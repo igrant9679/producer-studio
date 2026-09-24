@@ -1,3 +1,3 @@
-export function EditorPage() {
-  return <div>editor</div>
+export function EditorPage({ demo = false }: { demo?: boolean }) {
+  return <div>editor {demo ? 'demo' : ''}</div>
 }

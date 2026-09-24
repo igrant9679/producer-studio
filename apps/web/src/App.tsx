@@ -37,6 +37,8 @@ export function App() {
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/signup" element={<AuthPage mode="signup" />} />
         <Route path="/r/:token" element={<SharePage />} />
+        {/* Offline demo project (bundled media in /public/demo) for editor development without the API. */}
+        <Route path="/edit/demo" element={<EditorPage demo />} />
         <Route path="/edit/:projectId" element={<RequireAuth><EditorPage /></RequireAuth>} />
         <Route path="/*" element={<RequireAuth><ShellRoutes /></RequireAuth>} />
       </Routes>
