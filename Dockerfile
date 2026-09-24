@@ -38,7 +38,7 @@ RUN npm run build -w @producer/web
 FROM node:22-bookworm-slim
 # ffmpeg + the shared libraries chrome-headless-shell (HyperFrames renderer) needs
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg ca-certificates tini \
+      ffmpeg ca-certificates tini unzip \
       fonts-liberation libnss3 libatk-bridge2.0-0 libatk1.0-0 libgbm1 libasound2 libxkbcommon0 libxcomposite1 \
       libxdamage1 libxrandr2 libxfixes3 libxext6 libx11-6 libxcb1 libpango-1.0-0 libcairo2 libcups2 libdrm2 \
       libdbus-1-3 libexpat1 libglib2.0-0 libgomp1 \
