@@ -4,6 +4,7 @@ import type { AnimationPreset, AudioItem, BlendMode, CaptionItem, CaptionStyle, 
 import {
   ANIMATION_PRESETS,
   ASPECT_RATIOS,
+  CANVAS_RESOLUTIONS,
   CAPTION_PRESETS,
   COMBO_PRESETS,
   EFFECTS,
@@ -16,7 +17,9 @@ import {
   findItem,
   generateCaptions,
   projectDuration,
+  presetCanvasSize,
   setAspect,
+  setCanvasSize,
   updateItem,
   updateProject,
   updateTrack,
@@ -127,21 +130,70 @@ function ItemHeader({ item, track }: { item: Item; track: Track }) {
 
 // ---------- project ----------
 
+/** Working canvas size: resolution presets (keep the aspect, scale the layout) and a custom width × height. */
+function CanvasSizeFields({ project }: { project: Project }) {
+  const commit = useEditor((s) => s.commit)
+  const [w, setW] = useState(project.width)
+  const [h, setH] = useState(project.height)
+  useEffect(() => {
+    setW(project.width)
+    setH(project.height)
+  }, [project.width, project.height])
+  const short = Math.min(project.width, project.height)
+  const current = CANVAS_RESOLUTIONS.find((r) => r.short === short)?.id ?? 'custom'
+  const apply = (width: number, height: number, label: string) => {
+    commit(setCanvasSize(project, width, height), label)
+    useEditor.setState({ canvasZoom: 'fit' })
+  }
+  const setRes = (id: string) => {
+    const r = CANVAS_RESOLUTIONS.find((x) => x.id === id)
+    if (!r) return
+    const k = r.short / short
+    const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
+    apply(even(project.width * k), even(project.height * k), `Canvas ${r.name}`)
+  }
+  const valid = (n: number) => Number.isFinite(n) && n >= 16 && n <= 8192
+  const dirty = w !== project.width || h !== project.height
+  return (
+    <>
+      <Field label="Resolution">
+        <Segmented
+          size="sm"
+          value={current}
+          options={[...CANVAS_RESOLUTIONS.map((r) => ({ value: r.id as string, label: r.id === '4k' ? '4K' : r.id, title: r.name })), ...(current === 'custom' ? [{ value: 'custom', label: 'Custom' }] : [])]}
+          onChange={setRes}
+        />
+      </Field>
+      <Field label="Canvas">
+        <div className="row" style={{ gap: 6 }}>
+          <input className="ed-input mono" style={{ width: 70 }} type="number" min={16} max={8192} value={w} onChange={(e) => setW(Math.round(+e.target.value))} aria-label="Canvas width" />
+          <span className="muted">×</span>
+          <input className="ed-input mono" style={{ width: 70 }} type="number" min={16} max={8192} value={h} onChange={(e) => setH(Math.round(+e.target.value))} aria-label="Canvas height" />
+          {dirty && (
+            <button className="btn sm primary" disabled={!valid(w) || !valid(h)} onClick={() => apply(Math.round(w / 2) * 2, Math.round(h / 2) * 2, `Canvas ${w}×${h}`)}>
+              Apply
+            </button>
+          )}
+        </div>
+      </Field>
+    </>
+  )
+}
+
 function ProjectTab({ project }: { project: Project }) {
   const commit = useEditor((s) => s.commit)
   const demo = useEditor((s) => s.demo)
   const dur = projectDuration(project)
   const items = project.tracks.reduce((n, t) => n + t.items.length, 0)
-  const aspect = ASPECT_RATIOS.find((a) => a.width / a.height === project.width / project.height)
+  const aspect = ASPECT_RATIOS.find((a) => Math.abs(a.width / a.height - project.width / project.height) < 0.001)
+  const short = Math.min(project.width, project.height)
   return (
     <>
       <Section title="Project">
         <Field label="Name">
           <input className="ed-input" defaultValue={project.name} key={project.name} onBlur={(e) => e.target.value !== project.name && commit(updateProject(project, { name: e.target.value || 'Untitled project' }), 'Rename project')} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
         </Field>
-        <Field label="Canvas">
-          <span className="ed-static">{project.width} × {project.height}</span>
-        </Field>
+        <CanvasSizeFields project={project} />
         <Field label="Frame rate">
           <select className="ed-select" value={project.fps} onChange={(e) => commit(updateProject(project, { fps: +e.target.value }), 'Frame rate')}>
             {EXPORT_FPS.map((f) => (
@@ -162,7 +214,10 @@ function ProjectTab({ project }: { project: Project }) {
       <Section title="Aspect ratio">
         <div className="ed-ratio-grid">
           {ASPECT_RATIOS.map((a) => (
-            <button key={a.id} className={clsx(aspect?.id === a.id && 'on')} onClick={() => commit(setAspect(project, a.width, a.height), `Ratio ${a.name}`)}>
+            <button key={a.id} className={clsx(aspect?.id === a.id && 'on')} onClick={() => {
+                const size = presetCanvasSize(a.id, short)
+                commit(setAspect(project, size.width, size.height), `Ratio ${a.name}`)
+              }}>
               <span className="shape" style={{ aspectRatio: `${a.width}/${a.height}` }} />
               <b>{a.name}</b>
               <small>{a.hint}</small>

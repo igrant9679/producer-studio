@@ -12,7 +12,7 @@ import { newId } from '../ids'
 import type { JobContext } from '../jobs/worker'
 import { log } from '../log'
 import { probe } from '../media/process'
-import { ffmpeg, ffmpegProgress, run } from '../media/proc'
+import { ffmpeg, run } from '../media/proc'
 import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAsset } from '../services/assets'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { buildFontFaces, fontsUsed } from './fonts'
@@ -70,7 +70,7 @@ export interface PreparedRender {
  * Write everything the composition needs into `dir`: media (hardlinked/copied or downloaded), freeze-frame stills,
  * reversed clips, runtime.js, gsap.min.js, font files, and index.html.
  */
-export async function prepareRenderDir(project: Project, workspaceId: string, dir: string, opts: { useProxy?: boolean; signal?: AbortSignal; progress?: (f: number, m: string) => void } = {}): Promise<PreparedRender> {
+export async function prepareRenderDir(project: Project, workspaceId: string, dir: string, opts: { useProxy?: boolean; signal?: AbortSignal; progress?: (f: number, m: string) => void; output?: { w: number; h: number } } = {}): Promise<PreparedRender> {
   fs.mkdirSync(path.join(dir, 'assets'), { recursive: true })
   const files: string[] = []
   const ids = assetIdsUsed(project)
@@ -136,6 +136,8 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
     runtimePath: 'runtime.js',
     gsapPath: 'gsap.min.js',
     fontFaceCss: fonts.css,
+    outputWidth: opts.output?.w,
+    outputHeight: opts.output?.h,
     title: project.name,
   })
   const index = path.join(dir, 'index.html')
@@ -230,7 +232,10 @@ export async function exportRender(jc: JobContext): Promise<ExportResult> {
   fs.rmSync(dir, { recursive: true, force: true })
   fs.mkdirSync(dir, { recursive: true })
   try {
-    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: input.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m) })
+    // Render natively at the requested size: the stage is scaled inside the composition so text, shapes and
+    // captions are drawn at full resolution and source footage keeps its detail (no post-render upscale).
+    const tgt = targetSize(project.width, project.height, input.resolution)
+    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: input.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt })
     jc.check()
     jc.progress(0.09, 'Checking composition')
     const lint = await lintComposition(dir, jc.signal)
@@ -241,20 +246,7 @@ export async function exportRender(jc: JobContext): Promise<ExportResult> {
     jc.progress(0.1, 'Rendering')
     await renderComposition(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
     jc.check()
-    let final = raw
-    const tgt = targetSize(project.width, project.height, input.resolution)
-    if (tgt.w !== project.width || tgt.h !== project.height) {
-      jc.progress(0.91, `Scaling to ${tgt.w}×${tgt.h}`)
-      final = path.join(dir, `final.${ext}`)
-      const scale = `scale=${tgt.w}:${tgt.h}:flags=lanczos`
-      const codec =
-        ext === 'mp4'
-          ? ['-c:v', 'libx264', '-preset', input.quality === 'draft' ? 'veryfast' : 'medium', '-crf', input.quality === 'high' ? '16' : '19', '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-movflags', '+faststart']
-          : ext === 'webm'
-            ? ['-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '32', '-row-mt', '1', '-c:a', 'copy']
-            : []
-      await ffmpegProgress(['-i', raw, '-vf', scale, ...codec, final], prep.duration, (f) => jc.progress(0.91 + f * 0.06, 'Scaling'), { signal: jc.signal })
-    }
+    const final = raw
     jc.progress(0.97, 'Saving export')
     const info = await probe(final, jc.signal).catch(() => null)
     const name = (input.name?.trim() || `${project.name} ${input.resolution}`).slice(0, 180)

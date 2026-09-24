@@ -18,6 +18,9 @@ import {
   moveItem,
   projectDuration,
   separateAudio,
+  presetCanvasSize,
+  setAspect,
+  setCanvasSize,
   setKeyframe,
   splitItem,
   trimItem,
@@ -222,6 +225,41 @@ describe('evaluate', () => {
     const b = evaluate(p, 4.5).layers[0].mediaTime
     expect(a).toBeCloseTo(3, 3)
     expect(b).toBeCloseTo(3, 3)
+  })
+})
+
+describe('canvas size', () => {
+  it('scales the layout uniformly from 1080p to 4K', () => {
+    let p = twoClips()
+    p = addItem(p, createTextItem(0, 'heading', { transform: { x: 100, y: -200, scale: 1, rotation: 0 } }))
+    p = importSrt(p, '1\n00:00:01,000 --> 00:00:02,000\nHi\n')
+    const text = p.tracks.flatMap((t) => t.items).find((i) => i.type === 'text')!
+    const q = setCanvasSize(p, 3840, 2160)
+    const t2 = findItem(q, text.id)!.item as typeof text & { style: { fontSize: number; boxWidth: number } }
+    expect(q.width).toBe(3840)
+    expect(t2.transform.x).toBe(200)
+    expect(t2.transform.y).toBe(-400)
+    expect(t2.style.fontSize).toBe((text as typeof t2).style.fontSize * 2)
+    const cap = q.tracks.find((t) => t.kind === 'caption')!.captionStyle!
+    expect(cap.style.fontSize).toBe(p.tracks.find((t) => t.kind === 'caption')!.captionStyle!.style.fontSize * 2)
+  })
+
+  it('keeps sizes when switching aspect at the same short side', () => {
+    const p = addItem(twoClips(), createTextItem(0, 'heading'))
+    const size = presetCanvasSize('9:16', 1080)
+    expect(size).toEqual({ width: 1080, height: 1920 })
+    const q = setAspect(p, size.width, size.height)
+    const before = p.tracks.flatMap((t) => t.items).find((i) => i.type === 'text') as { style: { fontSize: number } }
+    const after = q.tracks.flatMap((t) => t.items).find((i) => i.type === 'text') as { style: { fontSize: number } }
+    expect(after.style.fontSize).toBe(before.style.fontSize)
+    expect(presetCanvasSize('16:9', 2160)).toEqual({ width: 3840, height: 2160 })
+  })
+
+  it('compiles a 1080p project to a natively scaled 4K composition', () => {
+    const html = compileToHyperFrames(twoClips(), { assetPath: (id) => `assets/${id}.mp4`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '', outputWidth: 3840, outputHeight: 2160 })
+    expect(html).toContain('data-width="3840" data-height="2160"')
+    expect(html).toContain('transform: scale(2.000000, 2.000000)')
+    expect(html).toContain("getElementById('stage')")
   })
 })
 

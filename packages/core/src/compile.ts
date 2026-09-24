@@ -20,6 +20,13 @@ export interface CompileOptions {
   /** @font-face rules for every font the project uses (local files). */
   fontFaceCss: string
   title?: string
+  /**
+   * Render size. When it differs from the project canvas, the stage keeps canvas coordinates and is scaled up/down
+   * inside a composition of this size, so text, shapes and captions are drawn natively at the output resolution
+   * (no bitmap upscaling) and source footage keeps its full detail.
+   */
+  outputWidth?: number
+  outputHeight?: number
 }
 
 function attr(v: string | number): string {
@@ -50,6 +57,9 @@ function clampRate(speed: number): number {
 
 export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
   const duration = Math.max(0.1, projectDuration(p))
+  const outW = Math.round(opts.outputWidth ?? p.width)
+  const outH = Math.round(opts.outputHeight ?? p.height)
+  const scaled = outW !== p.width || outH !== p.height
   const body: string[] = []
   const audio: string[] = []
   let trackIndex = 0
@@ -113,7 +123,7 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=${p.width}, height=${p.height}">
+<meta name="viewport" content="width=${outW}, height=${outH}">
 <title>${escapeHtml(opts.title ?? p.name)}</title>
 <script src="${attr(opts.gsapPath)}"></script>
 <script src="${attr(opts.runtimePath)}"></script>
@@ -121,18 +131,21 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
 ${opts.fontFaceCss}
 html, body { margin: 0; padding: 0; background: ${p.background}; }
 #root { position: relative; width: 100%; height: 100%; overflow: hidden; background: ${p.background}; font-family: 'Inter', sans-serif; }
+#stage { position: absolute; left: 0; top: 0; width: ${p.width}px; height: ${p.height}px; overflow: hidden; background: ${p.background};${scaled ? ` transform: scale(${(outW / p.width).toFixed(6)}, ${(outH / p.height).toFixed(6)}); transform-origin: 0 0;` : ''} }
 </style>
 </head>
 <body>
-<div id="root" data-composition-id="main" data-start="0" data-width="${p.width}" data-height="${p.height}" data-duration="${round(duration, 4)}">
+<div id="root" data-composition-id="main" data-start="0" data-width="${outW}" data-height="${outH}" data-duration="${round(duration, 4)}">
+<div id="stage">
 ${body.join('\n')}
+</div>
 ${audio.join('\n')}
 </div>
 <script>
 (function () {
   var project = ${projectJson};
   var assets = ${JSON.stringify(assetMap)};
-  var root = document.getElementById('root');
+  var root = document.getElementById('stage');
   var renderer = new ProducerRuntime.StageRenderer(root, project, {
     mode: 'export',
     resolveUrl: function (id) { return assets[id] || ''; }

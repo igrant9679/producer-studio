@@ -1,4 +1,4 @@
-import { ASPECT_RATIOS, setAspect, updateProject } from '@producer/core'
+import { ASPECT_RATIOS, presetCanvasSize, setAspect, updateProject } from '@producer/core'
 import clsx from 'clsx'
 import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, Keyboard, Loader2, MousePointer2, Redo2, Share2, TriangleAlert, Undo2, Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -169,10 +169,15 @@ function RatioMenu() {
                 <b>{a.name}</b> <span className="muted">{a.hint}</span>
               </span>
             }
-            kbd={`${a.width}×${a.height}`}
+            kbd={(() => {
+              const z = presetCanvasSize(a.id, Math.min(w, h))
+              return `${z.width}×${z.height}`
+            })()}
             onClick={() => {
               const s = useEditor.getState()
-              s.commit(setAspect(s.project, a.width, a.height), `Ratio ${a.name}`)
+              // keep the current resolution (short side) when changing shape
+              const z = presetCanvasSize(a.id, Math.min(s.project.width, s.project.height))
+              s.commit(setAspect(s.project, z.width, z.height), `Ratio ${a.name}`)
               useEditor.setState({ canvasZoom: 'fit' })
               setOpen(false)
             }}

@@ -8,6 +8,7 @@ import type {
   Item,
   Keyframe,
   Project,
+  TextStyle,
   Track,
   TrackKind,
   Transcript,
@@ -439,21 +440,63 @@ export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2)
   return touch(p)
 }
 
-export function setAspect(p0: Project, width: number, height: number): Project {
+function scaleTextStyle(s: TextStyle, k: number, maxBox: number) {
+  const r = (v: number) => round(v * k, 2)
+  s.fontSize = r(s.fontSize)
+  s.letterSpacing = r(s.letterSpacing)
+  s.boxWidth = Math.round(Math.min(s.boxWidth * k, maxBox))
+  if (s.stroke) s.stroke.width = r(s.stroke.width)
+  if (s.background) {
+    s.background.radius = r(s.background.radius)
+    s.background.padding = r(s.background.padding)
+  }
+  if (s.shadow) {
+    s.shadow.blur = r(s.shadow.blur)
+    s.shadow.x = r(s.shadow.x)
+    s.shadow.y = r(s.shadow.y)
+  }
+  if (s.glow) s.glow.blur = r(s.glow.blur)
+}
+
+/**
+ * Change the canvas to width × height. Positions (and x/y keyframes) scale per axis so layouts keep their place;
+ * pixel sizes (text, strokes, shapes, caption styles) scale with the short side, so going 1080p → 4K at the same
+ * aspect scales the whole layout uniformly and nothing shifts. Media items are resolution-independent (scale 1 =
+ * fit), so only their offsets move.
+ */
+export function setCanvasSize(p0: Project, width: number, height: number): Project {
+  const w = Math.max(16, Math.round(width))
+  const h = Math.max(16, Math.round(height))
   const p = clone(p0)
-  const sx = width / p.width
-  const sy = height / p.height
-  for (const t of p.tracks)
+  const sx = w / p.width
+  const sy = h / p.height
+  const k = Math.min(w, h) / Math.min(p.width, p.height)
+  const maxBox = w * 0.95
+  for (const t of p.tracks) {
+    if (t.captionStyle) scaleTextStyle(t.captionStyle.style, k, maxBox)
     for (const it of t.items) {
-      if (it.type === 'text' || it.type === 'shape') {
-        it.transform.x = round(it.transform.x * sx, 2)
-        it.transform.y = round(it.transform.y * sy, 2)
+      if (!('transform' in it)) continue
+      it.transform.x = round(it.transform.x * sx, 2)
+      it.transform.y = round(it.transform.y * sy, 2)
+      if (it.keyframes.x) it.keyframes.x = it.keyframes.x.map((kf) => ({ ...kf, value: round(kf.value * sx, 2) }))
+      if (it.keyframes.y) it.keyframes.y = it.keyframes.y.map((kf) => ({ ...kf, value: round(kf.value * sy, 2) }))
+      if (it.type === 'text') scaleTextStyle(it.style, k, maxBox)
+      if (it.type === 'shape') {
+        it.width = round(it.width * k, 2)
+        it.height = round(it.height * k, 2)
+        it.radius = round(it.radius * k, 2)
+        if (it.stroke) it.stroke.width = round(it.stroke.width * k, 2)
       }
-      if (it.type === 'text') it.style.boxWidth = Math.round(Math.min(it.style.boxWidth, width * 0.9))
     }
-  p.width = width
-  p.height = height
+  }
+  p.width = w
+  p.height = h
   return touch(p)
+}
+
+/** Aspect-ratio switch; callers pass preset dimensions at the current short side (see presetCanvasSize). */
+export function setAspect(p0: Project, width: number, height: number): Project {
+  return setCanvasSize(p0, width, height)
 }
 
 /** Times an edit should snap to: playhead, item edges, keyframes, markers. */

@@ -129,6 +129,21 @@ export const ASPECT_RATIOS = [
   { id: '21:9', name: '21:9', hint: 'Cinematic', width: 2560, height: 1080 },
 ] as const
 
+/** Working canvas resolutions (short side). Layouts scale proportionally when switching. */
+export const CANVAS_RESOLUTIONS = [
+  { id: '1080p', name: '1080p', short: 1080 },
+  { id: '1440p', name: '1440p (2K)', short: 1440 },
+  { id: '4k', name: '4K', short: 2160 },
+] as const
+
+/** Dimensions for an aspect preset at a given short side (even numbers, as encoders require). */
+export function presetCanvasSize(aspectId: string, short: number): { width: number; height: number } {
+  const a = ASPECT_RATIOS.find((r) => r.id === aspectId) ?? ASPECT_RATIOS[0]
+  const s = short / Math.min(a.width, a.height)
+  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
+  return { width: even(a.width * s), height: even(a.height * s) }
+}
+
 export const EXPORT_RESOLUTIONS = [
   { id: '720p', short: 720 },
   { id: '1080p', short: 1080 },

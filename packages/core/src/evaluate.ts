@@ -42,6 +42,7 @@ function backOut(x: number): number {
 
 /** Apply an in/out animation. `p` = 0 (hidden) .. 1 (fully shown). `dir` = 1 for in, -1 for out. */
 function applyAnimation(m: Mods, spec: AnimationSpec, p: number, dir: 1 | -1, W: number, H: number) {
+  const u = Math.min(W, H) / 1080 // pixel constants are authored for a 1080p canvas
   const e = dir === 1 ? ease('easeOut', p) : ease('easeOut', p)
   const hidden = 1 - e
   switch (spec.preset) {
@@ -65,7 +66,7 @@ function applyAnimation(m: Mods, spec: AnimationSpec, p: number, dir: 1 | -1, W:
       m.opacity *= Math.min(1, e * 1.5)
       break
     case 'rise':
-      m.ty += hidden * 60 * dir
+      m.ty += hidden * 60 * u * dir
       m.opacity *= e
       break
     case 'zoomIn':
@@ -86,7 +87,7 @@ function applyAnimation(m: Mods, spec: AnimationSpec, p: number, dir: 1 | -1, W:
       m.opacity *= e
       break
     case 'blur':
-      m.blur += hidden * 24
+      m.blur += hidden * 24 * u
       m.opacity *= e
       break
     case 'wipeLeft':
@@ -105,6 +106,7 @@ function applyAnimation(m: Mods, spec: AnimationSpec, p: number, dir: 1 | -1, W:
 }
 
 function applyTransition(m: Mods, tr: Transition, p: number, side: 'out' | 'in', W: number, H: number) {
+  const u = Math.min(W, H) / 1080
   const q = ease('easeInOut', p)
   const o = side === 'out'
   switch (tr.type) {
@@ -167,10 +169,10 @@ function applyTransition(m: Mods, tr: Transition, p: number, side: 'out' | 'in',
       break
     case 'blur':
       if (o) {
-        m.blur += q * 24
+        m.blur += q * 24 * u
         m.opacity *= 1 - q
       } else {
-        m.blur += (1 - q) * 24
+        m.blur += (1 - q) * 24 * u
         m.opacity *= q
       }
       break
@@ -301,6 +303,7 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
   const W = p.width
   const H = p.height
   const lt = a.local
+  const u = Math.min(W, H) / 1080
   const m = baseMods()
   const kf = it.keyframes ?? {}
   const x = sampleKeyframes(kf.x, lt, it.transform.x)
@@ -316,9 +319,9 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
   if (anim.combo && anim.combo.preset !== 'none') {
     const ph = (2 * Math.PI * lt) / Math.max(0.2, anim.combo.period)
     if (anim.combo.preset === 'pulse') m.scale *= 1 + 0.04 * Math.sin(ph)
-    if (anim.combo.preset === 'float') m.ty += 12 * Math.sin(ph)
+    if (anim.combo.preset === 'float') m.ty += 12 * u * Math.sin(ph)
     if (anim.combo.preset === 'swing') m.rotate += 6 * Math.sin(ph)
-    if (anim.combo.preset === 'shake') m.tx += 6 * Math.sin(ph * 3)
+    if (anim.combo.preset === 'shake') m.tx += 6 * u * Math.sin(ph * 3)
   }
   if (a.transition) applyTransition(m, a.transition.tr, a.transition.p, a.transition.side, W, H)
 
@@ -330,13 +333,13 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
     const k = fx.intensity / 100
     switch (fx.type) {
       case 'blur':
-        m.blur += 20 * k
+        m.blur += 20 * k * u
         break
       case 'blackWhite':
         extraFilter += ` grayscale(${k.toFixed(2)})`
         break
       case 'glow':
-        extraFilter += ` drop-shadow(0 0 ${(24 * k).toFixed(1)}px rgba(255,255,255,${(0.6 * k).toFixed(2)}))`
+        extraFilter += ` drop-shadow(0 0 ${(24 * k * u).toFixed(1)}px rgba(255,255,255,${(0.6 * k).toFixed(2)}))`
         break
       case 'flash': {
         const beat = (lt * 2) % 1
@@ -344,8 +347,8 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
         break
       }
       case 'shake':
-        m.tx += (hash01(frame * 1.7 + 3) - 0.5) * 30 * k
-        m.ty += (hash01(frame * 2.3 + 9) - 0.5) * 30 * k
+        m.tx += (hash01(frame * 1.7 + 3) - 0.5) * 30 * k * u
+        m.ty += (hash01(frame * 2.3 + 9) - 0.5) * 30 * k * u
         m.rotate += (hash01(frame * 3.1 + 5) - 0.5) * 2 * k
         break
       case 'zoomPulse':
@@ -353,17 +356,17 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
         break
       case 'kenBurns':
         m.scale *= 1 + 0.15 * k * clamp(lt / Math.max(0.1, it.duration), 0, 1)
-        m.tx += -40 * k * clamp(lt / Math.max(0.1, it.duration), 0, 1)
+        m.tx += -40 * k * u * clamp(lt / Math.max(0.1, it.duration), 0, 1)
         break
       case 'rgbSplit': {
-        const d = (6 * k).toFixed(1)
+        const d = (6 * k * u).toFixed(1)
         extraFilter += ` drop-shadow(${d}px 0 0 rgba(255,0,60,.55)) drop-shadow(-${d}px 0 0 rgba(0,220,255,.55))`
         break
       }
       case 'vhs':
         extraFilter += ` saturate(${(1 + 0.3 * k).toFixed(2)}) contrast(${(1 + 0.1 * k).toFixed(2)})`
-        overlays.push(`repeating-linear-gradient(0deg, rgba(0,0,0,${(0.18 * k).toFixed(2)}) 0 2px, transparent 2px 4px)`)
-        m.tx += (hash01(frame * 0.37) > 0.92 ? (hash01(frame) - 0.5) * 20 * k : 0)
+        overlays.push(`repeating-linear-gradient(0deg, rgba(0,0,0,${(0.18 * k).toFixed(2)}) 0 ${(2 * u).toFixed(2)}px, transparent ${(2 * u).toFixed(2)}px ${(4 * u).toFixed(2)}px)`)
+        m.tx += (hash01(frame * 0.37) > 0.92 ? (hash01(frame) - 0.5) * 20 * k * u : 0)
         break
       case 'grain': {
         const seed = frame % 97
