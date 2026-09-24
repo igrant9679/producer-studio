@@ -50,7 +50,7 @@ export function TopBar() {
           <ArrowLeft size={16} />
         </button>
         <div className="ed-logo" title="Producer Studio">
-          <svg width="20" height="20" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="4" fill="var(--accent)" /><path d="M10 8.5v7l6-3.5z" fill="#fff" /></svg>
+          <img src="/favicon.svg" width={22} height={22} alt="" style={{ borderRadius: 6, display: 'block' }} />
         </div>
         <input
           className="ed-title"

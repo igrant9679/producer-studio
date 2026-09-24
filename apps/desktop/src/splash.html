@@ -26,9 +26,8 @@
       .mark {
         width: 54px;
         height: 54px;
-        border-radius: 14px;
-        background: linear-gradient(135deg, #ff5a5f, #7c5cff 60%, #35e0ff);
-        box-shadow: 0 10px 30px rgba(124, 92, 255, 0.35);
+        display: block;
+        filter: drop-shadow(0 10px 30px rgba(124, 92, 255, 0.35));
       }
       h1 {
         margin: 0;
@@ -68,7 +67,7 @@
   </head>
   <body>
     <div class="wrap">
-      <div class="mark"></div>
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#0c0e14" stroke="#262d40" stroke-width="1"/><rect x="17" y="17" width="16" height="8" rx="4" fill="#ff5a5f"/><rect x="17" y="28" width="30" height="8" rx="4" fill="#7c5cff"/><rect x="17" y="39" width="16" height="8" rx="4" fill="#35e0ff"/></svg>
       <h1>Producer Studio</h1>
       <div class="bar"><i></i></div>
       <p>Starting the local engine…</p>
