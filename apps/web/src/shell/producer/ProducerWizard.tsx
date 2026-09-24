@@ -623,7 +623,7 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: () => void }) {
       {r.status === 'running' && (
         <div style={{ width: '100%', maxWidth: 440, margin: '4px auto 20px' }}>
           <Progress value={r.progress ?? -1} />
-          <div className="muted" style={{ textAlign: 'center', fontSize: 12, marginTop: 8 }}>{r.progress && r.progress > 0 ? `${Math.round(r.progress * 100)}%` : 'Starting…'}</div>
+          <div className="muted" style={{ textAlign: 'center', fontSize: '0.75rem', marginTop: 8 }}>{r.progress && r.progress > 0 ? `${Math.round(r.progress * 100)}%` : 'Starting…'}</div>
         </div>
       )}
       <div className="row" style={{ justifyContent: 'center', marginTop: 20 }}>
@@ -782,7 +782,7 @@ export default function ProducerWizard() {
         )}
         {confirmReset ? (
           <span className="row" style={{ gap: 6 }}>
-            <span className="muted" style={{ fontSize: 12 }}>Start a new video?</span>
+            <span className="muted" style={{ fontSize: '0.75rem' }}>Start a new video?</span>
             <button
               className="btn sm"
               onClick={() => {
@@ -820,11 +820,11 @@ export default function ProducerWizard() {
               <span />
             )}
             <span className="spacer" />
-            {!adv.ok && adv.reason && primaryLabel && <span className="muted" style={{ fontSize: 12.5 }}>{adv.reason}</span>}
+            {!adv.ok && adv.reason && primaryLabel && <span className="muted" style={{ fontSize: '0.7812rem' }}>{adv.reason}</span>}
             {s.step === 'review' &&
               (confirmRegen ? (
                 <span className="row" style={{ gap: 6 }}>
-                  <span className="muted" style={{ fontSize: 12.5 }}>Replace this script?</span>
+                  <span className="muted" style={{ fontSize: '0.7812rem' }}>Replace this script?</span>
                   <button
                     className="btn"
                     onClick={() => {

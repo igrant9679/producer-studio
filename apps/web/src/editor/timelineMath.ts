@@ -77,17 +77,18 @@ export function sliderToZoom(v: number, min = 4, max = 600) {
   return min * (max / min) ** clamp(v, 0, 1)
 }
 
-export function trackHeight(t: Track): number {
-  if (t.main) return 68
+/** Row height in px. `compact` (appearance density) trims every row; text size never changes it. */
+export function trackHeight(t: Track, compact = false): number {
+  if (t.main) return compact ? 56 : 68
   switch (t.kind) {
     case 'video':
     case 'overlay':
-      return 52
+      return compact ? 42 : 52
     case 'audio':
-      return 46
+      return compact ? 38 : 46
     case 'text':
     case 'caption':
-      return 34
+      return compact ? 28 : 34
   }
 }
 
@@ -100,12 +101,12 @@ export interface Row {
 }
 
 /** Rows in display order: highest stacking index on top (captions/text), audio at the bottom. */
-export function layoutRows(p: Project): { rows: Row[]; height: number } {
+export function layoutRows(p: Project, compact = false): { rows: Row[]; height: number } {
   const rows: Row[] = []
   let y = ROWS_TOP
   for (let i = p.tracks.length - 1; i >= 0; i--) {
     const t = p.tracks[i]
-    const h = trackHeight(t)
+    const h = trackHeight(t, compact)
     rows.push({ track: t, index: i, top: y, height: h })
     y += h + ROW_GAP
   }

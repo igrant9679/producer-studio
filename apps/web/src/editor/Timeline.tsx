@@ -60,6 +60,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import * as A from './actions'
 import { Menu, MenuItem, Slider } from './controls'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
+import { useAppearance } from '../lib/appearance'
 import { useEditor } from './store'
 import {
   HEADER_W,
@@ -80,6 +81,9 @@ import {
   zoomToSlider,
   type DropTarget,
 } from './timelineMath'
+
+/** Appearance density, read at event time so pointer maths matches the rendered rows. */
+const isCompact = () => useAppearance.getState().prefs.density === 'compact'
 
 const TL_KEY = 'ps.editor.timelineHeight'
 
@@ -174,7 +178,8 @@ function TimelineBody() {
   const [dropHint, setDropHint] = useState<{ x: number; target: DropTarget; w: number } | null>(null)
   const zoomAnchor = useRef<{ t: number; px: number } | null>(null)
 
-  const { rows, height: rowsH } = useMemo(() => layoutRows(project), [project])
+  const compact = useAppearance((s) => s.prefs.density === 'compact')
+  const { rows, height: rowsH } = useMemo(() => layoutRows(project, compact), [project, compact])
   const duration = projectDuration(project)
   const contentW = Math.max(viewW - HEADER_W, (duration + 12) * zoom)
   const selSet = useMemo(() => new Set(selection), [selection])
@@ -281,7 +286,7 @@ function TimelineBody() {
       active = true
       const rect = { x0: start.x, y0: start.y, x1: p.x, y1: p.y }
       setMarquee(rect)
-      const hits = marqueeHits(rect, layoutRows(useEditor.getState().project).rows, useEditor.getState().zoom)
+      const hits = marqueeHits(rect, layoutRows(useEditor.getState().project, isCompact()).rows, useEditor.getState().zoom)
       useEditor.getState().select([...new Set([...base, ...hits])])
     }
     const up = () => {
@@ -349,7 +354,7 @@ function TimelineBody() {
         }
       }
       const { y } = toContent(ev.clientX, ev.clientY)
-      const target = ids.length === 1 ? dropTargetAt(y, layoutRows(orig).rows) : null
+      const target = ids.length === 1 ? dropTargetAt(y, layoutRows(orig, isCompact()).rows) : null
       last = { ids, primary: item.id, dt, target, snapAt: snapT }
       setDrag(last)
     }
@@ -375,7 +380,7 @@ function TimelineBody() {
         const kind = kindForItem(f.item.type)
         if (kind) {
           const p2 = clone(orig)
-          const { rows: rs } = layoutRows(orig)
+          const { rows: rs } = layoutRows(orig, isCompact())
           const mainIdx = orig.tracks.findIndex((t) => t.main)
           const t = insertTrack(p2, kind, kind === 'audio' ? undefined : gapToAboveIndex(d.target.gap, rs, mainIdx))
           p = moveItem(p2, id, { start, trackId: t.id })
@@ -496,7 +501,7 @@ function TimelineBody() {
           <div className="tl-ruler-row" style={{ height: RULER_H }}>
             <div className="tl-corner">
               <span className="eyebrow">Tracks</span>
-              <span className="muted" style={{ fontSize: 11 }}>{project.tracks.length}</span>
+              <span className="muted" style={{ fontSize: '0.6875rem' }}>{project.tracks.length}</span>
             </div>
             <Ruler width={contentW} zoom={zoom} fps={project.fps} duration={duration} onPointerDown={startScrub} />
           </div>
@@ -683,7 +688,7 @@ const Ruler = memo(function Ruler({ width, zoom, fps, duration, onPointerDown }:
       className="tl-ruler"
       style={{
         width,
-        backgroundImage: `linear-gradient(90deg, var(--border-strong) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)`,
+        backgroundImage: `linear-gradient(90deg, var(--ruler-major) 1px, transparent 1px), linear-gradient(90deg, var(--ruler-minor) 1px, transparent 1px)`,
         backgroundSize: `${major * zoom}px 12px, ${minor * zoom}px 6px`,
         backgroundPosition: '0 100%, 0 100%',
       }}
@@ -810,7 +815,7 @@ function TrackHeader({ track }: { track: Track }) {
         />
       ) : (
         <span className="tl-name" onDoubleClick={() => setEditing(true)} title="Double-click to rename">
-          {track.name}
+          <span className="nm">{track.name}</span>
           {track.main && <em>Main</em>}
         </span>
       )}

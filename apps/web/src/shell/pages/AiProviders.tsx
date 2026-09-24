@@ -381,7 +381,7 @@ export function AiProviders({
   }
   return (
     <div className="ps-ai-cards">
-      <div className="ps-alert info" style={{ fontSize: 12.5 }}>
+      <div className="ps-alert info" style={{ fontSize: '0.7812rem' }}>
         <Info size={15} style={{ flex: 'none' }} />
         <span>
           API keys are billed per token by the provider you choose (OpenAI, Google, Anthropic).{' '}

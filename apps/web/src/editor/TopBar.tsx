@@ -1,9 +1,11 @@
 import { ASPECT_RATIOS, presetCanvasSize, setAspect, updateProject } from '@producer/core'
 import clsx from 'clsx'
-import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, Keyboard, Loader2, MousePointer2, Redo2, Share2, TriangleAlert, Undo2, Upload } from 'lucide-react'
+import type { ThemePreference } from '@producer/core'
+import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, Keyboard, Loader2, Monitor, Moon, MousePointer2, Redo2, Share2, Sun, TriangleAlert, Undo2, Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import { themeLabel, useAppearance } from '../lib/appearance'
 import { toast, toastError } from '../lib/toast'
 import * as A from './actions'
 import { Menu, MenuItem } from './controls'
@@ -89,6 +91,7 @@ export function TopBar() {
         <RatioMenu />
       </div>
       <div className="row ed-top-r">
+        <ThemeMenu />
         <button className="ed-tbtn" title="Keyboard shortcuts (?)" onClick={() => useEditor.setState({ shortcutsOpen: true })}>
           <Keyboard size={16} />
         </button>
@@ -119,6 +122,35 @@ function SaveStatus({ demo }: { demo: boolean }) {
     )
   return (
     <span className="ed-save saved" title={demo ? 'Saved in this browser' : 'All changes saved'}><Check size={13} /> {demo ? 'Saved locally' : 'Saved'}</span>
+  )
+}
+
+const THEME_ICON: Record<ThemePreference, JSX.Element> = { system: <Monitor size={14} />, dark: <Moon size={14} />, light: <Sun size={14} /> }
+
+/** Theme picker (System / Dark / Light); the full appearance settings live in Settings. */
+function ThemeMenu() {
+  const theme = useAppearance((s) => s.prefs.theme)
+  const resolved = useAppearance((s) => s.resolved)
+  const update = useAppearance((s) => s.update)
+  const nav = useNavigate()
+  const [open, setOpen] = useState(false)
+  const pick = (t: ThemePreference) => {
+    update({ theme: t })
+    setOpen(false)
+  }
+  return (
+    <div className="ed-dd ed-dd-right">
+      <button className="ed-tbtn" title={`Theme: ${themeLabel(theme)} (Ctrl+Shift+L)`} aria-label="Theme" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {resolved === 'light' ? <Sun size={16} /> : <Moon size={16} />}
+      </button>
+      <Menu open={open} onClose={() => setOpen(false)}>
+        {(['system', 'dark', 'light'] as const).map((t) => (
+          <MenuItem key={t} icon={THEME_ICON[t]} label={themeLabel(t)} active={theme === t} kbd={theme === t ? '✓' : undefined} onClick={() => pick(t)} />
+        ))}
+        <div className="ed-menu-sep" />
+        <MenuItem label="Appearance settings…" onClick={() => nav('/settings#appearance')} />
+      </Menu>
+    </div>
   )
 }
 

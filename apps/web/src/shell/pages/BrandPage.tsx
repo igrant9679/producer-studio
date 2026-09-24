@@ -180,7 +180,7 @@ export default function BrandPage() {
                   <select id={`font-${k}`} className="input" value={doc.fonts[k]} onChange={(e) => set({ fonts: { ...doc.fonts, [k]: e.target.value } })} style={{ fontFamily: `'${doc.fonts[k]}'` }} disabled={!canEdit}>
                     {FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: `'${f}'` }}>{f}</option>)}
                   </select>
-                  <div className="ps-font-sample" style={{ fontFamily: `'${doc.fonts[k]}', sans-serif`, fontWeight: k === 'headline' ? 700 : 400, fontSize: k === 'headline' ? 26 : 15 }}>
+                  <div className="ps-font-sample" style={{ fontFamily: `'${doc.fonts[k]}', sans-serif`, fontWeight: k === 'headline' ? 700 : 400, fontSize: k === 'headline' ? '1.625rem' : '0.9375rem' }}>
                     {k === 'headline' ? 'Built for teams' : 'The quick brown fox jumps over the lazy dog.'}
                   </div>
                 </div>
@@ -242,7 +242,7 @@ export default function BrandPage() {
           <div className="ps-bp-swatches">
             {doc.colors.filter(isHex).map((c, i) => <span key={i} style={{ background: c }} title={c} />)}
           </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+          <div className="muted" style={{ fontSize: '0.75rem', marginTop: 10 }}>
             {doc.fonts.headline} / {doc.fonts.body} · {cap.name} captions{doc.voice ? ` · ${voices.find((v) => v.id === doc.voice)?.name ?? doc.voice} voice` : ''}
           </div>
         </aside>

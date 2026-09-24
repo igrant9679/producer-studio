@@ -30,7 +30,7 @@ function AiWriter({ onClose, hasText, onStream }: { onClose: () => void; hasText
   return (
     <div className="ps-ai-pop" role="dialog" aria-label="AI writer">
       <div className="row" style={{ marginBottom: 10 }}>
-        <Sparkles size={15} style={{ color: '#b197fc' }} />
+        <Sparkles size={15} style={{ color: 'var(--violet)' }} />
         <strong style={{ fontFamily: 'var(--font-display)' }}>AI writer</strong>
         <span className="spacer" />
         <div className="ps-seg">
@@ -328,7 +328,7 @@ export default function VoiceStudio() {
             <div className="ps-vs-bar">
               {!text && (
                 <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                  <span className="muted" style={{ fontSize: 12 }}>Try an example:</span>
+                  <span className="muted" style={{ fontSize: '0.75rem' }}>Try an example:</span>
                   {EXAMPLES.map((ex) => (
                     <button key={ex.label} className="chip" onClick={() => setText(ex.text)}>{ex.label}</button>
                   ))}
@@ -344,7 +344,7 @@ export default function VoiceStudio() {
                 </>
               )}
               <span className="spacer" />
-              <span className="muted" style={{ fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+              <span className="muted" style={{ fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
                 {words} words · ≈ {formatDuration(estSecs)} · {text.length}/{MAX_CHARS}
               </span>
             </div>
@@ -354,7 +354,7 @@ export default function VoiceStudio() {
             <div className="ps-section-head">
               <History size={17} style={{ color: 'var(--text-3)' }} />
               <h2 className="ps-h2">History</h2>
-              <span className="muted" style={{ fontSize: 12 }}>{history.data?.length ? `${history.data.length} voiceover${history.data.length === 1 ? '' : 's'} in this space` : ''}</span>
+              <span className="muted" style={{ fontSize: '0.75rem' }}>{history.data?.length ? `${history.data.length} voiceover${history.data.length === 1 ? '' : 's'} in this space` : ''}</span>
             </div>
             {history.loading && !history.data ? (
               <div className="ps-hist-list">
@@ -380,9 +380,9 @@ export default function VoiceStudio() {
         <aside className="ps-vs-side">
           <div className="ps-vs-panel">
             <div className="row" style={{ marginBottom: 12 }}>
-              <strong style={{ fontFamily: 'var(--font-display)', fontSize: 15 }}>Select a voice</strong>
+              <strong style={{ fontFamily: 'var(--font-display)', fontSize: '0.9375rem' }}>Select a voice</strong>
               <span className="spacer" />
-              <span className="muted" style={{ fontSize: 12 }}>{shown.length} of {voices.length}</span>
+              <span className="muted" style={{ fontSize: '0.75rem' }}>{shown.length} of {voices.length}</span>
             </div>
             <div className="ps-soon-card">
               <div>
@@ -417,7 +417,7 @@ export default function VoiceStudio() {
             </div>
             {gen ? (
               <div className="ps-vs-gen">
-                <div className="row" style={{ fontSize: 12.5 }}><Spinner size={13} /> {gen.message}</div>
+                <div className="row" style={{ fontSize: '0.7812rem' }}><Spinner size={13} /> {gen.message}</div>
                 <Progress value={gen.progress} />
               </div>
             ) : (
@@ -425,7 +425,7 @@ export default function VoiceStudio() {
                 <AudioLines size={16} /> Generate{selected ? ` with ${selected.name}` : ''}
               </button>
             )}
-            {!text.trim() && <div className="muted" style={{ fontSize: 12, textAlign: 'center', marginTop: 8 }}>Write a script to generate a voiceover.</div>}
+            {!text.trim() && <div className="muted" style={{ fontSize: '0.75rem', textAlign: 'center', marginTop: 8 }}>Write a script to generate a voiceover.</div>}
           </div>
           <div className="ps-soon-card" style={{ marginTop: 12 }}>
             <div>

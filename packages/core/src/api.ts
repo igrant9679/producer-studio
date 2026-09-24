@@ -43,6 +43,58 @@ export interface MeResponse {
   workspaces: Workspace[]
 }
 
+// ---- per-user appearance preferences ----
+// GET /api/me/preferences                             -> PreferencesResponse (defaults until first saved)
+// PUT /api/me/preferences  Partial<UserPreferences>   -> PreferencesResponse (partial merge; unknown keys rejected)
+// Same routes on desktop (the one local user). Not part of the desktop/cloud sync change feed: each replica keeps
+// its own copy, and the browser also caches the last value in localStorage (`ps.appearance`).
+export type ThemePreference = 'system' | 'dark' | 'light'
+export type TextSize = 'sm' | 'md' | 'lg' | 'xl'
+export type AccentPreset = 'coral' | 'violet' | 'blue' | 'teal' | 'amber' | 'pink'
+export type Density = 'comfortable' | 'compact'
+
+export interface UserPreferences {
+  theme: ThemePreference
+  /** UI text scale: sm 0.9, md 1, lg 1.125, xl 1.25 (TEXT_SCALE). */
+  textSize: TextSize
+  accent: AccentPreset
+  density: Density
+  reduceMotion: boolean
+}
+
+export interface PreferencesResponse {
+  preferences: UserPreferences
+  /** Epoch ms of the last save; null = never saved (the defaults). */
+  updatedAt: number | null
+}
+
+export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'dark', 'light']
+export const TEXT_SIZES: readonly TextSize[] = ['sm', 'md', 'lg', 'xl']
+export const ACCENT_PRESETS: readonly AccentPreset[] = ['coral', 'violet', 'blue', 'teal', 'amber', 'pink']
+export const DENSITIES: readonly Density[] = ['comfortable', 'compact']
+export const TEXT_SCALE: Readonly<Record<TextSize, number>> = { sm: 0.9, md: 1, lg: 1.125, xl: 1.25 }
+
+export const DEFAULT_PREFERENCES: Readonly<UserPreferences> = Object.freeze({
+  theme: 'system',
+  textSize: 'md',
+  accent: 'coral',
+  density: 'comfortable',
+  reduceMotion: false,
+})
+
+/** Coerce anything (stored JSON, localStorage) into valid preferences, falling back to the defaults per field. */
+export function normalizePreferences(raw: unknown): UserPreferences {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const pick = <T extends string>(v: unknown, list: readonly T[], d: T): T => (typeof v === 'string' && (list as readonly string[]).includes(v) ? (v as T) : d)
+  return {
+    theme: pick(o.theme, THEME_PREFERENCES, DEFAULT_PREFERENCES.theme),
+    textSize: pick(o.textSize, TEXT_SIZES, DEFAULT_PREFERENCES.textSize),
+    accent: pick(o.accent, ACCENT_PRESETS, DEFAULT_PREFERENCES.accent),
+    density: pick(o.density, DENSITIES, DEFAULT_PREFERENCES.density),
+    reduceMotion: typeof o.reduceMotion === 'boolean' ? o.reduceMotion : DEFAULT_PREFERENCES.reduceMotion,
+  }
+}
+
 // ---- workspaces ----
 // GET  /api/workspaces                                -> Workspace[]
 // POST /api/workspaces {name}                         -> Workspace

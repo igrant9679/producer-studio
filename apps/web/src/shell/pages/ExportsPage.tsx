@@ -86,7 +86,7 @@ export default function ExportsPage() {
           <p>Every render from this space’s recent projects. Download files or send a link anyone can watch — no sign-in needed.</p>
         </div>
         <span className="spacer" />
-        {data?.length ? <span className="muted" style={{ fontSize: 13 }}>{data.length} exports · {formatBytes(total)}</span> : null}
+        {data?.length ? <span className="muted" style={{ fontSize: '0.8125rem' }}>{data.length} exports · {formatBytes(total)}</span> : null}
       </div>
 
       {error ? (

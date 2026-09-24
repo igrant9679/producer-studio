@@ -97,7 +97,7 @@ export function SyncIndicator() {
           <div className="row" style={{ padding: '6px 8px 10px', alignItems: 'flex-start' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <strong style={{ fontFamily: 'var(--font-display)' }}>Cloud sync</strong>
-              <div className="muted" style={{ fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {sync.linked ? `${sync.account ?? 'Linked'} · ${sync.cloudUrl?.replace(/^https?:\/\//, '') ?? ''}` : 'This computer isn’t linked to a cloud account'}
               </div>
             </div>
@@ -111,9 +111,9 @@ export function SyncIndicator() {
               <div><strong className={sync.conflicts.length ? 'warn' : ''}>{sync.conflicts.length}</strong><span>Conflicts</span></div>
             </div>
           ) : (
-            <p className="muted" style={{ fontSize: 13, margin: '0 8px 12px' }}>Link your Producer Studio account to back up projects and pick them up on any device. Everything keeps working offline.</p>
+            <p className="muted" style={{ fontSize: '0.8125rem', margin: '0 8px 12px' }}>Link your Producer Studio account to back up projects and pick them up on any device. Everything keeps working offline.</p>
           )}
-          {sync.error && <div className="ps-alert" style={{ margin: '0 4px 10px', fontSize: 12 }}>{sync.error}</div>}
+          {sync.error && <div className="ps-alert" style={{ margin: '0 4px 10px', fontSize: '0.75rem' }}>{sync.error}</div>}
 
           {sync.conflicts.length > 0 && (
             <div className="ps-conflicts">

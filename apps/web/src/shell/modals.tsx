@@ -133,7 +133,7 @@ export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; on
           <Link2 size={16} style={{ flex: 'none' }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, marginBottom: 2 }}>Invite link ready — share it with {email}</div>
-            <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12, wordBreak: 'break-all' }}>{url}</code>
+            <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', wordBreak: 'break-all' }}>{url}</code>
           </div>
           <button
             className="btn sm"
@@ -161,7 +161,7 @@ export function InviteModal({ onClose }: { onClose: () => void }) {
 }
 
 const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
-  ['Anywhere', [['Search projects & media', 'Ctrl K'], ['Show this help', '?'], ['Close dialogs & menus', 'Esc']]],
+  ['Anywhere', [['Search projects & media', 'Ctrl K'], ['Show this help', '?'], ['Cycle theme (system / dark / light)', 'Ctrl Shift L'], ['Close dialogs & menus', 'Esc']]],
   ['Editor — global', [['Play / pause', 'Space'], ['Undo', 'Ctrl Z'], ['Redo', 'Ctrl Shift Z'], ['Select all', 'Ctrl A'], ['Copy / paste', 'Ctrl C / V'], ['Delete', 'Backspace']]],
   ['Editor — timeline', [['Split at playhead', 'Ctrl B'], ['Zoom timeline', 'Ctrl + / −'], ['Previous / next frame', 'Ctrl ← / →'], ['Separate audio', 'Ctrl Shift S']]],
   ['Editor — canvas', [['Move tool', 'V'], ['Hand tool', 'H'], ['Fit canvas', 'Shift F'], ['Nudge 1 px', '↑ ↓ ← →']]],
@@ -202,7 +202,7 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
             <li>Everything in a space — projects, media, brand kit — is shared with its members.</li>
             <li>Exports and share links live under <b>Exports &amp; sharing</b>.</li>
           </ul>
-          <p className="muted" style={{ fontSize: 12 }}>Version 0.1 · Phase 1</p>
+          <p className="muted" style={{ fontSize: '0.75rem' }}>Version 0.1 · Phase 1</p>
         </div>
       )}
     </Modal>

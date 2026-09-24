@@ -260,10 +260,10 @@ function TextPanel() {
     <>
       <div className="ed-textadd">
         <button draggable onDragStart={(e) => startDrag(e, { kind: 'text', templateId: 'heading' })} onDragEnd={endDrag} onClick={() => A.addText('heading')}>
-          <span style={{ fontSize: 20, fontWeight: 800 }}>Add heading</span>
+          <span style={{ fontSize: '1.25rem', fontWeight: 800 }}>Add heading</span>
         </button>
         <button draggable onDragStart={(e) => startDrag(e, { kind: 'text', templateId: 'body' })} onDragEnd={endDrag} onClick={() => A.addText('body')}>
-          <span style={{ fontSize: 13, fontWeight: 500 }}>Add body text</span>
+          <span style={{ fontSize: '0.8125rem', fontWeight: 500 }}>Add body text</span>
         </button>
       </div>
       {cats.map((c) => (
@@ -427,8 +427,8 @@ function VoiceoverBox() {
     <div className="ed-vo">
       <div className="row" style={{ marginBottom: 8 }}>
         <Mic size={14} color="var(--accent)" />
-        <b style={{ fontSize: 13 }}>Voiceover</b>
-        <span className="muted" style={{ fontSize: 11 }}>text to speech</span>
+        <b style={{ fontSize: '0.8125rem' }}>Voiceover</b>
+        <span className="muted" style={{ fontSize: '0.6875rem' }}>text to speech</span>
       </div>
       <textarea className="ed-textarea" rows={4} placeholder="Type what the narrator should say…" value={text} onChange={(e) => setText(e.target.value)} />
       <div className="row" style={{ gap: 6, marginTop: 8 }}>

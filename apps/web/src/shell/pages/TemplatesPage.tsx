@@ -53,7 +53,7 @@ function TemplateModal({ list, index, onIndex, onClose }: { list: TemplateSummar
             <div><Clock size={15} /><strong>{formatDuration(t.duration)}</strong><span>Duration</span></div>
             <div><Ratio size={15} /><strong>{t.aspect}</strong><span>Aspect</span></div>
           </div>
-          <p className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
+          <p className="muted" style={{ fontSize: '0.8125rem', lineHeight: 1.55 }}>
             Opens as a new project with placeholder clips and texts you can replace — drop in your footage, change the words, keep the timing and motion.
           </p>
           <button className="btn primary" style={{ width: '100%', height: 44 }} disabled={busy} onClick={() => void create({ templateId: t.id })}>

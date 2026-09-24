@@ -1,12 +1,12 @@
 // Producer Studio desktop — Electron main process.
 // Boots the local server (MODE=desktop) as a child, opens a per-launch session for the one local user, then loads
 // the same web UI the cloud serves, from http://127.0.0.1:<port>. Renderers are sandboxed with context isolation;
-// the preload exposes a version, the platform and two validated functions; navigation never leaves the local origin.
+// the preload exposes a version, the platform and three validated functions; navigation never leaves the local origin.
 import fs from 'node:fs'
 import path from 'node:path'
-import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, dialog, ipcMain, session, shell } from 'electron'
+import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import { isDev } from './paths'
-import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, openExternal, setLocalOrigin } from './security'
+import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, nativeThemeMode, openExternal, setLocalOrigin } from './security'
 import { ServerProcess } from './server'
 
 app.enableSandbox()
@@ -227,6 +227,17 @@ if (!app.requestSingleInstanceLock()) {
     if (!target) return false
     if (fs.statSync(target).isDirectory()) void shell.openPath(target)
     else shell.showItemInFolder(target)
+    return true
+  })
+
+  ipcMain.handle('desktop:set-native-theme', (e, mode: unknown) => {
+    if (!isLocal(e.senderFrame?.url ?? '')) return false
+    const m = nativeThemeMode(mode)
+    if (!m) return false
+    nativeTheme.themeSource = m
+    // keep the window ground in step so resizes don't flash the other theme
+    const w = BrowserWindow.fromWebContents(e.sender)
+    w?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0c0e14' : '#f3f5f8')
     return true
   })
 

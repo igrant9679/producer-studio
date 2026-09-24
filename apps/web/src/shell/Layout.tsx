@@ -36,6 +36,7 @@ import { useCreateAndOpen } from './actions'
 import { MOCK_ACTIVE } from './dev/installMock'
 import { AspectPickerModal, CreateSpaceModal, HelpModal, InviteModal } from './modals'
 import { AiChip, DesktopBadge, SyncIndicator } from './SystemChrome'
+import { ThemeSwitcher } from './pages/AppearanceSettings'
 import { useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, useJobs, useUploads } from './stores'
 import { Avatar, Logo, MenuList, Popover, Progress, Spinner, spaceColor, useClickOutside, useFilePicker } from './ui'
@@ -86,7 +87,7 @@ function SpaceSwitcher({ openModal }: { openModal: (m: ModalKind) => void }) {
                 close()
               }}
             >
-              <span className="ps-space-avatar" style={{ background: spaceColor(w.id), width: 24, height: 24, fontSize: 11 }}>{w.name.slice(0, 1).toUpperCase()}</span>
+              <span className="ps-space-avatar" style={{ background: spaceColor(w.id), width: 24, height: 24, fontSize: '0.6875rem' }}>{w.name.slice(0, 1).toUpperCase()}</span>
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</span>
                 <span className="ps-menu-sub">{w.personal ? 'Personal' : `${w.memberCount} members`} · {w.role}</span>
@@ -263,7 +264,7 @@ function GlobalSearch() {
             <button key={p.id} className="ps-menu-item" style={hi === i ? { background: 'var(--surface-3)' } : undefined} onMouseEnter={() => setHi(i)} onClick={() => submit(i)}>
               {p.kind === 'producer' ? <Sparkles size={15} /> : <Film size={15} />}
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
-              <span className="muted" style={{ fontSize: 11.5 }}>{relativeTime(p.updatedAt)}</span>
+              <span className="muted" style={{ fontSize: '0.7188rem' }}>{relativeTime(p.updatedAt)}</span>
             </button>
           ))}
           {results.assets.length > 0 && <div className="ps-menu-label">Media</div>}
@@ -273,11 +274,11 @@ function GlobalSearch() {
               <button key={a.asset.id} className="ps-menu-item" style={hi === i ? { background: 'var(--surface-3)' } : undefined} onMouseEnter={() => setHi(i)} onClick={() => submit(i)}>
                 {a.asset.kind === 'audio' ? <Music size={15} /> : a.asset.kind === 'image' ? <ImageIcon size={15} /> : <Video size={15} />}
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.asset.name}</span>
-                {a.asset.duration ? <span className="muted" style={{ fontSize: 11.5 }}>{formatDuration(a.asset.duration)}</span> : null}
+                {a.asset.duration ? <span className="muted" style={{ fontSize: '0.7188rem' }}>{formatDuration(a.asset.duration)}</span> : null}
               </button>
             )
           })}
-          {data && !results.projects.length && !results.assets.length && <div className="muted" style={{ padding: '10px 10px 4px', fontSize: 13 }}>No matches for “{q.trim()}”.</div>}
+          {data && !results.projects.length && !results.assets.length && <div className="muted" style={{ padding: '10px 10px 4px', fontSize: '0.8125rem' }}>No matches for “{q.trim()}”.</div>}
           <div className="ps-menu-sep" />
           <button className="ps-menu-item" style={hi < 0 ? { background: 'var(--surface-3)' } : undefined} onMouseEnter={() => setHi(-1)} onClick={() => submit(-1)}>
             <FolderOpen size={15} />
@@ -351,7 +352,7 @@ function JobsIndicator() {
       <div className="row" style={{ padding: '6px 10px 8px' }}>
         <strong style={{ fontFamily: 'var(--font-display)' }}>Background jobs</strong>
         <span className="spacer" />
-        <span className="muted" style={{ fontSize: 12 }}>{count ? `${count} running` : 'All quiet'}</span>
+        <span className="muted" style={{ fontSize: '0.75rem' }}>{count ? `${count} running` : 'All quiet'}</span>
       </div>
       <div style={{ maxHeight: 420, overflowY: 'auto' }}>
         {uploads.map((u) => (
@@ -359,7 +360,7 @@ function JobsIndicator() {
             <div className="ps-job-title">
               <Upload size={14} style={{ color: 'var(--cyan)' }} />
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}</span>
-              <span className="muted" style={{ fontSize: 11.5 }}>{u.status === 'uploading' ? `${Math.round(u.progress * 100)}%` : u.status}</span>
+              <span className="muted" style={{ fontSize: '0.7188rem' }}>{u.status === 'uploading' ? `${Math.round(u.progress * 100)}%` : u.status}</span>
             </div>
             <div className="ps-job-msg">{u.status === 'error' ? u.error : u.status === 'uploading' ? 'Uploading' : u.status === 'processing' ? 'Processing on the server' : 'Ready in your library'}</div>
             {(u.status === 'uploading' || u.status === 'processing') && <Progress value={u.status === 'processing' ? -1 : u.progress} />}
@@ -370,7 +371,7 @@ function JobsIndicator() {
             <div className="ps-job-title">
               <Spinner size={14} />
               <span style={{ flex: 1 }}>{JOB_LABELS[j.kind] ?? j.kind}</span>
-              <span className="muted" style={{ fontSize: 11.5 }}>{j.progress >= 0 ? `${Math.round(j.progress * 100)}%` : j.status}</span>
+              <span className="muted" style={{ fontSize: '0.7188rem' }}>{j.progress >= 0 ? `${Math.round(j.progress * 100)}%` : j.status}</span>
               <button className="btn ghost sm" onClick={() => api.cancelJob(j.id).then((r) => useJobs.getState().upsert(r)).catch(() => undefined)}>Cancel</button>
             </div>
             <div className="ps-job-msg">{j.message || (j.status === 'queued' ? 'Waiting in queue' : 'Working…')}</div>
@@ -378,7 +379,7 @@ function JobsIndicator() {
           </div>
         ))}
         {!count && !uploads.length && !recent.length && (
-          <div className="muted" style={{ padding: '18px 10px', textAlign: 'center', fontSize: 13 }}>
+          <div className="muted" style={{ padding: '18px 10px', textAlign: 'center', fontSize: '0.8125rem' }}>
             Transcriptions, voiceovers and renders you start will show up here.
           </div>
         )}
@@ -388,7 +389,7 @@ function JobsIndicator() {
             <div className="ps-job-title" style={{ fontWeight: 500 }}>
               {j.status === 'done' ? <Check size={14} style={{ color: 'var(--green)' }} /> : <X size={14} style={{ color: 'var(--danger)' }} />}
               <span style={{ flex: 1 }}>{JOB_LABELS[j.kind] ?? j.kind}</span>
-              <span className="muted" style={{ fontSize: 11.5 }}>{j.status === 'done' ? relativeTime(j.updatedAt) : j.status}</span>
+              <span className="muted" style={{ fontSize: '0.7188rem' }}>{j.status === 'done' ? relativeTime(j.updatedAt) : j.status}</span>
               <button className="btn ghost sm icon" aria-label="Dismiss" onClick={() => dismiss(j.id)}><X size={12} /></button>
             </div>
             {j.status === 'error' && j.error && <div className="ps-job-msg" style={{ marginBottom: 0 }}>{j.error}</div>}
@@ -424,8 +425,14 @@ function AvatarMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
             <Avatar name={user?.name} color={user?.avatarColor} size={38} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.name}</div>
-              <div className="muted" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.email}</div>
+              <div className="muted" style={{ fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.email}</div>
             </div>
+          </div>
+          <div className="ps-menu-sep" />
+          <div className="row ps-menu-theme">
+            <span className="ps-menu-theme-label">Theme</span>
+            <span className="spacer" />
+            <ThemeSwitcher />
           </div>
           <div className="ps-menu-sep" />
           <MenuList

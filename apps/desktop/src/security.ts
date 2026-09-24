@@ -39,6 +39,13 @@ export function openExternal(raw: unknown): boolean {
   return true
 }
 
+export type NativeThemeMode = 'system' | 'dark' | 'light'
+
+/** Validate a theme mode from the renderer; null for anything else. */
+export function nativeThemeMode(raw: unknown): NativeThemeMode | null {
+  return raw === 'system' || raw === 'dark' || raw === 'light' ? raw : null
+}
+
 /** A path inside the data folder (after resolving symlinks), or null. */
 export function insideDataDir(raw: unknown, dataDir: string): string | null {
   if (typeof raw !== 'string' || !raw || raw.length > 4096 || raw.includes('\0')) return null

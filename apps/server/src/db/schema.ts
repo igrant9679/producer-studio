@@ -203,4 +203,11 @@ export const aiKeys = pgTable(
   (t) => [primaryKey({ columns: [t.workspaceId, t.provider] })],
 )
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, tombstones, devices, workspaceAiSettings, aiKeys }
+/** Appearance preferences per user (UserPreferences). Not synced. */
+export const userPreferences = pgTable('user_preferences', {
+  userId: text('user_id').primaryKey(),
+  doc: jsonb('doc').$type<Record<string, unknown>>().notNull(),
+  updatedAt: ms('updated_at').notNull(),
+})
+
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences }

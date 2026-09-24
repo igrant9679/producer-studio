@@ -13,6 +13,7 @@ import type {
   ExportResult,
   Job,
   MeResponse,
+  PreferencesResponse,
   Member,
   ProduceScriptRequest,
   Project,
@@ -24,6 +25,7 @@ import type {
   TemplateSummary,
   Transcript,
   TtsRequest,
+  UserPreferences,
   Voice,
   Workspace,
   WriteRequest,
@@ -122,6 +124,8 @@ export const api = {
   login: (email: string, password: string) => req<MeResponse>('POST', '/auth/login', { email, password }),
   signup: (email: string, password: string, name: string) => req<MeResponse>('POST', '/auth/signup', { email, password, name }),
   logout: () => req<{ ok: true }>('POST', '/auth/logout'),
+  preferences: () => req<PreferencesResponse>('GET', '/me/preferences'),
+  savePreferences: (p: Partial<UserPreferences>) => req<PreferencesResponse>('PUT', '/me/preferences', p),
 
   // workspaces
   workspaces: () => req<Workspace[]>('GET', '/workspaces'),

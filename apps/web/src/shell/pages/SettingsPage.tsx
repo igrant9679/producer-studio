@@ -1,14 +1,16 @@
 import type { AiSettings, Device, DesktopSettings } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, Paintbrush, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { HttpError } from '../../lib/api'
+import { scrollBehavior } from '../../lib/appearance'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { syncSummary } from '../SystemChrome'
 import { aiLabel, aiLabelHasModel, sysFetch, systemApi, useSystem } from '../system'
 import { AiProviders } from './AiProviders'
+import { AppearanceSettings } from './AppearanceSettings'
 import { Avatar, EmptyState, Spinner, useAsync, usePageTitle } from '../ui'
 import { relativeTime } from '../util'
 
@@ -83,7 +85,7 @@ function LinkForm() {
   }
   return (
     <form onSubmit={submit} className="ps-set-form" aria-label="Link a cloud account">
-      <p className="muted" style={{ margin: '0 0 14px', fontSize: 13 }}>Sign in with your Producer Studio cloud account. Your password is exchanged for a device token and isn’t stored on this computer.</p>
+      <p className="muted" style={{ margin: '0 0 14px', fontSize: '0.8125rem' }}>Sign in with your Producer Studio cloud account. Your password is exchanged for a device token and isn’t stored on this computer.</p>
       <div className="ps-set-grid">
         <div className="ps-field" style={{ gridColumn: '1 / -1' }}>
           <label className="label" htmlFor="sync-url">Cloud URL</label>
@@ -125,7 +127,7 @@ function DesktopAccount({ settings, onSettings }: { settings?: DesktopSettings; 
   return (
     <div>
       <div className="ps-linked">
-        <span className="ps-set-icon" style={{ background: 'rgba(61,220,151,.12)', color: 'var(--green)' }}><Cloud size={18} /></span>
+        <span className="ps-set-icon" style={{ background: 'var(--green-soft)', color: 'var(--green)' }}><Cloud size={18} /></span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <strong>{sync.account ?? 'Linked account'}</strong>
           <span>{sync.cloudUrl} · {sum.label}{sync.lastSyncAt ? ` · last synced ${relativeTime(sync.lastSyncAt)}` : ''}</span>
@@ -414,7 +416,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!loc.hash) return
-    const t = setTimeout(() => document.getElementById(loc.hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
+    const t = setTimeout(() => document.getElementById(loc.hash.slice(1))?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 60)
     return () => clearTimeout(t)
   }, [loc.hash, loaded])
 
@@ -445,6 +447,10 @@ export default function SettingsPage() {
       ) : (
         <div className="ps-set">
           {settingsErr && <div className="ps-alert">Couldn’t load desktop settings: {settingsErr}</div>}
+          <Section id="appearance" icon={<Paintbrush size={18} />} title="Appearance" sub={desktop ? 'Theme, text size and colour for this computer. Changes apply instantly.' : 'Theme, text size and colour. Changes apply instantly and follow your account.'}>
+            <AppearanceSettings />
+          </Section>
+
           <Section id="account" icon={desktop ? <Cloud size={18} /> : <User size={18} />} title="Account & sync" sub={desktop ? 'Link this computer to your cloud account to back up and share projects.' : 'Your account and the desktop apps linked to it.'}>
             {desktop ? (
               <DesktopAccount settings={settings} onSettings={onSettings} />

@@ -17,6 +17,7 @@ import { aiSettingsRoutes } from './routes/ai-settings'
 import { assetRoutes, mediaRoutes, uploadRoutes } from './routes/assets'
 import { authRoutes } from './routes/auth'
 import { eventRoutes, jobRoutes } from './routes/jobs'
+import { preferenceRoutes } from './routes/preferences'
 import { projectRoutes } from './routes/projects'
 import { exportRoutes, projectExportRoutes, shareRoutes } from './routes/share'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
@@ -100,6 +101,7 @@ export function createApp() {
   // desktop-only routes first: they shadow signup and (while linked) workspace creation
   if (ctx().config.mode === 'desktop') app.route('/api', desktopRoutes)
   app.route('/api/auth', authRoutes)
+  app.route('/api/me', preferenceRoutes)
   app.route('/api/workspaces', workspaceRoutes)
   app.route('/api/invites', inviteRoutes)
   app.route('/api/projects', projectExportRoutes)

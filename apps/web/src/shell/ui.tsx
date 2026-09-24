@@ -176,7 +176,7 @@ export function gradientFor(seed: string): string {
   let h = 0
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
   const [a, b] = GRADS[h % GRADS.length]
-  return `linear-gradient(135deg, ${a}33, ${b}55), linear-gradient(160deg, #1b2030, #10131b)`
+  return `linear-gradient(135deg, ${a}33, ${b}55), linear-gradient(160deg, var(--thumb-a), var(--thumb-b))`
 }
 
 /** Thumbnail with graceful fallback (gradient + icon) when the image is missing or fails. */

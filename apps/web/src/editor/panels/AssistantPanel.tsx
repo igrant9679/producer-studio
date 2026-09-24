@@ -4,6 +4,7 @@ import type { AssistantMessage } from '@producer/core'
 import clsx from 'clsx'
 import { ArrowUp, Bot, Loader2, Sparkles, Undo2, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { scrollBehavior } from '../../lib/appearance'
 import { api } from '../../lib/api'
 import { aiLabel, aiProviderLabel, systemApi, useSystem } from '../../shell/system'
 import { toastError } from '../../lib/toast'
@@ -55,7 +56,7 @@ export function AssistantPanel() {
 
   useEffect(() => {
     history.set(projectId, msgs)
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: scrollBehavior() })
   }, [msgs, projectId])
   useEffect(() => () => abort.current?.abort(), [])
 

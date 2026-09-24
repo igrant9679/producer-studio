@@ -1,6 +1,14 @@
-/* Producer Studio design tokens. Dark, production-tool look: near-black ground, layered slate surfaces,
-   coral accent (Producer brand) with a cyan secondary for playheads/selection. */
+/* Producer Studio design tokens.
+   Dark (default): near-black ground, layered slate surfaces, coral accent (Producer brand) with a cyan secondary
+   for playheads/selection. Light: off-white ground, white surfaces, slate text.
+   Appearance is driven by attributes on <html> (lib/appearance.ts + public/appearance-boot.js):
+     data-theme="dark|light"  data-accent="coral|violet|blue|teal|amber|pink"  data-density="comfortable|compact"
+     data-reduce-motion="true|false"  and the text scale as the inline variable --ui-scale.
+   Font sizes are rem (html font-size = 16px x --ui-scale); geometry that pointer maths depends on stays px. */
 :root {
+  --ui-scale: 1;
+
+  /* grounds, surfaces, text */
   --bg: #0c0e14;
   --bg-2: #10131b;
   --surface: #151924;
@@ -10,87 +18,382 @@
   --border-strong: #343d56;
   --text: #eef1f8;
   --text-2: #b4bbcd;
-  --text-3: #7c859c;
+  --text-3: #818aa1;
+  /* controls: default button face, text fields, segmented controls */
+  --control: var(--surface-2);
+  --control-hover: var(--surface-3);
+  --field: var(--bg-2);
+  --field-2: var(--bg);
+  --seg-bg: var(--surface);
+  --seg-on: var(--surface-3);
+  --hover-tint: rgba(255, 255, 255, 0.02);
+  --inset-highlight: rgba(255, 255, 255, 0.04);
+  --seg-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --ed-seg-bg: var(--bg);
+  --ring: rgba(255, 255, 255, 0.14);
+  --checker: #333;
+  --highlight: rgba(255, 194, 77, 0.22);
+  --grid-line: rgba(255, 255, 255, 0.035);
+  --pitch-bg: linear-gradient(160deg, #121624, #0c0e14);
+
+  /* accent (preset: coral). --accent marks/borders/icons/accent text; --accent-fill is a solid fill under
+     --on-accent text (>= 4.5:1); --accent-hover is the fill's hover. */
+  --brand: #ff5a5f;
+  /* the wordmark keeps the brand coral whatever the accent preset */
+  --brand-text: #ff5a5f;
   --accent: #ff5a5f;
-  --accent-hover: #ff7478;
-  --accent-soft: rgba(255, 90, 95, 0.14);
+  --accent-fill: #d8353b;
+  --accent-hover: #c62c33;
+  --on-accent: #fff;
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 28%, transparent);
+  --accent-mid: color-mix(in srgb, var(--accent) 45%, #ffe2d6);
+
+  /* secondary + status */
   --cyan: #35e0ff;
   --cyan-soft: rgba(53, 224, 255, 0.16);
+  --cyan-line: rgba(53, 224, 255, 0.4);
+  --on-cyan: #0c0e14;
+  --link: var(--cyan);
   --green: #3ddc97;
+  --green-soft: rgba(61, 220, 151, 0.12);
   --amber: #ffc24d;
+  --amber-soft: rgba(255, 194, 77, 0.1);
+  --amber-line: rgba(255, 194, 77, 0.4);
   --danger: #ff4d6a;
+  --danger-soft: rgba(255, 77, 106, 0.1);
+  --danger-line: rgba(255, 77, 106, 0.42);
+  --danger-text: #ffc2cc;
+  --info-text: #c9f6ff;
+  --violet: #b197fc;
+  --violet-soft: rgba(151, 117, 250, 0.12);
+  --violet-line: rgba(151, 117, 250, 0.45);
+  --violet-text: #cdbdff;
+  --on-status: #0c0e14;
+  --key: #ffe14d;
+
+  /* timeline tracks (hues are shared by both themes) */
   --track-video: #3b5bdb;
   --track-overlay: #7950f2;
   --track-text: #e8590c;
   --track-audio: #0ca678;
   --track-caption: #c2255c;
+  --timeline-bg: var(--bg-2);
+  --lane-bg: rgba(255, 255, 255, 0.012);
+  --lane-line: rgba(255, 255, 255, 0.025);
+  --lane-main: rgba(59, 91, 219, 0.05);
+  --lane-locked: rgba(255, 255, 255, 0.03);
+  --ruler-major: var(--border-strong);
+  --ruler-minor: var(--border);
+  --clip-base: #0b0d13;
+  --clip-pct: 38%;
+  --clip-pct-text: 55%;
+  --clip-pct-caption: 45%;
+  --clip-border-base: #000;
+  --clip-text: #fff;
+  --clip-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --clip-hover-base: #fff;
+  --badge-bg: rgba(0, 0, 0, 0.45);
+  --badge-line: rgba(255, 255, 255, 0.18);
+  --fade: rgba(0, 0, 0, 0.45);
+  --trim: rgba(255, 255, 255, 0.55);
+  --trim-2: rgba(255, 255, 255, 0.1);
+  --main-tag: #9db1ff;
+  --wave-base: #fff;
+  --wave-pct: 55%;
+  --wave-mini: rgba(170, 255, 220, 0.8);
+  --playhead: var(--cyan);
+  --selection: var(--cyan);
+
+  /* canvas stage: the letterbox around the video stays neutral dark grey in both themes */
+  --stage-bg: #07080c;
+  --stage-dot: rgba(255, 255, 255, 0.045);
+  --stage-edge: rgba(255, 255, 255, 0.06);
+  /* canvas guides and selection handles draw over the video, so they stay bright cyan in both themes */
+  --canvas-accent: #35e0ff;
+
+  /* media overlays (always drawn on top of imagery, so identical in both themes) */
+  --media-scrim: rgba(8, 10, 15, 0.78);
+  --media-dim: rgba(8, 10, 15, 0.6);
+  --on-media: #fff;
+  --media-bg: #05060a;
+  --thumb-a: #1b2030;
+  --thumb-b: #10131b;
+  --thumb-icon: rgba(255, 255, 255, 0.55);
+
+  /* scrims, glass, elevation */
+  --scrim: rgba(4, 6, 10, 0.66);
+  --overlay: rgba(12, 14, 20, 0.82);
+  --glass: rgba(12, 14, 20, 0.72);
+  --glass-strong: rgba(21, 25, 36, 0.92);
+  --nav-bg: linear-gradient(180deg, rgba(21, 25, 36, 0.92), rgba(12, 14, 20, 0.96));
+  --glow-cyan: rgba(53, 224, 255, 0.05);
+  --glow-accent: color-mix(in srgb, var(--accent) 6%, transparent);
+  --shadow-color: rgba(0, 0, 0, 0.45);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 18px 44px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 12px 26px rgba(0, 0, 0, 0.4);
+  --shadow-soft: 0 20px 50px rgba(0, 0, 0, 0.25);
+  --shadow-drop: rgba(0, 0, 0, 0.6);
+
+  /* density (comfortable = the original look). Control heights grow a little with the text scale. */
+  --h-control: calc(36px + (var(--ui-scale) - 1) * 16px);
+  --h-control-sm: calc(28px + (var(--ui-scale) - 1) * 12px);
+  --h-topbar: 60px;
+  --h-edtop: 48px;
+  --h-panelhead: 42px;
+  --h-toolbar: 40px;
+  --row-h: calc(36px + (var(--ui-scale) - 1) * 12px);
+  --row-h-menu: calc(34px + (var(--ui-scale) - 1) * 12px);
+  --row-h-field: calc(30px + (var(--ui-scale) - 1) * 10px);
+  --h-ed-input: calc(28px + (var(--ui-scale) - 1) * 10px);
+  --h-ed-seg: calc(24px + (var(--ui-scale) - 1) * 8px);
+  --h-ed-menu: calc(30px + (var(--ui-scale) - 1) * 10px);
+  --pad-page-y: 32px;
+  --pad-page-x: 36px;
+  --pad-card: 22px 24px;
+  --pad-panel: 12px;
+  --pad-cell: 8px 12px;
+  --gap-grid: 18px;
+
   --radius-sm: 6px;
   --radius: 10px;
   --radius-lg: 16px;
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   --font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
   color-scheme: dark;
 }
 
+/* ---------------- light theme ---------------- */
+:root[data-theme='light'] {
+  --bg: #f3f5f8;
+  --bg-2: #f8f9fb;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --surface-3: #e2e6ed;
+  --border: #dde2ea;
+  --border-strong: #c3cad6;
+  --text: #0f172a;
+  --text-2: #3d4658;
+  --text-3: #5a6475;
+  --control: #ffffff;
+  --control-hover: #eef1f5;
+  --field: #ffffff;
+  --field-2: #ffffff;
+  --seg-bg: #eef1f5;
+  --seg-on: #ffffff;
+  --hover-tint: rgba(15, 23, 42, 0.025);
+  --inset-highlight: rgba(255, 255, 255, 0.6);
+  --seg-shadow: 0 1px 2px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.04);
+  --ed-seg-bg: #eef1f5;
+  --ring: rgba(15, 23, 42, 0.16);
+  --checker: #d3d8e0;
+  --highlight: rgba(255, 194, 77, 0.45);
+  --grid-line: rgba(15, 23, 42, 0.045);
+  --pitch-bg: linear-gradient(160deg, #ffffff, #eef2f8);
+
+  --brand-text: #e0353c;
+  --accent: #d12f36;
+  --accent-fill: #d12f36;
+  --accent-hover: #b8262d;
+  --accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 22%, transparent);
+  --accent-mid: color-mix(in srgb, var(--accent) 70%, #7a2bd0);
+
+  --cyan: #0e7490;
+  --cyan-soft: rgba(14, 116, 144, 0.1);
+  --cyan-line: rgba(14, 116, 144, 0.4);
+  --on-cyan: #fff;
+  --green: #15803d;
+  --green-soft: rgba(21, 128, 61, 0.1);
+  --amber: #a85b00;
+  --amber-soft: rgba(217, 119, 6, 0.1);
+  --amber-line: rgba(217, 119, 6, 0.45);
+  --danger: #d42a4a;
+  --danger-soft: rgba(212, 42, 74, 0.08);
+  --danger-line: rgba(212, 42, 74, 0.4);
+  --danger-text: #a3162f;
+  --info-text: #0b5a70;
+  --violet: #6d3fe0;
+  --violet-soft: rgba(109, 63, 224, 0.09);
+  --violet-line: rgba(109, 63, 224, 0.4);
+  --violet-text: #5b2fc9;
+  --on-status: #fff;
+  --key: #c08400;
+
+  --timeline-bg: #f6f7fa;
+  --lane-bg: rgba(15, 23, 42, 0.02);
+  --lane-line: rgba(15, 23, 42, 0.05);
+  --lane-main: rgba(59, 91, 219, 0.05);
+  --lane-locked: rgba(15, 23, 42, 0.04);
+  --ruler-major: #9aa3b2;
+  --ruler-minor: #cdd3dd;
+  --clip-base: #ffffff;
+  --clip-pct: 24%;
+  --clip-pct-text: 30%;
+  --clip-pct-caption: 26%;
+  --clip-border-base: #fff;
+  --clip-text: #121826;
+  /* audio clip labels sit over the waveform: a soft white halo keeps them legible */
+  --clip-text-shadow: 0 0 2px #fff, 0 0 4px rgba(255, 255, 255, 0.9);
+  --clip-hover-base: #000;
+  --badge-bg: rgba(255, 255, 255, 0.7);
+  --badge-line: rgba(15, 23, 42, 0.14);
+  --fade: rgba(15, 23, 42, 0.16);
+  --trim: rgba(15, 23, 42, 0.32);
+  --trim-2: rgba(15, 23, 42, 0.05);
+  --main-tag: #2f47b8;
+  --thumb-a: #e3e7ee;
+  --thumb-b: #d3d9e3;
+  --thumb-icon: rgba(15, 23, 42, 0.35);
+  --wave-base: #000;
+  --wave-pct: 70%;
+  --playhead: #0891b2;
+  --selection: #0891b2;
+
+  --stage-bg: #2b2e35;
+  --stage-dot: rgba(255, 255, 255, 0.06);
+  --stage-edge: rgba(0, 0, 0, 0.25);
+
+  --scrim: rgba(15, 23, 42, 0.38);
+  --overlay: rgba(248, 249, 251, 0.9);
+  --glass: rgba(248, 249, 251, 0.82);
+  --glass-strong: rgba(255, 255, 255, 0.94);
+  --nav-bg: linear-gradient(180deg, #ffffff, #f8f9fb);
+  --glow-cyan: rgba(8, 145, 178, 0.05);
+  --glow-accent: color-mix(in srgb, var(--accent) 5%, transparent);
+  --shadow-color: rgba(15, 23, 42, 0.12);
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  --shadow-pop: 0 16px 40px rgba(15, 23, 42, 0.16), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-card: 0 10px 24px rgba(15, 23, 42, 0.1);
+  --shadow-soft: 0 12px 32px rgba(15, 23, 42, 0.07);
+  --shadow-drop: rgba(15, 23, 42, 0.25);
+  color-scheme: light;
+}
+
+/* ---------------- accent presets ---------------- */
+:root[data-accent='violet'] { --accent: #9d7bff; --accent-fill: #7148e8; --accent-hover: #6538dc; }
+:root[data-accent='blue'] { --accent: #5b9cff; --accent-fill: #2563eb; --accent-hover: #1d56d8; }
+:root[data-accent='teal'] { --accent: #2fd4bd; --accent-fill: #0f766e; --accent-hover: #0b655e; }
+:root[data-accent='amber'] { --accent: #ffc24d; --accent-fill: #ffb224; --accent-hover: #ffc14a; --on-accent: #1a1204; }
+:root[data-accent='pink'] { --accent: #ff6fae; --accent-fill: #d02a72; --accent-hover: #bd2266; }
+:root[data-theme='light'][data-accent='violet'] { --accent: #6d3fe0; --accent-fill: #6d3fe0; --accent-hover: #5b2fc9; }
+:root[data-theme='light'][data-accent='blue'] { --accent: #1d5fd6; --accent-fill: #1d5fd6; --accent-hover: #1a4fb8; }
+:root[data-theme='light'][data-accent='teal'] { --accent: #0e7a70; --accent-fill: #0e7a70; --accent-hover: #0b645c; }
+:root[data-theme='light'][data-accent='amber'] { --accent: #b45309; --accent-fill: #b45309; --accent-hover: #9a4508; --on-accent: #fff; }
+:root[data-theme='light'][data-accent='pink'] { --accent: #c2185b; --accent-fill: #c2185b; --accent-hover: #a3154d; }
+
+/* ---------------- density ---------------- */
+:root[data-density='compact'] {
+  --h-control: calc(30px + (var(--ui-scale) - 1) * 14px);
+  --h-control-sm: calc(24px + (var(--ui-scale) - 1) * 10px);
+  --h-topbar: 50px;
+  --h-edtop: 42px;
+  --h-panelhead: 36px;
+  --h-toolbar: 34px;
+  --row-h: calc(30px + (var(--ui-scale) - 1) * 12px);
+  --row-h-menu: calc(28px + (var(--ui-scale) - 1) * 10px);
+  --row-h-field: calc(26px + (var(--ui-scale) - 1) * 8px);
+  --h-ed-input: calc(24px + (var(--ui-scale) - 1) * 8px);
+  --h-ed-seg: calc(21px + (var(--ui-scale) - 1) * 8px);
+  --h-ed-menu: calc(26px + (var(--ui-scale) - 1) * 8px);
+  --pad-page-y: 22px;
+  --pad-page-x: 26px;
+  --pad-card: 16px 18px;
+  --pad-panel: 8px;
+  --pad-cell: 5px 10px;
+  --gap-grid: 14px;
+}
+
+/* ---------------- reduce motion ----------------
+   Transitions and animations off app-wide; progress bars and loading spinners keep moving (they report state).
+   Video playback is not a CSS animation and is unaffected. */
+:root[data-reduce-motion='true'] *,
+:root[data-reduce-motion='true'] *::before,
+:root[data-reduce-motion='true'] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0s !important;
+  transition-duration: 0.001ms !important;
+  transition-delay: 0s !important;
+  scroll-behavior: auto !important;
+}
+:root[data-reduce-motion='true'] .ps-progress > i,
+:root[data-reduce-motion='true'] .ed-bar div,
+:root[data-reduce-motion='true'] .ed-uprow .bar div { transition-duration: 0.3s !important; }
+:root[data-reduce-motion='true'] .ps-progress.indeterminate > i,
+:root[data-reduce-motion='true'] .ed-bar.ind div,
+:root[data-reduce-motion='true'] .ed-uprow.processing .bar div,
+:root[data-reduce-motion='true'] .ps-spin,
+:root[data-reduce-motion='true'] .spin { animation-duration: 1.2s !important; animation-iteration-count: infinite !important; }
+
 * { box-sizing: border-box; }
+html { font-size: calc(16px * var(--ui-scale)); }
 html, body, #root { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.45 var(--font);
+  font: 0.875rem/1.45 var(--font);
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
-a { color: var(--cyan); text-decoration: none; }
-::selection { background: var(--accent-soft); }
+a { color: var(--link); text-decoration: none; }
+::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+:root[data-theme='light'] ::-webkit-scrollbar-thumb { background: #c9cfd9; background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+:focus-visible { outline-color: var(--cyan); }
 
 /* Shared primitives used by shell and editor */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  height: 36px; padding: 0 14px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
-  cursor: pointer; font-weight: 600; font-size: 13px; white-space: nowrap;
+  height: var(--h-control); padding: 0 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--control); color: var(--text);
+  cursor: pointer; font-weight: 600; font-size: 0.8125rem; white-space: nowrap;
   transition: background .12s, border-color .12s, transform .06s;
 }
-.btn:hover { background: var(--surface-3); border-color: var(--border-strong); }
+.btn:hover { background: var(--control-hover); border-color: var(--border-strong); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover { background: var(--accent-hover); }
+.btn.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn.ghost { background: transparent; border-color: transparent; }
 .btn.ghost:hover { background: var(--surface-2); }
-.btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
-.btn.icon { width: 36px; padding: 0; }
-.btn.sm.icon { width: 28px; }
+.btn.sm { height: var(--h-control-sm); padding: 0 10px; font-size: 0.75rem; }
+.btn.icon { width: var(--h-control); padding: 0; }
+.btn.sm.icon { width: var(--h-control-sm); }
 .input {
-  height: 36px; width: 100%; padding: 0 12px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border); background: var(--bg-2); outline: none;
+  height: var(--h-control); width: 100%; padding: 0 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--field); outline: none;
 }
+.input::placeholder { color: var(--text-3); opacity: 1; }
 .input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px var(--cyan-soft); }
 textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
-.label { font-size: 12px; color: var(--text-3); font-weight: 600; margin-bottom: 6px; display: block; }
-.eyebrow { font: 600 11px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text-3); }
+.label { font-size: 0.75rem; color: var(--text-3); font-weight: 600; margin-bottom: 6px; display: block; }
+.eyebrow { font: 600 0.6875rem/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text-3); }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .chip {
-  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px;
-  border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border);
-  color: var(--text-2); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px; min-height: var(--h-control-sm); padding: 0 12px;
+  border-radius: 999px; background: var(--control); border: 1px solid var(--border);
+  color: var(--text-2); font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;
 }
 .chip.active, .chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
 .muted { color: var(--text-3); }
 .row { display: flex; align-items: center; gap: 8px; }
 .spacer { flex: 1; }
-.kbd { font: 11px var(--font-mono); padding: 2px 6px; border-radius: 4px; background: var(--surface-3); color: var(--text-2); }
+.kbd { font: 0.6875rem var(--font-mono); padding: 2px 6px; border-radius: 4px; background: var(--surface-3); color: var(--text-2); }
 .skeleton { background: linear-gradient(90deg, var(--surface) 0%, var(--surface-2) 50%, var(--surface) 100%); background-size: 200% 100%; animation: sk 1.2s linear infinite; border-radius: var(--radius-sm); }
+:root[data-theme='light'] .skeleton { background-image: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%); }
 @keyframes sk { to { background-position: -200% 0; } }
 .toast-host { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 .toast { pointer-events: auto; background: var(--surface-3); border: 1px solid var(--border-strong); padding: 10px 16px; border-radius: var(--radius); box-shadow: var(--shadow); font-weight: 500; }
+:root[data-theme='light'] .toast { background: #1e2433; border-color: #1e2433; color: #f4f6fb; }
 .toast.error { border-color: var(--danger); }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(4, 6, 10, .66); backdrop-filter: blur(4px); display: grid; place-items: center; z-index: 1000; }
+:root[data-theme='light'] .toast.error { background: #a3162f; border-color: #a3162f; }
+.modal-backdrop { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(4px); display: grid; place-items: center; z-index: 1000; }
 .modal { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow); max-width: min(92vw, 720px); width: 100%; max-height: 90vh; overflow: auto; }
+:root[data-theme='light'] .modal { border-color: var(--border); box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2); }

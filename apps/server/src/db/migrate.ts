@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -250,8 +250,20 @@ CREATE TABLE IF NOT EXISTS ai_keys (
 );
 `
 
+/**
+ * v4 — per-user appearance preferences (UserPreferences JSON). No change_seq trigger: not part of the sync feed.
+ */
+export const DDL_V4 = `
+CREATE TABLE IF NOT EXISTS user_preferences (
+  user_id text PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  doc jsonb NOT NULL,
+  updated_at double precision NOT NULL
+);
+`
+
 /** Ordered migrations after v1: [version, sql]. Append here; never edit a shipped entry. */
 export const MIGRATIONS: Array<[number, string]> = [
   [2, DDL_V2],
   [3, DDL_V3],
+  [4, DDL_V4],
 ]

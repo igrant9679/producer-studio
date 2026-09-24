@@ -169,7 +169,7 @@ export function ExportDialog() {
 }
 
 const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
-  ['Playback', [['Space', 'Play / pause'], ['← / →', 'Previous / next frame'], ['Shift ← / →', 'Back / forward 1 s'], ['Home / End', 'Go to start / end'], ['Ctrl Shift F', 'Full-screen preview']]],
+  ['Playback', [['Space', 'Play / pause'], ['← / →', 'Previous / next frame'], ['Shift ← / →', 'Back / forward 1 s'], ['Home / End', 'Go to start / end'], ['Ctrl Shift F', 'Full-screen preview'], ['Ctrl Shift L', 'Cycle theme']]],
   ['Editing', [['Ctrl B', 'Split at playhead'], ['Delete', 'Delete'], ['Shift Delete', 'Ripple delete'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl A', 'Select all'], ['Ctrl Z', 'Undo'], ['Ctrl Shift Z', 'Redo']]],
   ['Timeline', [['Ctrl = / Ctrl -', 'Zoom in / out'], ['Ctrl wheel', 'Zoom at pointer'], ['S', 'Toggle snapping'], ['Alt drag', 'Move without snapping'], ['Ctrl / Shift click', 'Multi-select']]],
   ['Canvas', [['V', 'Select tool'], ['H', 'Hand tool'], ['Arrows', 'Nudge 1 px (canvas focused)'], ['Shift arrows', 'Nudge 10 px'], ['Double-click text', 'Edit text inline'], ['Shift drag', 'Constrain / 15° rotate']]],

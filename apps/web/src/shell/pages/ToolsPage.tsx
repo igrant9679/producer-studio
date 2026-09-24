@@ -94,7 +94,7 @@ export default function ToolsPage() {
         <section key={g.title} className="ps-section" style={{ marginTop: 32 }}>
           <div className="ps-section-head">
             <h2 className="ps-h2">{g.title}</h2>
-            <span className="muted" style={{ fontSize: 13 }}>{g.blurb}</span>
+            <span className="muted" style={{ fontSize: '0.8125rem' }}>{g.blurb}</span>
           </div>
           <div className="ps-grid">
             {g.tools.map((t) => (

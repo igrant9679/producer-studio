@@ -405,6 +405,15 @@ on('POST', '/api/auth/logout', () => {
   return json({ ok: true })
 })
 
+// appearance preferences (per mock session, in memory)
+let mockPrefs: { preferences: Record<string, unknown>; updatedAt: number | null } = { preferences: { theme: 'system', textSize: 'md', accent: 'coral', density: 'comfortable', reduceMotion: false }, updatedAt: null }
+on('GET', '/api/me/preferences', () => (currentUser() ? json(mockPrefs) : fail(401, 'Not signed in', 'unauthorized')))
+on('PUT', '/api/me/preferences', (_m, _q, b) => {
+  if (!currentUser()) return fail(401, 'Not signed in', 'unauthorized')
+  mockPrefs = { preferences: { ...mockPrefs.preferences, ...(b as Record<string, unknown>) }, updatedAt: Date.now() }
+  return json(mockPrefs)
+})
+
 on('GET', '/api/workspaces', () => json(workspaces))
 on('POST', '/api/workspaces', async (_m, _q, b) => {
   await delay(300)

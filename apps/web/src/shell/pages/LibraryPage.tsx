@@ -56,7 +56,7 @@ function ConfirmModal({ title, body, confirm, onConfirm, onClose, busy }: { titl
       footer={
         <>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn" style={{ background: 'var(--danger)', borderColor: 'var(--danger)', color: '#fff' }} onClick={onConfirm} disabled={busy} autoFocus>
+          <button className="btn danger" onClick={onConfirm} disabled={busy} autoFocus>
             {busy && <Spinner />} {confirm}
           </button>
         </>
@@ -206,7 +206,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
             ))}
           </div>
         )}
-        {trash && <span className="muted" style={{ fontSize: 13 }}>Projects in trash can be restored or deleted permanently.</span>}
+        {trash && <span className="muted" style={{ fontSize: '0.8125rem' }}>Projects in trash can be restored or deleted permanently.</span>}
         <span className="spacer" />
         <select className="input" style={{ width: 160, height: 32 }} value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort">
           {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -451,7 +451,7 @@ function AssetsTab({ q }: { q: string }) {
             <div key={u.id} className="ps-acard">
               <div className="ps-thumb" style={{ display: 'grid', placeItems: 'center' }}>
                 <div style={{ width: '70%' }}>
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 8, textAlign: 'center' }}>Uploading {Math.round(u.progress * 100)}%</div>
+                  <div className="muted" style={{ fontSize: '0.75rem', marginBottom: 8, textAlign: 'center' }}>Uploading {Math.round(u.progress * 100)}%</div>
                   <Progress value={u.progress} />
                 </div>
               </div>

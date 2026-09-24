@@ -11,6 +11,8 @@ const api = Object.freeze({
   openExternal: (url: string): Promise<boolean> => ipcRenderer.invoke('desktop:open-external', String(url)),
   /** Reveal a file (or open the folder) inside the Producer data folder. Resolves false for any other path. */
   showItemInFolder: (p: string): Promise<boolean> => ipcRenderer.invoke('desktop:show-item', String(p)),
+  /** Make the native window frame and menus follow the app theme ('system' | 'dark' | 'light'). */
+  setNativeTheme: (mode: string): Promise<boolean> => ipcRenderer.invoke('desktop:set-native-theme', String(mode)),
 })
 
 contextBridge.exposeInMainWorld('producerDesktop', api)

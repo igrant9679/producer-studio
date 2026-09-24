@@ -22,10 +22,10 @@ export function QuickCard({ icon, title, body, onClick, glow, iconBg, iconFg, so
   )
 }
 
-export const CYAN = { glow: 'rgba(53,224,255,.14)', iconBg: 'var(--cyan-soft)', iconFg: 'var(--cyan)' }
-export const AMBER = { glow: 'rgba(255,194,77,.14)', iconBg: 'rgba(255,194,77,.14)', iconFg: 'var(--amber)' }
-export const GREEN = { glow: 'rgba(61,220,151,.14)', iconBg: 'rgba(61,220,151,.14)', iconFg: 'var(--green)' }
-export const VIOLET = { glow: 'rgba(151,117,250,.16)', iconBg: 'rgba(151,117,250,.16)', iconFg: '#b197fc' }
+export const CYAN = { glow: 'var(--cyan-soft)', iconBg: 'var(--cyan-soft)', iconFg: 'var(--cyan)' }
+export const AMBER = { glow: 'var(--amber-soft)', iconBg: 'var(--amber-soft)', iconFg: 'var(--amber)' }
+export const GREEN = { glow: 'var(--green-soft)', iconBg: 'var(--green-soft)', iconFg: 'var(--green)' }
+export const VIOLET = { glow: 'var(--violet-soft)', iconBg: 'var(--violet-soft)', iconFg: 'var(--violet)' }
 
 const ASPECTS = ['16:9', '9:16', '1:1'] as const
 const IDEAS = ['A 90-second product tour from my screen recording', 'A vertical teaser for our new feature', 'An onboarding walkthrough for new customers']

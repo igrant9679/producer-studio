@@ -17,7 +17,7 @@ export function voiceAccent(v: Voice): string {
 export function VoiceAvatar({ v, size = 36 }: { v: Voice; size?: number }) {
   const c = HUES[v.gender] ?? '#b197fc'
   return (
-    <span className="ps-voice-av" style={{ width: size, height: size, background: `radial-gradient(circle at 30% 25%, ${c}, ${c}55 60%, #1b2030)`, fontSize: size * 0.4 }}>
+    <span className="ps-voice-av" style={{ width: size, height: size, background: `radial-gradient(circle at 30% 25%, ${c}, ${c}55 60%, var(--thumb-a))`, fontSize: size * 0.4 }}>
       {v.name.slice(0, 1)}
     </span>
   )

@@ -26,7 +26,7 @@ export default function SpacePage() {
     <div className="ps-page narrow">
       <div className="ps-page-head">
         <div className="row" style={{ gap: 16, alignItems: 'center' }}>
-          <span className="ps-space-avatar" style={{ width: 56, height: 56, borderRadius: 16, fontSize: 24, background: spaceColor(ws?.id ?? '') }}>{(ws?.name ?? '?').slice(0, 1).toUpperCase()}</span>
+          <span className="ps-space-avatar" style={{ width: 56, height: 56, borderRadius: 16, fontSize: '1.5rem', background: spaceColor(ws?.id ?? '') }}>{(ws?.name ?? '?').slice(0, 1).toUpperCase()}</span>
           <div>
             <span className="eyebrow">{ws?.personal ? 'Personal space' : 'Team space'}</span>
             <h1 style={{ marginTop: 4 }}>{ws?.name}</h1>
@@ -64,7 +64,7 @@ export default function SpacePage() {
             ))}
           </div>
         )}
-        <div className="muted" style={{ fontSize: 12, marginTop: 14 }}>Changing roles and removing members is coming soon.</div>
+        <div className="muted" style={{ fontSize: '0.75rem', marginTop: 14 }}>Changing roles and removing members is coming soon.</div>
       </section>
 
       {workspaces.length > 1 && (
