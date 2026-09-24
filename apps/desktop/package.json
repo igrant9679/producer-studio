@@ -1,7 +1,7 @@
 {
   "name": "@producer/desktop",
   "productName": "Producer Studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Producer Studio for desktop — the Producer Studio editor and AI production running locally, synced with your cloud account.",
   "author": "Producer Studio",

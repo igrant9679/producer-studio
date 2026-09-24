@@ -1,7 +1,7 @@
 {
   "name": "producer-studio",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Producer Studio — AI video production and a full timeline editor in the browser.",
   "type": "module",
   "workspaces": [
