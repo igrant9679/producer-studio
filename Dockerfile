@@ -59,11 +59,17 @@ ENV NODE_ENV=production \
     PRODUCER_SKILL_DIR=/app/apps/server/skill \
     HYPERFRAMES_NO_TELEMETRY=1
 # Pre-fetch the headless Chrome used by HyperFrames and the Kokoro-82M model so the first job doesn't download them.
+# Chrome is installed with @puppeteer/browsers (non-interactive; `hyperframes browser ensure` can hang without a TTY)
+# at the version HyperFrames pins, and HyperFrames is pointed at it explicitly.
+ARG CHROME_VERSION=152.0.7977.30
+ENV PRODUCER_HEADLESS_SHELL_PATH=/opt/chrome/chrome-headless-shell/linux-${CHROME_VERSION}/chrome-headless-shell-linux64/chrome-headless-shell
+ENV CHROME_PATH=${PRODUCER_HEADLESS_SHELL_PATH}
+RUN timeout 900 node node_modules/@puppeteer/browsers/lib/main-cli.js install chrome-headless-shell@${CHROME_VERSION} --path /opt/chrome \
+ && test -x "$PRODUCER_HEADLESS_SHELL_PATH"
 ARG PREFETCH=1
 RUN if [ "$PREFETCH" = "1" ]; then \
-      node node_modules/hyperframes/bin/hyperframes.mjs browser ensure \
-      && mkdir -p /opt/kokoro \
-      && (echo '{"id":"w","type":"warm"}' | node apps/server/scripts/tts-worker.mjs || echo "kokoro prefetch skipped"); \
+      mkdir -p /opt/kokoro \
+      && (echo '{"id":"w","type":"warm"}' | timeout 900 node apps/server/scripts/tts-worker.mjs || echo "kokoro prefetch skipped"); \
     fi
 # /data holds renders and scratch files; on Railway attach a volume there (VOLUME is not allowed in Railway builds).
 RUN mkdir -p /data
