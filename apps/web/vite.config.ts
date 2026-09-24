@@ -8,8 +8,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // /r/:token share pages are SPA routes; the page fetches /api/share/:token.
       '/api': { target: API, changeOrigin: false },
-      '/r': { target: API, changeOrigin: false },
     },
   },
   build: { outDir: 'dist', sourcemap: true, chunkSizeWarningLimit: 1500 },

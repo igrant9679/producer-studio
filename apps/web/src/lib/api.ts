@@ -6,6 +6,8 @@ import type {
   AssistantResult,
   BrandKitDoc,
   CreateProjectRequest,
+  DesktopSettings,
+  Device,
   ExportRecord,
   ExportRequest,
   ExportResult,
@@ -17,6 +19,8 @@ import type {
   ProjectDocResponse,
   ProjectSummary,
   ScriptScene,
+  SyncStatus,
+  SystemInfo,
   TemplateSummary,
   Transcript,
   TtsRequest,
@@ -197,11 +201,27 @@ export const api = {
   exports: (projectId: string) => req<ExportRecord[]>('GET', `/exports${qs({ projectId })}`),
   share: (id: string, exportId?: string) => req<{ url: string; token: string }>('POST', `/projects/${id}/share`, { exportId }),
   templates: (workspaceId: string) => req<TemplateSummary[]>('GET', `/templates${qs({ workspaceId })}`),
+
+  // system / desktop / sync
+  system: () => req<SystemInfo>('GET', '/system'),
+  settings: () => req<DesktopSettings>('GET', '/settings'),
+  saveSettings: (p: Partial<DesktopSettings>) => req<DesktopSettings>('PUT', '/settings', p),
+  syncStatus: () => req<SyncStatus>('GET', '/sync/status'),
+  syncNow: () => req<SyncStatus>('POST', '/sync/now'),
+  syncLink: (cloudUrl: string, email: string, password: string) => req<SyncStatus>('POST', '/sync/link', { cloudUrl, email, password }),
+  syncUnlink: () => req<SyncStatus>('POST', '/sync/unlink'),
+  resolveSync: (id: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both') => req<SyncStatus>('POST', `/projects/${id}/sync`, { mode }),
+  devices: () => req<Device[]>('GET', '/devices'),
+  revokeDevice: (id: string) => req<{ ok: true }>('DELETE', `/devices/${id}`),
 }
 
 /** Subscribe to server events for a workspace. Returns an unsubscribe function. */
-export function subscribeEvents(workspaceId: string, handlers: { job?: (j: Job) => void; asset?: (a: AssetRecord) => void; project?: (p: { id: string; version: number }) => void }): () => void {
+export function subscribeEvents(
+  workspaceId: string,
+  handlers: { job?: (j: Job) => void; asset?: (a: AssetRecord) => void; project?: (p: { id: string; version: number }) => void; sync?: (s: SyncStatus) => void },
+): () => void {
   const es = new EventSource(`/api/events?workspaceId=${encodeURIComponent(workspaceId)}`, { withCredentials: true })
+  if (handlers.sync) es.addEventListener('sync', (e) => handlers.sync!(JSON.parse((e as MessageEvent).data)))
   if (handlers.job) es.addEventListener('job', (e) => handlers.job!(JSON.parse((e as MessageEvent).data)))
   if (handlers.asset) es.addEventListener('asset', (e) => handlers.asset!(JSON.parse((e as MessageEvent).data)))
   if (handlers.project) es.addEventListener('project', (e) => handlers.project!(JSON.parse((e as MessageEvent).data)))

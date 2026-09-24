@@ -32,12 +32,21 @@ export const useSession = create<SessionState>((set, get) => ({
   status: 'loading',
   workspaces: [],
   async load() {
-    try {
-      const me = await api.me()
-      set({ status: 'ready', user: me.user, workspaces: me.workspaces, workspaceId: pickWorkspace(me.workspaces) })
-    } catch (e) {
-      if (e instanceof HttpError && e.status === 401) set({ status: 'anon', user: undefined, workspaces: [] })
-      else set({ status: 'anon' })
+    // Retry network errors and 5xx (server restarting, desktop server still booting) before treating the
+    // user as signed out; only a real 401 means "anonymous".
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const me = await api.me()
+        set({ status: 'ready', user: me.user, workspaces: me.workspaces, workspaceId: pickWorkspace(me.workspaces) })
+        return
+      } catch (e) {
+        const transient = !(e instanceof HttpError) || e.status >= 500
+        if (!transient || attempt >= 4) {
+          set({ status: 'anon', user: undefined, workspaces: [] })
+          return
+        }
+        await new Promise((r) => setTimeout(r, 400 * 2 ** attempt))
+      }
     }
   },
   async login(email, password) {

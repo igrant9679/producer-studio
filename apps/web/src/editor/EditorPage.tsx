@@ -1,7 +1,7 @@
 // Producer Studio editor: top bar, left rail + asset panel, canvas, properties, timeline.
 import { ChevronsLeft, Loader2, TriangleAlert, Upload } from 'lucide-react'
 import { Component, useEffect, useState, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { HttpError } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import { Canvas } from './Canvas'
@@ -13,7 +13,7 @@ import { flush, keepBoth, loadInto, onProjectEvent, overwriteServer, reloadTheir
 import { startPlaybackClock } from './playback'
 import { PropertiesPanel } from './PropertiesPanel'
 import { useShortcuts } from './shortcuts'
-import { useEditor } from './store'
+import { useEditor, type LeftTab } from './store'
 import { Timeline } from './Timeline'
 import { TopBar } from './TopBar'
 import { loadLibrary, subscribeWorkspace, uploadFiles } from './uploads'
@@ -34,6 +34,15 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
       void flush().catch(() => undefined)
     }
   }, [id, demo])
+
+  // Deep links from the shell (All tools, Home cards): /edit/:id?tab=captions opens that panel.
+  const [search] = useSearchParams()
+  const tabParam = search.get('tab')
+  useEffect(() => {
+    if (!loaded || !tabParam) return
+    const tabs: LeftTab[] = ['media', 'audio', 'text', 'captions', 'transcript', 'effects', 'transitions', 'filters', 'brand', 'ai']
+    if ((tabs as string[]).includes(tabParam)) useEditor.setState({ activeLeftTab: tabParam as LeftTab, leftCollapsed: false })
+  }, [loaded, tabParam])
 
   useEffect(() => startPlaybackClock(), [])
   useEffect(() => startAutosave(), [])

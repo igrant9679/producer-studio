@@ -69,7 +69,7 @@ export function AssistantPanel() {
   }
 
   return (
-    <div className="ai">
+    <div className="ed-ai">
       <div className="ai-list" ref={listRef}>
         {!msgs.length && (
           <div className="ai-intro">
