@@ -12,7 +12,7 @@ import { AiProviders } from './AiProviders'
 import { Avatar, EmptyState, Spinner, useAsync, usePageTitle } from '../ui'
 import { relativeTime } from '../util'
 
-const DEFAULT_CLOUD_URL = 'https://studio.meyousocial.com'
+const DEFAULT_CLOUD_URL = 'https://producerstudio.app'
 
 /** Narrow bridge exposed by the Electron preload (desktop app only). */
 interface ProducerDesktopBridge {

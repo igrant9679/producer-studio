@@ -669,7 +669,7 @@ const mockMode = (() => {
 const desktopSettings: DesktopSettings = { claudePath: '', claudeModel: '', dataDir: 'C:\\Users\\alex\\AppData\\Roaming\\Producer Studio\\data', mediaSync: 'on-demand', autoSync: true }
 const sync: SyncStatus = {
   linked: true,
-  cloudUrl: 'https://studio.meyousocial.com',
+  cloudUrl: 'https://producerstudio.app',
   account: 'alex@example.com',
   state: 'idle',
   lastSyncAt: now - 2 * MIN,
