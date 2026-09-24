@@ -150,6 +150,19 @@ describe('overlays', () => {
   })
 })
 
+describe('linked audio on the main track', () => {
+  it('follows its clip when the main track repacks', () => {
+    let p = twoClips()
+    const [first, second] = mainTrack(p)!.items.map((i) => i.id)
+    p = separateAudio(p, second)
+    const audioId = p.tracks.find((t) => t.kind === 'audio')!.items[0].id
+    expect(findItem(p, audioId)!.item.start).toBe(10)
+    p = deleteItems(p, [first])
+    expect(findItem(p, second)!.item.start).toBe(0)
+    expect(findItem(p, audioId)!.item.start).toBe(0)
+  })
+})
+
 describe('transcript editing', () => {
   it('cuts a source range and ripples the main track', () => {
     const p = twoClips()

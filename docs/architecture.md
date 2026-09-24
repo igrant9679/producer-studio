@@ -57,6 +57,34 @@ to clients over SSE (`/api/events`).
 Email + password (scrypt), httpOnly `ps_session` cookie (30 days, sliding). Every user gets a personal workspace;
 workspaces are the tenancy boundary (projects, assets, brand kit). Roles: owner, editor, viewer.
 
+## Two products, one codebase
+
+| | **Producer Studio Web** | **Producer Studio Desktop** |
+|---|---|---|
+| Shell | Browser | Electron (Windows first, macOS later) |
+| Server | `apps/server` `MODE=cloud` on Railway | same `apps/server` in `MODE=desktop`, spawned by Electron on 127.0.0.1 |
+| Users | Multi-user, workspaces, invites | One local user; linked to a cloud account for sync |
+| DB / storage | Postgres + S3 | PGlite + local disk under the user's data folder |
+| AI | Anthropic API (`claude-opus-5`, server key, metered) | Locally installed **Claude Code CLI** (user's own Claude subscription, no API tokens) |
+| Transcribe / TTS / render | Worker containers | Local whisper.cpp, Kokoro, HyperFrames (free, offline) |
+
+### Claude CLI provider (desktop)
+- Detects `claude` the way Producer did (Claude desktop bundle `%APPDATA%\Claude\claude-code\<v>\claude.exe`, MSIX `Claude_*` package cache, `~/.local/bin`, `where claude`), or uses the path in Settings; `claude auth status` for sign-in state; Setup offers "Sign in to Claude".
+- Runs `claude -p <prompt> --output-format stream-json --verbose` with a **local MCP server** (`--mcp-config`) that exposes the same editing tools as the cloud assistant (`get_timeline`, `split_at`, `add_text`, `generate_captions`, …) plus `submit_script` for structured Producer scripts. `--allowedTools` is restricted to those MCP tools (no Bash/Write, **no `--dangerously-skip-permissions`**); a per-run temp working dir; stream events relayed to the UI exactly like the API provider.
+- Same `ClaudeProvider` interface as `AnthropicApiProvider`, so features are identical in both products.
+
+### Sync (desktop ⇄ cloud)
+- Cloud is the source of truth; the desktop is a full offline-capable replica. Ids are global, so a project/asset has one id everywhere.
+- Link: Settings → sign in with the cloud account → the desktop gets a **device token** (Bearer, revocable under Devices).
+- **Pull**: `GET /api/sync/changes?since=<cursor>` (server-wide monotonic `change_seq`, tombstones for deletes, paged) → upsert workspaces, projects, brand kits, asset records locally. Media downloads on demand (first open) or eagerly (setting), verified by sha256.
+- **Push**: local writes are journaled (outbox). Assets: `POST /api/uploads {assetId, sha256}` → PUT bytes (skip on 409 exists) → complete. Projects: `PUT /api/projects/:id {baseVersion}`; new local projects `POST /api/projects {id}`.
+- **Conflicts**: a 409 on push (both sides edited since the last sync) marks the project conflicted; the user picks Keep local (force-push over the cloud version), Keep cloud, or Keep both (local becomes "(conflicted copy)" with a new id). Assets are immutable, so they never conflict.
+- Runs on launch, every 60 s while online, and immediately after local saves (debounced); state is surfaced in the top bar (`/api/sync/status`, SSE `sync`).
+- The web editor reloads silently when an SSE `project` event arrives for the open project with no unsaved edits; otherwise it shows the conflict banner.
+
+### Desktop hardening (lessons from the Producer 0.1.x review)
+Signed builds, `sandbox: true` + context isolation, a narrow validated preload API (no generic `invoke`), `shell.openExternal` limited to http(s), no bundled test artefacts or personal paths, and skills/configs never written into the user's global `~/.claude`.
+
 ## Deploy
 Single Docker image (Node 22 + ffmpeg + chrome-headless-shell deps + whisper.cpp) on Railway: `web` (API +
 static SPA) and `worker` services from the same image, Postgres plugin, S3-compatible bucket.

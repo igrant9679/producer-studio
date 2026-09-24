@@ -8,6 +8,12 @@ export interface ApiError {
   details?: unknown
 }
 
+/** `details` of a 409 from PUT /api/projects/:id. */
+export interface ProjectConflictDetails {
+  version: number
+  project?: Project
+}
+
 export interface User {
   id: string
   email: string
@@ -264,6 +270,92 @@ export interface TemplateSummary {
   builtIn: boolean
   clipCount: number
   textCount: number
+}
+
+// ---- system, AI provider, desktop/cloud sync ----
+// The same server runs in two modes:
+//   cloud   — hosted, multi-user; AI via the Anthropic API (server key).
+//   desktop — bundled in the Electron app for one local user; AI via the locally installed Claude Code CLI
+//             (the user's own subscription); local PGlite + local storage; syncs with a cloud account.
+// Ids of projects, assets and items are globally unique (uuid-like), so the same id refers to the same object
+// on every replica.
+//
+// GET  /api/system                         -> SystemInfo   (public)
+// Desktop-only (mode === 'desktop'):
+// GET  /api/settings                       -> DesktopSettings
+// PUT  /api/settings  Partial<DesktopSettings> -> DesktopSettings
+// POST /api/sync/link {cloudUrl, email, password} -> SyncStatus   (exchanges credentials for a device token)
+// POST /api/sync/unlink                    -> SyncStatus
+// POST /api/sync/now                       -> SyncStatus
+// GET  /api/sync/status                    -> SyncStatus
+// POST /api/projects/:id/sync {mode:'keep-local'|'keep-cloud'|'keep-both'} -> SyncStatus  (resolve a conflict)
+// Cloud sync surface (used by desktop replicas; Bearer device token or cookie):
+// POST /api/devices {name}                 -> {deviceId, token}   (token shown once; stored hashed)
+// GET  /api/devices                        -> Device[]
+// DELETE /api/devices/:id                  -> {ok}
+// GET  /api/sync/changes?since=<cursor>    -> SyncChanges  (all workspaces the user belongs to)
+// POST /api/projects accepts optional `id` (client-generated) so desktop-created projects keep their id;
+// PUT  /api/projects/:id with baseVersion is the push path (409 on conflict, details.version = cloud version).
+// POST /api/uploads accepts optional `assetId` and `sha256`; returns 409 {code:'conflict'} with details
+//      {exists: true} when that asset already exists in the cloud (nothing to upload).
+// Every project/asset/workspace write bumps a server-wide monotonic `change_seq`; `cursor` is that number.
+export interface SystemInfo {
+  mode: 'cloud' | 'desktop'
+  version: string
+  ai: { provider: 'anthropic-api' | 'claude-cli' | 'none'; available: boolean; detail: string; model?: string }
+  /** Local capabilities (true on desktop; on cloud reflects the worker image). */
+  capabilities: { transcribe: boolean; tts: boolean; render: boolean }
+  sync?: SyncStatus
+}
+
+export interface SyncStatus {
+  linked: boolean
+  cloudUrl?: string
+  account?: string
+  state: 'unlinked' | 'idle' | 'syncing' | 'offline' | 'error'
+  lastSyncAt?: number
+  /** Local changes not yet pushed (projects + assets). */
+  pending: number
+  /** Projects edited on both sides since the last sync. */
+  conflicts: Array<{ projectId: string; name: string; localVersion: number; cloudVersion: number }>
+  error?: string
+}
+
+export interface DesktopSettings {
+  /** Path to the Claude Code CLI; empty = auto-detect (Claude desktop bundle, ~/.local/bin, PATH). */
+  claudePath: string
+  /** Optional model override passed to the CLI (`--model`). */
+  claudeModel: string
+  /** Where local media and renders live. */
+  dataDir: string
+  /** Download cloud media eagerly ('all') or when first opened ('on-demand'). */
+  mediaSync: 'all' | 'on-demand'
+  autoSync: boolean
+}
+
+export interface Device {
+  id: string
+  name: string
+  createdAt: number
+  lastSeenAt?: number
+}
+
+export interface SyncProject {
+  summary: ProjectSummary
+  project: Project
+  version: number
+  changeSeq: number
+}
+
+export interface SyncChanges {
+  cursor: number
+  workspaces: Workspace[]
+  projects: SyncProject[]
+  assets: Array<AssetRecord & { sha256?: string; changeSeq: number }>
+  brandKits: Array<{ workspaceId: string; doc: BrandKitDoc; changeSeq: number }>
+  deleted: { projects: string[]; assets: string[] }
+  /** True when more changes remain after `cursor` (page again). */
+  more: boolean
 }
 
 export type { Transcript, ScriptScene }

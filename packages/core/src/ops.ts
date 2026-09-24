@@ -116,8 +116,16 @@ export function packMain(p: Project) {
   sortItems(m)
   let t = 0
   for (const it of m.items) {
+    const delta = round(t, 4) - it.start
     it.start = round(t, 4)
     t += it.duration
+    // linked items on other tracks (separated audio) ride along with their main-track clip
+    if (it.linkId && Math.abs(delta) > EPS) {
+      for (const tr of p.tracks) {
+        if (tr === m) continue
+        for (const o of tr.items) if (o.linkId === it.linkId) o.start = Math.max(0, round(o.start + delta, 4))
+      }
+    }
   }
 }
 
