@@ -1,0 +1,20 @@
+{
+  "id": "boardroom-slate",
+  "name": "Boardroom Slate",
+  "tagline": "Slate canvas, split screen: large numerals on the left, footage on the right.",
+  "aspect": "16:9",
+  "canvas": "dark",
+  "brand": {
+    "primary": "#1e232c",
+    "accent": "#4fd1c5",
+    "ink": "#eef1f6",
+    "headlineFont": "Montserrat",
+    "labelFont": "IBM Plex Mono"
+  },
+  "preview": "preview.png",
+  "scenes": {
+    "hook": "compositions/hook.html",
+    "footage": "compositions/footage.html",
+    "close": "compositions/close.html"
+  }
+}

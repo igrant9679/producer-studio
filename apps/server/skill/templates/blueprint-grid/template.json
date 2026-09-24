@@ -1,0 +1,20 @@
+{
+  "id": "blueprint-grid",
+  "name": "Blueprint Grid",
+  "tagline": "Light technical grid, mono annotations with leader lines. For engineering audiences.",
+  "aspect": "16:9",
+  "canvas": "light",
+  "brand": {
+    "primary": "#eef3f8",
+    "accent": "#1f6feb",
+    "ink": "#0f1a2b",
+    "headlineFont": "Oswald",
+    "labelFont": "Space Mono"
+  },
+  "preview": "preview.png",
+  "scenes": {
+    "hook": "compositions/hook.html",
+    "footage": "compositions/footage.html",
+    "close": "compositions/close.html"
+  }
+}

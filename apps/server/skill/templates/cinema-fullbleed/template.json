@@ -1,0 +1,20 @@
+{
+  "id": "cinema-fullbleed",
+  "name": "Cinema Full-Bleed",
+  "tagline": "Footage fills the frame under a dark scrim; headlines and lower-thirds ride on top.",
+  "aspect": "16:9",
+  "canvas": "dark",
+  "brand": {
+    "primary": "#07090f",
+    "accent": "#ff5a5f",
+    "ink": "#f5f6fa",
+    "headlineFont": "Montserrat",
+    "labelFont": "IBM Plex Mono"
+  },
+  "preview": "preview.png",
+  "scenes": {
+    "hook": "compositions/hook.html",
+    "footage": "compositions/footage.html",
+    "close": "compositions/close.html"
+  }
+}

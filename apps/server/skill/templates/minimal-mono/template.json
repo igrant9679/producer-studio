@@ -1,0 +1,20 @@
+{
+  "id": "minimal-mono",
+  "name": "Minimal Mono",
+  "tagline": "Black and white, hairline frames, one enormous condensed headline. Sparse and confident.",
+  "aspect": "16:9",
+  "canvas": "dark",
+  "brand": {
+    "primary": "#0a0a0a",
+    "accent": "#ffffff",
+    "ink": "#f2f2f2",
+    "headlineFont": "League Gothic",
+    "labelFont": "IBM Plex Mono"
+  },
+  "preview": "preview.png",
+  "scenes": {
+    "hook": "compositions/hook.html",
+    "footage": "compositions/footage.html",
+    "close": "compositions/close.html"
+  }
+}

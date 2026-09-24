@@ -1,0 +1,20 @@
+{
+  "id": "studio-dark",
+  "name": "Studio Dark",
+  "tagline": "Navy canvas, footage in a framed window, story column of cards. The house look.",
+  "aspect": "16:9",
+  "canvas": "dark",
+  "brand": {
+    "primary": "#0b1830",
+    "accent": "#ff5a5f",
+    "ink": "#f3f5fa",
+    "headlineFont": "Montserrat",
+    "labelFont": "IBM Plex Mono"
+  },
+  "preview": "preview.png",
+  "scenes": {
+    "hook": "compositions/hook.html",
+    "footage": "compositions/footage.html",
+    "close": "compositions/close.html"
+  }
+}

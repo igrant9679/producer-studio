@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "dev": "tsx watch --clear-screen=false --ignore ./.data/** src/index.ts",
     "start": "node --import tsx src/index.ts",
     "build": "tsc --noEmit -p .",
     "typecheck": "tsc --noEmit -p .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "seed": "node --import tsx src/seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

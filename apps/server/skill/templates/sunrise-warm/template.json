@@ -1,0 +1,20 @@
+{
+  "id": "sunrise-warm",
+  "name": "Sunrise Warm",
+  "tagline": "Deep plum canvas with warm glows; headline on top, footage centred, chips beneath.",
+  "aspect": "16:9",
+  "canvas": "dark",
+  "brand": {
+    "primary": "#1a0f24",
+    "accent": "#ff8a3d",
+    "ink": "#fff4ea",
+    "headlineFont": "Montserrat",
+    "labelFont": "IBM Plex Mono"
+  },
+  "preview": "preview.png",
+  "scenes": {
+    "hook": "compositions/hook.html",
+    "footage": "compositions/footage.html",
+    "close": "compositions/close.html"
+  }
+}

@@ -12,6 +12,7 @@ export interface ApiError {
 export interface ProjectConflictDetails {
   version: number
   project?: Project
+  summary?: ProjectSummary
 }
 
 export interface User {
@@ -99,6 +100,10 @@ export interface CreateProjectRequest {
   /** Start from a template project (built-in id `tpl:<look>` or a workspace template project id). */
   templateId?: string
   kind?: 'edit' | 'producer'
+  /** Client-generated project id (desktop-created projects keep their id in the cloud). */
+  id?: string
+  /** Full document to create from (desktop push of a locally created project). */
+  project?: Project
 }
 
 export interface ProjectDocResponse {
@@ -125,6 +130,9 @@ export interface UploadRequest {
   filename: string
   mime: string
   size: number
+  /** Client-generated id (desktop sync keeps ids identical across replicas). */
+  assetId?: string
+  sha256?: string
 }
 
 export interface UploadTicket {
@@ -143,6 +151,7 @@ export interface AssetRecord {
   error?: string
   /** 'upload' | 'tts' | 'render' | 'freeze' | 'ai' */
   origin: string
+  sha256?: string
   createdAt: number
 }
 

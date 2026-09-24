@@ -30,7 +30,10 @@ export interface Asset {
   id: Id
   kind: AssetKind
   name: string
-  /** Storage key; resolved to a URL by the host (browser: signed URL, export: local path). */
+  /**
+   * Media location. The server fills src/proxySrc/thumbnail/filmstrip.src with `/api/media/<id>/<variant>` URLs;
+   * the export compiler maps asset ids to local files instead.
+   */
   src: string
   /** Optional low-res proxy used for editing preview. */
   proxySrc?: string

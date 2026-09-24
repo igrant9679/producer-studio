@@ -1,0 +1,20 @@
+{
+  "id": "editorial-light",
+  "name": "Editorial Light",
+  "tagline": "Warm paper canvas, ink type, strong rules. Calm and print-like.",
+  "aspect": "16:9",
+  "canvas": "light",
+  "brand": {
+    "primary": "#f6f2ea",
+    "accent": "#d8232a",
+    "ink": "#15171c",
+    "headlineFont": "Montserrat",
+    "labelFont": "IBM Plex Mono"
+  },
+  "preview": "preview.png",
+  "scenes": {
+    "hook": "compositions/hook.html",
+    "footage": "compositions/footage.html",
+    "close": "compositions/close.html"
+  }
+}
