@@ -1,6 +1,6 @@
 ---
 name: producer-pipeline
-description: House production recipe for Producer (the CommunityForce desktop app) — turn a screen recording plus a locked script and recorded narration into a HyperFrames composition that passes check, the seam gate and a footage audit. Load whenever a project folder contains producer.json, before writing any composition HTML or editing one. Overrides generic HyperFrames creative guidance where they differ.
+description: House production recipe for Producer Studio — turn a screen recording plus a locked script and recorded narration into a HyperFrames composition that passes check, the seam gate and a footage audit. Load whenever a project folder contains producer.json, before writing any composition HTML or editing one. Overrides generic HyperFrames creative guidance where they differ.
 ---
 
 # Producer pipeline — from script + narration to a verified composition

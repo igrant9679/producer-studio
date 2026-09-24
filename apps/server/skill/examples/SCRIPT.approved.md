@@ -1,44 +1,45 @@
-# SCRIPT — Tableau Next at CommunityForce (locked narration)
+# SCRIPT — Lumen Analytics at Northwind Supply (locked narration)
 
 Voice: Kokoro `af_heart`, speed 0.95. One line per scene; ids match `compositions/sNN-*.html`
-and `assets/vo/sNN.wav`. Numbers are written as they should be spoken.
+and `assets/vo/sNN.wav`. Numbers are written as they should be spoken. Northwind Supply and Lumen
+Analytics are fictional; this script shows the house register, shape and density.
 
 ## s01 — Hook
 
-Every CommunityForce opportunity, lead, and campaign is already in Salesforce. So that's where we keep our analytics too. This is how we use Tableau Next to run pipeline analytics — without ever leaving the platform.
+Every Northwind order, shipment, and customer ticket already lives in one operations platform. So that's where we keep our analytics too. This is how we use Lumen Analytics to see the whole business — without exporting a single spreadsheet.
 
 ## s02 — Where it lives
 
-Tableau Next is a native Salesforce app. Open it from the App Launcher, or from Setup: search for Tableau Next and click "Go to Tableau Next". Either way you land on Home, where every asset the team has built is listed in one place — models, metrics, visualizations, and dashboards.
+Lumen is built into the platform. Open it from the app switcher, or from the Reports menu: choose Lumen, and you land on Home. Every asset the team has built is listed in one place — sources, models, charts, and dashboards.
 
-## s03 — Five building blocks
+## s03 — Four building blocks
 
-Everything in Tableau Next is built from five kinds of assets. Data connects your sources. Data Transform shapes it. A Semantic Model gives it business meaning. Visualizations chart it. And Dashboards bring it all together, in front of the people who need it.
+Everything in Lumen is built from four kinds of assets. Sources bring data in. Models give it business meaning. Charts show it. And dashboards bring it all together, in front of the people who make decisions every day.
 
-## s04 — Connecting data
+## s04 — Bringing data in
 
-We start with data. Click Add, choose Data, and Tableau Next pulls Salesforce data objects straight from our org — opportunities, leads, campaign members, activities. We can also upload CSV files, or add a connector for outside systems. Under the hood, everything flows through Data three sixty — Salesforce Data Cloud.
+We start with sources. Click Add, choose Source, and Lumen reads orders, shipments, and returns straight from the platform. We can also drop in a CSV file, or connect an outside system like a warehouse scanner. Everything lands in one place, refreshed every fifteen minutes.
 
-## s05 — The semantic model
+## s05 — The model
 
-Once the data is in, we model it. The CommunityForce Pipeline semantic model joins seven data objects — Activity, Campaign Member, Lead, Opportunity Fact, Opportunity Line, Pipeline Snapshot, and Quota — and defines twelve metrics on top of them. Dimensions and measures get their business names here, once, so every chart downstream speaks the same language.
+Once the data is in, we model it. The Fulfilment model joins five tables — Orders, Shipments, Returns, Carriers, and Regions — and defines ten measures on top of them. Names are set once, here, so every chart downstream speaks the same language.
 
-## s06 — Build a visualization
+## s06 — Build a chart
 
-From the model, click Create Visualization. Drag a measure onto columns and a dimension onto rows — here, Sum of Total Price by Product Name — and Tableau Next draws the chart. Most of the Tableau chart library is here, with forecasting and reference lines built in. Global Administrator licenses and Enterprise SaaS fees lead our revenue by product.
+From the model, click New Chart. Drag a measure onto the value axis and a dimension onto categories — here, on-time delivery by carrier — and Lumen draws the chart. Trend lines and targets are built in. Two carriers carry most of our late shipments.
 
-## s07 — The Pipeline Overview dashboard
+## s07 — The operations dashboard
 
-Visualizations become dashboards. Our Pipeline Overview dashboard combines seventeen visualizations across six pages. At a glance: nine hundred eighty thousand dollars of open pipeline. Two hundred ninety-eight thousand weighted. Three hundred forty-one open opportunities — all filterable by market category, client size, and stage.
+Charts become dashboards. The Operations dashboard combines twelve charts across four pages. At a glance: four thousand two hundred orders this week. Ninety-six percent shipped on time. Thirty-one open returns — all filterable by region, carrier, and product line.
 
-## s08 — Embedded where the team works
+## s08 — Where the team works
 
-And because it's Salesforce, the dashboard lives right inside the Sales app, as its own Pipeline Analytics tab. Reps filter, hover, and drill without switching tools. Sales Performance tracks all five thousand opportunities by close year, with a leaderboard by owner and pipeline by forecast category. Pipeline Generation follows sixteen thousand leads from source to conversion.
+And because it's built in, the dashboard lives right inside the warehouse app, as its own Insights tab. Supervisors filter, hover, and drill without switching tools. The Returns page tracks every return by reason, with a leaderboard by product and cost by region.
 
-## s09 — The executive view
+## s09 — The leadership view
 
-The same model powers an executive view for leadership — total opportunity value, product revenue, quota, and campaign reach — rolled up on a single page. One model, every audience.
+The same model powers a leadership view — revenue, fulfilment cost, on-time rate, and customer satisfaction — rolled up on a single page. One model, every audience.
 
 ## s10 — Close
 
-Data can arrive from anywhere through the Data three sixty ingestion API, land as data lake objects, and flow straight into Tableau Next. That's how CommunityForce turns Salesforce data into decisions — without leaving Salesforce.
+Data can arrive from anywhere, land in one model, and show up where people already work. That's how Northwind turns everyday operations into decisions — without leaving the platform.
