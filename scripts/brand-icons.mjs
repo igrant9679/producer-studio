@@ -1,4 +1,4 @@
-// Generates every Producer Studio icon from the master mark (apps/web/public/favicon.svg, "Track play"):
+// Generates every Producer Studio icon from the master mark (apps/web/public/favicon.svg, "Playhead"):
 // web favicons + PWA icons, and the Windows app/installer icon for the desktop build.
 // Run: node scripts/brand-icons.mjs
 import fs from 'node:fs'
@@ -14,7 +14,8 @@ fs.mkdirSync(iconsDir, { recursive: true })
 fs.mkdirSync(deskAssets, { recursive: true })
 
 const master = fs.readFileSync(path.join(pub, 'favicon.svg'), 'utf8')
-const BARS = '<rect x="17" y="17" width="16" height="8" rx="4" fill="#ff5a5f"/><rect x="17" y="28" width="30" height="8" rx="4" fill="#7c5cff"/><rect x="17" y="39" width="16" height="8" rx="4" fill="#35e0ff"/>'
+// The mark without its rounded ground (everything after the first <rect>), reused for the maskable/Apple variants.
+const BARS = master.replace(/^[\s\S]*?<rect[^>]*\/>/, '').replace(/<\/svg>\s*$/, '')
 // Maskable (Android adaptive): full-bleed ground, mark inside the 80 % safe zone.
 const maskable = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#0c0e14"/><g transform="translate(32 32) scale(0.8) translate(-32 -32)">${BARS}</g></svg>`
 // Opaque square (iOS rounds it itself).
