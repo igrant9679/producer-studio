@@ -387,6 +387,7 @@ function RewriteButton({ scene, brief, onText, onBusy }: { scene: ScriptScene; b
           prompt: instruction || 'Rewrite this narration so it is clearer, tighter and more engaging. Keep the meaning and roughly the same length.',
           context: [`Video: ${brief.title}`, brief.audience && `Audience: ${brief.audience}`, brief.goal && `Goal: ${brief.goal}`, `Tone: ${brief.tone}`, `Scene: ${scene.title}`, scene.headline && `Headline: ${scene.headline}`, `Narration: ${original}`].filter(Boolean).join('\n'),
           maxWords: Math.max(20, Math.round(sceneWords(original) * 1.4)),
+          workspaceId: useSession.getState().workspaceId,
         },
         (d) => {
           acc += d

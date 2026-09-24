@@ -7,6 +7,8 @@ import { VOICES, type AssistantRequest, type Project } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { jobDto } from '../dto'
+import { eq } from 'drizzle-orm'
+import { memberships, workspaces } from '../db/schema'
 import { HttpError, body, notFound, requireRole } from '../http'
 import { enqueue } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
@@ -74,10 +76,25 @@ aiRoutes.get('/voices/:id/sample', async (c) => {
   return new Response(buf, { headers: { 'Content-Type': 'audio/wav', 'Content-Length': String(buf.length), 'Cache-Control': 'private, max-age=86400' } })
 })
 
+/** Workspace whose AI settings apply to the writer: the requested one (editor+), else the user's personal workspace. */
+async function writerScope(userId: string, workspaceId: string | undefined): Promise<string | undefined> {
+  if (ctx().config.mode === 'desktop') return undefined
+  if (workspaceId) {
+    await requireRole(userId, workspaceId, 'editor')
+    return workspaceId
+  }
+  const rows = await ctx()
+    .db.select({ id: workspaces.id, personal: workspaces.personal })
+    .from(memberships)
+    .innerJoin(workspaces, eq(workspaces.id, memberships.workspaceId))
+    .where(eq(memberships.userId, userId))
+  return (rows.find((r) => r.personal) ?? rows[0])?.id
+}
+
 aiRoutes.post('/write', async (c) => {
-  requireUser(c)
-  const b = await body(c, z.object({ kind: z.enum(['voiceover', 'script', 'headline', 'caption', 'rewrite']), prompt: z.string().min(1).max(20000), context: z.string().max(50000).optional(), maxWords: z.number().int().min(1).max(5000).optional() }))
-  const provider = await requireProvider()
+  const u = requireUser(c)
+  const b = await body(c, z.object({ kind: z.enum(['voiceover', 'script', 'headline', 'caption', 'rewrite']), prompt: z.string().min(1).max(20000), context: z.string().max(50000).optional(), maxWords: z.number().int().min(1).max(5000).optional(), workspaceId: z.string().max(100).optional() }))
+  const provider = await requireProvider(await writerScope(u.id, b.workspaceId), 'writer')
   return streamSSE(c, async (stream) => {
     const ac = new AbortController()
     stream.onAbort(() => ac.abort())
@@ -110,7 +127,7 @@ aiRoutes.post('/produce/script', async (c) => {
   const b = await body(c, z.object({ projectId: z.string().min(1), assetIds: z.array(z.string()).min(1).max(20), brief: BriefSchema }))
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
-  await requireProvider()
+  await requireProvider(row.workspaceId, 'script')
   const j = await enqueue('ai.produce.script', { ...b, brief: { ...b.brief, voice: validVoice(b.brief.voice) } }, { workspaceId: row.workspaceId, userId: u.id, projectId: row.id, message: 'Writing script' })
   return c.json(jobDto(j))
 })
@@ -148,7 +165,7 @@ aiRoutes.post('/assistant', async (c) => {
   )
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
-  const provider = await requireProvider()
+  const provider = await requireProvider(row.workspaceId, 'assistant')
   const wsId = row.workspaceId
   const req = b as unknown as AssistantRequest
   return streamSSE(c, async (stream) => {

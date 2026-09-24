@@ -677,3 +677,4 @@
   .ed-field { grid-template-columns: 76px 1fr 22px; gap: 6px; }
   .ed-top-c .ed-ddbtn { padding: 0 6px; }
 }
+.ai-caption { font-size: 10.5px; color: var(--text-3); text-align: right; margin-top: -2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

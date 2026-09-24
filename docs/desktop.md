@@ -76,7 +76,8 @@ Without them the build logs "signing" steps but produces unsigned binaries (Smar
   safeStorage is unavailable (e.g. Linux without a keyring, or the server run outside Electron) the key falls back to
   `<data>/.device-key`, which protects nothing against someone who can read the data folder. Revoke the device from the
   cloud (Settings → Linked devices) if a machine is lost.
-- `PS_DESKTOP_SECRET` (≥ 16 chars) fixes the per-launch secret for UI automation; only whoever launches the app can set it.
+- `PS_DESKTOP_SECRET` (≥ 16 chars) fixes the per-launch secret for UI automation in **dev builds only** (`!app.isPackaged`); packaged builds always generate a random secret.
+- AI provider keys (Settings → AI: Anthropic, Gemini, OpenAI) live in the `ai` block of `settings.json`, AES-256-GCM sealed with the same safeStorage-protected key as the device token; they are never synced and never returned by the local API (only `hasKey` + last 4).
 
 ## Sync behaviour (summary)
 

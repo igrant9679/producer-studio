@@ -162,7 +162,7 @@ describe('AI without credentials', () => {
     const A = await signup(t.app)
     const w = await A.client.json('POST', '/api/ai/write', { kind: 'headline', prompt: 'A video about spreadsheets' })
     expect(w.status).toBe(503)
-    expect(w.body).toEqual({ code: 'server', error: 'AI is not configured on this server' })
+    expect(w.body).toEqual({ code: 'server', error: 'AI is not configured — add a key in Settings' })
     const voices = await A.client.json('GET', '/api/ai/voices')
     expect(voices.body.length).toBe(24)
   })

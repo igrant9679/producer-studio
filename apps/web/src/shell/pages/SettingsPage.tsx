@@ -1,4 +1,4 @@
-import type { Device, DesktopSettings, SystemInfo } from '@producer/core'
+import type { AiSettings, Device, DesktopSettings } from '@producer/core'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
@@ -7,7 +7,8 @@ import { HttpError } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { syncSummary } from '../SystemChrome'
-import { aiLabel, sysFetch, systemApi, useSystem } from '../system'
+import { aiLabel, aiLabelHasModel, sysFetch, systemApi, useSystem } from '../system'
+import { AiProviders } from './AiProviders'
 import { Avatar, EmptyState, Spinner, useAsync, usePageTitle } from '../ui'
 import { relativeTime } from '../util'
 
@@ -21,13 +22,6 @@ interface ProducerDesktopBridge {
   showItemInFolder(path: string): Promise<boolean>
 }
 const desktopBridge = (): ProducerDesktopBridge | undefined => (window as unknown as { producerDesktop?: ProducerDesktopBridge }).producerDesktop
-
-/** Re-probe the AI provider now (bypasses the server's ~30 s cache) and update the shared system state. */
-async function refreshSystem(): Promise<SystemInfo> {
-  const info = await sysFetch<SystemInfo>('GET', '/system?refresh=1')
-  useSystem.setState((s) => ({ info, loaded: true, error: undefined, sync: info.sync ?? s.sync }))
-  return info
-}
 
 function Section({ id, icon, title, sub, children }: { id: string; icon: ReactNode; title: string; sub?: string; children: ReactNode }) {
   return (
@@ -221,23 +215,38 @@ function AiInfo() {
     <div className={clsx('ps-ai-status', ok ? 'ok' : 'bad')}>
       {ok ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <strong>{aiLabel(info)}{info.ai.model ? ` · ${info.ai.model}` : ''}</strong>
+        <strong>{ok ? 'Active: ' : ''}{aiLabel(info)}{info.ai.model && !aiLabelHasModel(info) ? ` · ${info.ai.model}` : ''}</strong>
         <span>{info.ai.detail || (ok ? 'Ready' : 'Not available')}</span>
       </div>
     </div>
   )
 }
 
-function DesktopAi({ settings, onSettings }: { settings?: DesktopSettings; onSettings: (p: Partial<DesktopSettings>) => Promise<void> }) {
+type Builtin = AiSettings['builtin']
+
+/** Status of the Claude Code CLI (the desktop's built-in provider), independent of the chosen default. */
+function BuiltinInfo({ builtin }: { builtin?: Builtin }) {
+  if (!builtin) return <div className="skeleton" style={{ height: 56 }} />
+  return (
+    <div className={clsx('ps-ai-status', builtin.available ? 'ok' : 'bad')}>
+      {builtin.available ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <strong>{builtin.id === 'claude-cli' ? 'Claude Code CLI' : builtin.id === 'none' ? 'AI disabled' : 'Claude API'}{builtin.model ? ` · ${builtin.model}` : ''}</strong>
+        <span>{builtin.detail || (builtin.available ? 'Ready' : 'Not available')}</span>
+      </div>
+    </div>
+  )
+}
+
+function DesktopAi({ settings, onSettings, builtin, refresh }: { settings?: DesktopSettings; onSettings: (p: Partial<DesktopSettings>) => Promise<void>; builtin?: Builtin; refresh: () => Promise<Builtin | undefined> }) {
   const [path, setPath] = useState('')
   const [model, setModel] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; detail: string }>()
   const [signingIn, setSigningIn] = useState(false)
-  const info = useSystem((s) => s.info)
   const load = useSystem((s) => s.load)
-  const signedOut = info?.ai.provider === 'claude-cli' && !info.ai.available && /not signed in/i.test(info.ai.detail)
+  const signedOut = builtin?.id === 'claude-cli' && !builtin.available && /not signed in/i.test(builtin.detail)
   useEffect(() => {
     if (!signingIn) return
     // after "Sign in to Claude": poll until the CLI reports a signed-in account (up to 5 minutes)
@@ -245,11 +254,11 @@ function DesktopAi({ settings, onSettings }: { settings?: DesktopSettings; onSet
     const t0 = Date.now()
     const iv = setInterval(async () => {
       try {
-        const next = await refreshSystem()
+        const next = await refresh()
         if (!alive) return
-        if (next.ai.available) {
+        if (next?.available) {
           setSigningIn(false)
-          setTest({ ok: true, detail: next.ai.detail })
+          setTest({ ok: true, detail: next.detail })
           toast('Signed in to Claude')
         } else if (Date.now() - t0 > 5 * 60_000) setSigningIn(false)
       } catch {
@@ -282,8 +291,8 @@ function DesktopAi({ settings, onSettings }: { settings?: DesktopSettings; onSet
     setTesting(true)
     setTest(undefined)
     try {
-      const info = await refreshSystem()
-      setTest({ ok: info.ai.available, detail: info.ai.detail || (info.ai.available ? 'Claude responded' : 'Claude is not available') })
+      const b = await refresh()
+      setTest({ ok: !!b?.available, detail: b?.detail || (b?.available ? 'Claude responded' : 'Claude is not available') })
     } catch (e) {
       setTest({ ok: false, detail: errText(e) })
     } finally {
@@ -292,7 +301,7 @@ function DesktopAi({ settings, onSettings }: { settings?: DesktopSettings; onSet
   }
   return (
     <div>
-      <AiInfo />
+      <BuiltinInfo builtin={builtin} />
       <div className="ps-set-grid" style={{ marginTop: 16 }}>
         <div className="ps-field">
           <label className="label" htmlFor="ai-path">Claude CLI path</label>
@@ -454,23 +463,35 @@ export default function SettingsPage() {
             )}
           </Section>
 
-          <Section id="ai" icon={<Cpu size={18} />} title="AI" sub={desktop ? 'Producer uses the Claude Code CLI installed on this computer.' : 'AI features run on Producer Studio’s servers.'}>
-            {desktop ? (
-              <DesktopAi settings={settings} onSettings={saveSettings} />
-            ) : (
-              <>
-                <AiInfo />
-                {info && (
-                  <div className="ps-caps">
-                    {(['transcribe', 'tts', 'render'] as const).map((k) => (
-                      <span key={k} className={clsx('ps-cap-pill', info.capabilities[k] ? 'ok' : 'off')}>
-                        {info.capabilities[k] ? <CheckCircle2 size={12} /> : <CloudOff size={12} />} {k === 'tts' ? 'Voiceover' : k === 'transcribe' ? 'Transcription' : 'Rendering'}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
+          <Section
+            id="ai"
+            icon={<Cpu size={18} />}
+            title="AI"
+            sub={desktop ? 'Use Claude through the Claude Code CLI on this computer, or bring your own Anthropic, Gemini or OpenAI key.' : 'Use Producer Studio’s built-in Claude, or bring your own Anthropic, Gemini or OpenAI key for this workspace.'}
+          >
+            <AiInfo />
+            <div style={{ height: 14 }} />
+            <AiProviders
+              desktop={desktop}
+              renderBuiltin={({ builtin, refresh }) =>
+                desktop ? (
+                  <DesktopAi settings={settings} onSettings={saveSettings} builtin={builtin} refresh={refresh} />
+                ) : (
+                  <>
+                    <BuiltinInfo builtin={builtin} />
+                    {info && (
+                      <div className="ps-caps">
+                        {(['transcribe', 'tts', 'render'] as const).map((k) => (
+                          <span key={k} className={clsx('ps-cap-pill', info.capabilities[k] ? 'ok' : 'off')}>
+                            {info.capabilities[k] ? <CheckCircle2 size={12} /> : <CloudOff size={12} />} {k === 'tts' ? 'Voiceover' : k === 'transcribe' ? 'Transcription' : 'Rendering'}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )
+              }
+            />
           </Section>
 
           {desktop && (

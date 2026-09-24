@@ -30,6 +30,11 @@ describe('sync status', () => {
     const base = { mode: 'desktop' as const, version: '1', capabilities: { transcribe: true, tts: true, render: true } }
     expect(aiLabel({ ...base, ai: { provider: 'claude-cli', available: true, detail: '' } })).toBe('Claude · your subscription')
     expect(aiLabel({ ...base, ai: { provider: 'anthropic-api', available: true, detail: '' } })).toBe('Claude API')
+    expect(aiLabel({ ...base, ai: { provider: 'gemini', available: true, detail: '', model: 'gemini-3-pro' } })).toBe('Gemini · gemini-3-pro')
+    expect(aiLabel({ ...base, ai: { provider: 'openai', available: true, detail: '', model: 'gpt-5.5' } })).toBe('OpenAI · gpt-5.5')
+    expect(aiLabel({ ...base, ai: { provider: 'anthropic-key', available: true, detail: '', model: 'claude-opus-5' } })).toBe('Claude · claude-opus-5')
+    expect(aiLabel({ ...base, ai: { provider: 'openai', available: true, detail: '' } })).toBe('OpenAI API')
+    expect(aiLabel({ ...base, ai: { provider: 'none', available: false, detail: '' } })).toBe('AI unavailable')
   })
 })
 

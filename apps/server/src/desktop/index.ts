@@ -7,7 +7,7 @@ import { type AppEnv, SESSION_COOKIE, requireUser } from '../auth'
 import { ctx } from '../context'
 import { HttpError, body, forbidden } from '../http'
 import { log } from '../log'
-import { getProvider } from '../ai/provider'
+import { invalidateBuiltin } from '../ai/resolve'
 import { findClaude } from '../ai/cli/detect'
 import { setMissingMediaFetcher } from '../services/assets'
 import { openSignInTerminal } from './claude-login'
@@ -91,7 +91,7 @@ desktopRoutes.post('/desktop/claude/login', async (c) => {
   const install = await findClaude(getSettings().claudePath)
   if (!install) throw new HttpError(404, 'not_found', 'Claude Code CLI not found. Install Claude Code, or set its path in Settings → AI.')
   openSignInTerminal(install.path)
-  ;((await getProvider()) as { invalidate?: () => void }).invalidate?.()
+  await invalidateBuiltin()
   return c.json({ ok: true, path: install.path })
 })
 
@@ -105,7 +105,7 @@ desktopRoutes.put('/settings', async (c) => {
   const patch = await body(c, SettingsPatch)
   try {
     const next = saveSettings(patch)
-    if (patch.claudePath !== undefined || patch.claudeModel !== undefined) ((await getProvider()) as { invalidate?: () => void }).invalidate?.()
+    if (patch.claudePath !== undefined || patch.claudeModel !== undefined) await invalidateBuiltin()
     return c.json(next)
   } catch (err) {
     if ((err as { invalid?: boolean }).invalid) throw new HttpError(400, 'invalid', (err as Error).message)

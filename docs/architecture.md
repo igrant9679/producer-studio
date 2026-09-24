@@ -53,6 +53,23 @@ to clients over SSE (`/api/events`).
   posted project and returns the new document plus a summary; the client pushes it onto its undo stack.
 - The API key lives only on the server (`ANTHROPIC_API_KEY`).
 
+### Bring-your-own-key providers (`ai/openai.ts`, `ai/gemini.ts`, `ai/anthropic.ts` with a key)
+- Every feature talks to `AiProvider` (`ai/provider.ts`; `ClaudeProvider` is an alias). Ids: `anthropic-api` (server
+  env credentials), `anthropic-key`, `openai` (Responses API), `gemini` (AI Studio key), `claude-cli`, `none`.
+- Each provider implements streamed `write`, native JSON-schema `structured` (zod → `z.toJSONSchema` → dialect
+  adapter in `ai/common.ts`, validated with zod, one repair turn) and a manual tool-call loop `runAgent` over the same
+  `ToolSpec`s + `runTool` (parallel calls, tool errors returned to the model, `maxIterations`, abort).
+- Settings (`GET/PUT /api/ai/settings`, `PUT/DELETE /api/ai/keys/:provider`, `POST /api/ai/keys/:provider/test`):
+  `{defaultProvider, perFeature: {writer, script, assistant}, providers: {openai|gemini|anthropic: {model, hasKey,
+  keyLast4, models}}}`. The test call lists models (chat/text-capable ones only); the UI offers them in a dropdown with
+  a free-text fallback.
+- Resolution (`ai/resolve.ts`, `getProvider(scope, feature)`): per-feature override → default provider → built-in
+  (cloud: server `ANTHROPIC_API_KEY`; desktop: Claude CLI) → none (503 "AI is not configured — add a key in Settings").
+  Key providers are cached per scope + provider + model + key hash.
+- Storage: cloud `workspace_ai_settings` (JSON) + `ai_keys` (AES-256-GCM, key from `SECRETS_KEY`, AAD = workspace +
+  provider), owners edit, members read masked settings; desktop: the `ai` block of the local settings file with keys
+  sealed by the safeStorage-protected key. Neither is part of the sync change feed. Keys never appear in responses.
+
 ## Auth & tenancy
 Email + password (scrypt), httpOnly `ps_session` cookie (30 days, sliding). Every user gets a personal workspace;
 workspaces are the tenancy boundary (projects, assets, brand kit). Roles: owner, editor, viewer.

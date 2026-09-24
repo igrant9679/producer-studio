@@ -23,6 +23,8 @@ if (!app.requestSingleInstanceLock()) {
   let quitting = false
   let serverStopped = false
   let restarting = false
+  // window + taskbar icon (packaged: inside app.asar next to dist/; dev: apps/desktop/assets)
+  const appIcon = [path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'), path.join(__dirname, '..', 'assets', 'icon.png')].find((p) => fs.existsSync(p))
 
   const logFile = () => path.join(app.getPath('userData'), 'logs', 'main.log')
   const logLine = (msg: string) => {
@@ -46,6 +48,7 @@ if (!app.requestSingleInstanceLock()) {
       backgroundColor: '#0c0e14',
       skipTaskbar: false,
       title: 'Producer Studio',
+      ...(appIcon ? { icon: appIcon } : {}),
       webPreferences: { ...SECURE_PREFS },
     })
     w.once('ready-to-show', () => w.show())
@@ -62,6 +65,7 @@ if (!app.requestSingleInstanceLock()) {
       show: false,
       backgroundColor: '#0c0e14',
       title: 'Producer Studio',
+      ...(appIcon ? { icon: appIcon } : {}),
       webPreferences: {
         ...SECURE_PREFS,
         preload: path.join(__dirname, 'preload.cjs'),

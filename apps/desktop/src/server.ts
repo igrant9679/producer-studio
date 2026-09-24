@@ -85,8 +85,10 @@ export class ServerProcess extends EventEmitter {
   async start(): Promise<void> {
     this.stopping = false
     this.port = await freePort(this.port || undefined)
-    // PS_DESKTOP_SECRET: fixed secret for UI automation/tests, set only by whoever launches the app
-    this.secret = process.env.PS_DESKTOP_SECRET && process.env.PS_DESKTOP_SECRET.length >= 16 ? process.env.PS_DESKTOP_SECRET : crypto.randomBytes(32).toString('base64url')
+    // PS_DESKTOP_SECRET: fixed secret for UI automation/tests in dev builds only; packaged builds always use a random
+    // per-launch secret (so nothing in the environment can pre-arrange a way into the local API)
+    const fixed = !app.isPackaged ? process.env.PS_DESKTOP_SECRET : undefined
+    this.secret = fixed && fixed.length >= 16 ? fixed : crypto.randomBytes(32).toString('base64url')
     const l = layout()
     fs.mkdirSync(this.paths.dataDir, { recursive: true })
     const env: NodeJS.ProcessEnv = {

@@ -206,6 +206,8 @@ export interface Voice {
 
 export interface WriteRequest {
   kind: 'voiceover' | 'script' | 'headline' | 'caption' | 'rewrite'
+  /** Workspace whose AI settings apply (cloud). Defaults to the user's personal workspace; ignored on desktop. */
+  workspaceId?: string
   prompt: string
   context?: string
   maxWords?: number
@@ -311,7 +313,8 @@ export interface TemplateSummary {
 export interface SystemInfo {
   mode: 'cloud' | 'desktop'
   version: string
-  ai: { provider: 'anthropic-api' | 'claude-cli' | 'none'; available: boolean; detail: string; model?: string }
+  /** Effective default AI provider (for `?workspaceId=` on cloud, that workspace's settings). */
+  ai: { provider: AiProviderId; available: boolean; detail: string; model?: string }
   /** Local capabilities (true on desktop; on cloud reflects the worker image). */
   capabilities: { transcribe: boolean; tts: boolean; render: boolean }
   sync?: SyncStatus
@@ -365,6 +368,68 @@ export interface SyncChanges {
   deleted: { projects: string[]; assets: string[] }
   /** True when more changes remain after `cursor` (page again). */
   more: boolean
+}
+
+// ---- AI providers (bring your own key) ----
+// Keys are stored server-side only (cloud: per workspace, AES-256-GCM; desktop: encrypted with the OS keystore key)
+// and never returned: responses carry `hasKey` and `keyLast4`. Desktop ignores `workspaceId`.
+// GET    /api/ai/settings?workspaceId=                        -> AiSettings            (viewer+)
+// PUT    /api/ai/settings        AiSettingsUpdate             -> AiSettings            (owner)
+// PUT    /api/ai/keys/:provider  {workspaceId?, key}          -> AiKeyTestResult       (owner; stores, then tests)
+// DELETE /api/ai/keys/:provider?workspaceId=                  -> AiSettings            (owner)
+// POST   /api/ai/keys/:provider/test {workspaceId?, key?}     -> AiKeyTestResult       (owner; given key or the stored one)
+/** Provider implementations: server Anthropic key, workspace/user Anthropic key, OpenAI, Gemini, local Claude CLI. */
+export type AiProviderId = 'anthropic-api' | 'anthropic-key' | 'openai' | 'gemini' | 'claude-cli' | 'none'
+/** Providers configured with a user-supplied API key. */
+export type AiKeyProvider = 'openai' | 'gemini' | 'anthropic'
+/** What a feature can be pointed at: the built-in provider (desktop: Claude CLI; cloud: the server's key) or a key. */
+export type AiChoice = 'builtin' | AiKeyProvider
+export type AiFeature = 'writer' | 'script' | 'assistant'
+
+export interface AiKeyProviderSettings {
+  /** Model id sent to the provider (free text; defaults picked from the live model list). */
+  model: string
+  hasKey: boolean
+  keyLast4?: string
+  /** Model ids the key could use at the last successful test. */
+  models?: string[]
+  /** Result of the last key test (undefined = never tested). */
+  valid?: boolean
+  /** User-facing reason when the last test failed. */
+  error?: string
+  checkedAt?: number
+  updatedAt?: number
+}
+
+export interface AiSettings {
+  /** null = automatic (the built-in provider). */
+  defaultProvider: AiChoice | null
+  perFeature: Partial<Record<AiFeature, AiChoice>>
+  providers: Partial<Record<AiKeyProvider, AiKeyProviderSettings>>
+  /** The built-in provider for this edition and whether it's usable. */
+  builtin: { id: AiProviderId; available: boolean; detail: string; model?: string }
+  /** Effective provider per feature after resolution. */
+  effective: Record<AiFeature, { provider: AiProviderId; model?: string }>
+  /** True when the caller may change keys and settings (workspace owner; always on desktop). */
+  canEdit: boolean
+}
+
+export interface AiSettingsUpdate {
+  workspaceId?: string
+  defaultProvider?: AiChoice | null
+  perFeature?: Partial<Record<AiFeature, AiChoice | null>>
+  models?: Partial<Record<AiKeyProvider, string>>
+}
+
+export interface AiKeyTestResult {
+  ok: boolean
+  /** Chat/text-capable model ids the key can use (newest first). */
+  models: string[]
+  /** "✓ valid · N models" style detail or a user-facing error. */
+  detail: string
+  /** Suggested default model from the live list. */
+  defaultModel?: string
+  settings?: AiSettings
 }
 
 export type { Transcript, ScriptScene }

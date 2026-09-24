@@ -19,7 +19,13 @@ export function aiConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return dirs.some((d) => d && fs.existsSync(path.join(d, 'configs')))
 }
 
-export const notConfigured = () => new HttpError(503, 'server', 'AI is not configured on this server')
+export const NOT_CONFIGURED = 'AI is not configured — add a key in Settings'
+export const notConfigured = () => new HttpError(503, 'server', NOT_CONFIGURED)
+
+/** Client for a user-supplied key (never cached here; the resolver caches providers per scope + settings). */
+export function keyClient(apiKey: string): Anthropic {
+  return new Anthropic({ apiKey, maxRetries: 2 })
+}
 
 export function getClient(): Anthropic {
   if (!aiConfigured()) throw notConfigured()
@@ -33,12 +39,21 @@ export function getClient(): Anthropic {
   return client
 }
 
-/** Translate SDK errors into API errors (typed classes, most specific first). */
-export function mapAiError(err: unknown): never {
+/**
+ * Translate SDK errors into API errors (typed classes, most specific first). `keyed` = a user-supplied key, so auth
+ * failures blame the key (and say where to fix it) instead of the server configuration.
+ */
+export function mapAiError(err: unknown, opts: { keyed?: boolean; model?: string } = {}): never {
   if (err instanceof HttpError) throw err
-  if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) throw notConfigured()
-  if (err instanceof Anthropic.RateLimitError) throw new HttpError(429, 'quota', 'The AI service is busy right now. Please try again in a moment.')
-  if (err instanceof Anthropic.BadRequestError) throw new HttpError(400, 'invalid', `AI request rejected: ${err.message}`)
+  if (err instanceof Anthropic.APIUserAbortError) throw err
+  if (err instanceof Anthropic.AuthenticationError) throw opts.keyed ? new HttpError(400, 'invalid', 'The Anthropic API key was rejected. Check or replace it in Settings → AI.') : notConfigured()
+  if (err instanceof Anthropic.PermissionDeniedError) throw opts.keyed ? new HttpError(403, 'forbidden', 'This Anthropic API key isn’t allowed to use that model or feature.') : notConfigured()
+  if (err instanceof Anthropic.NotFoundError) throw new HttpError(404, 'not_found', `Anthropic model “${opts.model ?? MODEL}” was not found. Pick another model in Settings → AI.`)
+  if (err instanceof Anthropic.RateLimitError) throw new HttpError(429, 'quota', opts.keyed ? 'Anthropic rate limit or quota reached for this key. Try again in a moment or check your plan’s limits.' : 'The AI service is busy right now. Please try again in a moment.')
+  if (err instanceof Anthropic.BadRequestError) {
+    if (opts.keyed && /credit balance|billing/i.test(err.message)) throw new HttpError(429, 'quota', 'Your Anthropic account is out of credit. Add credit in the Anthropic console.')
+    throw new HttpError(400, 'invalid', `AI request rejected: ${err.message}`)
+  }
   if (err instanceof Anthropic.APIConnectionError) throw new HttpError(502, 'server', 'Could not reach the AI service')
   if (err instanceof Anthropic.APIError) throw new HttpError(502, 'server', `AI request failed (${err.status ?? 'network'})`)
   if (err instanceof Anthropic.AnthropicError) throw notConfigured()
@@ -68,16 +83,22 @@ const WRITE_SYSTEM: Record<string, string> = {
   rewrite: 'You rewrite text as requested, preserving meaning and facts. Output only the rewritten text, no preamble or quotes.',
 }
 
-export function writeRequestParams(kind: string, prompt: string, context?: string, maxWords?: number) {
+/** System prompt + user message for the AI writer (shared by every provider). */
+export function writePrompt(kind: string, prompt: string, context?: string, maxWords?: number): { system: string; user: string } {
   const system = WRITE_SYSTEM[kind] ?? WRITE_SYSTEM.rewrite
   const parts = [prompt.trim()]
   if (context?.trim()) parts.push(`Context:\n${context.trim()}`)
   if (maxWords) parts.push(`Keep it under ${maxWords} words.`)
+  return { system, user: parts.join('\n\n') }
+}
+
+export function writeRequestParams(kind: string, prompt: string, context?: string, maxWords?: number, model: string = MODEL) {
+  const { system, user } = writePrompt(kind, prompt, context, maxWords)
   return {
-    model: MODEL,
+    model,
     max_tokens: 8000,
     thinking: { type: 'adaptive' as const },
     system,
-    messages: [{ role: 'user' as const, content: parts.join('\n\n') }],
+    messages: [{ role: 'user' as const, content: user }],
   }
 }

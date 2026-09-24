@@ -245,7 +245,7 @@ export default function VoiceStudio() {
     let acc = ''
     try {
       await api.write(
-        { kind, prompt: prompt || 'Improve this voiceover script.', context, maxWords: 300 },
+        { kind, prompt: prompt || 'Improve this voiceover script.', context, maxWords: 300, workspaceId: useSession.getState().workspaceId },
         (d) => {
           acc += d
           setText(before + acc + after)

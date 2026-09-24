@@ -297,4 +297,15 @@
 .ps-cap-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); }
 .ps-cap-pill.ok { color: var(--green); }
 .ps-cap-pill.off { color: var(--text-3); }
+.ps-ai-cards { display: flex; flex-direction: column; gap: 12px; }
+.ps-ai-card { padding: 16px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--border); }
+.ps-ai-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.ps-ai-card-head .ps-set-icon { width: 32px; height: 32px; border-radius: 9px; }
+.ps-ai-card-head strong { display: block; font-size: 14px; }
+.ps-ai-card-head span:not(.ps-set-icon):not(.ps-ai-badge) { display: block; font-size: 12px; color: var(--text-3); }
+.ps-ai-badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); letter-spacing: .02em; }
+.ps-ai-badge.on { color: var(--cyan); border-color: rgba(53, 224, 255, .45); background: rgba(53, 224, 255, .08); }
+.ps-ai-adv { margin-top: 10px; }
+.ps-ai-adv > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-2); padding: 10px 2px 0; }
+.ps-ai-adv > summary:hover { color: var(--text); }
 @media (max-width: 1100px) { .ps-set-grid { grid-template-columns: 1fr; } }

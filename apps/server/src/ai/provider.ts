@@ -1,12 +1,15 @@
-// AI provider seam. Features (writer, Producer script, editor assistant) are written against ClaudeProvider;
-// cloud uses the Anthropic API, desktop will use the local Claude Code CLI. Prompts, schemas and tool handlers
-// stay provider-agnostic: tools are plain data (name, description, JSON Schema) validated with zod and executed
-// by `runTool` in tools.ts, so a CLI provider can expose the very same tools over MCP.
+// AI provider seam. Features (writer, Producer script, editor assistant) are written against AiProvider:
+//   anthropic-api  – the cloud server's own Anthropic credentials (ANTHROPIC_API_KEY …)
+//   anthropic-key  – a workspace/user-supplied Anthropic API key
+//   openai, gemini – user-supplied OpenAI / Google AI Studio keys
+//   claude-cli     – the locally installed Claude Code CLI (desktop, the user's own subscription)
+// Prompts, schemas and tool handlers stay provider-agnostic: tools are plain data (name, description, JSON Schema)
+// validated with zod and executed by `runTool` in tools.ts, so every provider (and the CLI over MCP) exposes the very
+// same tools. Which provider serves a request is resolved per scope + feature in resolve.ts.
 import type * as z from 'zod/v4'
-import type { WriteRequest } from '@producer/core'
-import { ctx } from '../context'
+import type { AiFeature, AiProviderId, WriteRequest } from '@producer/core'
 
-export type ProviderId = 'anthropic-api' | 'claude-cli' | 'none'
+export type ProviderId = AiProviderId
 
 export interface ProviderStatus {
   available: boolean
@@ -48,7 +51,7 @@ export interface AgentRequest {
   signal?: AbortSignal
 }
 
-export interface ClaudeProvider {
+export interface AiProvider {
   readonly id: ProviderId
   status(): Promise<ProviderStatus>
   /** Short streamed completion (AI writer). Returns the full text. */
@@ -59,36 +62,39 @@ export interface ClaudeProvider {
   runAgent(req: AgentRequest): Promise<{ text: string }>
 }
 
-let cached: ClaudeProvider | undefined
+/** @deprecated use AiProvider (kept so existing imports keep working). */
+export type ClaudeProvider = AiProvider
 
-export async function getProvider(): Promise<ClaudeProvider> {
-  if (cached) return cached
-  const id = ctx().config.aiProvider
-  if (id === 'claude-cli') {
-    const { ClaudeCliProvider } = await import('./cli')
-    cached = new ClaudeCliProvider()
-  } else if (id === 'anthropic-api') {
-    const { AnthropicApiProvider } = await import('./anthropic')
-    cached = new AnthropicApiProvider()
-  } else {
-    const { NoProvider } = await import('./cli')
-    cached = new NoProvider()
-  }
-  return cached
+/** Settings scope: a workspace id on cloud; ignored on desktop (one local scope). */
+export type AiScope = string | undefined
+
+export const LOCAL_SCOPE = 'local'
+
+export type { AiFeature }
+
+let override: AiProvider | undefined
+
+/** Provider for a scope + feature (feature undefined = the default provider). */
+export async function getProvider(scope?: AiScope, feature?: AiFeature): Promise<AiProvider> {
+  if (override) return override
+  const { resolveProvider } = await import('./resolve')
+  return (await resolveProvider(scope, feature)).provider
 }
 
-/** Test hook. */
-export function setProvider(p: ClaudeProvider | undefined) {
-  cached = p
+/** Test hook: force one provider for every scope and feature (undefined restores resolution). */
+export function setProvider(p: AiProvider | undefined) {
+  override = p
 }
 
-/** Throw 503 unless the configured provider is usable. */
-export async function requireProvider(): Promise<ClaudeProvider> {
-  const p = await getProvider()
+/** Throw 503 unless the provider for this scope + feature is usable. */
+export async function requireProvider(scope?: AiScope, feature?: AiFeature): Promise<AiProvider> {
+  const p = await getProvider(scope, feature)
   const s = await p.status()
   if (!s.available) {
+    const { HttpError } = await import('../http')
     const { notConfigured } = await import('./claude')
-    throw notConfigured()
+    // a chosen provider that isn't usable explains itself (e.g. "Claude isn't signed in"); nothing configured → the generic message
+    throw p.id === 'none' || p.id === 'anthropic-api' ? notConfigured() : new HttpError(503, 'server', s.detail || notConfigured().message)
   }
   return p
 }

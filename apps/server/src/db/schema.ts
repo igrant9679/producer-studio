@@ -181,4 +181,26 @@ export const devices = pgTable('devices', {
   lastSeenAt: ms('last_seen_at'),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, tombstones, devices }
+/** Non-secret AI settings per workspace (AiSettingsDoc in ai/store.ts). Not synced. */
+export const workspaceAiSettings = pgTable('workspace_ai_settings', {
+  workspaceId: text('workspace_id').primaryKey(),
+  doc: jsonb('doc').$type<Record<string, unknown>>().notNull(),
+  updatedAt: ms('updated_at').notNull(),
+})
+
+/** Provider API keys, AES-256-GCM (base64 fields). Never returned by any API; not synced. */
+export const aiKeys = pgTable(
+  'ai_keys',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    provider: text('provider').notNull(),
+    ciphertext: text('ciphertext').notNull(),
+    iv: text('iv').notNull(),
+    tag: text('tag').notNull(),
+    last4: text('last4').notNull(),
+    updatedAt: ms('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.provider] })],
+)
+
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, tombstones, devices, workspaceAiSettings, aiKeys }

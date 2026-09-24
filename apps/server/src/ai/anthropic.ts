@@ -1,27 +1,57 @@
-// ClaudeProvider over the Anthropic API (@anthropic-ai/sdk): claude-opus-5, adaptive thinking, server-side
+// AiProvider over the Anthropic API (@anthropic-ai/sdk): claude-opus-5 by default, adaptive thinking, server-side
 // refusal fallback (`fallbacks: "default"`, beta server-side-fallback-2026-07-01), streaming for long outputs.
-import type Anthropic from '@anthropic-ai/sdk'
+// Two ids: `anthropic-api` = the server's own credentials (env), `anthropic-key` = a user-supplied key + model.
+import Anthropic from '@anthropic-ai/sdk'
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod'
 import type { WriteRequest } from '@producer/core'
 import { HttpError } from '../http'
-import { BETAS, MODEL, aiConfigured, checkStop, getClient, mapAiError, textOf, writeRequestParams } from './claude'
-import type { AgentRequest, ClaudeProvider, ProviderStatus, StructuredRequest } from './provider'
+import { BETAS, MODEL, aiConfigured, checkStop, getClient, keyClient, mapAiError, textOf, writeRequestParams } from './claude'
+import type { AgentRequest, AiProvider, ProviderStatus, StructuredRequest } from './provider'
 
-export class AnthropicApiProvider implements ClaudeProvider {
-  readonly id = 'anthropic-api' as const
+const isApiError = (err: unknown) => err instanceof Anthropic.APIError
+
+export interface AnthropicProviderOptions {
+  /** User-supplied key; omitted = the server's own credentials (env / profile). */
+  apiKey?: string
+  model?: string
+  /** Injected client (tests). */
+  client?: Anthropic
+}
+
+export class AnthropicApiProvider implements AiProvider {
+  readonly id: 'anthropic-api' | 'anthropic-key'
+  readonly model: string
+  private readonly keyed: boolean
+  private client?: Anthropic
+
+  constructor(opts: AnthropicProviderOptions = {}) {
+    this.keyed = Boolean(opts.apiKey || opts.client)
+    this.id = this.keyed ? 'anthropic-key' : 'anthropic-api'
+    this.model = opts.model?.trim() || MODEL
+    this.client = opts.client ?? (opts.apiKey ? keyClient(opts.apiKey) : undefined)
+  }
+
+  private getClient(): Anthropic {
+    return this.client ?? getClient()
+  }
+
+  private fail(err: unknown): never {
+    mapAiError(err, { keyed: this.keyed, model: this.model })
+  }
 
   async status(): Promise<ProviderStatus> {
+    if (this.keyed) return { available: true, detail: 'Anthropic API · your key', model: this.model }
     return aiConfigured()
-      ? { available: true, detail: 'Anthropic API', model: MODEL }
-      : { available: false, detail: 'ANTHROPIC_API_KEY is not set on this server', model: MODEL }
+      ? { available: true, detail: 'Anthropic API', model: this.model }
+      : { available: false, detail: 'ANTHROPIC_API_KEY is not set on this server', model: this.model }
   }
 
   async write(req: WriteRequest, onDelta: (t: string) => void, signal?: AbortSignal): Promise<string> {
-    const client = getClient()
+    const client = this.getClient()
     try {
       const stream = client.beta.messages.stream(
         {
-          ...writeRequestParams(req.kind, req.prompt, req.context, req.maxWords),
+          ...writeRequestParams(req.kind, req.prompt, req.context, req.maxWords, this.model),
           betas: BETAS,
           // @ts-expect-error SDK 0.110 types `fallbacks` as an array only; the "default" scalar form (beta server-side-fallback-2026-07-01) routes refusals by category server-side.
           fallbacks: 'default',
@@ -33,45 +63,55 @@ export class AnthropicApiProvider implements ClaudeProvider {
       checkStop(msg, 'write this')
       return textOf(msg.content).trim()
     } catch (err) {
-      mapAiError(err)
+      this.fail(err)
     }
   }
 
   async structured<T>(req: StructuredRequest<T>): Promise<T> {
-    const client = getClient()
+    const client = this.getClient()
     const content: Anthropic.Beta.BetaContentBlockParam[] = []
     for (const img of req.images) {
       content.push({ type: 'text', text: img.label })
       content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } })
     }
     content.push({ type: 'text', text: req.prompt })
-    let parsed: T | null = null
-    try {
-      const msg = await client.beta.messages.parse(
-        {
-          model: MODEL,
-          max_tokens: 16000,
-          thinking: { type: 'adaptive' },
-          betas: BETAS,
-          // @ts-expect-error SDK 0.110 types `fallbacks` as an array only; the "default" scalar form (beta server-side-fallback-2026-07-01) routes refusals by category server-side.
-          fallbacks: 'default',
-          system: req.system,
-          messages: [{ role: 'user', content }],
-          output_config: { format: betaZodOutputFormat(req.schema) },
-        },
-        { signal: req.signal },
-      )
-      checkStop(msg, 'complete this request')
-      parsed = (msg.parsed_output as T | null | undefined) ?? null
-    } catch (err) {
-      mapAiError(err)
+    // one repair retry when the output fails validation (the SDK parses + validates with the zod schema)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let parsed: T | null = null
+      try {
+        const msg = await client.beta.messages.parse(
+          {
+            model: this.model,
+            max_tokens: 16000,
+            thinking: { type: 'adaptive' },
+            betas: BETAS,
+            // @ts-expect-error SDK 0.110 types `fallbacks` as an array only; the "default" scalar form (beta server-side-fallback-2026-07-01) routes refusals by category server-side.
+            fallbacks: 'default',
+            system: req.system,
+            messages: [
+              {
+                role: 'user',
+                content: attempt ? [...content, { type: 'text', text: 'Your previous answer did not match the required JSON schema. Answer again with JSON that matches it exactly.' }] : content,
+              },
+            ],
+            output_config: { format: betaZodOutputFormat(req.schema) },
+          },
+          { signal: req.signal },
+        )
+        checkStop(msg, 'complete this request')
+        parsed = (msg.parsed_output as T | null | undefined) ?? null
+      } catch (err) {
+        // parse/validation failures are local (not API errors): retry once; everything else maps to a user-facing error
+        if (attempt === 0 && !(err instanceof HttpError) && !isApiError(err) && !req.signal?.aborted) continue
+        this.fail(err)
+      }
+      if (parsed != null) return parsed
     }
-    if (parsed == null) throw new HttpError(502, 'server', 'The AI response did not match the expected format')
-    return parsed
+    throw new HttpError(502, 'server', 'The AI response did not match the expected format')
   }
 
   async runAgent(req: AgentRequest): Promise<{ text: string }> {
-    const client = getClient()
+    const client = this.getClient()
     const tools: Anthropic.Beta.BetaTool[] = req.tools.map((t) => ({
       name: t.name,
       description: t.description,
@@ -92,7 +132,7 @@ export class AnthropicApiProvider implements ClaudeProvider {
       try {
         const stream = client.beta.messages.stream(
           {
-            model: MODEL,
+            model: this.model,
             max_tokens: 16000,
             thinking: { type: 'adaptive' },
             betas: BETAS,
@@ -107,7 +147,7 @@ export class AnthropicApiProvider implements ClaudeProvider {
         stream.on('text', (d) => req.onText(d))
         msg = await stream.finalMessage()
       } catch (err) {
-        mapAiError(err)
+        this.fail(err)
       }
       const text = textOf(msg.content)
       if (text) finalText += (finalText ? '\n' : '') + text

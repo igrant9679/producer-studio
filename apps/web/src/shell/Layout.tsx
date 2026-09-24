@@ -461,9 +461,10 @@ export function Layout({ children }: { children: ReactNode }) {
   useWorkspaceEvents(workspaceId)
   useSyncPolling(workspaceId)
   const loadSystem = useSystem((s) => s.load)
+  // the AI chip reflects the current workspace's AI settings (cloud)
   useEffect(() => {
     void loadSystem()
-  }, [loadSystem])
+  }, [loadSystem, workspaceId])
 
   useEffect(() => {
     contentRef.current?.scrollTo({ top: 0 })

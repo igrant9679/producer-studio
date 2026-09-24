@@ -9,9 +9,10 @@ import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { assets, brandKits, devices, memberships, projects, tombstones, workspaces } from '../db/schema'
 import { assetRecord, projectSummary } from '../dto'
-import { HttpError, body, notFound, unauthorized } from '../http'
+import { HttpError, body, memberRole, notFound, unauthorized } from '../http'
 import { newId, randomToken, sha256 } from '../ids'
 import { getProvider } from '../ai/provider'
+import { builtinProvider, invalidateBuiltin } from '../ai/resolve'
 import { whisperAvailable } from '../ai/whisper'
 import { hydrateAssets } from '../services/projects'
 import { checkCredentials } from './auth'
@@ -47,9 +48,14 @@ export const systemRoutes = new Hono<AppEnv>()
 
 systemRoutes.get('/', async (c) => {
   const cfg = ctx().config
-  const provider = await getProvider()
+  // ?workspaceId= (cloud, members only) reports that workspace's effective default provider; else the built-in one
+  let scope: string | undefined
+  const ws = c.req.query('workspaceId')
+  const user = c.get('user')
+  if (cfg.mode === 'cloud' && ws && user && (await memberRole(user.id, ws))) scope = ws
   // ?refresh=1 re-probes the provider now (e.g. right after "Sign in to Claude"); otherwise cached ~30 s
-  if (c.req.query('refresh') === '1') (provider as { invalidate?: () => void }).invalidate?.()
+  if (c.req.query('refresh') === '1') await invalidateBuiltin()
+  const provider = cfg.mode === 'desktop' && !user ? await builtinProvider() : await getProvider(scope)
   const s = await provider.status()
   const info: SystemInfo = {
     mode: cfg.mode,

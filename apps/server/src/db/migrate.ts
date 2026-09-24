@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -227,5 +227,31 @@ CREATE INDEX IF NOT EXISTS projects_seq_idx ON projects(workspace_id, change_seq
 CREATE INDEX IF NOT EXISTS assets_seq_idx ON assets(workspace_id, change_seq);
 `
 
+/**
+ * v3 — bring-your-own-key AI providers: per-workspace AI settings (non-secret JSON) and encrypted provider keys
+ * (AES-256-GCM, key from SECRETS_KEY). Deliberately no change_seq triggers: never part of the sync change feed.
+ */
+export const DDL_V3 = `
+CREATE TABLE IF NOT EXISTS workspace_ai_settings (
+  workspace_id text PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  doc jsonb NOT NULL,
+  updated_at double precision NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_keys (
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  provider text NOT NULL,
+  ciphertext text NOT NULL,
+  iv text NOT NULL,
+  tag text NOT NULL,
+  last4 text NOT NULL,
+  updated_at double precision NOT NULL,
+  PRIMARY KEY (workspace_id, provider)
+);
+`
+
 /** Ordered migrations after v1: [version, sql]. Append here; never edit a shipped entry. */
-export const MIGRATIONS: Array<[number, string]> = [[2, DDL_V2]]
+export const MIGRATIONS: Array<[number, string]> = [
+  [2, DDL_V2],
+  [3, DDL_V3],
+]

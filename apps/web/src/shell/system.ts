@@ -1,9 +1,10 @@
 // Server mode (cloud | desktop), AI provider and desktop sync state.
 // lib/api.ts doesn't cover these endpoints yet, so the shell calls them with a small fetch helper.
-import type { ApiError, Device, DesktopSettings, SyncStatus, SystemInfo } from '@producer/core'
+import type { AiKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, SyncStatus, SystemInfo } from '@producer/core'
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { HttpError } from '../lib/api'
+import { useSession } from '../lib/session'
 
 export async function sysFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
@@ -35,6 +36,19 @@ export const systemApi = {
   resolve: (projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both') => sysFetch<SyncStatus>('POST', `/projects/${encodeURIComponent(projectId)}/sync`, { mode }),
   devices: () => sysFetch<Device[]>('GET', '/devices'),
   revokeDevice: (id: string) => sysFetch<{ ok: true }>('DELETE', `/devices/${encodeURIComponent(id)}`),
+  // bring-your-own-key AI providers (desktop ignores workspaceId)
+  aiSettings: (workspaceId?: string) => sysFetch<AiSettings>('GET', `/ai/settings${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
+  saveAiSettings: (u: AiSettingsUpdate) => sysFetch<AiSettings>('PUT', '/ai/settings', u),
+  saveAiKey: (provider: AiKeyProvider, key: string, workspaceId?: string) => sysFetch<AiKeyTestResult>('PUT', `/ai/keys/${provider}`, { workspaceId, key }),
+  deleteAiKey: (provider: AiKeyProvider, workspaceId?: string) => sysFetch<AiSettings>('DELETE', `/ai/keys/${provider}${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
+  testAiKey: (provider: AiKeyProvider, workspaceId?: string, key?: string) => sysFetch<AiKeyTestResult>('POST', `/ai/keys/${provider}/test`, { workspaceId, key }),
+}
+
+/** /api/system for the current workspace (cloud: its effective AI provider). */
+export function systemPath(refresh = false): string {
+  const ws = useSession.getState().workspaceId
+  const q = [ws ? `workspaceId=${encodeURIComponent(ws)}` : '', refresh ? 'refresh=1' : ''].filter(Boolean).join('&')
+  return `/system${q ? `?${q}` : ''}`
 }
 
 interface SystemState {
@@ -47,14 +61,19 @@ interface SystemState {
 }
 
 let inflight: Promise<SystemInfo | undefined> | undefined
+let inflightPath = ''
 
 export const useSystem = create<SystemState>((set) => ({
   loaded: false,
   load() {
-    inflight ??= systemApi
-      .system()
+    const path = systemPath()
+    if (inflight && inflightPath !== path) inflight = undefined
+    inflightPath = path
+    if (inflight) return inflight
+    const p: Promise<SystemInfo | undefined> = sysFetch<SystemInfo>('GET', path)
       .then((info) => {
-        set((s) => ({ info, loaded: true, error: undefined, sync: info.sync ?? s.sync }))
+        // a newer request (workspace switch) wins
+        if (inflight === p || !inflight) set((s) => ({ info, loaded: true, error: undefined, sync: info.sync ?? s.sync }))
         return info
       })
       .catch((e) => {
@@ -63,9 +82,10 @@ export const useSystem = create<SystemState>((set) => ({
         return undefined
       })
       .finally(() => {
-        inflight = undefined
+        if (inflight === p) inflight = undefined
       })
-    return inflight
+    inflight = p
+    return p
   },
   setSync: (sync) => set((s) => ({ sync, info: s.info ? { ...s.info, sync } : s.info })),
 }))
@@ -124,13 +144,36 @@ export function projectSyncBadge(projectId: string, sync: SyncStatus | undefined
   return 'synced'
 }
 
-export function aiLabel(info?: SystemInfo): string {
-  switch (info?.ai.provider) {
+const PROVIDER_NAME: Record<AiProviderId, string> = {
+  'claude-cli': 'Claude',
+  'anthropic-api': 'Claude',
+  'anthropic-key': 'Claude',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  none: 'AI',
+}
+
+export const aiProviderName = (id?: AiProviderId) => (id ? PROVIDER_NAME[id] : 'AI')
+
+/** "Claude · your subscription", "Claude API", "Gemini · gemini-3-pro", "OpenAI · gpt-5.5". */
+export function aiProviderLabel(id?: AiProviderId, model?: string): string {
+  switch (id) {
     case 'claude-cli':
       return 'Claude · your subscription'
     case 'anthropic-api':
       return 'Claude API'
+    case 'anthropic-key':
+    case 'openai':
+    case 'gemini':
+      return model ? `${PROVIDER_NAME[id]} · ${model}` : `${PROVIDER_NAME[id]} API`
     default:
       return 'AI unavailable'
   }
 }
+
+export function aiLabel(info?: SystemInfo): string {
+  return aiProviderLabel(info?.ai.provider, info?.ai.model)
+}
+
+/** True when the label already names the model (key-backed providers). */
+export const aiLabelHasModel = (info?: SystemInfo) => ['anthropic-key', 'openai', 'gemini'].includes(info?.ai.provider ?? '') && !!info?.ai.model

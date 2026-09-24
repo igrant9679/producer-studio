@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import { ArrowUp, Bot, Loader2, Sparkles, Undo2, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
+import { aiLabel, aiProviderLabel, systemApi, useSystem } from '../../shell/system'
 import { toastError } from '../../lib/toast'
 import * as A from '../actions'
 import { useEditor } from '../store'
@@ -22,8 +23,30 @@ const SUGGESTIONS = ['Add captions', 'Cut the pauses', 'Add a title at the start
 
 const history = new Map<string, ChatMsg[]>()
 
+/** "Answered by Gemini · gemini-3-pro": the provider the editor assistant resolves to for this workspace. */
+function useAssistantProvider(): string | undefined {
+  const workspaceId = useEditor((s) => s.workspaceId)
+  const demo = useEditor((s) => s.demo)
+  const info = useSystem((s) => s.info)
+  const [label, setLabel] = useState<string>()
+  useEffect(() => {
+    // desktop ignores workspaceId; the editor route may not have loaded /api/system, so don't depend on it
+    if (demo || !workspaceId) return
+    let alive = true
+    systemApi
+      .aiSettings(workspaceId)
+      .then((st) => alive && setLabel(aiProviderLabel(st.effective.assistant.provider, st.effective.assistant.model)))
+      .catch(() => alive && setLabel(info?.ai.available ? aiLabel(info) : undefined))
+    return () => {
+      alive = false
+    }
+  }, [workspaceId, demo, info])
+  return label === 'AI unavailable' ? undefined : label
+}
+
 export function AssistantPanel() {
   const projectId = useEditor((s) => s.projectId)
+  const answeredBy = useAssistantProvider()
   const [msgs, setMsgs] = useState<ChatMsg[]>(() => history.get(projectId) ?? [])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -133,6 +156,7 @@ export function AssistantPanel() {
             {busy ? <Loader2 size={14} className="spin" /> : <ArrowUp size={15} />}
           </button>
         </form>
+        {answeredBy && <div className="ai-caption">Answered by {answeredBy}</div>}
       </div>
     </div>
   )

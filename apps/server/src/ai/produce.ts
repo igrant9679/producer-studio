@@ -163,7 +163,7 @@ async function workspaceAssets(workspaceId: string, ids: string[]): Promise<Asse
 
 export async function produceScript(jc: JobContext): Promise<{ script: { scenes: ScriptScene[]; message?: string } }> {
   const input = jc.job.input as { projectId: string; assetIds: string[]; brief: Brief }
-  const provider = await requireProvider() // fail fast (503) when AI isn't configured
+  const provider = await requireProvider(jc.job.workspaceId, 'script') // fail fast (503) when AI isn't configured
   const row = await loadProjectRow(input.projectId)
   const rows = await workspaceAssets(row.workspaceId, input.assetIds)
   const work = tmpDir('script')

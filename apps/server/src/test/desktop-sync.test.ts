@@ -171,6 +171,47 @@ describe('desktop identity & hardening', () => {
   })
 })
 
+describe('desktop AI keys', () => {
+  it('seals keys in the local settings file, ignores workspaceId and never returns them', async () => {
+    const { setKeyClients } = await import('../ai/keys')
+    const KEY = 'AIzaDESKTOPKEY0123456789wxyz'
+    setKeyClients({
+      gemini: () => ({
+        models: {
+          generateContentStream: async () => (async function* () {})(),
+          list: async () =>
+            (async function* () {
+              yield { name: 'models/gemini-3-pro', supportedActions: ['generateContent'] }
+            })(),
+        },
+      }),
+    })
+    try {
+      const put = await desk.json('PUT', '/api/ai/keys/gemini', { workspaceId: 'ignored-on-desktop', key: KEY })
+      expect(put.status).toBe(200)
+      expect(put.body).toMatchObject({ ok: true, models: ['gemini-3-pro'], settings: { canEdit: true, builtin: { id: 'claude-cli' }, providers: { gemini: { hasKey: true, keyLast4: 'wxyz', model: 'gemini-3-pro' } } } })
+      const file = fs.readFileSync(process.env.DESKTOP_SETTINGS_FILE!, 'utf8')
+      expect(file).not.toContain(KEY)
+      expect(JSON.parse(file).ai.keys.gemini).toMatchObject({ v: 1, last4: 'wxyz', data: expect.any(String) })
+      const settings = await desk.json('GET', '/api/settings')
+      expect(settings.body.ai).toBeUndefined()
+      expect((await desk.json('PUT', '/api/settings', { ai: {} })).status).toBe(400)
+      await desk.json('PUT', '/api/ai/settings', { defaultProvider: 'gemini' })
+      const sys = await desk.json('GET', '/api/system')
+      expect(sys.body.ai).toMatchObject({ provider: 'gemini', available: true, model: 'gemini-3-pro' })
+      for (const r of [put, settings, sys, await desk.json('GET', '/api/ai/settings')]) expect(JSON.stringify(r.body)).not.toContain(KEY)
+      const del = await desk.json('DELETE', '/api/ai/keys/gemini')
+      expect(del.body).toMatchObject({ defaultProvider: null, providers: { gemini: { hasKey: false } } })
+      expect((await desk.json('GET', '/api/system')).body.ai.provider).toBe('claude-cli')
+      // a settings save afterwards keeps the (now key-less) AI document intact
+      await desk.json('PUT', '/api/settings', { mediaSync: 'on-demand' })
+      expect(JSON.parse(fs.readFileSync(process.env.DESKTOP_SETTINGS_FILE!, 'utf8')).ai.doc.providers.gemini.model).toBe('gemini-3-pro')
+    } finally {
+      setKeyClients(undefined)
+    }
+  })
+})
+
 describe('link, pull, push', () => {
   let localOnly: string
   let cloudA: string

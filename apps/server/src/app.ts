@@ -13,6 +13,7 @@ import { HttpError } from './http'
 import { log } from './log'
 import { aiConfigured } from './ai/claude'
 import { aiRoutes } from './routes/ai'
+import { aiSettingsRoutes } from './routes/ai-settings'
 import { assetRoutes, mediaRoutes, uploadRoutes } from './routes/assets'
 import { authRoutes } from './routes/auth'
 import { eventRoutes, jobRoutes } from './routes/jobs'
@@ -108,6 +109,7 @@ export function createApp() {
   app.route('/api/media', mediaRoutes)
   app.route('/api/jobs', jobRoutes)
   app.route('/api/events', eventRoutes)
+  app.route('/api/ai', aiSettingsRoutes)
   app.route('/api/ai', aiRoutes)
   app.route('/api/exports', exportRoutes)
   app.route('/api/share', shareRoutes)
