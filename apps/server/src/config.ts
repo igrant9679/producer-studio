@@ -4,7 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const SERVER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+/** apps/server in the repo; the packaged desktop app sets PS_SERVER_ROOT to its bundled server folder. */
+export const SERVER_ROOT = process.env.PS_SERVER_ROOT ? path.resolve(process.env.PS_SERVER_ROOT) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const REPO_ROOT = path.resolve(SERVER_ROOT, '..', '..')
 
 const PRODUCER_APP = path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Producer', 'resources', 'app', 'resources')

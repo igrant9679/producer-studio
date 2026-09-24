@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import type { Database } from './db'
 import { log } from './log'
 
-export type EventName = 'job' | 'asset' | 'project'
+export type EventName = 'job' | 'asset' | 'project' | 'sync'
 
 export interface BusEvent {
   workspaceId: string
@@ -59,10 +59,17 @@ export class EventBus {
   /** Publish to local subscribers and (on Postgres) to other processes. */
   publish(workspaceId: string, event: EventName, data: unknown, ref?: { id: string; inline?: unknown }) {
     this.em.emit(workspaceId, { workspaceId, event, data } satisfies BusEvent)
+    this.em.emit('*', { workspaceId, event, data } satisfies BusEvent)
     if (this.database.driver === 'postgres' && ref) {
       const payload = JSON.stringify({ o: this.instanceId, e: event, id: ref.id, ws: workspaceId, d: ref.inline })
       void this.database.notify(CHANNEL, payload.length < 7900 ? payload : JSON.stringify({ o: this.instanceId, e: event, id: ref.id, ws: workspaceId })).catch((err) => log.warn('notify failed', { err }))
     }
+  }
+
+  /** Every local event regardless of workspace (desktop sync schedules a push after local saves). */
+  onAny(fn: (e: BusEvent) => void): () => void {
+    this.em.on('*', fn)
+    return () => this.em.off('*', fn)
   }
 
   subscribe(workspaceId: string, fn: (e: BusEvent) => void): () => void {

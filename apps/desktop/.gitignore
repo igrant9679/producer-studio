@@ -1,0 +1,3 @@
+# build outputs (dist/ is ignored at the root)
+build/
+release/

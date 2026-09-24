@@ -175,5 +175,11 @@ mediaRoutes.on(['GET', 'HEAD'], '/:assetId/:variant', async (c) => {
   await requireRole(u.id, row.workspaceId, 'viewer')
   const target = variantTarget(row, assertVariant(c.req.param('variant')))
   if (!target || (row.status === 'uploading' && target.key === row.sourceKey)) throw new HttpError(404, 'not_found', 'This media variant is not available yet')
+  if (ctx().config.mode === 'desktop') {
+    // cloud media on a desktop replica: fetched on first use (202 while downloading)
+    const { desktopMediaResponse } = await import('../desktop/media')
+    const r = await desktopMediaResponse(c, row, target.key)
+    if (r) return r
+  }
   return serveObject(c, target)
 })

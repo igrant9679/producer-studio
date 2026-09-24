@@ -21,7 +21,8 @@ export interface RunOptions extends Pick<SpawnOptions, 'cwd' | 'env'> {
   input?: string
 }
 
-function killTree(pid: number | undefined) {
+/** Kill a process and its children (taskkill /T on Windows, the process group elsewhere). */
+export function killTree(pid: number | undefined) {
   if (!pid) return
   if (process.platform === 'win32') {
     spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => undefined)

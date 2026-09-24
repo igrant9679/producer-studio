@@ -25,6 +25,8 @@ let runtimeJs: Promise<string> | undefined
 export function runtimeBundle(): Promise<string> {
   if (!runtimeJs) {
     runtimeJs = (async () => {
+      // packaged desktop app: prebuilt bundle (no esbuild / TypeScript sources at runtime)
+      if (process.env.RUNTIME_JS && fs.existsSync(process.env.RUNTIME_JS)) return fs.readFileSync(process.env.RUNTIME_JS, 'utf8')
       const esbuild = await import('esbuild')
       const entry = path.join(REPO_ROOT, 'packages', 'core', 'src', 'runtime.ts')
       const r = await esbuild.build({ entryPoints: [entry], bundle: true, format: 'iife', globalName: 'ProducerRuntime', minify: true, write: false, target: 'es2020', platform: 'browser', logLevel: 'silent' })

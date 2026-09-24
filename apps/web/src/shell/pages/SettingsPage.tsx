@@ -1,17 +1,33 @@
-import type { Device, DesktopSettings } from '@producer/core'
+import type { Device, DesktopSettings, SystemInfo } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, FolderOpen, HardDrive, Laptop, Link2, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { HttpError } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { syncSummary } from '../SystemChrome'
-import { aiLabel, systemApi, useSystem } from '../system'
+import { aiLabel, sysFetch, systemApi, useSystem } from '../system'
 import { Avatar, EmptyState, Spinner, useAsync, usePageTitle } from '../ui'
 import { relativeTime } from '../util'
 
 const DEFAULT_CLOUD_URL = 'https://studio.meyousocial.com'
+
+/** Narrow bridge exposed by the Electron preload (desktop app only). */
+interface ProducerDesktopBridge {
+  version: string
+  platform: string
+  openExternal(url: string): Promise<boolean>
+  showItemInFolder(path: string): Promise<boolean>
+}
+const desktopBridge = (): ProducerDesktopBridge | undefined => (window as unknown as { producerDesktop?: ProducerDesktopBridge }).producerDesktop
+
+/** Re-probe the AI provider now (bypasses the server's ~30 s cache) and update the shared system state. */
+async function refreshSystem(): Promise<SystemInfo> {
+  const info = await sysFetch<SystemInfo>('GET', '/system?refresh=1')
+  useSystem.setState((s) => ({ info, loaded: true, error: undefined, sync: info.sync ?? s.sync }))
+  return info
+}
 
 function Section({ id, icon, title, sub, children }: { id: string; icon: ReactNode; title: string; sub?: string; children: ReactNode }) {
   return (
@@ -62,6 +78,8 @@ function LinkForm() {
     try {
       setSync(await systemApi.link(cloudUrl.trim().replace(/\/+$/, ''), email.trim(), password))
       setPassword('')
+      // linking adopts the cloud account and its workspaces: reload the signed-in user
+      await useSession.getState().load()
       toast('Linked — syncing your projects')
     } catch (e2) {
       setErr(errText(e2))
@@ -216,7 +234,43 @@ function DesktopAi({ settings, onSettings }: { settings?: DesktopSettings; onSet
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; detail: string }>()
+  const [signingIn, setSigningIn] = useState(false)
+  const info = useSystem((s) => s.info)
   const load = useSystem((s) => s.load)
+  const signedOut = info?.ai.provider === 'claude-cli' && !info.ai.available && /not signed in/i.test(info.ai.detail)
+  useEffect(() => {
+    if (!signingIn) return
+    // after "Sign in to Claude": poll until the CLI reports a signed-in account (up to 5 minutes)
+    let alive = true
+    const t0 = Date.now()
+    const iv = setInterval(async () => {
+      try {
+        const next = await refreshSystem()
+        if (!alive) return
+        if (next.ai.available) {
+          setSigningIn(false)
+          setTest({ ok: true, detail: next.ai.detail })
+          toast('Signed in to Claude')
+        } else if (Date.now() - t0 > 5 * 60_000) setSigningIn(false)
+      } catch {
+        /* server busy; keep polling */
+      }
+    }, 3000)
+    return () => {
+      alive = false
+      clearInterval(iv)
+    }
+  }, [signingIn])
+  async function signIn() {
+    setTest(undefined)
+    try {
+      await sysFetch('POST', '/desktop/claude/login')
+      setSigningIn(true)
+      toast('A terminal window opened — finish signing in to Claude in your browser')
+    } catch (e) {
+      setTest({ ok: false, detail: errText(e) })
+    }
+  }
   useEffect(() => {
     if (settings) {
       setPath(settings.claudePath)
@@ -228,8 +282,7 @@ function DesktopAi({ settings, onSettings }: { settings?: DesktopSettings; onSet
     setTesting(true)
     setTest(undefined)
     try {
-      const info = await load()
-      if (!info) throw new Error(useSystem.getState().error ?? 'No response')
+      const info = await refreshSystem()
       setTest({ ok: info.ai.available, detail: info.ai.detail || (info.ai.available ? 'Claude responded' : 'Claude is not available') })
     } catch (e) {
       setTest({ ok: false, detail: errText(e) })
@@ -268,7 +321,12 @@ function DesktopAi({ settings, onSettings }: { settings?: DesktopSettings; onSet
         >
           {saving ? <Spinner /> : <Save size={14} />} Save
         </button>
-        <button className="btn" onClick={testClaude} disabled={testing}>{testing ? <Spinner /> : <Sparkles size={14} />} Test Claude</button>
+        <button className="btn" onClick={testClaude} disabled={testing}>{testing ? <Spinner /> : <Sparkles size={14} />} Check Claude sign-in</button>
+        {(signedOut || signingIn) && (
+          <button className="btn primary" onClick={signIn} disabled={signingIn}>
+            {signingIn ? <Spinner /> : <LogIn size={14} />} {signingIn ? 'Waiting for sign-in…' : 'Sign in to Claude'}
+          </button>
+        )}
         {test && (
           <span className={clsx('ps-test', test.ok ? 'ok' : 'bad')} role="status">
             {test.ok ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />} {test.detail}
@@ -305,6 +363,11 @@ function DesktopStorage({ settings, onSettings }: { settings?: DesktopSettings; 
           >
             {saving ? <Spinner /> : <FolderOpen size={14} />} Change folder
           </button>
+          {desktopBridge() && settings?.dataDir && (
+            <button className="btn ghost" onClick={() => void desktopBridge()!.showItemInFolder(settings.dataDir)}>
+              <FolderOpen size={14} /> Open data folder
+            </button>
+          )}
         </div>
         <div className="ps-hint">Local media, proxies and renders live here. Changing it takes effect after restarting the app.</div>
       </div>
@@ -413,6 +476,19 @@ export default function SettingsPage() {
           {desktop && (
             <Section id="storage" icon={<HardDrive size={18} />} title="Storage" sub="Where Producer keeps your media on this computer.">
               <DesktopStorage settings={settings} onSettings={onSettings} />
+            </Section>
+          )}
+
+          {desktop && (
+            <Section id="about" icon={<Info size={18} />} title="About" sub="Producer Studio for desktop.">
+              <div className="ps-set-row" style={{ borderTop: 0, marginTop: 0, paddingTop: 0 }}>
+                <div>
+                  <strong>Producer Studio {desktopBridge()?.version || info?.version}</strong>
+                  <span>
+                    Local engine v{info?.version} · {desktopBridge()?.platform ?? 'desktop'} · {aiLabel(info)}
+                  </span>
+                </div>
+              </div>
             </Section>
           )}
         </div>

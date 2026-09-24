@@ -21,6 +21,7 @@ import { exportRoutes, projectExportRoutes, shareRoutes } from './routes/share'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { templateRoutes } from './routes/templates'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
+import { desktopGuard, desktopRoutes } from './desktop'
 
 const started = Date.now()
 
@@ -54,6 +55,9 @@ export function createApp() {
       log.info('http', { method: c.req.method, path: p, status: c.res.status, ms: Math.round(performance.now() - t0) })
     }
   })
+
+  // desktop: Host allow-list, loopback peers, CSP — before any route (health and the SPA included)
+  if (ctx().config.mode === 'desktop') app.use('*', desktopGuard)
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.message, code: err.code, ...(err.details !== undefined ? { details: err.details } : {}) }, err.status as 400)
@@ -92,6 +96,8 @@ export function createApp() {
   app.use('/api/projects/:id', bodyLimit({ maxSize: 64 * 1024 * 1024 }))
   app.use('/api/ai/assistant', bodyLimit({ maxSize: 64 * 1024 * 1024 }))
 
+  // desktop-only routes first: they shadow signup and (while linked) workspace creation
+  if (ctx().config.mode === 'desktop') app.route('/api', desktopRoutes)
   app.route('/api/auth', authRoutes)
   app.route('/api/workspaces', workspaceRoutes)
   app.route('/api/invites', inviteRoutes)

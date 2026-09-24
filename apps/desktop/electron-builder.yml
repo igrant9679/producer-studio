@@ -1,0 +1,51 @@
+# electron-builder config for Producer Studio desktop (Windows NSIS first).
+# Build with: npm run dist -w @producer/desktop   (runs web build → main/preload build → stage → tools → builder)
+appId: studio.producer.desktop
+productName: Producer Studio
+copyright: Copyright © 2026 Producer Studio
+directories:
+  output: release
+  buildResources: build/resources
+# app.asar holds only the Electron main process, preload and splash; the server, web UI and tools live in
+# resources/ (unpacked) so their binaries (ffmpeg, onnxruntime, whisper, chrome) can be executed.
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+extraResources:
+  - from: build/stage/server
+    to: server
+  # electron-builder skips node_modules folders inside extraResources unless they are named explicitly
+  - from: build/stage/server/node_modules
+    to: server/node_modules
+    filter: ["**/*"]
+  - from: build/stage/web
+    to: web
+  - from: build/stage/tools
+    to: tools
+asar: true
+# electron is hoisted to the repo root node_modules; keep in sync with devDependencies
+electronVersion: 44.4.5
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/resources/icon.png
+  # Code signing: unsigned unless CSC_LINK (path/URL/base64 of a .pfx) and CSC_KEY_PASSWORD are set in the
+  # environment (or WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD). Azure Trusted Signing: add `azureSignOptions` here.
+  signtoolOptions:
+    publisherName: Producer Studio
+    signingHashAlgorithms: [sha256]
+  forceCodeSigning: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Producer Studio
+  artifactName: Producer-Studio-Setup-${version}.exe
+  deleteAppDataOnUninstall: false

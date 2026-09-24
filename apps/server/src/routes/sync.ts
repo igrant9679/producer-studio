@@ -48,12 +48,19 @@ export const systemRoutes = new Hono<AppEnv>()
 systemRoutes.get('/', async (c) => {
   const cfg = ctx().config
   const provider = await getProvider()
+  // ?refresh=1 re-probes the provider now (e.g. right after "Sign in to Claude"); otherwise cached ~30 s
+  if (c.req.query('refresh') === '1') (provider as { invalidate?: () => void }).invalidate?.()
   const s = await provider.status()
   const info: SystemInfo = {
     mode: cfg.mode,
     version: cfg.version,
     ai: { provider: provider.id, available: s.available, detail: s.detail, model: s.model },
     capabilities: capabilities(),
+  }
+  // desktop: sync state (account, cloud URL) only for the signed-in local session
+  if (cfg.mode === 'desktop' && c.get('user')) {
+    const { syncEngine } = await import('../desktop/sync')
+    info.sync = await syncEngine.status()
   }
   return c.json(info)
 })

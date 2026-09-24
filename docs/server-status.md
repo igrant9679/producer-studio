@@ -14,7 +14,7 @@ _Living document for the web and desktop agents. Last update: 23 Sept 2026, 23:5
 | Data | PGlite at `apps/server/.data/pg`, files at `apps/server/.data/storage` |
 
 Stop it: `taskkill /PID 50800 /T /F`. Re-seed (idempotent; PGlite is single-process, so stop the server first): `npm run seed -w @producer/server`.
-Tests: `npm test -w @producer/server` (39 tests). Typecheck: `cd apps/server && npx tsc --noEmit -p .`
+Tests: `npm test -w @producer/server` (63 tests). Typecheck: `cd apps/server && npx tsc --noEmit -p .`
 
 ## Endpoints
 
@@ -94,5 +94,8 @@ export of a 20 s 1080p project at 720p draft ~50 s.
 - Change feed: a write whose transaction commits after a later seq was already read could be skipped (writes here are single-statement,
   so the window is tiny); a desktop client can re-read with a small lookback (`since = cursor - 100`) to be safe.
 - Template thumbnails are the skill's `preview.png`; workspace templates use their first clip's thumbnail. No `previewUrl` videos yet.
-- Desktop-only routes (`/api/settings`, `/api/sync/link|unlink|now|status`, `/api/projects/:id/sync`) and the Claude CLI provider are
-  left to the desktop agent (`src/ai/cli.ts` is the stub; `src/ai/provider.ts` is the seam).
+- Desktop mode (`MODE=desktop`, see [desktop.md](desktop.md)) is implemented: `POST /api/desktop/session` (per-launch secret),
+  `POST /api/desktop/claude/login`, `GET/PUT /api/settings`, `/api/sync/link|unlink|now|status`, `POST /api/projects/:id/sync`,
+  on-demand cloud media in `/api/media`, and the Claude Code CLI provider (`src/ai/cli.ts` + `src/ai/cli/`, MCP server in
+  `scripts/mcp-server.mjs`). `GET /api/system?refresh=1` re-probes the AI provider. Tests: `cli.test.ts`, `desktop-sync.test.ts`.
+- `/api/health` `features.ai` still reflects only the Anthropic API credentials (use `/api/system` for the active provider).

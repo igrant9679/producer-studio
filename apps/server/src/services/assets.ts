@@ -115,12 +115,21 @@ export async function createAssetFromFile(opts: {
   return row
 }
 
+type MissingMediaFetcher = (row: AssetRow, key: string) => Promise<boolean>
+let missingMediaFetcher: MissingMediaFetcher | undefined
+
+/** Desktop hook: fetch a cloud asset's bytes into local storage the first time a job needs them. */
+export function setMissingMediaFetcher(fn: MissingMediaFetcher | undefined) {
+  missingMediaFetcher = fn
+}
+
 /** A local filesystem path for an asset's source (downloaded to `tmpDir` for S3). */
 export async function localSource(row: AssetRow, tmpDir: string, key = row.sourceKey): Promise<string> {
   const s = ctx().storage
   if (s.localPath) {
     const p = s.localPath(key)
     if (fs.existsSync(p)) return p
+    if (missingMediaFetcher && (await missingMediaFetcher(row, key)) && fs.existsSync(p)) return p
     throw notFound('Asset file is missing from storage')
   }
   const dest = path.join(tmpDir, `${row.id}${path.extname(key)}`)

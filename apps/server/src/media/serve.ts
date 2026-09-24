@@ -49,7 +49,11 @@ export async function serveObject(c: Context, t: ServeTarget, opts: { cache?: st
     'Last-Modified': new Date(st.mtimeMs).toUTCString(),
     ETag: `"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`,
   })
-  if (t.filename) headers.set('Content-Disposition', `inline; filename="${t.filename.replace(/["\\\r\n]/g, '')}"`)
+  if (t.filename) {
+    // header values must be Latin-1: ASCII fallback + RFC 5987 UTF-8 name (e.g. "Sample A — test.mp4")
+    const ascii = t.filename.replace(/["\\\r\n]/g, '').replace(/[^\x20-\x7e]/g, '_')
+    headers.set('Content-Disposition', `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(t.filename.replace(/[\r\n]/g, ''))}`)
+  }
   const etag = headers.get('ETag')!
   if (c.req.header('if-none-match') === etag) return new Response(null, { status: 304, headers })
   const ifRange = c.req.header('if-range')
