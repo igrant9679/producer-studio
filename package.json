@@ -1,0 +1,20 @@
+{
+  "name": "producer-studio",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Producer Studio — AI video production and a full timeline editor in the browser.",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "build": "npm run build -w @producer/core && npm run build -w @producer/web && npm run build -w @producer/server",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
