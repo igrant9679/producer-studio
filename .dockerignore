@@ -8,3 +8,5 @@
 .env
 .env.*
 !.env.example
+apps/desktop/build
+apps/desktop/release

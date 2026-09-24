@@ -1,6 +1,6 @@
 # Producer Studio — single image for the web (API + SPA) and worker services.
 #   docker build -t producer-studio .
-#   docker run -p 8787:8787 -v ps-data:/data -e ANTHROPIC_API_KEY=... producer-studio
+#   docker run -p 8787:8787 -v ps-data:/data -e SECRETS_KEY=... producer-studio
 # ROLE=all|api|worker selects what the container runs (default all).
 
 # ---------- whisper.cpp (speech-to-text) ----------
@@ -26,6 +26,10 @@ COPY package.json package-lock.json ./
 COPY packages/core/package.json packages/core/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/server/package.json apps/server/package.json
+# The lockfile covers every workspace; the desktop one is needed for `npm ci` to validate, but its Electron
+# binary is not (the server image never runs Electron).
+COPY apps/desktop/package.json apps/desktop/package.json
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build -w @producer/web
@@ -59,10 +63,10 @@ ARG PREFETCH=1
 RUN if [ "$PREFETCH" = "1" ]; then \
       node node_modules/hyperframes/bin/hyperframes.mjs browser ensure \
       && mkdir -p /opt/kokoro \
-      && echo '{"id":"w","type":"warm"}' | node apps/server/scripts/tts-worker.mjs; \
+      && (echo '{"id":"w","type":"warm"}' | node apps/server/scripts/tts-worker.mjs || echo "kokoro prefetch skipped"); \
     fi
+# /data holds renders and scratch files; on Railway attach a volume there (VOLUME is not allowed in Railway builds).
 RUN mkdir -p /data
-VOLUME ["/data"]
 EXPOSE 8787
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "--import", "tsx", "apps/server/src/index.ts"]
