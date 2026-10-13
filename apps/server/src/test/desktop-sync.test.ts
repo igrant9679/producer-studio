@@ -353,6 +353,37 @@ describe('assets', () => {
   })
 })
 
+describe('workspace rename & delete', () => {
+  const ids = async (h: Http) => (await h.json('GET', '/api/workspaces')).body.map((w: { id: string }) => w.id)
+
+  it('a space deleted in the cloud disappears locally with its projects', async () => {
+    const ws = (await cloudHttp.json('POST', '/api/workspaces', { name: 'Short-lived' })).body.id
+    const pid = (await cloudHttp.json('POST', '/api/projects', { workspaceId: ws, name: 'In the space' })).body.summary.id
+    await sync()
+    expect(await ids(desk)).toContain(ws)
+    expect((await desk.json('GET', `/api/projects/${pid}`)).status).toBe(200)
+    expect((await cloudHttp.json('DELETE', `/api/workspaces/${ws}`)).status).toBe(200)
+    const st = await sync()
+    expect(st).toMatchObject({ state: 'idle', pending: 0 })
+    expect(await ids(desk)).not.toContain(ws)
+    expect((await desk.json('GET', `/api/projects/${pid}`)).status).toBe(404)
+  })
+
+  it('renaming and deleting on desktop go to the cloud first', async () => {
+    const ws = (await desk.json('POST', '/api/workspaces', { name: 'From desktop' })).body.id
+    expect(await ids(cloudHttp)).toContain(ws)
+    const r = await desk.json('PATCH', `/api/workspaces/${ws}`, { name: 'Renamed on desktop' })
+    expect(r.body).toMatchObject({ id: ws, name: 'Renamed on desktop' })
+    expect((await cloudHttp.json('GET', '/api/workspaces')).body.find((w: { id: string }) => w.id === ws).name).toBe('Renamed on desktop')
+    expect((await desk.json('DELETE', `/api/workspaces/${ws}`)).body).toEqual({ ok: true })
+    expect(await ids(cloudHttp)).not.toContain(ws)
+    expect(await ids(desk)).not.toContain(ws)
+    expect((await sync()).state).toBe('idle')
+    // the personal space can't be deleted (cloud refuses)
+    expect((await desk.json('DELETE', `/api/workspaces/${cloudWs}`)).status).toBe(409)
+  })
+})
+
 describe('deletes & unlink', () => {
   it('a project deleted in the cloud disappears locally; unlink keeps local data', async () => {
     const id = (await cloudHttp.json('POST', '/api/projects', { workspaceId: cloudWs, name: 'Doomed' })).body.summary.id

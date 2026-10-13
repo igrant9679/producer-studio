@@ -5,7 +5,7 @@ import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import * as z from 'zod/v4'
 import { type AppEnv, SESSION_COOKIE, requireUser } from '../auth'
 import { ctx } from '../context'
-import { HttpError, body, forbidden } from '../http'
+import { HttpError, body, forbidden, requireRole } from '../http'
 import { log } from '../log'
 import { invalidateBuiltin } from '../ai/resolve'
 import { findClaude } from '../ai/cli/detect'
@@ -15,6 +15,7 @@ import { ensureDesktopTables } from './db'
 import { createLocalSession, ensureLocalUser, secretMatches } from './identity'
 import { fetchMissingMedia } from './media'
 import { SettingsPatch, getSettings, saveSettings } from './settings'
+import { CloudError } from './cloud'
 import { syncEngine } from './sync'
 
 export async function initDesktop() {
@@ -149,6 +150,36 @@ desktopRoutes.post('/workspaces', async (c, next) => {
   const w = await syncEngine.createWorkspace(name)
   if (!w) return next()
   return c.json(w)
+})
+
+/** Surface a cloud refusal (403/404/409…) as the same error here; offline/5xx as 502. */
+async function viaCloud<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    if (!(e instanceof CloudError)) throw e
+    if (e.status >= 400 && e.status < 500 && e.code) throw new HttpError(e.status, e.code, e.message)
+    throw new HttpError(502, 'server', e.offline ? 'The cloud is unreachable. Try again when you’re online.' : e.message)
+  }
+}
+
+// while linked, renaming/deleting a cloud workspace goes to the cloud first; local-only spaces fall through
+desktopRoutes.patch('/workspaces/:id', async (c, next) => {
+  const u = requireUser(c)
+  const raw = (await c.req.raw.clone().json().catch(() => ({}))) as { name?: unknown }
+  const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 80) : ''
+  if (!name) return next()
+  await requireRole(u.id, c.req.param('id'), 'owner')
+  const w = await viaCloud(() => syncEngine.renameWorkspace(c.req.param('id'), name))
+  if (!w) return next()
+  return c.json(w)
+})
+
+desktopRoutes.delete('/workspaces/:id', async (c, next) => {
+  const u = requireUser(c)
+  await requireRole(u.id, c.req.param('id'), 'owner')
+  if (!(await viaCloud(() => syncEngine.deleteWorkspace(c.req.param('id'))))) return next()
+  return c.json({ ok: true })
 })
 
 export function desktopMode(): boolean {

@@ -1,8 +1,8 @@
-import { Crown, Eye, Pencil, Plus, UserPlus, Users } from 'lucide-react'
+import { Crown, Eye, Pencil, Plus, Settings2, Trash2, UserPlus, Users } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
-import { CreateSpaceModal, InviteForm } from '../modals'
+import { CreateSpaceModal, DeleteSpaceModal, InviteForm, RenameSpaceModal } from '../modals'
 import { Avatar, EmptyState, spaceColor, useAsync, usePageTitle } from '../ui'
 
 const ROLE: Record<string, { label: string; icon: React.ReactNode; desc: string }> = {
@@ -18,9 +18,10 @@ export default function SpacePage() {
   const workspaces = useSession((s) => s.workspaces)
   const setWorkspace = useSession((s) => s.setWorkspace)
   const ws = workspaces.find((w) => w.id === workspaceId)
-  const [create, setCreate] = useState(false)
+  const [modal, setModal] = useState<'create' | 'rename' | 'delete'>()
   const members = useAsync(() => (workspaceId ? api.members(workspaceId) : Promise.resolve([])), [workspaceId])
   const canInvite = ws?.role === 'owner' || ws?.role === 'editor'
+  const isOwner = ws?.role === 'owner'
 
   return (
     <div className="ps-page narrow">
@@ -33,7 +34,8 @@ export default function SpacePage() {
           </div>
         </div>
         <span className="spacer" />
-        <button className="btn" onClick={() => setCreate(true)}><Plus size={15} /> Create space</button>
+        {isOwner && <button className="btn" onClick={() => setModal('rename')}><Pencil size={15} /> Rename</button>}
+        <button className="btn" onClick={() => setModal('create')}><Plus size={15} /> Create space</button>
       </div>
 
       <section className="card ps-brand-sec" style={{ marginBottom: 18 }}>
@@ -67,6 +69,28 @@ export default function SpacePage() {
         <div className="muted" style={{ fontSize: '0.75rem', marginTop: 14 }}>Changing roles and removing members is coming soon.</div>
       </section>
 
+      {isOwner && ws && (
+        <section className="card ps-brand-sec" style={{ marginTop: 18 }}>
+          <div className="ps-brand-sec-head"><Settings2 size={15} /> <strong>Space settings</strong><span className="muted">Only owners see this</span></div>
+          <div className="ps-space-setting">
+            <div>
+              <strong>Name</strong>
+              <span className="muted">{ws.name}</span>
+            </div>
+            <button className="btn sm" onClick={() => setModal('rename')}><Pencil size={14} /> Rename</button>
+          </div>
+          <div className="ps-space-setting">
+            <div>
+              <strong>Delete this space</strong>
+              <span className="muted">
+                {ws.personal ? 'Your personal space can’t be deleted.' : 'Permanently deletes its projects, media, exports and brand kit for every member.'}
+              </span>
+            </div>
+            {!ws.personal && <button className="btn sm ps-btn-danger-outline" onClick={() => setModal('delete')}><Trash2 size={14} /> Delete space</button>}
+          </div>
+        </section>
+      )}
+
       {workspaces.length > 1 && (
         <section className="ps-section">
           <div className="ps-section-head"><h2 className="ps-h2">Your spaces</h2></div>
@@ -76,14 +100,16 @@ export default function SpacePage() {
                 <span className="ps-space-avatar" style={{ background: spaceColor(w.id) }}>{w.name.slice(0, 1).toUpperCase()}</span>
                 <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
                   <strong>{w.name}</strong>
-                  <span>{w.personal ? 'Personal' : `${w.memberCount} members`} · {w.role}</span>
+                  <span>{w.personal ? 'Personal' : `${w.memberCount} member${w.memberCount === 1 ? '' : 's'}`} · {w.role}</span>
                 </span>
               </button>
             ))}
           </div>
         </section>
       )}
-      {create && <CreateSpaceModal onClose={() => setCreate(false)} />}
+      {modal === 'create' && <CreateSpaceModal onClose={() => setModal(undefined)} />}
+      {modal === 'rename' && ws && <RenameSpaceModal ws={ws} onClose={() => setModal(undefined)} />}
+      {modal === 'delete' && ws && <DeleteSpaceModal ws={ws} onClose={() => setModal(undefined)} />}
     </div>
   )
 }

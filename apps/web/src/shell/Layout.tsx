@@ -16,11 +16,13 @@ import {
   LogOut,
   Music,
   Palette,
+  Pencil,
   Plus,
   Search,
   Send,
   Settings,
   Sparkles,
+  Trash2,
   Upload,
   UserPlus,
   Users,
@@ -32,9 +34,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api, subscribeEvents } from '../lib/api'
 import { useSession } from '../lib/session'
+import { toast } from '../lib/toast'
 import { useCreateAndOpen } from './actions'
 import { MOCK_ACTIVE } from './dev/installMock'
-import { AspectPickerModal, CreateSpaceModal, HelpModal, InviteModal } from './modals'
+import { AspectPickerModal, CreateSpaceModal, DeleteSpaceModal, HelpModal, InviteModal, RenameSpaceModal, ownSpaceDeletes } from './modals'
 import { AiChip, DesktopBadge, SyncIndicator } from './SystemChrome'
 import { ThemeSwitcher } from './pages/AppearanceSettings'
 import { useSyncPolling, useSystem } from './system'
@@ -42,7 +45,7 @@ import { isActive, liveBus, uploadFiles, useJobs, useUploads } from './stores'
 import { Avatar, Logo, MenuList, Popover, Progress, Spinner, spaceColor, useClickOutside, useFilePicker } from './ui'
 import { JOB_LABELS, formatDuration, relativeTime } from './util'
 
-type ModalKind = 'aspect' | 'space' | 'invite' | 'help' | undefined
+type ModalKind = 'aspect' | 'space' | 'invite' | 'help' | 'rename-space' | 'delete-space' | undefined
 
 function NavItem({ to, icon, label, end, badge }: { to: string; icon: ReactNode; label: string; end?: boolean; badge?: string }) {
   return (
@@ -90,7 +93,7 @@ function SpaceSwitcher({ openModal }: { openModal: (m: ModalKind) => void }) {
               <span className="ps-space-avatar" style={{ background: spaceColor(w.id), width: 24, height: 24, fontSize: '0.6875rem' }}>{w.name.slice(0, 1).toUpperCase()}</span>
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</span>
-                <span className="ps-menu-sub">{w.personal ? 'Personal' : `${w.memberCount} members`} · {w.role}</span>
+                <span className="ps-menu-sub">{w.personal ? 'Personal' : `${w.memberCount} member${w.memberCount === 1 ? '' : 's'}`} · {w.role}</span>
               </span>
               {w.id === workspaceId && <Check size={15} style={{ color: 'var(--cyan)' }} />}
             </button>
@@ -101,7 +104,9 @@ function SpaceSwitcher({ openModal }: { openModal: (m: ModalKind) => void }) {
             items={[
               { label: 'Invite members', icon: <UserPlus size={15} />, onClick: () => openModal('invite') },
               { label: 'Manage members', icon: <Users size={15} />, onClick: () => navigate('/space') },
+              ...(current?.role === 'owner' ? [{ label: 'Rename space', icon: <Pencil size={15} />, onClick: () => openModal('rename-space') }] : []),
               { label: 'Create space', icon: <Plus size={15} />, onClick: () => openModal('space') },
+              ...(current?.role === 'owner' && !current.personal ? [{ label: 'Delete space…', icon: <Trash2 size={15} />, danger: true, onClick: () => openModal('delete-space') }] : []),
             ]}
           />
         </>
@@ -316,6 +321,16 @@ function useWorkspaceEvents(workspaceId: string | undefined) {
         },
         asset: (a) => liveBus.emitAsset(a),
         project: (p) => liveBus.emitProject(p),
+        // renamed or deleted by another owner / tab / device
+        workspace: (w) => {
+          const { workspaces, refreshWorkspaces } = useSession.getState()
+          const name = workspaces.find((x) => x.id === w.id)?.name
+          void refreshWorkspaces()
+            .then(() => {
+              if (w.deleted && name && !ownSpaceDeletes.has(w.id)) toast(`“${name}” was deleted. Switched to another space.`)
+            })
+            .catch(() => undefined)
+        },
       })
     } catch {
       /* EventSource unsupported */
@@ -461,6 +476,7 @@ function AvatarMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
 
 export function Layout({ children }: { children: ReactNode }) {
   const workspaceId = useSession((s) => s.workspaceId)
+  const currentWs = useSession((s) => s.workspaces.find((w) => w.id === s.workspaceId))
   const [modal, setModal] = useState<ModalKind>()
   const [create, creating] = useCreateAndOpen()
   const loc = useLocation()
@@ -560,6 +576,8 @@ export function Layout({ children }: { children: ReactNode }) {
 
       {modal === 'aspect' && <AspectPickerModal onClose={close} busy={creating} onPick={(a) => void create({ width: a.width, height: a.height, name: a.name })} />}
       {modal === 'space' && <CreateSpaceModal onClose={close} />}
+      {modal === 'rename-space' && currentWs && <RenameSpaceModal ws={currentWs} onClose={close} />}
+      {modal === 'delete-space' && currentWs && <DeleteSpaceModal ws={currentWs} onClose={close} />}
       {modal === 'invite' && <InviteModal onClose={close} />}
       {modal === 'help' && <HelpModal onClose={close} />}
     </div>

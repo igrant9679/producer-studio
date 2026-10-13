@@ -98,6 +98,9 @@ export function normalizePreferences(raw: unknown): UserPreferences {
 // ---- workspaces ----
 // GET  /api/workspaces                                -> Workspace[]
 // POST /api/workspaces {name}                         -> Workspace
+// PATCH  /api/workspaces/:id {name}                   -> Workspace   (owner)
+// DELETE /api/workspaces/:id                          -> {ok: true}  (owner; personal spaces can't be deleted.
+//        Permanently removes the space's projects, media, exports, brand kit and AI keys for every member.)
 // GET  /api/workspaces/:id/members                    -> Member[]
 // POST /api/workspaces/:id/invites {email, role}      -> {ok, inviteUrl}
 // GET  /api/workspaces/:id/brand                      -> BrandKitDoc
@@ -417,7 +420,8 @@ export interface SyncChanges {
   projects: SyncProject[]
   assets: Array<AssetRecord & { sha256?: string; changeSeq: number }>
   brandKits: Array<{ workspaceId: string; doc: BrandKitDoc; changeSeq: number }>
-  deleted: { projects: string[]; assets: string[] }
+  /** `workspaces`: spaces the user no longer belongs to (deleted, or membership removed). Optional: older clouds omit it. */
+  deleted: { projects: string[]; assets: string[]; workspaces?: string[] }
   /** True when more changes remain after `cursor` (page again). */
   more: boolean
 }

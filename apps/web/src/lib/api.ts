@@ -130,6 +130,8 @@ export const api = {
   // workspaces
   workspaces: () => req<Workspace[]>('GET', '/workspaces'),
   createWorkspace: (name: string) => req<Workspace>('POST', '/workspaces', { name }),
+  renameWorkspace: (id: string, name: string) => req<Workspace>('PATCH', `/workspaces/${id}`, { name }),
+  deleteWorkspace: (id: string) => req<{ ok: true }>('DELETE', `/workspaces/${id}`),
   members: (id: string) => req<Member[]>('GET', `/workspaces/${id}/members`),
   invite: (id: string, email: string, role: string) => req<{ ok: true; inviteUrl: string }>('POST', `/workspaces/${id}/invites`, { email, role }),
   brand: (id: string) => req<BrandKitDoc>('GET', `/workspaces/${id}/brand`),
@@ -222,13 +224,20 @@ export const api = {
 /** Subscribe to server events for a workspace. Returns an unsubscribe function. */
 export function subscribeEvents(
   workspaceId: string,
-  handlers: { job?: (j: Job) => void; asset?: (a: AssetRecord) => void; project?: (p: { id: string; version: number }) => void; sync?: (s: SyncStatus) => void },
+  handlers: {
+    job?: (j: Job) => void
+    asset?: (a: AssetRecord) => void
+    project?: (p: { id: string; version: number }) => void
+    sync?: (s: SyncStatus) => void
+    workspace?: (w: { id: string; name?: string; deleted: boolean }) => void
+  },
 ): () => void {
   const es = new EventSource(`/api/events?workspaceId=${encodeURIComponent(workspaceId)}`, { withCredentials: true })
   if (handlers.sync) es.addEventListener('sync', (e) => handlers.sync!(JSON.parse((e as MessageEvent).data)))
   if (handlers.job) es.addEventListener('job', (e) => handlers.job!(JSON.parse((e as MessageEvent).data)))
   if (handlers.asset) es.addEventListener('asset', (e) => handlers.asset!(JSON.parse((e as MessageEvent).data)))
   if (handlers.project) es.addEventListener('project', (e) => handlers.project!(JSON.parse((e as MessageEvent).data)))
+  if (handlers.workspace) es.addEventListener('workspace', (e) => handlers.workspace!(JSON.parse((e as MessageEvent).data)))
   return () => es.close()
 }
 

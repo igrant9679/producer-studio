@@ -4,7 +4,7 @@ import * as z from 'zod/v4'
 import { FONTS, type BrandKitDoc, type Member, type Role, type Workspace } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
-import { brandKits, invites, memberships, users, workspaces } from '../db/schema'
+import { brandKits, exportsTable, invites, jobs, memberships, projects, shareLinks, users, workspaces } from '../db/schema'
 import { HttpError, body, notFound, requireRole } from '../http'
 import { newId, randomToken } from '../ids'
 
@@ -38,6 +38,36 @@ export async function listWorkspaces(userId: string): Promise<Workspace[]> {
     .sort((a, b) => Number(b.personal) - Number(a.personal))
 }
 
+/** Rename a workspace (owner). The change_seq trigger republishes it to desktop replicas. */
+export async function renameWorkspace(userId: string, id: string, name: string): Promise<Workspace> {
+  await requireRole(userId, id, 'owner')
+  await ctx().db.update(workspaces).set({ name }).where(eq(workspaces.id, id))
+  const ws = (await listWorkspaces(userId)).find((w) => w.id === id)!
+  ctx().bus.publish(id, 'workspace', { id, name, deleted: false }, { id, inline: { id, name, deleted: false } })
+  return ws
+}
+
+/**
+ * Permanently delete a workspace (owner; not a personal space). Projects, assets, memberships, invites, brand kit
+ * and AI settings/keys cascade; jobs, exports and share links have no FK so they go explicitly (a running job sees
+ * its row gone and stops). Membership deletes write tombstones so members' desktops drop the space too.
+ */
+export async function deleteWorkspace(userId: string, id: string): Promise<void> {
+  await requireRole(userId, id, 'owner')
+  const db = ctx().db
+  const ws = (await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]
+  if (!ws) throw notFound()
+  if (ws.personal) throw new HttpError(409, 'conflict', 'Personal spaces can’t be deleted')
+  await db.transaction(async (tx) => {
+    await tx.delete(shareLinks).where(inArray(shareLinks.projectId, tx.select({ id: projects.id }).from(projects).where(eq(projects.workspaceId, id))))
+    await tx.delete(exportsTable).where(eq(exportsTable.workspaceId, id))
+    await tx.delete(jobs).where(eq(jobs.workspaceId, id))
+    await tx.delete(workspaces).where(eq(workspaces.id, id))
+  })
+  await ctx().storage.deletePrefix(`ws/${id}/`).catch(() => undefined)
+  ctx().bus.publish(id, 'workspace', { id, deleted: true }, { id, inline: { id, deleted: true } })
+}
+
 export function defaultBrand(name: string): BrandKitDoc {
   return { name, colors: ['#0b1830', '#ff5a5f', '#f3f5fa', '#35e0ff'], fonts: { headline: 'Montserrat', body: 'Inter' }, captionPreset: 'clean', voice: 'af_heart' }
 }
@@ -68,6 +98,20 @@ workspaceRoutes.post('/', async (c) => {
   const u = requireUser(c)
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(80) }))
   return c.json(await createWorkspace(u.id, b.name))
+})
+
+const NameSchema = z.object({ name: z.string().trim().min(1).max(80) })
+
+workspaceRoutes.patch('/:id', async (c) => {
+  const u = requireUser(c)
+  const b = await body(c, NameSchema)
+  return c.json(await renameWorkspace(u.id, c.req.param('id'), b.name))
+})
+
+workspaceRoutes.delete('/:id', async (c) => {
+  const u = requireUser(c)
+  await deleteWorkspace(u.id, c.req.param('id'))
+  return c.json({ ok: true })
 })
 
 workspaceRoutes.get('/:id/members', async (c) => {

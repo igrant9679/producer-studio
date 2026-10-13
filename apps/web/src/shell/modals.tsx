@@ -1,6 +1,7 @@
-// Modals opened from the shell chrome: aspect picker, create space, invite, help.
+// Modals opened from the shell chrome: aspect picker, create / rename / delete space, invite, help.
 import { ASPECT_RATIOS } from '@producer/core'
-import { Check, Copy, Keyboard, Link2, Mail } from 'lucide-react'
+import type { Workspace } from '@producer/core'
+import { Check, Copy, Keyboard, Link2, Mail, Trash2 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { api, HttpError } from '../lib/api'
 import { useSession } from '../lib/session'
@@ -84,6 +85,86 @@ export function CreateSpaceModal({ onClose }: { onClose: () => void }) {
         <div className="row" style={{ justifyContent: 'flex-end', marginTop: 20 }}>
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy || !name.trim()}>{busy && <Spinner />} Create space</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+export function RenameSpaceModal({ ws, onClose }: { ws: Workspace; onClose: () => void }) {
+  const [name, setName] = useState(ws.name)
+  const [busy, setBusy] = useState(false)
+  const refresh = useSession((s) => s.refreshWorkspaces)
+  const trimmed = name.trim()
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!trimmed || trimmed === ws.name) return onClose()
+    setBusy(true)
+    try {
+      const w = await api.renameWorkspace(ws.id, trimmed)
+      await refresh()
+      toast(`Renamed to “${w.name}”`)
+      onClose()
+    } catch (err) {
+      toastError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title="Rename space" subtitle="Everyone in the space sees the new name." onClose={onClose} width={480}>
+      <form onSubmit={submit}>
+        <label className="label" htmlFor="space-rename">Space name</label>
+        <input id="space-rename" className="input" autoFocus value={name} onChange={(e) => setName(e.target.value)} onFocus={(e) => e.currentTarget.select()} maxLength={80} />
+        <div className="row" style={{ justifyContent: 'flex-end', marginTop: 20 }}>
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={busy || !trimmed}>{busy && <Spinner />} Save</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+/** Spaces this tab deleted itself, so the live `workspace` event doesn't toast a second time. */
+export const ownSpaceDeletes = new Set<string>()
+
+/** Permanent delete, confirmed by typing the space's name. */
+export function DeleteSpaceModal({ ws, onClose }: { ws: Workspace; onClose: () => void }) {
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const refresh = useSession((s) => s.refreshWorkspaces)
+  const ok = typed.trim() === ws.name.trim()
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!ok) return
+    setBusy(true)
+    try {
+      ownSpaceDeletes.add(ws.id)
+      await api.deleteWorkspace(ws.id)
+      await refresh()
+      toast(`Deleted “${ws.name}”`)
+      onClose()
+    } catch (err) {
+      ownSpaceDeletes.delete(ws.id)
+      toastError(err)
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title={`Delete “${ws.name}”?`} subtitle="This can’t be undone." onClose={onClose} width={520}>
+      <form onSubmit={submit}>
+        <div className="ps-alert" style={{ marginBottom: 16 }}>
+          <Trash2 size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            Every project, media file, export, template and the brand kit in this space is permanently deleted, {ws.memberCount > 1 ? `for all ${ws.memberCount} members` : 'for everyone in it'}. Share links stop working and
+            linked desktops remove the space on their next sync.
+          </span>
+        </div>
+        <label className="label" htmlFor="space-delete-confirm">Type <strong>{ws.name}</strong> to confirm</label>
+        <input id="space-delete-confirm" className="input" autoFocus autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />
+        <div className="row" style={{ justifyContent: 'flex-end', marginTop: 20 }}>
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn danger" disabled={busy || !ok}>{busy && <Spinner />} Delete space</button>
         </div>
       </form>
     </Modal>

@@ -113,19 +113,32 @@ type Change =
   | { seq: number; kind: 'brand'; row: typeof brandKits.$inferSelect }
   | { seq: number; kind: 'workspace'; id: string }
   | { seq: number; kind: 'tombstone'; row: typeof tombstones.$inferSelect }
+  | { seq: number; kind: 'left'; id: string }
 
 /** Changes after `since` across the user's workspaces, merged by change_seq and paged. */
 export async function changesSince(userId: string, since: number, limit: number): Promise<SyncChanges> {
   const db = ctx().db
   const mine = await db.select({ ws: memberships.workspaceId, seq: memberships.changeSeq }).from(memberships).where(eq(memberships.userId, userId))
   const wsIds = mine.map((m) => m.ws)
-  if (!wsIds.length) return { cursor: since, workspaces: [], projects: [], assets: [], brandKits: [], deleted: { projects: [], assets: [] }, more: false }
   const n = limit + 1
+  // spaces this user left (deleted, or removed from); ignore any they've since rejoined
+  const left = (
+    await db
+      .select({ ws: tombstones.workspaceId, seq: tombstones.changeSeq })
+      .from(tombstones)
+      .where(and(eq(tombstones.kind, 'membership'), eq(tombstones.id, userId), gt(tombstones.changeSeq, since)))
+      .orderBy(asc(tombstones.changeSeq))
+      .limit(n)
+  ).filter((l) => !wsIds.includes(l.ws))
+  if (!wsIds.length) {
+    const page = left.slice(0, limit)
+    return { cursor: page.length ? page[page.length - 1].seq : since, workspaces: [], projects: [], assets: [], brandKits: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws) }, more: left.length > limit }
+  }
   const [p, a, b, t, w] = await Promise.all([
     db.select().from(projects).where(and(inArray(projects.workspaceId, wsIds), gt(projects.changeSeq, since))).orderBy(asc(projects.changeSeq)).limit(n),
     db.select().from(assets).where(and(inArray(assets.workspaceId, wsIds), gt(assets.changeSeq, since))).orderBy(asc(assets.changeSeq)).limit(n),
     db.select().from(brandKits).where(and(inArray(brandKits.workspaceId, wsIds), gt(brandKits.changeSeq, since))).orderBy(asc(brandKits.changeSeq)).limit(n),
-    db.select().from(tombstones).where(and(inArray(tombstones.workspaceId, wsIds), gt(tombstones.changeSeq, since))).orderBy(asc(tombstones.changeSeq)).limit(n),
+    db.select().from(tombstones).where(and(inArray(tombstones.workspaceId, wsIds), inArray(tombstones.kind, ['project', 'asset']), gt(tombstones.changeSeq, since))).orderBy(asc(tombstones.changeSeq)).limit(n),
     db.select({ id: workspaces.id, seq: workspaces.changeSeq }).from(workspaces).where(and(inArray(workspaces.id, wsIds), gt(workspaces.changeSeq, since))),
   ])
   const all: Change[] = [
@@ -135,11 +148,12 @@ export async function changesSince(userId: string, since: number, limit: number)
     ...t.map((row) => ({ seq: row.changeSeq, kind: 'tombstone' as const, row })),
     ...w.map((row) => ({ seq: row.seq ?? 0, kind: 'workspace' as const, id: row.id })),
     ...mine.filter((m) => (m.seq ?? 0) > since).map((m) => ({ seq: m.seq ?? 0, kind: 'workspace' as const, id: m.ws })),
+    ...left.map((l) => ({ seq: l.seq, kind: 'left' as const, id: l.ws })),
   ].sort((x, y) => x.seq - y.seq)
   const page = all.slice(0, limit)
   const more = all.length > limit
   const cursor = page.length ? page[page.length - 1].seq : since
-  const out: SyncChanges = { cursor, workspaces: [], projects: [], assets: [], brandKits: [], deleted: { projects: [], assets: [] }, more }
+  const out: SyncChanges = { cursor, workspaces: [], projects: [], assets: [], brandKits: [], deleted: { projects: [], assets: [], workspaces: [] }, more }
   const wsChanged = new Set<string>()
   for (const ch of page) {
     if (ch.kind === 'project') {
@@ -151,7 +165,8 @@ export async function changesSince(userId: string, since: number, limit: number)
     } else if (ch.kind === 'tombstone') {
       if (ch.row.kind === 'project') out.deleted.projects.push(ch.row.id)
       else if (ch.row.kind === 'asset') out.deleted.assets.push(ch.row.id)
-    } else wsChanged.add(ch.id)
+    } else if (ch.kind === 'left') out.deleted.workspaces!.push(ch.id)
+    else wsChanged.add(ch.id)
   }
   if (wsChanged.size || since === 0) {
     const list = await listWorkspaces(userId)

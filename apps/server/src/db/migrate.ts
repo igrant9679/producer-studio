@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -261,9 +261,27 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 );
 `
 
+/**
+ * v5 — leaving a workspace (membership deleted, including by a workspace delete cascading) writes a tombstone
+ * ('membership', user_id, workspace_id) so that user's desktop replicas drop the space (SyncChanges.deleted.workspaces).
+ */
+export const DDL_V5 = `
+CREATE OR REPLACE FUNCTION ps_membership_left() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO tombstones (kind, id, workspace_id, change_seq, deleted_at)
+  VALUES ('membership', OLD.user_id, OLD.workspace_id, nextval('change_seq'), extract(epoch from clock_timestamp()) * 1000);
+  RETURN OLD;
+END $$;
+
+DROP TRIGGER IF EXISTS memberships_left ON memberships;
+CREATE TRIGGER memberships_left AFTER DELETE ON memberships FOR EACH ROW EXECUTE FUNCTION ps_membership_left();
+CREATE INDEX IF NOT EXISTS tombstones_membership_idx ON tombstones(id, change_seq) WHERE kind = 'membership';
+`
+
 /** Ordered migrations after v1: [version, sql]. Append here; never edit a shipped entry. */
 export const MIGRATIONS: Array<[number, string]> = [
   [2, DDL_V2],
   [3, DDL_V3],
   [4, DDL_V4],
+  [5, DDL_V5],
 ]

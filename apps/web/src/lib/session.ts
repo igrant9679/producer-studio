@@ -71,6 +71,12 @@ export const useSession = create<SessionState>((set, get) => ({
   },
   async refreshWorkspaces() {
     const list = await api.workspaces()
-    set({ workspaces: list, workspaceId: get().workspaceId ?? pickWorkspace(list) })
+    const cur = get().workspaceId
+    if (cur && list.some((w) => w.id === cur)) return set({ workspaces: list })
+    // the active space is gone (deleted or left): fall back to the saved one, else personal
+    set({ workspaces: list })
+    const next = pickWorkspace(list)
+    if (next) get().setWorkspace(next)
+    else set({ workspaceId: undefined })
   },
 }))

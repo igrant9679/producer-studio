@@ -424,6 +424,29 @@ on('POST', '/api/workspaces', async (_m, _q, b) => {
   brands[w.id] = { name: w.name, colors: ['#ff5a5f', '#35e0ff'], fonts: { headline: 'Space Grotesk', body: 'Inter' } }
   return json(w)
 })
+on('PATCH', '/api/workspaces/([^/]+)', async (m, _q, b) => {
+  await delay(200)
+  const w = workspaces.find((x) => x.id === m[1])
+  if (!w) return fail(404, 'Not found', 'not_found')
+  if (w.role !== 'owner') return fail(403, 'Only workspace owners can do that', 'forbidden')
+  const name = String(b.name ?? '').trim()
+  if (!name) return fail(400, 'name: Too small', 'invalid')
+  w.name = name.slice(0, 80)
+  return json(w)
+})
+on('DELETE', '/api/workspaces/([^/]+)', async (m) => {
+  await delay(300)
+  const i = workspaces.findIndex((x) => x.id === m[1])
+  if (i < 0) return fail(404, 'Not found', 'not_found')
+  if (workspaces[i].role !== 'owner') return fail(403, 'Only workspace owners can do that', 'forbidden')
+  if (workspaces[i].personal) return fail(409, 'Personal spaces can’t be deleted', 'conflict')
+  workspaces.splice(i, 1)
+  for (let j = projects.length - 1; j >= 0; j--) if (projects[j].workspaceId === m[1]) projects.splice(j, 1)
+  for (let j = assets.length - 1; j >= 0; j--) if (assets[j].workspaceId === m[1]) assets.splice(j, 1)
+  delete members[m[1]]
+  delete brands[m[1]]
+  return json({ ok: true })
+})
 on('GET', '/api/workspaces/([^/]+)/members', (m) => json(members[m[1]] ?? []))
 on('POST', '/api/workspaces/([^/]+)/invites', async (m, _q, b) => {
   await delay(300)

@@ -4,7 +4,7 @@
 //            others created in the cloud) so every local project has a cloud home.
 //   pull   — GET /api/sync/changes?since=<cursor − lookback>, paged: workspaces, asset records (bytes on demand),
 //            projects (never overwriting a dirty local copy; cloud advanced + local dirty ⇒ conflict), brand kits,
-//            tombstones.
+//            tombstones, and spaces the user left (deleted in the cloud) are removed locally.
 //   push   — local hard deletes; local-only assets (upload with the same id + sha256, 409 exists ⇒ done); dirty
 //            projects (PUT with baseVersion = cloud_version; 409 ⇒ conflict) and new ones (POST with id); brand kits.
 //   resolve— keep-local (force-push over the latest cloud version), keep-cloud, keep-both (local → "(conflicted copy)").
@@ -16,7 +16,7 @@ import { Readable } from 'node:stream'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncProject, type SyncStatus, type UploadTicket, type Workspace } from '@producer/core'
 import { ctx } from '../context'
-import { type AssetMeta, assets, brandKits, memberships, projects, workspaces } from '../db/schema'
+import { type AssetMeta, assets, brandKits, exportsTable, jobs, memberships, projects, workspaces } from '../db/schema'
 import { HttpError } from '../http'
 import { log } from '../log'
 import { assetPrefix, extFor, hashObject } from '../services/assets'
@@ -317,6 +317,55 @@ export class SyncEngine {
     return w
   }
 
+  /** Is this workspace mirrored from the cloud (vs local-only, not yet merged)? */
+  private async isCloudWorkspace(id: string): Promise<boolean> {
+    return ((await kvGet<string[]>('cloudWorkspaces')) ?? []).includes(id)
+  }
+
+  /** Rename while linked: in the cloud first, then mirrored. Null when unlinked or local-only (caller renames locally). */
+  async renameWorkspace(id: string, name: string): Promise<Workspace | null> {
+    const c = cloud()
+    if (!c || !(await this.isCloudWorkspace(id))) return null
+    const w = await c.json<Workspace>('PATCH', `/api/workspaces/${encodeURIComponent(id)}`, { name })
+    await this.mirrorWorkspaces([w])
+    ctx().bus.publish(id, 'workspace', { id, name: w.name, deleted: false })
+    return w
+  }
+
+  /** Delete while linked: in the cloud first, then here. False when unlinked or local-only (caller deletes locally). */
+  async deleteWorkspace(id: string): Promise<boolean> {
+    const c = cloud()
+    if (!c || !(await this.isCloudWorkspace(id))) return false
+    await c.json('DELETE', `/api/workspaces/${encodeURIComponent(id)}`).catch((e) => {
+      if (!(e instanceof CloudError && e.status === 404)) throw e
+    })
+    await this.applyWorkspaceDelete(id)
+    return true
+  }
+
+  /** The cloud says this user no longer belongs to a space: drop it and everything in it from this replica. */
+  private async applyWorkspaceDelete(id: string) {
+    const db = ctx().db
+    if (!(await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, id)).limit(1)).length) return
+    for (const p of await db.select({ id: projects.id }).from(projects).where(eq(projects.workspaceId, id))) await deleteSync('project', p.id)
+    for (const a of await db.select({ id: assets.id }).from(assets).where(eq(assets.workspaceId, id))) await deleteSync('asset', a.id)
+    await deleteSync('brand', id)
+    this.suppress++
+    try {
+      await db.transaction(async (tx) => {
+        await tx.delete(exportsTable).where(eq(exportsTable.workspaceId, id))
+        await tx.delete(jobs).where(eq(jobs.workspaceId, id))
+        await tx.delete(workspaces).where(eq(workspaces.id, id)) // projects, assets, memberships, brand kit cascade
+      })
+      await ctx().storage.deletePrefix(`ws/${id}/`).catch(() => undefined)
+    } finally {
+      this.suppress--
+    }
+    await kvSet('cloudWorkspaces', ((await kvGet<string[]>('cloudWorkspaces')) ?? []).filter((w) => w !== id))
+    ctx().bus.publish(id, 'workspace', { id, deleted: true })
+    log.info('desktop: removed workspace deleted in the cloud', { id })
+  }
+
   // ---------------- pull ----------------
 
   private async pull(c: CloudClient) {
@@ -333,6 +382,7 @@ export class SyncEngine {
       for (const b of ch.brandKits) await this.applyBrand(b.workspaceId, b.doc)
       for (const id of ch.deleted.assets) await this.applyAssetDelete(id)
       for (const id of ch.deleted.projects) await this.applyProjectDelete(id)
+      for (const id of ch.deleted.workspaces ?? []) await this.applyWorkspaceDelete(id)
       cursor = Math.max(cursor, ch.cursor)
       await kvSet('cursor', cursor)
       if (!ch.more) break
@@ -497,7 +547,13 @@ export class SyncEngine {
     let cursor = (await kvGet<number>('tombCursor')) ?? 0
     const rows = await rawQuery<{ kind: string; id: string; seq: string }>(sql`SELECT kind, id, change_seq::text AS seq FROM tombstones WHERE change_seq > ${cursor} ORDER BY change_seq`)
     for (const t of rows) {
-      const kind = t.kind === 'project' ? 'project' : 'asset'
+      if (t.kind !== 'project' && t.kind !== 'asset') {
+        // membership tombstones (local workspace merges/deletes) aren't pushed
+        cursor = Number(t.seq)
+        await kvSet('tombCursor', cursor)
+        continue
+      }
+      const kind = t.kind
       const s = await syncRow(kind, t.id)
       if (s && (kind === 'project' ? s.cloudVersion != null : s.uploaded)) {
         try {

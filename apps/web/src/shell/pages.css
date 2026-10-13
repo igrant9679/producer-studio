@@ -358,3 +358,12 @@
 :root[data-theme='light'] .sw-pink { --sw: #c2185b; }
 .ps-theme-switch button { min-height: 28px; padding: 0 10px; }
 @media (max-width: 760px) { .ps-theme-cards { grid-template-columns: 1fr; } }
+
+/* space settings rows (SpacePage) */
+.ps-space-setting { display: flex; align-items: center; gap: 16px; padding: 12px 0; border-top: 1px solid var(--border); }
+.ps-brand-sec-head + .ps-space-setting { border-top: 0; padding-top: 4px; }
+.ps-space-setting > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ps-space-setting .muted { font-size: 0.8125rem; overflow-wrap: anywhere; }
+.ps-btn-danger-outline { border-color: var(--danger-line); color: var(--danger); }
+.ps-btn-danger-outline:hover { background: var(--danger-soft); border-color: var(--danger); }
+@media (max-width: 560px) { .ps-space-setting { flex-wrap: wrap; } }
