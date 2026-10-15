@@ -77,6 +77,9 @@ export function useEngine() {
   return { desktop, status, running: vsRunning(status) }
 }
 
+/** Latest Windows installer (GitHub release page; always the newest version). */
+export const DESKTOP_DOWNLOAD_URL = 'https://github.com/igrant9679/producer-studio/releases/latest'
+
 /** Web edition: what VoiceStudio is, and how to use it through a linked desktop. */
 export function DesktopOnly({ feature, children }: { feature: string; children?: ReactNode }) {
   const devices = useAsync(() => systemApi.devices(), [])
@@ -90,6 +93,9 @@ export function DesktopOnly({ feature, children }: { feature: string; children?:
         Windows, sign in to the same account (Settings → Account &amp; sync → Link), and everything it makes — voices, voiceovers, dubbed videos,
         audiobooks — syncs to this space automatically.
       </p>
+      <a className="btn primary" href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer" style={{ marginBottom: 14 }}>
+        <Download size={14} /> Download Producer Studio for Windows
+      </a>
       <ul className="vs-steps">
         <li><Download size={14} /> Install Producer Studio for Windows and open <b>Voice Studio → Engine</b> to set up VoiceStudio (one-time, several GB).</li>
         <li><Laptop size={14} /> Link it: <b>Settings → Account &amp; sync</b>, sign in with this account.</li>
