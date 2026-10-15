@@ -461,6 +461,14 @@ export interface DesktopSettings {
   voiceStudioDir: string
   /** Start the VoiceStudio engine when Producer Studio opens (once installed). */
   voiceStudioAutoStart: boolean
+  /** System-wide dictation: a global shortcut dictates into any app (desktop, needs VoiceStudio + an ASR model). */
+  dictationGlobal: boolean
+  /** Electron accelerator for system-wide dictation (press to start, press again to insert). */
+  dictationShortcut: string
+  /** Paste the result into the focused app (else only copy it to the clipboard). */
+  dictationPaste: boolean
+  /** VoiceStudio dictation model id ('' = VoiceStudio's default). */
+  dictationModel: string
 }
 
 export interface Device {

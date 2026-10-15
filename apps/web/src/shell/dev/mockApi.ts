@@ -699,7 +699,7 @@ const mockMode = (() => {
     return 'cloud'
   }
 })()
-const desktopSettings: DesktopSettings = { claudePath: '', claudeModel: '', dataDir: 'C:\\Users\\alex\\AppData\\Roaming\\Producer Studio\\data', mediaSync: 'on-demand', autoSync: true, voiceStudioDir: '', voiceStudioAutoStart: true }
+const desktopSettings: DesktopSettings = { claudePath: '', claudeModel: '', dataDir: 'C:\\Users\\alex\\AppData\\Roaming\\Producer Studio\\data', mediaSync: 'on-demand', autoSync: true, voiceStudioDir: '', voiceStudioAutoStart: true, dictationGlobal: false, dictationShortcut: 'CommandOrControl+Alt+D', dictationPaste: true, dictationModel: '' }
 const sync: SyncStatus = {
   linked: true,
   cloudUrl: 'https://producerstudio.app',

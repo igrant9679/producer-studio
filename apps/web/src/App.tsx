@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { EditorPage } from './editor/EditorPage'
 import { useSession } from './lib/session'
@@ -6,6 +6,8 @@ import { useToasts } from './lib/toast'
 import { AuthPage } from './shell/AuthPage'
 import { ShellRoutes } from './shell/ShellRoutes'
 import { SharePage } from './shell/SharePage'
+
+const DictationWidget = lazy(() => import('./shell/voicestudio/Dictation'))
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const status = useSession((s) => s.status)
@@ -39,6 +41,8 @@ export function App() {
         <Route path="/r/:token" element={<SharePage />} />
         {/* Offline demo project (bundled media in /public/demo) for editor development without the API. */}
         <Route path="/edit/demo" element={<EditorPage demo />} />
+        {/* Desktop: the floating system-wide dictation bar (its own frameless window). */}
+        <Route path="/dictate" element={<RequireAuth><Suspense fallback={null}><DictationWidget /></Suspense></RequireAuth>} />
         <Route path="/edit/:projectId" element={<RequireAuth><EditorPage /></RequireAuth>} />
         <Route path="/*" element={<RequireAuth><ShellRoutes /></RequireAuth>} />
       </Routes>

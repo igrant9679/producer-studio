@@ -1,6 +1,6 @@
 import type { AiSettings, Device, DesktopSettings } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, Paintbrush, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, Mic, Paintbrush, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { HttpError } from '../../lib/api'
@@ -10,6 +10,7 @@ import { toast, toastError } from '../../lib/toast'
 import { syncSummary } from '../SystemChrome'
 import { aiLabel, aiLabelHasModel, sysFetch, systemApi, useSystem } from '../system'
 import { AiProviders } from './AiProviders'
+import { DictationSettings } from '../voicestudio/Dictation'
 import { AppearanceSettings } from './AppearanceSettings'
 import { Avatar, EmptyState, Spinner, useAsync, usePageTitle } from '../ui'
 import { relativeTime } from '../util'
@@ -499,6 +500,12 @@ export default function SettingsPage() {
               }
             />
           </Section>
+
+          {desktop && (
+            <Section id="dictation" icon={<Mic size={18} />} title="Dictation" sub="Speak instead of typing — in Producer Studio or in any app on this computer. Runs locally with VoiceStudio.">
+              <DictationSettings settings={settings} onSettings={saveSettings} />
+            </Section>
+          )}
 
           {desktop && (
             <Section id="storage" icon={<HardDrive size={18} />} title="Storage" sub="Where Producer keeps your media on this computer.">

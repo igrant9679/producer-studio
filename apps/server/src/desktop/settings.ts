@@ -19,6 +19,10 @@ const Schema = z.object({
   autoSync: z.boolean(),
   voiceStudioDir: z.string().max(1000),
   voiceStudioAutoStart: z.boolean(),
+  dictationGlobal: z.boolean(),
+  dictationShortcut: z.string().max(60),
+  dictationPaste: z.boolean(),
+  dictationModel: z.string().max(120),
 })
 
 export const SettingsPatch = Schema.partial().strict()
@@ -41,7 +45,7 @@ export function settingsFile(): string {
 }
 
 function defaults(): DesktopSettings {
-  return { claudePath: '', claudeModel: '', dataDir: ctx().config.dataDir, mediaSync: 'on-demand', autoSync: true, voiceStudioDir: '', voiceStudioAutoStart: true }
+  return { claudePath: '', claudeModel: '', dataDir: ctx().config.dataDir, mediaSync: 'on-demand', autoSync: true, voiceStudioDir: '', voiceStudioAutoStart: true, dictationGlobal: false, dictationShortcut: 'CommandOrControl+Alt+D', dictationPaste: true, dictationModel: '' }
 }
 
 function load() {

@@ -22,6 +22,8 @@ if (config.role === 'all' || config.role === 'api') {
   server = serve({ fetch: app.fetch, port: config.port, hostname }, (info) => {
     log.info('listening', { port: info.port, host: hostname, mode: config.mode, role: config.role, db: c.database.driver, storage: c.storage.kind, production: config.production })
   })
+  // desktop: live dictation WebSocket → VoiceStudio
+  if (desktop) desktop.attachUpgrades(server as unknown as import('node:http').Server, config.port)
   // uploads and renders can be long-lived; don't let Node cut them off
   const s = server as unknown as { requestTimeout?: number; headersTimeout?: number }
   s.requestTimeout = 0

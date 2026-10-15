@@ -86,3 +86,18 @@
 .vs-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; max-height: 420px; overflow: auto; }
 .vs-preset { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-2); font-size: 0.8125rem; min-width: 0; }
 @media (max-width: 640px) { .vs-form-grid { grid-template-columns: 1fr; } }
+
+/* dictation: in-app pill and the floating system-wide widget */
+.vs-dict-pill { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 1200; display: flex; align-items: center; gap: 10px; max-width: min(720px, 92vw); padding: 10px 12px 10px 16px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: 0 12px 40px rgba(0,0,0,.28); }
+.vs-dict-text { flex: 1; min-width: 0; font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.vs-dict-dot { flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--text-3); transition: transform .08s linear; }
+.vs-dict-dot.on { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+html.vs-dict-widget-root, html.vs-dict-widget-root body, html.vs-dict-widget-root #root { background: transparent !important; overflow: hidden; }
+.vs-dict-widget { position: fixed; inset: 10px; display: flex; align-items: center; gap: 12px; padding: 0 16px 0 20px; border-radius: 22px; background: color-mix(in srgb, var(--surface) 94%, transparent); border: 1px solid var(--border-strong); box-shadow: 0 10px 30px rgba(0,0,0,.35); -webkit-app-region: drag; }
+.vs-dict-widget button { -webkit-app-region: no-drag; }
+.vs-dict-widget .vs-dict-text { font-size: 0.9375rem; }
+
+/* batch */
+.vs-langs { display: flex; flex-wrap: wrap; gap: 6px; max-height: 150px; overflow: auto; padding: 2px; }
+.vs-chip-x { display: inline-grid; place-items: center; width: 14px; height: 14px; margin-left: 2px; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
+.vs-chip-x:hover { background: var(--surface-3); }

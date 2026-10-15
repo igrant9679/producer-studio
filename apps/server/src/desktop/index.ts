@@ -43,13 +43,30 @@ export async function initDesktop() {
 export async function startDesktopServices() {
   await syncEngine.start()
   voiceStudio.refresh()
+  void import('./voicestudio/batch').then(async (b) => (await b.trackedBatches()).length && b.startBatchWatcher())
   if (voiceStudio.status().state === 'stopped' && getDesktopSettings().voiceStudioAutoStart) {
-    void voiceStudio.start().catch((e) => log.warn('voicestudio: autostart failed', { err: String(e) }))
+    void voiceStudio
+      .start()
+      .then(async () => {
+        // dictation users: load the speech model now, not on the first word
+        const s = getDesktopSettings()
+        if (s.dictationGlobal) {
+          const { warmDictation } = await import('./voicestudio/wsproxy')
+          log.info('voicestudio: dictation warm-up', { ok: await warmDictation(s.dictationModel || undefined) })
+        }
+      })
+      .catch((e) => log.warn('voicestudio: autostart failed', { err: String(e) }))
   }
+}
+
+/** WebSocket upgrades on the desktop server (only the dictation stream). */
+export function attachUpgrades(server: import('node:http').Server, port: number) {
+  void import('./voicestudio/wsproxy').then((m) => m.attachDictationProxy(server, port))
 }
 
 export function stopDesktopServices() {
   syncEngine.stop()
+  void import('./voicestudio/batch').then((b) => b.stopBatchWatcher())
   // VoiceStudio also exits on its own when our stdin pipe to it closes (OMNIVOICE_DESKTOP_CONTAINED)
   void voiceStudio.stop().catch(() => undefined)
 }
@@ -130,6 +147,10 @@ desktopRoutes.put('/settings', async (c) => {
   try {
     const next = saveSettings(patch)
     if (patch.claudePath !== undefined || patch.claudeModel !== undefined) await invalidateBuiltin()
+    // turning dictation on (or switching its model): load the speech model in the background
+    if (next.dictationGlobal && (patch.dictationGlobal === true || patch.dictationModel !== undefined) && voiceStudio.status().state === 'running') {
+      void import('./voicestudio/wsproxy').then((m) => m.warmDictation(next.dictationModel || undefined)).catch(() => undefined)
+    }
     return c.json(next)
   } catch (err) {
     if ((err as { invalid?: boolean }).invalid) throw new HttpError(400, 'invalid', (err as Error).message)

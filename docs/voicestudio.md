@@ -60,12 +60,30 @@ Web UI (Voice Studio tabs) ── same-origin fetches only
 | Text to speech | `/generate` (via the `ai.tts` job for `vs:` voices) |
 | My voices | `POST /profiles` (clone: `ref_audio`; design: `vd_states` + `instruct` + `seed`), `/design/describe`, `/archetypes`, `/archetypes/{id}/use`, `/profiles/{id}/audio` |
 | Dubbing / voice changer | `/dub/upload` → `/tasks/stream` (prep) → `/dub/transcribe-stream` → `/dub/translate` (provider sent explicitly; Argos packs installed on demand) → `/dub/generate` → `/tasks/stream` → `/dub/download*`, `/dub/srt`, `/dub/export-stems` |
+| Batch dubbing | `POST /batch/enqueue` (via `asset-to/batch` for library videos), `/batch/jobs[/{id}]`, `cancel`/`retry`/`DELETE`, `/batch/download/{id}/{lang}`; jobs queued with "add to library" are tracked in desktop_kv and a 15 s watcher imports each finished language as a `dub` asset (`desktop/voicestudio/batch.ts`) |
 | Audiobooks | `/audiobook/import`, `/audiobook/plan`, `/audiobook/preview`, `POST /audiobook` (SSE), `/audio/<output>` |
 | Audio tools | `/clean-audio`, `/transcribe` |
 | Engine | `/engines/tts`, `/engines/select`, `/engines/sidecar/{id}/install`, `/api/settings/license`, `/models`, `/models/install[/status|/cancel]`, `DELETE /models/{repo}` |
 
 Results come into the library with `POST /api/voicestudio/import` (server fetches a VoiceStudio output path into an asset)
 and library media goes to VoiceStudio with `POST /api/voicestudio/asset-to/:target` (no browser round trip).
+
+## Dictation
+
+- **Stream:** the renderer records WebM/Opus (or the test harness sends `?pcm=1&sr=16000`) to `ws://127.0.0.1:<port>/api/voicestudio/ws/dictation`.
+  `wsproxy.ts` handles that upgrade on the Node server (Hono middleware doesn't see upgrades), re-checks loopback peer,
+  Host, same-origin `Origin` and the `ps_session` cookie, then splices TCP to VoiceStudio's
+  `/v1/audio/transcriptions/stream` without Origin/Cookie (VoiceStudio refuses browser origins). Messages: `partial`,
+  `final` (`final_kind` utterance/summary), `status`, `error`; finish with `{"type":"input_audio.end"}`.
+- **In-app:** `Ctrl+Shift+Space` in any focused text field (DictationController in the shell); text goes in with
+  `execCommand('insertText')` so React fields update and undo works. Esc cancels.
+- **System-wide (Settings → Dictation):** Electron `globalShortcut` (default `Ctrl+Alt+D`; `Ctrl+Alt+Space` is often
+  taken) toggles a frameless, never-focused, always-on-top widget window loading `/dictate`; the result goes to the main
+  process, which copies it, pastes with `SendKeys ^v` (PowerShell) into the foreground app and restores the clipboard
+  after 1.5 s. Electron allows microphone-only media for the local origin.
+- **Warm-up:** with system-wide dictation on, the server pre-loads the dictation model when VoiceStudio starts or the
+  setting changes (`warmDictation`); otherwise the first dictation waits ~35 s for faster-whisper large-v3 to load.
+  Warm latency measured on an RTX 5090: partials every ~2.5 s (PCM) and the final ≈ 1 s after speech ends.
 
 ## Licences
 
@@ -76,8 +94,8 @@ advice. Decision (Oct 2026): expose all engines with warnings; Producer Studio i
 
 ## Gaps / next
 
-- Windows only (the runtime supports others in principle; untested). Not yet bundled: VoiceStudio's batch queue UI, the
-  dictation widget (global OS shortcut), story/longform stems, the gallery import UI, MCP tools for the Claude CLI.
+- Windows only (the runtime supports others in principle; untested). Not yet bundled: story/longform stems, the gallery
+  import UI, MCP tools for the Claude CLI. System-wide paste uses SendKeys (Windows only).
 - Cloud previews of profile voices aren't available (no sample is synced; play them on the desktop).
 - If the Claude desktop app launches Producer Studio, MSIX AppData redirection can break uv's Python links; normal
   launches are unaffected.

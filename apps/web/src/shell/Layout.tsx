@@ -39,6 +39,7 @@ import { useCreateAndOpen } from './actions'
 import { MOCK_ACTIVE } from './dev/installMock'
 import { AspectPickerModal, CreateSpaceModal, DeleteSpaceModal, HelpModal, InviteModal, RenameSpaceModal, ownSpaceDeletes } from './modals'
 import { AiChip, DesktopBadge, SyncIndicator } from './SystemChrome'
+import { DictationController } from './voicestudio/Dictation'
 import { ThemeSwitcher } from './pages/AppearanceSettings'
 import { useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, useJobs, useUploads } from './stores'
@@ -574,6 +575,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </main>
       </div>
 
+      <DictationController />
       {modal === 'aspect' && <AspectPickerModal onClose={close} busy={creating} onPick={(a) => void create({ width: a.width, height: a.height, name: a.name })} />}
       {modal === 'space' && <CreateSpaceModal onClose={close} />}
       {modal === 'rename-space' && currentWs && <RenameSpaceModal ws={currentWs} onClose={close} />}

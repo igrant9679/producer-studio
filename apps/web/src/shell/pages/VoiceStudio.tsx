@@ -1,7 +1,7 @@
 import type { AssetRecord } from '@producer/core'
 import { addAsset, addItem, createAudioItem } from '@producer/core'
 import clsx from 'clsx'
-import { AudioLines, BookOpen, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import { AudioLines, BookOpen, Layers, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, mediaUrl, waitForJob } from '../../lib/api'
@@ -16,6 +16,7 @@ import { MyVoices } from '../voicestudio/MyVoices'
 
 const Dubbing = lazy(() => import('../voicestudio/Dubbing'))
 const Audiobooks = lazy(() => import('../voicestudio/Audiobooks'))
+const Batch = lazy(() => import('../voicestudio/Batch'))
 const AudioTools = lazy(() => import('../voicestudio/AudioTools'))
 const EnginePanel = lazy(() => import('../voicestudio/EnginePanel'))
 import { formatDuration, relativeTime } from '../util'
@@ -431,12 +432,13 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
   )
 }
 
-type Tab = 'tts' | 'voices' | 'dub' | 'audiobook' | 'tools' | 'engine'
+type Tab = 'tts' | 'voices' | 'dub' | 'batch' | 'audiobook' | 'tools' | 'engine'
 
 const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode; desktopOnly?: boolean }> = [
   { id: 'tts', label: 'Text to speech', icon: <AudioLines size={14} /> },
   { id: 'voices', label: 'My voices', icon: <Mic size={14} /> },
   { id: 'dub', label: 'Dubbing', icon: <Languages size={14} /> },
+  { id: 'batch', label: 'Batch', icon: <Layers size={14} /> },
   { id: 'audiobook', label: 'Audiobooks', icon: <BookOpen size={14} /> },
   { id: 'tools', label: 'Audio tools', icon: <SlidersHorizontal size={14} /> },
   { id: 'engine', label: 'Engine', icon: <Cpu size={14} />, desktopOnly: true },
@@ -446,6 +448,7 @@ const HEAD: Record<Tab, { title: string; body: string }> = {
   tts: { title: 'Text to speech', body: 'Write or paste a script, pick a voice — built-in, cloned or designed — and generate a voiceover you can drop into any project.' },
   voices: { title: 'My voices', body: 'Clone a voice from a short recording, design one from a description, or start from a preset. Your voices work everywhere you pick a voice.' },
   dub: { title: 'Dubbing & voice changer', body: 'Dub a video into another language with timed, natural speech — or re-voice a recording with one of your voices.' },
+  batch: { title: 'Batch dubbing', body: 'Queue many videos into one or more languages and let them render in the background. Finished dubs land in your library.' },
   audiobook: { title: 'Audiobooks', body: 'Turn a manuscript, EPUB or PDF into a narrated audiobook with chapters, character voices and mastering.' },
   tools: { title: 'Audio tools', body: 'Isolate vocals from music and noise, and transcribe speech in hundreds of languages.' },
   engine: { title: 'VoiceStudio engine', body: 'The local engine behind cloning, design, dubbing and audiobooks: setup, models, licences and status.' },
@@ -498,6 +501,7 @@ export default function VoiceStudio() {
           />
         )}
         {tab === 'dub' && <Dubbing onOpenEngine={() => setTab('engine')} />}
+        {tab === 'batch' && <Batch onOpenEngine={() => setTab('engine')} />}
         {tab === 'audiobook' && <Audiobooks onOpenEngine={() => setTab('engine')} />}
         {tab === 'tools' && <AudioTools onOpenEngine={() => setTab('engine')} />}
         {tab === 'engine' && <EnginePanel />}

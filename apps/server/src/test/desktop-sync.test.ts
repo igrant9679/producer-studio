@@ -357,6 +357,7 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
   let fake: Awaited<ReturnType<typeof import('./fake-voicestudio').startFakeVoiceStudio>>
   let voiceId: string
   let makeWav: (s?: number) => Buffer
+  let batchMp4: string
 
   async function waitJob(h: Http, id: string, ms = 30_000) {
     const end = Date.now() + ms
@@ -377,7 +378,12 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
   beforeAll(async () => {
     const m = await import('./fake-voicestudio')
     makeWav = m.makeWav
-    fake = await m.startFakeVoiceStudio()
+    // a real (tiny) MP4 for batch outputs
+    const ffmpeg = (await import('ffmpeg-static')).default as unknown as string
+    batchMp4 = path.join(os.tmpdir(), `ps-batch-${Date.now()}.mp4`)
+    const { spawnSync } = await import('node:child_process')
+    spawnSync(ffmpeg, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:d=1', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-shortest', '-pix_fmt', 'yuv420p', batchMp4])
+    fake = await m.startFakeVoiceStudio({ batchMp4 })
     process.env.PS_VOICESTUDIO_URL = fake.url
     // the earlier "deletes & unlink" suite may not have run yet; make sure we're linked
     const st = await desk.json<SyncStatus>('GET', '/api/sync/status').catch(() => null)
@@ -461,6 +467,63 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
     expect(done.status).toBe('done')
     expect(done.result.asset).toMatchObject({ origin: 'voicestudio', asset: { name: 'Best take', kind: 'audio' } })
     expect((await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source: '/system/info', name: 'x', kind: 'audio' })).status).toBe(400)
+  })
+
+  it('proxies the live dictation WebSocket only for this app’s signed-in pages, without leaking Origin or cookies', async () => {
+    const http = await import('node:http')
+    const { attachDictationProxy } = await import('../desktop/voicestudio/wsproxy')
+    const server = http.createServer((_q, r) => r.end())
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    const port = (server.address() as net.AddressInfo).port
+    attachDictationProxy(server, port)
+    const url = `ws://127.0.0.1:${port}/api/voicestudio/ws/dictation?model=sherpa-x&evil=1`
+    const open = (headers: Record<string, string>) =>
+      new Promise<{ ok: boolean; messages: string[] }>((resolve) => {
+        const ws = new (WebSocket as unknown as new (u: string, o: { headers: Record<string, string> }) => WebSocket)(url, { headers })
+        const messages: string[] = []
+        ws.onmessage = (m) => {
+          messages.push(String(m.data))
+          if (messages.length === 2) ws.send(new Uint8Array([1, 2, 3]))
+        }
+        ws.onclose = () => resolve({ ok: messages.length > 0, messages })
+        ws.onerror = () => undefined
+      })
+    try {
+      expect((await open({ origin: `http://127.0.0.1:${port}` })).ok).toBe(false) // no session
+      expect((await open({ cookie: desk.cookie, origin: 'http://evil.test' })).ok).toBe(false) // cross-site
+      const before = fake.upgrades.length
+      const r = await open({ cookie: desk.cookie, origin: `http://127.0.0.1:${port}` })
+      expect(r.messages.map((m) => JSON.parse(m).type)).toEqual(['session.started', 'partial', 'final'])
+      expect(JSON.parse(r.messages[2]).text).toBe('Hello world.')
+      expect(fake.upgrades.length).toBe(before + 1)
+      expect(fake.upgrades.at(-1)).toMatchObject({ path: '/v1/audio/transcriptions/stream?model=sherpa-x', origin: undefined, cookie: undefined })
+    } finally {
+      server.close()
+    }
+  })
+
+  it('batch: finished jobs queued from Producer are imported into the library per language', async () => {
+    const f = new FormData()
+    f.set('video', new File([new Uint8Array(fs.readFileSync(batchMp4))], 'clip.mp4', { type: 'video/mp4' }))
+    f.set('langs', 'es,fr')
+    const res = await app.request('/api/voicestudio/x/batch/enqueue', { method: 'POST', headers: { cookie: desk.cookie }, body: f })
+    const { job_id } = await res.json()
+    expect((await desk.json('POST', '/api/voicestudio/batch/track', { jobId: job_id, workspaceId: cloudWs, name: 'clip', langs: ['es', 'fr'] })).body).toEqual({ ok: true })
+    expect((await desk.json('GET', '/api/voicestudio/batch/tracked')).body.map((t: { jobId: string }) => t.jobId)).toContain(job_id)
+    const { pollBatches } = await import('../desktop/voicestudio/batch')
+    expect(await pollBatches()).toBe(2)
+    expect((await desk.json('GET', '/api/voicestudio/batch/tracked')).body).toEqual([])
+    // the two import jobs finish into dub assets
+    const end = Date.now() + 30_000
+    for (;;) {
+      const vids = (await desk.json('GET', `/api/assets?workspaceId=${cloudWs}&kind=video`)).body.filter((a: { origin: string; asset: { name: string } }) => a.origin === 'dub' && a.asset.name.startsWith('clip'))
+      if (vids.length === 2 && vids.every((a: { status: string }) => a.status === 'ready')) {
+        expect(vids.map((a: { asset: { name: string } }) => a.asset.name).sort()).toEqual(['clip — es', 'clip — fr'])
+        break
+      }
+      if (Date.now() > end) throw new Error(`imports not ready: ${JSON.stringify(vids.map((a: { status: string }) => a.status))}`)
+      await new Promise((r) => setTimeout(r, 300))
+    }
   })
 
   it('deleting the voice on the web removes it from the desktop and from VoiceStudio', async () => {

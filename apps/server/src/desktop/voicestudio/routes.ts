@@ -204,6 +204,7 @@ voiceStudioRoutes.post('/import', async (c) => {
 /** VoiceStudio endpoints that take an uploaded media file, and the form field they read it from. */
 const ASSET_TARGETS: Record<string, { path: string; field: string; variant?: 'audio' }> = {
   dub: { path: '/dub/upload', field: 'video' },
+  batch: { path: '/batch/enqueue', field: 'video' },
   'clean-audio': { path: '/clean-audio', field: 'audio', variant: 'audio' },
   transcribe: { path: '/transcribe', field: 'audio', variant: 'audio' },
   'audiobook-import': { path: '/audiobook/import', field: 'file' },
@@ -244,6 +245,38 @@ voiceStudioRoutes.post('/asset-to/:target', async (c) => {
   }
 })
 
+// ---------------- batch dubbing: add finished outputs to the library ----------------
+
+const TrackSchema = z.object({
+  jobId: z.string().regex(/^[\w-]{4,64}$/),
+  workspaceId: z.string().min(1),
+  name: z.string().trim().min(1).max(200),
+  langs: z.array(z.string().max(20)).min(1).max(20),
+})
+
+/** Remember a VoiceStudio batch job so its dubbed videos are imported into the space when it finishes. */
+voiceStudioRoutes.post('/batch/track', async (c) => {
+  const u = requireUser(c)
+  const b = await body(c, TrackSchema)
+  await requireRole(u.id, b.workspaceId, 'editor')
+  const { trackBatch } = await import('./batch')
+  await trackBatch({ ...b, userId: u.id })
+  return c.json({ ok: true })
+})
+
+voiceStudioRoutes.get('/batch/tracked', async (c) => {
+  requireUser(c)
+  const { trackedBatches } = await import('./batch')
+  return c.json(await trackedBatches())
+})
+
+voiceStudioRoutes.delete('/batch/track/:jobId', async (c) => {
+  requireUser(c)
+  const { untrackBatch } = await import('./batch')
+  await untrackBatch(c.req.param('jobId'))
+  return c.json({ ok: true })
+})
+
 // ---------------- proxy to VoiceStudio's own API ----------------
 
 /** VoiceStudio routes the Voice Studio UI may call. Admin/system, telephony, marketplace, MCP and auth stay blocked. */
@@ -267,6 +300,7 @@ const ALLOW: Array<[RegExp, RegExp]> = [
   [/^(GET|POST|DELETE)$/, /^\/batch\//],
   [/^POST$/, /^\/(transcribe|clean-audio)$/],
   [/^(GET|POST)$/, /^\/api\/settings\/license(\/|$)/],
+  [/^(GET|POST)$/, /^\/dictation\/(models|readiness|prefs)$/],
   [/^GET$/, /^\/v1\/audio\/voices$/],
   [/^POST$/, /^\/v1\/audio\/(transcriptions|translations)$/],
 ]

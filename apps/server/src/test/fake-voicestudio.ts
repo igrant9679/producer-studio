@@ -1,5 +1,7 @@
 // A tiny stand-in for the VoiceStudio backend (the endpoints Producer uses), for tests: /health, /profiles,
 // /generate (returns a real WAV), /engines/tts, /audio/<file>. Records every request.
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 
@@ -33,8 +35,22 @@ export function makeWav(seconds = 1, rate = 24000): Buffer {
   return Buffer.concat([h, data])
 }
 
-export async function startFakeVoiceStudio() {
+/** One unmasked server→client WebSocket text frame. */
+function wsText(s: string): Buffer {
+  const p = Buffer.from(s)
+  const head = p.length < 126 ? Buffer.from([0x81, p.length]) : Buffer.from([0x81, 126, p.length >> 8, p.length & 255])
+  return Buffer.concat([head, p])
+}
+
+export interface FakeOptions {
+  /** MP4 served for /batch/download/* */
+  batchMp4?: string
+}
+
+export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
   const requests: FakeRequest[] = []
+  const upgrades: Array<{ path: string; origin?: string; cookie?: string }> = []
+  const batch = new Map<string, { id: string; status: string; filename: string; langs: string[]; outputs: Record<string, string> }>()
   const profiles = new Map<string, { id: string; name: string; kind: string }>()
   let n = 0
   const server = http.createServer((req, res) => {
@@ -71,6 +87,18 @@ export async function startFakeVoiceStudio() {
         res.writeHead(200, { 'content-type': 'audio/wav', 'x-omnivoice-backend': '0.5.6', 'x-audio-id': `h${++n}`, 'x-seed': '42', 'x-audio-duration': '1.5', 'content-length': String(wav.length) })
         return res.end(wav)
       }
+      if (url.pathname === '/batch/enqueue' && req.method === 'POST') {
+        const id = `b${++n}abcd`
+        batch.set(id, { id, status: 'done', filename: 'clip.mp4', langs: (field('langs') ?? 'es').split(','), outputs: Object.fromEntries((field('langs') ?? 'es').split(',').map((l) => [l, `/x/${l}.mp4`])) })
+        return json(200, { job_id: id, status: 'queued', queue_position: 0 })
+      }
+      const bj = /^\/batch\/jobs\/([^/]+)$/.exec(url.pathname)
+      if (bj) return batch.has(bj[1]) ? json(200, batch.get(bj[1])) : json(404, { detail: 'Job not found' })
+      if (url.pathname.startsWith('/batch/download/') && opts.batchMp4) {
+        const buf = fs.readFileSync(opts.batchMp4)
+        res.writeHead(200, { 'content-type': 'video/mp4', 'content-disposition': 'attachment; filename="clip_es.mp4"', 'content-length': String(buf.length), 'x-omnivoice-backend': '0.5.6' })
+        return res.end(buf)
+      }
       if (url.pathname.startsWith('/audio/')) {
         const wav = makeWav(1)
         res.writeHead(200, { 'content-type': 'audio/wav', 'content-disposition': 'attachment; filename="take.wav"', 'content-length': String(wav.length), 'x-omnivoice-backend': '0.5.6' })
@@ -79,7 +107,20 @@ export async function startFakeVoiceStudio() {
       json(404, { detail: `not in fake: ${req.method} ${url.pathname}` })
     })
   })
+  // live dictation stream: answer the handshake, then partial → (on any client frame) final
+  server.on('upgrade', (req, socket) => {
+    upgrades.push({ path: req.url ?? '', origin: req.headers.origin as string | undefined, cookie: req.headers.cookie })
+    const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
+    socket.write(['HTTP/1.1 101 Switching Protocols', 'Upgrade: websocket', 'Connection: Upgrade', `Sec-WebSocket-Accept: ${accept}`, '', ''].join('\r\n'))
+    socket.write(wsText(JSON.stringify({ type: 'session.started', protocol: 'voicestudio.speech.v1' })))
+    socket.write(wsText(JSON.stringify({ type: 'partial', text: 'hello wor' })))
+    socket.once('data', () => {
+      socket.write(wsText(JSON.stringify({ type: 'final', text: 'Hello world.' })))
+      socket.end(Buffer.from([0x88, 0]))
+    })
+    socket.on('error', () => undefined)
+  })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-  return { url, requests, profiles, close: () => new Promise<void>((r) => server.close(() => r())) }
+  return { url, requests, profiles, upgrades, batch, close: () => new Promise<void>((r) => server.close(() => r())) }
 }

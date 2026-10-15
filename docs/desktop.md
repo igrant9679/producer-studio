@@ -59,7 +59,9 @@ Without them the build logs "signing" steps but produces unsigned binaries (Smar
   default browser via `shell.openExternal`; every other scheme is denied. `window.open` of local media/share pages opens
   a sandboxed viewer window; anything else local is denied. Permission requests are denied except clipboard-write,
   fullscreen and microphone-only media (Voice Studio records reference clips for voice cloning) for the local origin. Downloads always show a save dialog.
-- Preload exposes only `window.producerDesktop = { version, platform, openExternal(url), showItemInFolder(path) }`.
+- Preload exposes only `window.producerDesktop = { version, platform, openExternal(url), showItemInFolder(path),
+  setNativeTheme(mode), dictation: { configure, result, cancel, toggle, onCommand } }` (system-wide dictation: global
+  shortcut, the `/dictate` widget window, clipboard + SendKeys paste; see voicestudio.md).
   IPC handlers check the sender is the local origin and re-validate: `openExternal` takes http(s) URLs only (no
   credentials, ≤ 2 KB); `showItemInFolder` resolves symlinks and only accepts paths inside the data folder (the folder
   itself opens in Explorer). No generic `invoke`, no remote module.

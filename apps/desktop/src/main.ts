@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import { isDev } from './paths'
+import { setupDictation } from './dictation'
 import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, nativeThemeMode, openExternal, setLocalOrigin } from './security'
 import { ServerProcess } from './server'
 
@@ -240,6 +241,15 @@ if (!app.requestSingleInstanceLock()) {
     w?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0c0e14' : '#f3f5f8')
     return true
   })
+
+  const dictation = setupDictation({
+    origin: () => server?.origin,
+    isLocal,
+    preload: path.join(__dirname, 'preload.cjs'),
+    secure: { ...SECURE_PREFS, additionalArguments: [`--ps-version=${app.getVersion()}`] },
+    log: logLine,
+  })
+  app.on('will-quit', () => dictation.dispose())
 
   app.on('web-contents-created', (_e, wc) => hardenContents(wc))
 
