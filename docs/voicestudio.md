@@ -60,6 +60,8 @@ Web UI (Voice Studio tabs) ── same-origin fetches only
 | Text to speech | `/generate` (via the `ai.tts` job for `vs:` voices) |
 | My voices | `POST /profiles` (clone: `ref_audio`; design: `vd_states` + `instruct` + `seed`), `/design/describe`, `/archetypes`, `/archetypes/{id}/use`, `/profiles/{id}/audio` |
 | Dubbing / voice changer | `/dub/upload` → `/tasks/stream` (prep) → `/dub/transcribe-stream` → `/dub/translate` (provider sent explicitly; Argos packs installed on demand) → `/dub/generate` → `/tasks/stream` → `/dub/download*`, `/dub/srt`, `/dub/export-stems` |
+| Gallery | `/gallery/voices` (list/patch/delete), `/gallery/upload` (files, trimmed clips encoded in the browser, library clips via `asset-to/gallery`), `/gallery/download` + `/gallery/search/youtube` (yt-dlp, online, ≤30 s sections), `/gallery/voices/{id}/save-as-profile` → adopt with consent; `/community/items` (+ `/preview`, `/use`; online catalog with offline cache); `/personas/inspect` → `/personas/import` (consent asked unless the pack carries verified consent), `/personas/export/{vsId}` from My voices |
+| Stories & stems | Each line via `/generate`, decoded and laid out client-side (`lib/storyStems.ts`): mixdown + **timeline-aligned stems** (one per character, full length, silent elsewhere — unlike VoiceStudio's own back-to-back stems), uploaded to the library or opened as a project with one audio track per character; mastered single file via `POST /longform/render` (SSE) → `/audio/<output>` |
 | Batch dubbing | `POST /batch/enqueue` (via `asset-to/batch` for library videos), `/batch/jobs[/{id}]`, `cancel`/`retry`/`DELETE`, `/batch/download/{id}/{lang}`; jobs queued with "add to library" are tracked in desktop_kv and a 15 s watcher imports each finished language as a `dub` asset (`desktop/voicestudio/batch.ts`) |
 | Audiobooks | `/audiobook/import`, `/audiobook/plan`, `/audiobook/preview`, `POST /audiobook` (SSE), `/audio/<output>` |
 | Audio tools | `/clean-audio`, `/transcribe` |
@@ -94,8 +96,9 @@ advice. Decision (Oct 2026): expose all engines with warnings; Producer Studio i
 
 ## Gaps / next
 
-- Windows only (the runtime supports others in principle; untested). Not yet bundled: story/longform stems, the gallery
-  import UI, MCP tools for the Claude CLI. System-wide paste uses SendKeys (Windows only).
+- Windows only (the runtime supports others in principle; untested). Not yet bundled: MCP tools for the Claude CLI.
+  System-wide paste uses SendKeys (Windows only). Our consent attestation isn't written into exported voice packs
+  (VoiceStudio's pack consent needs a recorded statement), so re-imported packs ask for consent again.
 - Cloud previews of profile voices aren't available (no sample is synced; play them on the desktop).
 - If the Claude desktop app launches Producer Studio, MSIX AppData redirection can break uv's Python links; normal
   launches are unaffected.

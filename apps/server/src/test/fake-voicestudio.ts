@@ -87,6 +87,10 @@ export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
         res.writeHead(200, { 'content-type': 'audio/wav', 'x-omnivoice-backend': '0.5.6', 'x-audio-id': `h${++n}`, 'x-seed': '42', 'x-audio-duration': '1.5', 'content-length': String(wav.length) })
         return res.end(wav)
       }
+      if (url.pathname === '/gallery/upload' && req.method === 'POST') {
+        if (!/name="audio"; filename="/.test(body)) return json(422, { detail: 'audio is required' })
+        return json(200, { id: `g${++n}`, name: field('name') ?? '', audio_path: '/x.wav', duration: 2 })
+      }
       if (url.pathname === '/batch/enqueue' && req.method === 'POST') {
         const id = `b${++n}abcd`
         batch.set(id, { id, status: 'done', filename: 'clip.mp4', langs: (field('langs') ?? 'es').split(','), outputs: Object.fromEntries((field('langs') ?? 'es').split(',').map((l) => [l, `/x/${l}.mp4`])) })

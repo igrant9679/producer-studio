@@ -2,7 +2,7 @@
 // library clip with a consent record, design from a description, browse preset voices. Web: list, rename, delete, use.
 import type { AssetRecord, VoiceProfile } from '@producer/core'
 import clsx from 'clsx'
-import { AudioLines, Check, Circle, FileAudio, Library, Mic, MoreHorizontal, Pencil, Play, Plus, RefreshCw, ShieldCheck, Square, Trash2, Upload, Wand2 } from 'lucide-react'
+import { AudioLines, Check, Circle, FileAudio, Library, Mic, MoreHorizontal, Package, Pencil, Play, Plus, RefreshCw, ShieldCheck, Square, Trash2, Upload, Wand2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, mediaUrl } from '../../lib/api'
 import { useSession } from '../../lib/session'
@@ -10,7 +10,7 @@ import { toast, toastError } from '../../lib/toast'
 import { PlaySample, useVoicesVersion } from '../components/VoiceCard'
 import { EmptyState, MenuList, Modal, Popover, Spinner, useAsync, useAudioPreview } from '../ui'
 import { relativeTime } from '../util'
-import { DesktopOnly, EngineGate, LANGUAGES, LicenseChip, canDesign, engineName, useEngine, useElapsed, useTtsEngines, type TtsBackend } from './shared'
+import { DesktopOnly, EngineGate, LANGUAGES, LicenseChip, canDesign, engineName, saveBlob, useEngine, useElapsed, useTtsEngines, type TtsBackend } from './shared'
 import { PresetVoices } from './PresetVoices'
 import { vsApi, vsFetch } from './vsApi'
 
@@ -118,6 +118,15 @@ export function MyVoices({ onUse, onOpenEngine }: { onUse: (voiceId: string) => 
   )
 }
 
+async function exportPack(v: VoiceProfile) {
+  try {
+    const res = await vsFetch(`/personas/export/${encodeURIComponent(v.vsProfileId!)}`, { method: 'POST', query: { include_reference: true } })
+    saveBlob(await res.blob(), `${v.name.replace(/[^\w .-]+/g, '_')}.ovsvoice`)
+  } catch (e) {
+    toastError(e)
+  }
+}
+
 function ProfileCard({ v, desktop, onUse, onRename, onDelete }: { v: VoiceProfile; desktop: boolean; onUse: () => void; onRename: () => void; onDelete: () => void }) {
   return (
     <div className="vs-voice-card">
@@ -137,6 +146,7 @@ function ProfileCard({ v, desktop, onUse, onRename, onDelete }: { v: VoiceProfil
               items={[
                 { label: 'Use for a voiceover', icon: <AudioLines size={14} />, onClick: onUse },
                 { label: 'Rename', icon: <Pencil size={14} />, onClick: onRename },
+                ...(desktop && v.local && v.vsProfileId ? [{ label: 'Export voice pack', icon: <Package size={14} />, onClick: () => void exportPack(v) }] : []),
                 { label: 'Delete', icon: <Trash2 size={14} />, danger: true, onClick: onDelete },
               ]}
             />

@@ -205,6 +205,7 @@ voiceStudioRoutes.post('/import', async (c) => {
 const ASSET_TARGETS: Record<string, { path: string; field: string; variant?: 'audio' }> = {
   dub: { path: '/dub/upload', field: 'video' },
   batch: { path: '/batch/enqueue', field: 'video' },
+  gallery: { path: '/gallery/upload', field: 'audio', variant: 'audio' },
   'clean-audio': { path: '/clean-audio', field: 'audio', variant: 'audio' },
   transcribe: { path: '/transcribe', field: 'audio', variant: 'audio' },
   'audiobook-import': { path: '/audiobook/import', field: 'file' },
@@ -301,6 +302,10 @@ const ALLOW: Array<[RegExp, RegExp]> = [
   [/^POST$/, /^\/(transcribe|clean-audio)$/],
   [/^(GET|POST)$/, /^\/api\/settings\/license(\/|$)/],
   [/^(GET|POST)$/, /^\/dictation\/(models|readiness|prefs)$/],
+  [/^(GET|POST)$/, /^\/community\/(sources|manifest|items)(\/|$)/],
+  [/^POST$/, /^\/personas\/(export\/[^/]+|import|inspect)$/],
+  [/^GET$/, /^\/longform\/jobs(\/|$)/],
+  [/^POST$/, /^\/longform\/render$/],
   [/^GET$/, /^\/v1\/audio\/voices$/],
   [/^POST$/, /^\/v1\/audio\/(transcriptions|translations)$/],
 ]

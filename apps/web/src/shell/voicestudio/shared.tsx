@@ -1,6 +1,7 @@
 // Shared bits for the VoiceStudio tabs: engine hooks, the "needs the desktop" panels, language list, small widgets.
-import { Download, Laptop, MonitorSmartphone, Power, Sparkles } from 'lucide-react'
+import { Download, Laptop, MonitorSmartphone, Power, ShieldCheck, Sparkles } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
+import { useSession } from '../../lib/session'
 import { useAsync } from '../ui'
 import { systemApi, useIsDesktop } from '../system'
 import { LICENSE_NOTES, useVsStatus, vsApi, vsGet, vsRunning, type VsStatus } from './vsApi'
@@ -181,3 +182,53 @@ export function useElapsed(active: boolean): number {
 }
 
 export const fmtBytes = (n?: number | null) => (n == null ? '' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : n >= 1024 ** 2 ? `${Math.round(n / 1024 ** 2)} MB` : `${Math.round(n / 1024)} KB`)
+
+// ---------------- consent (cloning a real person's voice) ----------------
+
+export interface ConsentState {
+  whose: 'me' | 'other'
+  speaker: string
+  agreed: boolean
+}
+
+export function consentStatement(c: ConsentState, userName: string): string {
+  const who = c.whose === 'me' ? userName || 'me' : c.speaker.trim()
+  return c.whose === 'me'
+    ? `I, ${who}, am the person speaking in this recording and I consent to Producer Studio cloning my voice. I will not use it to deceive or impersonate anyone.`
+    : `I have ${who || 'the speaker'}’s explicit permission to clone their voice from this recording for use in our videos, and I will not use it to deceive or impersonate anyone.`
+}
+
+export const consentReady = (c: ConsentState) => c.agreed && (c.whose === 'me' || !!c.speaker.trim())
+
+/** The attestation payload for /api/voicestudio/voices[/adopt]. */
+export function consentPayload(c: ConsentState, userName: string) {
+  return { agreed: true as const, speaker: c.whose === 'me' ? 'me' : c.speaker.trim(), statement: consentStatement(c, userName) }
+}
+
+export function ConsentFields({ value, onChange, defaultSpeaker }: { value: ConsentState; onChange: (c: ConsentState) => void; defaultSpeaker?: string }) {
+  const userName = useSession((s) => s.user?.name ?? '')
+  return (
+    <div className="vs-consent">
+      <strong><ShieldCheck size={15} /> Consent</strong>
+      <div className="ps-seg" style={{ margin: '8px 0' }}>
+        <button type="button" className={value.whose === 'me' ? 'on' : ''} onClick={() => onChange({ ...value, whose: 'me' })}>It’s my voice</button>
+        <button type="button" className={value.whose === 'other' ? 'on' : ''} onClick={() => onChange({ ...value, whose: 'other', speaker: value.speaker || defaultSpeaker || '' })}>Someone else’s (with permission)</button>
+      </div>
+      {value.whose === 'other' && <input className="input" placeholder="Speaker’s full name" value={value.speaker} onChange={(e) => onChange({ ...value, speaker: e.target.value })} maxLength={120} style={{ marginBottom: 8 }} />}
+      <label className="vs-check">
+        <input type="checkbox" checked={value.agreed} onChange={(e) => onChange({ ...value, agreed: e.target.checked })} />
+        <span>{consentStatement(value, userName)}</span>
+      </label>
+      <span className="muted" style={{ fontSize: '0.7188rem' }}>Saved with the voice, with your name and the date. Public clips (YouTube, podcasts) still need the speaker’s permission.</span>
+    </div>
+  )
+}
+
+/** Save bytes as a file (desktop shows a save dialog). */
+export function saveBlob(blob: Blob, name: string) {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+}

@@ -101,7 +101,7 @@ export const vsApi = {
   adoptVoice: (b: { workspaceId: string; vsProfileId: string; name: string; kind?: 'clone' | 'design'; engine?: string; language?: string; description?: string; consent: { agreed: true; speaker?: string; statement: string } }) =>
     sysFetch<VoiceProfile>('POST', '/voicestudio/voices/adopt', b),
   /** Send a library asset into VoiceStudio (dub upload, vocal isolation, transcription, audiobook import). */
-  async assetTo(target: 'dub' | 'batch' | 'clean-audio' | 'transcribe' | 'audiobook-import', assetId: string, fields: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<Response> {
+  async assetTo(target: 'dub' | 'batch' | 'gallery' | 'clean-audio' | 'transcribe' | 'audiobook-import', assetId: string, fields: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<Response> {
     const q = new URLSearchParams({ assetId })
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) q.set(k, v)
     const res = await fetch(`/api/voicestudio/asset-to/${target}?${q}`, { method: 'POST', credentials: 'include', signal })

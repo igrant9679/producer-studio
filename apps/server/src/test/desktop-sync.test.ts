@@ -401,6 +401,10 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
     expect(eng.status).toBe(200)
     expect(eng.body.backends[0].id).toBe('omnivoice')
     expect((await desk.json('GET', '/api/voicestudio/x/system/info')).status).toBe(403)
+    // routes the Gallery / Stories tabs rely on are allowed through (the fake answers 404, not the proxy's 403)
+    for (const [m, p] of [['POST', '/longform/render'], ['GET', '/longform/jobs'], ['GET', '/community/items'], ['POST', '/personas/inspect'], ['POST', '/gallery/upload'], ['GET', '/dictation/models']] as const) {
+      expect((await desk.json(m, `/api/voicestudio/x${p}`, m === 'POST' ? {} : undefined)).status, `${m} ${p}`).not.toBe(403)
+    }
     expect((await desk.json('POST', '/api/voicestudio/x/api/settings/hf-token', { token: 'x' })).status).toBe(403)
     expect((await desk.json('GET', '/api/voicestudio/x/profiles/../system/info')).status).not.toBe(200)
     expect(fake.requests.every((r) => r.origin === undefined)).toBe(true)
@@ -524,6 +528,17 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
       if (Date.now() > end) throw new Error(`imports not ready: ${JSON.stringify(vids.map((a: { status: string }) => a.status))}`)
       await new Promise((r) => setTimeout(r, 300))
     }
+  })
+
+  it('sends a library clip into the gallery (extracted audio, extra form fields passed through)', async () => {
+    const lib = (await desk.json('GET', `/api/assets?workspaceId=${cloudWs}&kind=audio`)).body as Array<{ asset: { id: string } }>
+    const before = fake.requests.length
+    const r = await desk.json('POST', `/api/voicestudio/asset-to/gallery?assetId=${lib[0].asset.id}&name=Interview&category=import`)
+    expect(r.body).toMatchObject({ name: 'Interview', duration: 2 })
+    const req = fake.requests.slice(before).find((x) => x.path === '/gallery/upload')!
+    expect(req.body).toMatch(/name="audio"; filename=/)
+    expect(req.body).toMatch(/name="category"\r\n\r\nimport/)
+    expect((await desk.json('POST', `/api/voicestudio/asset-to/nope?assetId=${lib[0].asset.id}`)).status).toBe(404)
   })
 
   it('deleting the voice on the web removes it from the desktop and from VoiceStudio', async () => {
