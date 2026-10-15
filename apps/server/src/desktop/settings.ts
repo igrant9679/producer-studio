@@ -17,6 +17,8 @@ const Schema = z.object({
   dataDir: z.string().max(1000),
   mediaSync: z.enum(['all', 'on-demand']),
   autoSync: z.boolean(),
+  voiceStudioDir: z.string().max(1000),
+  voiceStudioAutoStart: z.boolean(),
 })
 
 export const SettingsPatch = Schema.partial().strict()
@@ -39,7 +41,7 @@ export function settingsFile(): string {
 }
 
 function defaults(): DesktopSettings {
-  return { claudePath: '', claudeModel: '', dataDir: ctx().config.dataDir, mediaSync: 'on-demand', autoSync: true }
+  return { claudePath: '', claudeModel: '', dataDir: ctx().config.dataDir, mediaSync: 'on-demand', autoSync: true, voiceStudioDir: '', voiceStudioAutoStart: true }
 }
 
 function load() {

@@ -1,13 +1,14 @@
 // Transcription and TTS as reusable steps (used by their jobs, by produce.assemble and by the assistant).
 import fs from 'node:fs'
 import path from 'node:path'
-import type { AssetRecord, Transcript } from '@producer/core'
+import { isProfileVoice, type AssetRecord, type Transcript } from '@producer/core'
 import { assetRecord } from '../dto'
 import type { JobContext } from '../jobs/worker'
 import { processAsset } from '../media/process'
 import { type AssetRow, createAssetFromFile, loadAsset, localSource, mergeAssetMeta, tmpDir } from '../services/assets'
 import { transcribeFile } from './whisper'
 import { tts, validVoice } from './tts'
+import { synthesizeProfileToAsset } from '../services/voice'
 
 type Step = Pick<JobContext, 'signal' | 'progress' | 'check'>
 
@@ -49,6 +50,8 @@ export interface TtsInput {
 
 /** Synthesize narration → WAV → audio asset (origin 'tts'), processed inline for waveform. */
 export async function synthesizeToAsset(input: TtsInput, jc: Step): Promise<{ asset: AssetRecord; row: AssetRow; duration: number }> {
+  // cloned / designed voices run in VoiceStudio (desktop) or are relayed to the desktop that owns them (cloud)
+  if (isProfileVoice(input.voice)) return synthesizeProfileToAsset(input, jc)
   const work = tmpDir('tts')
   try {
     const voice = validVoice(input.voice)

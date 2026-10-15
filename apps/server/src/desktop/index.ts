@@ -17,20 +17,41 @@ import { fetchMissingMedia } from './media'
 import { SettingsPatch, getSettings, saveSettings } from './settings'
 import { CloudError } from './cloud'
 import { syncEngine } from './sync'
+import { registerHandler } from '../jobs/worker'
+import { voiceStudioRoutes, runImport } from './voicestudio/routes'
+import { voiceStudio } from './voicestudio/runtime'
+import { getSettings as getDesktopSettings } from './settings'
 
 export async function initDesktop() {
   await ensureDesktopTables()
   await ensureLocalUser()
   setMissingMediaFetcher(fetchMissingMedia)
+  registerHandler('voicestudio.install', async (jc) => {
+    await voiceStudio.install({ progress: (f, m) => jc.progress(f, m), signal: jc.signal })
+    // ready to use straight away
+    await voiceStudio.start().catch((e) => log.warn('voicestudio: start after install failed', { err: String(e) }))
+    return voiceStudio.status()
+  })
+  registerHandler('voicestudio.task', async (jc) => {
+    const input = jc.job.input as Parameters<typeof runImport>[0]
+    if (input.op === 'import') return runImport(input, jc.job.userId, jc)
+    throw new Error(`Unknown VoiceStudio task ${String((input as { op?: string }).op)}`)
+  })
   if (!process.env.DESKTOP_SECRET) log.warn('desktop: DESKTOP_SECRET is not set; POST /api/desktop/session is disabled')
 }
 
 export async function startDesktopServices() {
   await syncEngine.start()
+  voiceStudio.refresh()
+  if (voiceStudio.status().state === 'stopped' && getDesktopSettings().voiceStudioAutoStart) {
+    void voiceStudio.start().catch((e) => log.warn('voicestudio: autostart failed', { err: String(e) }))
+  }
 }
 
 export function stopDesktopServices() {
   syncEngine.stop()
+  // VoiceStudio also exits on its own when our stdin pipe to it closes (OMNIVOICE_DESKTOP_CONTAINED)
+  void voiceStudio.stop().catch(() => undefined)
 }
 
 function remoteAddress(c: Context): string {
@@ -73,6 +94,8 @@ export const desktopGuard: MiddlewareHandler<AppEnv> = async (c, next) => {
 }
 
 export const desktopRoutes = new Hono<AppEnv>()
+
+desktopRoutes.route('/voicestudio', voiceStudioRoutes)
 
 // one local user: no sign-ups on the desktop
 desktopRoutes.post('/auth/signup', () => {

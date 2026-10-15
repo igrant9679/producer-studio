@@ -30,6 +30,9 @@ uploadRoutes.post('/', async (c) => {
       /** Client-generated global id (desktop replicas keep their asset ids). */
       assetId: z.string().regex(/^[A-Za-z0-9_-]{6,80}$/).optional(),
       sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+      /** Desktop replicas keep how the asset was made (generated voiceovers stay in Voice Studio's history). */
+      origin: z.enum(['upload', 'tts', 'voicestudio', 'dub', 'ai', 'freeze']).optional(),
+      tts: z.object({ text: z.string().max(10000), voice: z.string().max(80), speed: z.number().min(0.5).max(2) }).optional(),
     }),
   )
   await requireRole(u.id, b.workspaceId, 'editor')
@@ -58,9 +61,9 @@ uploadRoutes.post('/', async (c) => {
       mime,
       size: b.size,
       status: 'uploading',
-      origin: 'upload',
+      origin: b.origin ?? 'upload',
       sourceKey: key,
-      meta: {},
+      meta: b.tts ? { tts: b.tts } : {},
       sha256: b.sha256?.toLowerCase() ?? null,
       createdBy: u.id,
       createdAt: now,

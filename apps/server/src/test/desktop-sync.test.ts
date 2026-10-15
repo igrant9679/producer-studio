@@ -353,6 +353,124 @@ describe('assets', () => {
   })
 })
 
+describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
+  let fake: Awaited<ReturnType<typeof import('./fake-voicestudio').startFakeVoiceStudio>>
+  let voiceId: string
+  let makeWav: (s?: number) => Buffer
+
+  async function waitJob(h: Http, id: string, ms = 30_000) {
+    const end = Date.now() + ms
+    for (;;) {
+      const j = (await h.json('GET', `/api/jobs/${id}`)).body
+      if (j.status === 'done' || j.status === 'error' || j.status === 'cancelled') return j
+      if (Date.now() > end) throw new Error(`job ${id} still ${j.status}: ${j.message}`)
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  }
+
+  async function postForm(url: string, form: FormData) {
+    const res = await app.request(url, { method: 'POST', headers: { cookie: desk.cookie }, body: form })
+    const text = await res.text()
+    return { status: res.status, body: text ? JSON.parse(text) : undefined }
+  }
+
+  beforeAll(async () => {
+    const m = await import('./fake-voicestudio')
+    makeWav = m.makeWav
+    fake = await m.startFakeVoiceStudio()
+    process.env.PS_VOICESTUDIO_URL = fake.url
+    // the earlier "deletes & unlink" suite may not have run yet; make sure we're linked
+    const st = await desk.json<SyncStatus>('GET', '/api/sync/status').catch(() => null)
+    if (!st?.body?.linked) await desk.json('POST', '/api/sync/link', { cloudUrl, email, password })
+  })
+
+  afterAll(async () => {
+    delete process.env.PS_VOICESTUDIO_URL
+    await fake?.close()
+  })
+
+  it('starts the engine and proxies only allow-listed VoiceStudio routes (without an Origin header)', async () => {
+    expect((await desk.json('POST', '/api/voicestudio/start')).body).toMatchObject({ state: 'running', supported: true, version: '0.5.6' })
+    const eng = await desk.json('GET', '/api/voicestudio/x/engines/tts')
+    expect(eng.status).toBe(200)
+    expect(eng.body.backends[0].id).toBe('omnivoice')
+    expect((await desk.json('GET', '/api/voicestudio/x/system/info')).status).toBe(403)
+    expect((await desk.json('POST', '/api/voicestudio/x/api/settings/hf-token', { token: 'x' })).status).toBe(403)
+    expect((await desk.json('GET', '/api/voicestudio/x/profiles/../system/info')).status).not.toBe(200)
+    expect(fake.requests.every((r) => r.origin === undefined)).toBe(true)
+  })
+
+  it('creates a cloned voice only with a recording and a consent record', async () => {
+    const base = () => {
+      const f = new FormData()
+      f.set('workspaceId', cloudWs)
+      f.set('name', 'Dana (clone)')
+      f.set('kind', 'clone')
+      f.set('engine', 'omnivoice')
+      f.set('language', 'English')
+      return f
+    }
+    const noConsent = base()
+    noConsent.set('audio', new File([new Uint8Array(makeWav(3))], 'me.wav', { type: 'audio/wav' }))
+    expect((await postForm('/api/voicestudio/voices', noConsent)).status).toBe(400)
+    const noAudio = base()
+    noAudio.set('consent', JSON.stringify({ agreed: true, statement: 'This is my own voice and I consent to cloning it.' }))
+    expect((await postForm('/api/voicestudio/voices', noAudio)).status).toBe(400)
+    const ok = base()
+    ok.set('audio', new File([new Uint8Array(makeWav(3))], 'me.wav', { type: 'audio/wav' }))
+    ok.set('consent', JSON.stringify({ agreed: true, speaker: 'me', statement: 'This is my own voice and I consent to cloning it.' }))
+    const r = await postForm('/api/voicestudio/voices', ok)
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ name: 'Dana (clone)', kind: 'clone', engine: 'omnivoice', local: true, consent: { speaker: 'me' } })
+    voiceId = r.body.id
+    expect(fake.profiles.size).toBe(1)
+    const voices = (await desk.json('GET', `/api/ai/voices?workspaceId=${cloudWs}`)).body
+    expect(voices.find((v: { id: string }) => v.id === `vs:${voiceId}`)).toMatchObject({ available: true, source: 'clone' })
+  })
+
+  it('generates speech with the cloned voice on the desktop', async () => {
+    const job = await desk.json('POST', '/api/ai/tts', { workspaceId: cloudWs, text: 'Made on my desktop.', voice: `vs:${voiceId}` })
+    expect(job.body.kind).toBe('ai.tts')
+    const done = await waitJob(desk, job.body.id)
+    expect(done.status).toBe('done')
+    expect(done.result.asset).toMatchObject({ origin: 'tts', asset: { kind: 'audio' } })
+    const gen = fake.requests.filter((r) => r.path === '/generate')
+    expect(gen.at(-1)!.body).toMatch(/name="profile_id"\r\n\r\np1/)
+    expect(gen.at(-1)!.body).toMatch(/name="engine"\r\n\r\nomnivoice/)
+  })
+
+  it('syncs the voice to the cloud, and the web app generates with it through this desktop', async () => {
+    await sync()
+    const cloudList = await cloudHttp.json('GET', `/api/voice/profiles?workspaceId=${cloudWs}`)
+    const v = cloudList.body.find((x: { id: string }) => x.id === voiceId)
+    expect(v).toMatchObject({ name: 'Dana (clone)', local: false })
+    expect(v.deviceId).toBeTruthy()
+    const job = await cloudHttp.json('POST', '/api/ai/tts', { workspaceId: cloudWs, text: 'Requested from the browser.', voice: `vs:${voiceId}` })
+    expect(job.body.kind).toBe('voice.relay')
+    await (engine as unknown as { relayCheckAt: number; relayTick: () => Promise<void> }).relayTick()
+    const done = await waitJob(cloudHttp, job.body.id)
+    expect(done.status).toBe('done')
+    const assetId = done.result.asset.asset.id
+    expect((await cloudHttp.json('GET', `/api/assets/${assetId}`)).body).toMatchObject({ origin: 'tts', asset: { kind: 'audio' } })
+  })
+
+  it('imports a VoiceStudio output into the library', async () => {
+    const job = await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source: '/audio/h2.wav', name: 'Best take', kind: 'audio' })
+    expect(job.status).toBe(200)
+    const done = await waitJob(desk, job.body.id)
+    expect(done.status).toBe('done')
+    expect(done.result.asset).toMatchObject({ origin: 'voicestudio', asset: { name: 'Best take', kind: 'audio' } })
+    expect((await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source: '/system/info', name: 'x', kind: 'audio' })).status).toBe(400)
+  })
+
+  it('deleting the voice on the web removes it from the desktop and from VoiceStudio', async () => {
+    expect((await cloudHttp.json('DELETE', `/api/voice/profiles/${voiceId}`)).body).toEqual({ ok: true })
+    await sync()
+    expect((await desk.json('GET', `/api/voice/profiles?workspaceId=${cloudWs}`)).body).toEqual([])
+    expect(fake.profiles.size).toBe(0)
+  })
+})
+
 describe('workspace rename & delete', () => {
   const ids = async (h: Http) => (await h.json('GET', '/api/workspaces')).body.map((w: { id: string }) => w.id)
 

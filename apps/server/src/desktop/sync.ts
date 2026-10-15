@@ -7,6 +7,8 @@
 //            tombstones, and spaces the user left (deleted in the cloud) are removed locally.
 //   push   — local hard deletes; local-only assets (upload with the same id + sha256, 409 exists ⇒ done); dirty
 //            projects (PUT with baseVersion = cloud_version; 409 ⇒ conflict) and new ones (POST with id); brand kits.
+//   voices — VoiceStudio voice profiles sync as metadata (the reference audio and VoiceStudio-side profile stay on the
+//            desktop that made them); the relay poller generates speech for the web app with this desktop's voices.
 //   resolve— keep-local (force-push over the latest cloud version), keep-cloud, keep-both (local → "(conflicted copy)").
 // Runs on start, every 60 s, and 3 s after local saves; backs off while offline; SSE `sync` carries SyncStatus.
 import fs from 'node:fs'
@@ -14,9 +16,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncProject, type SyncStatus, type UploadTicket, type Workspace } from '@producer/core'
+import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncProject, type SyncStatus, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
 import { ctx } from '../context'
-import { type AssetMeta, assets, brandKits, exportsTable, jobs, memberships, projects, workspaces } from '../db/schema'
+import { type AssetMeta, assets, brandKits, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
 import { HttpError } from '../http'
 import { log } from '../log'
 import { assetPrefix, extFor, hashObject } from '../services/assets'
@@ -33,6 +35,7 @@ const PAGE = 200
 const INTERVAL_MS = 60_000
 const AFTER_SAVE_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
+const RELAY_POLL_MS = 5_000
 
 type ProjectRow = typeof projects.$inferSelect
 
@@ -59,6 +62,10 @@ export class SyncEngine {
   private suppress = 0
   private unsubs: Array<() => void> = []
   private stopped = false
+  private relayTimer?: NodeJS.Timeout
+  private relayBusy = false
+  private relayCheckAt = 0
+  private relayHasVoices = false
 
   async start() {
     const link = await loadLink()
@@ -80,11 +87,14 @@ export class SyncEngine {
     }, INTERVAL_MS)
     this.interval.unref()
     if (link && getSettings().autoSync) this.schedule(1000)
+    this.relayTimer = setInterval(() => void this.relayTick(), RELAY_POLL_MS)
+    this.relayTimer.unref()
   }
 
   stop() {
     this.stopped = true
     if (this.interval) clearInterval(this.interval)
+    if (this.relayTimer) clearInterval(this.relayTimer)
     if (this.debounce) clearTimeout(this.debounce)
     for (const u of this.unsubs) u()
     this.unsubs = []
@@ -237,6 +247,7 @@ export class SyncEngine {
       await this.pushAssets(c)
       await this.pushProjects(c)
       await this.pushBrandKits(c)
+      await this.pushVoiceProfiles(c)
       this.lastSyncAt = Date.now()
       await kvSet('lastSyncAt', this.lastSyncAt)
       this.backoffMs = 0
@@ -382,6 +393,8 @@ export class SyncEngine {
       for (const b of ch.brandKits) await this.applyBrand(b.workspaceId, b.doc)
       for (const id of ch.deleted.assets) await this.applyAssetDelete(id)
       for (const id of ch.deleted.projects) await this.applyProjectDelete(id)
+      for (const v of ch.voiceProfiles ?? []) await this.applyVoiceProfile(v)
+      for (const id of ch.deleted.voiceProfiles ?? []) await this.applyVoiceProfileDelete(id)
       for (const id of ch.deleted.workspaces ?? []) await this.applyWorkspaceDelete(id)
       cursor = Math.max(cursor, ch.cursor)
       await kvSet('cursor', cursor)
@@ -547,6 +560,18 @@ export class SyncEngine {
     let cursor = (await kvGet<number>('tombCursor')) ?? 0
     const rows = await rawQuery<{ kind: string; id: string; seq: string }>(sql`SELECT kind, id, change_seq::text AS seq FROM tombstones WHERE change_seq > ${cursor} ORDER BY change_seq`)
     for (const t of rows) {
+      if (t.kind === 'voice_profile') {
+        const vs = await syncRow('voice', t.id)
+        if (vs?.cloudVersion != null) {
+          await c.json('DELETE', `/api/voice/profiles/${encodeURIComponent(t.id)}`).catch((err) => {
+            if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
+          })
+        }
+        if (vs) await deleteSync('voice', t.id)
+        cursor = Number(t.seq)
+        await kvSet('tombCursor', cursor)
+        continue
+      }
       if (t.kind !== 'project' && t.kind !== 'asset') {
         // membership tombstones (local workspace merges/deletes) aren't pushed
         cursor = Number(t.seq)
@@ -590,7 +615,7 @@ export class SyncEngine {
       const filename = path.extname(a.name) ? a.name : `${a.name}${ext}`
       let ticket: UploadTicket
       try {
-        ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: a.size, assetId: a.id, sha256: sha, ...(a.projectId ? { projectId: a.projectId } : {}) })
+        ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: a.size, assetId: a.id, sha256: sha, origin: a.origin, ...(a.meta?.tts ? { tts: a.meta.tts } : {}), ...(a.projectId ? { projectId: a.projectId } : {}) })
       } catch (err) {
         if (err instanceof CloudError && err.status === 409 && (err.body?.details as { exists?: boolean } | undefined)?.exists) {
           await putSync('asset', a.id, { uploaded: true, remote: false })
@@ -705,6 +730,153 @@ export class SyncEngine {
     }
   }
 
+  // ---------------- voice profiles ----------------
+
+  /** Cloud → here: upsert the metadata, keeping this replica's VoiceStudio link (vs_profile_id) untouched. */
+  private async applyVoiceProfile(v: VoiceProfile & { changeSeq: number }) {
+    const db = ctx().db
+    const cur = (await db.select().from(voiceProfiles).where(eq(voiceProfiles.id, v.id)).limit(1))[0]
+    const s = await syncRow('voice', v.id)
+    // edited here, not pushed yet, and newer: keep ours (pushed next)
+    if (cur && s?.localVersion !== cur.updatedAt && cur.updatedAt > v.updatedAt) return
+    if (!(await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, v.workspaceId)).limit(1)).length) return
+    const values = {
+      workspaceId: v.workspaceId,
+      name: v.name,
+      kind: v.kind,
+      engine: v.engine,
+      language: v.language ?? null,
+      gender: v.gender ?? null,
+      description: v.description ?? null,
+      consent: v.consent,
+      deviceId: v.deviceId ?? null,
+      sampleAssetId: v.sampleAssetId ?? null,
+      updatedAt: v.updatedAt,
+    }
+    this.suppress++
+    try {
+      if (cur) await db.update(voiceProfiles).set(values).where(eq(voiceProfiles.id, v.id))
+      else await db.insert(voiceProfiles).values({ id: v.id, ...values, createdBy: v.createdBy, createdAt: v.createdAt })
+    } finally {
+      this.suppress--
+    }
+    await putSync('voice', v.id, { localVersion: v.updatedAt, cloudVersion: 1 })
+  }
+
+  private async applyVoiceProfileDelete(id: string) {
+    const db = ctx().db
+    const cur = (await db.select().from(voiceProfiles).where(eq(voiceProfiles.id, id)).limit(1))[0]
+    await deleteSync('voice', id)
+    if (!cur) return
+    if (cur.vsProfileId) {
+      const { deleteVsProfile } = await import('./voicestudio/profiles')
+      await deleteVsProfile(cur.vsProfileId).catch(() => undefined)
+    }
+    this.suppress++
+    try {
+      await db.delete(voiceProfiles).where(eq(voiceProfiles.id, id))
+    } finally {
+      this.suppress--
+    }
+  }
+
+  /** Here → cloud: new or edited profiles (metadata only). Profiles made before linking adopt this device. */
+  private async pushVoiceProfiles(c: CloudClient) {
+    const cloudWs = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
+    const rows = await syncRows('voice')
+    const deviceId = linkInfo()?.deviceId
+    for (const v of await ctx().db.select().from(voiceProfiles)) {
+      if (!cloudWs.has(v.workspaceId)) continue
+      let row = v
+      if (!row.deviceId && row.vsProfileId && deviceId) {
+        ;[row] = await ctx().db.update(voiceProfiles).set({ deviceId }).where(eq(voiceProfiles.id, v.id)).returning()
+      }
+      const s = rows.get(row.id)
+      if (s?.localVersion === row.updatedAt && s.cloudVersion != null) continue
+      try {
+        await c.json('PUT', `/api/voice/profiles/${encodeURIComponent(row.id)}`, {
+          workspaceId: row.workspaceId,
+          name: row.name,
+          kind: row.kind,
+          engine: row.engine,
+          language: row.language ?? undefined,
+          gender: row.gender ?? undefined,
+          description: row.description ?? undefined,
+          consent: row.consent,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        })
+      } catch (err) {
+        if (err instanceof CloudError && (err.status === 403 || err.status === 409)) {
+          // viewers can't add voices / id clash: leave it local-only
+          await putSync('voice', row.id, { localVersion: row.updatedAt })
+          continue
+        }
+        throw err
+      }
+      await putSync('voice', row.id, { localVersion: row.updatedAt, cloudVersion: 1 })
+    }
+  }
+
+  // ---------------- relay: generate for the web app ----------------
+
+  /** Poll the cloud for speech requests that need one of this desktop's voices; generate, upload, report. */
+  private async relayTick() {
+    if (this.relayBusy || this.stopped) return
+    const c = cloud()
+    if (!c) return
+    const { voiceStudio } = await import('./voicestudio/runtime')
+    if (voiceStudio.status().state === 'not-installed') return
+    if (Date.now() - this.relayCheckAt > 60_000) {
+      this.relayCheckAt = Date.now()
+      const n = await rawQuery<{ n: string }>(sql`SELECT count(*)::text AS n FROM voice_profiles WHERE vs_profile_id IS NOT NULL`).catch(() => [{ n: '0' }])
+      this.relayHasVoices = Number(n[0]?.n ?? 0) > 0
+    }
+    if (!this.relayHasVoices) return
+    this.relayBusy = true
+    try {
+      const r = await c.json<{ job: RelayClaim | null }>('GET', '/api/voice/relay/claim')
+      if (r.job) await this.runRelay(c, r.job)
+    } catch (err) {
+      if (!(err instanceof CloudError && err.offline)) log.warn('desktop: voice relay failed', { err: String(err) })
+    } finally {
+      this.relayBusy = false
+    }
+  }
+
+  /** Re-check for local voices right away (after creating one). */
+  voicesChanged() {
+    this.relayCheckAt = 0
+  }
+
+  private async runRelay(c: CloudClient, job: RelayClaim) {
+    const ac = new AbortController()
+    let lastBeat = 0
+    const progress = (f: number, m?: string) => {
+      if (Date.now() - lastBeat < 2000 && f < 1) return
+      lastBeat = Date.now()
+      void c
+        .json<{ cancelled: boolean }>('POST', `/api/voice/relay/${job.id}/progress`, { progress: f, message: m })
+        .then((x) => x.cancelled && ac.abort())
+        .catch(() => undefined)
+    }
+    try {
+      const { synthesizeProfileToAsset } = await import('../services/voice')
+      // the project may not be on this desktop; the asset still lands in the space's library
+      const projectId = job.projectId && (await ctx().db.select({ id: projects.id }).from(projects).where(eq(projects.id, job.projectId)).limit(1)).length ? job.projectId : undefined
+      const r = await synthesizeProfileToAsset(
+        { workspaceId: job.workspaceId, userId: job.userId, projectId, text: job.input.text, voice: `vs:${job.input.profileId}`, speed: job.input.speed, name: job.input.name },
+        { signal: ac.signal, progress: (f, m) => progress(f < 0 ? -1 : Math.min(0.9, f * 0.9), m), check: () => ac.signal.throwIfAborted() },
+      )
+      progress(0.92, 'Uploading')
+      await this.syncNow()
+      if (!(await syncRow('asset', r.row.id))?.uploaded) throw new Error('The audio could not be uploaded to the cloud')
+      await c.json('POST', `/api/voice/relay/${job.id}/done`, { assetId: r.row.id })
+    } catch (err) {
+      await c.json('POST', `/api/voice/relay/${job.id}/fail`, { error: err instanceof Error ? err.message : String(err) }).catch(() => undefined)
+    }
+  }
+
   // ---------------- conflicts ----------------
 
   async resolve(projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both'): Promise<SyncStatus> {
@@ -750,3 +922,11 @@ export class SyncEngine {
 }
 
 export const syncEngine = new SyncEngine()
+
+interface RelayClaim {
+  id: string
+  userId: string
+  workspaceId: string
+  projectId?: string
+  input: { profileId: string; text: string; speed?: number; name?: string }
+}

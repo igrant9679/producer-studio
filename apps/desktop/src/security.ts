@@ -1,5 +1,5 @@
 // Renderer hardening: navigation locked to the local server origin, window.open routed safely, permission requests
-// denied except the few the editor needs, and IPC argument validation helpers.
+// denied except the few the editor needs (clipboard write, fullscreen, microphone-only media for voice cloning), and IPC argument validation helpers.
 import fs from 'node:fs'
 import path from 'node:path'
 import { type BrowserWindowConstructorOptions, type Session, type WebContents, shell } from 'electron'
@@ -106,8 +106,20 @@ export function hardenContents(wc: WebContents) {
 const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen'])
 
 export function hardenSession(s: Session) {
-  s.setPermissionRequestHandler((wc, permission, cb) => cb(ALLOWED_PERMISSIONS.has(permission) && isLocal(wc.getURL())))
-  s.setPermissionCheckHandler((_wc, permission, origin) => ALLOWED_PERMISSIONS.has(permission) && isLocal(origin))
+  s.setPermissionRequestHandler((wc, permission, cb, details) => {
+    if (!isLocal(wc.getURL())) return cb(false)
+    // the microphone only (Voice Studio records reference clips for voice cloning); never the camera or screen
+    if (permission === 'media') {
+      const types = (details as { mediaTypes?: string[] }).mediaTypes ?? []
+      return cb(types.length > 0 && types.every((t) => t === 'audio'))
+    }
+    cb(ALLOWED_PERMISSIONS.has(permission))
+  })
+  s.setPermissionCheckHandler((_wc, permission, origin, details) => {
+    if (!isLocal(origin)) return false
+    if (permission === 'media') return (details as { mediaType?: string }).mediaType === 'audio'
+    return ALLOWED_PERMISSIONS.has(permission)
+  })
   s.setDevicePermissionHandler(() => false)
   // downloads (export "Download", asset originals) always ask where to save
   s.on('will-download', (_e, item) => {

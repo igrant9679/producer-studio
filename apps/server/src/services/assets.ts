@@ -87,8 +87,10 @@ export async function createAssetFromFile(opts: {
   origin: string
   meta?: AssetMeta
   status?: 'processing' | 'ready'
+  /** Fixed id (e.g. a relayed voice job reserving it); default a new one. */
+  id?: string
 }): Promise<AssetRow> {
-  const id = newId('as')
+  const id = opts.id ?? newId('as')
   const key = `${assetPrefix(opts.workspaceId, id)}/source${path.extname(opts.filePath) || extFor(opts.name, opts.mime)}`
   const { size } = await ctx().storage.putFile(key, opts.filePath, opts.mime)
   const now = Date.now()

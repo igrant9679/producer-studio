@@ -57,8 +57,8 @@ Without them the build logs "signing" steps but produces unsigned binaries (Smar
 - Renderer: `sandbox: true` (also `app.enableSandbox()`), `contextIsolation`, no `nodeIntegration`, `webSecurity`,
   no webview, DevTools only in dev. Navigation is locked to `http://127.0.0.1:<port>`; other http(s) links open in the
   default browser via `shell.openExternal`; every other scheme is denied. `window.open` of local media/share pages opens
-  a sandboxed viewer window; anything else local is denied. Permission requests are denied except clipboard-write and
-  fullscreen for the local origin. Downloads always show a save dialog.
+  a sandboxed viewer window; anything else local is denied. Permission requests are denied except clipboard-write,
+  fullscreen and microphone-only media (Voice Studio records reference clips for voice cloning) for the local origin. Downloads always show a save dialog.
 - Preload exposes only `window.producerDesktop = { version, platform, openExternal(url), showItemInFolder(path) }`.
   IPC handlers check the sender is the local origin and re-validate: `openExternal` takes http(s) URLs only (no
   credentials, ≤ 2 KB); `showItemInFolder` resolves symlinks and only accepts paths inside the data folder (the folder
@@ -79,6 +79,11 @@ Without them the build logs "signing" steps but produces unsigned binaries (Smar
 - `PS_DESKTOP_SECRET` (≥ 16 chars) fixes the per-launch secret for UI automation in **dev builds only** (`!app.isPackaged`); packaged builds always generate a random secret.
 - AI provider keys (Settings → AI: Anthropic, Gemini, OpenAI) live in the `ai` block of `settings.json`, AES-256-GCM sealed with the same safeStorage-protected key as the device token; they are never synced and never returned by the local API (only `hasKey` + last 4).
 
+## VoiceStudio
+
+Voice cloning, design, dubbing and audiobooks run in a separately managed, unmodified VoiceStudio backend (AGPL-3.0)
+installed from Voice Studio → Engine into `%LOCALAPPDATA%\Producer Studio\VoiceStudio`. See [voicestudio.md](voicestudio.md).
+
 ## Sync behaviour (summary)
 
 See `apps/server/src/desktop/sync.ts`. Link adopts the cloud identity, mirrors workspaces with the same ids and merges
@@ -93,7 +98,6 @@ the same id + sha256; cloud assets download on demand (202 while downloading, so
 
 - Builds are unsigned; Windows only (macOS/Linux targets not configured).
 - Changing the data folder in Settings takes effect at the next launch and does not move existing data.
-- Removal from a cloud workspace (membership revoked) isn't mirrored locally: the workspace stays on this computer and pushes to it fail with an error in the sync status.
 - Brand-kit conflicts are last-writer-wins (local edits since the last sync win until pushed).
 - Assets are uploaded in one request per file (no resumable/multipart upload for very large sources yet).
 - The Kokoro model is the quantized ONNX only; whisper is `small.en` (English).

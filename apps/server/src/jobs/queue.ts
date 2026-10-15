@@ -51,7 +51,8 @@ export async function claimNext(workerId: string): Promise<JobRow | null> {
   const rows = await ctx()
     .db.update(jobs)
     .set({ status: 'running', lockedBy: workerId, lockedAt: now, updatedAt: now, attempts: sql`${jobs.attempts} + 1`, message: 'Starting' })
-    .where(eq(jobs.id, sql`(SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)`))
+    // voice.relay jobs are claimed by the owning desktop over /api/voice/relay/claim, never by a local worker
+    .where(eq(jobs.id, sql`(SELECT id FROM jobs WHERE status = 'queued' AND kind <> 'voice.relay' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)`))
     .returning()
   return rows[0] ?? null
 }

@@ -164,6 +164,35 @@ export const brandKits = pgTable('brand_kits', {
   changeSeq: seq(),
 })
 
+export interface VoiceConsent {
+  /** The statement the user agreed to when creating the voice. */
+  statement: string
+  attestedBy: string
+  attestedAt: number
+  /** Whose voice it is ("me" or a name), for the record. */
+  speaker?: string
+}
+
+export const voiceProfiles = pgTable('voice_profiles', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  name: text('name').notNull(),
+  kind: text('kind').notNull(),
+  engine: text('engine').notNull(),
+  language: text('language'),
+  gender: text('gender'),
+  description: text('description'),
+  consent: jsonb('consent').$type<VoiceConsent>().notNull(),
+  deviceId: text('device_id'),
+  /** Local-only: the VoiceStudio backend's profile id on the desktop that owns the reference audio. Never synced. */
+  vsProfileId: text('vs_profile_id'),
+  sampleAssetId: text('sample_asset_id'),
+  createdBy: text('created_by').notNull(),
+  createdAt: ms('created_at').notNull(),
+  updatedAt: ms('updated_at').notNull(),
+  changeSeq: seq(),
+})
+
 export const tombstones = pgTable('tombstones', {
   kind: text('kind').notNull(),
   id: text('id').notNull(),
@@ -210,4 +239,4 @@ export const userPreferences = pgTable('user_preferences', {
   updatedAt: ms('updated_at').notNull(),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences }
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences }

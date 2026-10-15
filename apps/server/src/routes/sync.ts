@@ -7,7 +7,7 @@ import * as z from 'zod/v4'
 import type { Device, SyncChanges, SystemInfo } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
-import { assets, brandKits, devices, memberships, projects, tombstones, workspaces } from '../db/schema'
+import { assets, brandKits, devices, memberships, projects, tombstones, voiceProfiles, workspaces } from '../db/schema'
 import { assetRecord, projectSummary } from '../dto'
 import { HttpError, body, memberRole, notFound, unauthorized } from '../http'
 import { newId, randomToken, sha256 } from '../ids'
@@ -17,6 +17,7 @@ import { whisperAvailable } from '../ai/whisper'
 import { hydrateAssets } from '../services/projects'
 import { checkCredentials } from './auth'
 import { listWorkspaces } from './workspaces'
+import { voiceProfileDto } from './voice'
 
 const require = createRequire(import.meta.url)
 
@@ -114,6 +115,7 @@ type Change =
   | { seq: number; kind: 'workspace'; id: string }
   | { seq: number; kind: 'tombstone'; row: typeof tombstones.$inferSelect }
   | { seq: number; kind: 'left'; id: string }
+  | { seq: number; kind: 'voice'; row: typeof voiceProfiles.$inferSelect }
 
 /** Changes after `since` across the user's workspaces, merged by change_seq and paged. */
 export async function changesSince(userId: string, since: number, limit: number): Promise<SyncChanges> {
@@ -132,14 +134,15 @@ export async function changesSince(userId: string, since: number, limit: number)
   ).filter((l) => !wsIds.includes(l.ws))
   if (!wsIds.length) {
     const page = left.slice(0, limit)
-    return { cursor: page.length ? page[page.length - 1].seq : since, workspaces: [], projects: [], assets: [], brandKits: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws) }, more: left.length > limit }
+    return { cursor: page.length ? page[page.length - 1].seq : since, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws), voiceProfiles: [] }, more: left.length > limit }
   }
-  const [p, a, b, t, w] = await Promise.all([
+  const [p, a, b, t, w, v] = await Promise.all([
     db.select().from(projects).where(and(inArray(projects.workspaceId, wsIds), gt(projects.changeSeq, since))).orderBy(asc(projects.changeSeq)).limit(n),
     db.select().from(assets).where(and(inArray(assets.workspaceId, wsIds), gt(assets.changeSeq, since))).orderBy(asc(assets.changeSeq)).limit(n),
     db.select().from(brandKits).where(and(inArray(brandKits.workspaceId, wsIds), gt(brandKits.changeSeq, since))).orderBy(asc(brandKits.changeSeq)).limit(n),
-    db.select().from(tombstones).where(and(inArray(tombstones.workspaceId, wsIds), inArray(tombstones.kind, ['project', 'asset']), gt(tombstones.changeSeq, since))).orderBy(asc(tombstones.changeSeq)).limit(n),
+    db.select().from(tombstones).where(and(inArray(tombstones.workspaceId, wsIds), inArray(tombstones.kind, ['project', 'asset', 'voice_profile']), gt(tombstones.changeSeq, since))).orderBy(asc(tombstones.changeSeq)).limit(n),
     db.select({ id: workspaces.id, seq: workspaces.changeSeq }).from(workspaces).where(and(inArray(workspaces.id, wsIds), gt(workspaces.changeSeq, since))),
+    db.select().from(voiceProfiles).where(and(inArray(voiceProfiles.workspaceId, wsIds), gt(voiceProfiles.changeSeq, since))).orderBy(asc(voiceProfiles.changeSeq)).limit(n),
   ])
   const all: Change[] = [
     ...p.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'project' as const, row })),
@@ -149,11 +152,12 @@ export async function changesSince(userId: string, since: number, limit: number)
     ...w.map((row) => ({ seq: row.seq ?? 0, kind: 'workspace' as const, id: row.id })),
     ...mine.filter((m) => (m.seq ?? 0) > since).map((m) => ({ seq: m.seq ?? 0, kind: 'workspace' as const, id: m.ws })),
     ...left.map((l) => ({ seq: l.seq, kind: 'left' as const, id: l.ws })),
+    ...v.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'voice' as const, row })),
   ].sort((x, y) => x.seq - y.seq)
   const page = all.slice(0, limit)
   const more = all.length > limit
   const cursor = page.length ? page[page.length - 1].seq : since
-  const out: SyncChanges = { cursor, workspaces: [], projects: [], assets: [], brandKits: [], deleted: { projects: [], assets: [], workspaces: [] }, more }
+  const out: SyncChanges = { cursor, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [] }, more }
   const wsChanged = new Set<string>()
   for (const ch of page) {
     if (ch.kind === 'project') {
@@ -165,7 +169,9 @@ export async function changesSince(userId: string, since: number, limit: number)
     } else if (ch.kind === 'tombstone') {
       if (ch.row.kind === 'project') out.deleted.projects.push(ch.row.id)
       else if (ch.row.kind === 'asset') out.deleted.assets.push(ch.row.id)
-    } else if (ch.kind === 'left') out.deleted.workspaces!.push(ch.id)
+      else if (ch.row.kind === 'voice_profile') out.deleted.voiceProfiles!.push(ch.row.id)
+    } else if (ch.kind === 'voice') out.voiceProfiles!.push({ ...voiceProfileDto(ch.row), vsProfileId: undefined, changeSeq: ch.seq })
+    else if (ch.kind === 'left') out.deleted.workspaces!.push(ch.id)
     else wsChanged.add(ch.id)
   }
   if (wsChanged.size || since === 0) {

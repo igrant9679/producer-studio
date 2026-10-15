@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -278,10 +278,53 @@ CREATE TRIGGER memberships_left AFTER DELETE ON memberships FOR EACH ROW EXECUTE
 CREATE INDEX IF NOT EXISTS tombstones_membership_idx ON tombstones(id, change_seq) WHERE kind = 'membership';
 `
 
+/**
+ * v6 — VoiceStudio voice profiles (cloned / designed voices). The reference audio and the VoiceStudio-side profile live
+ * only on the desktop that created it (`device_id`, `vs_profile_id` is local-only); the row itself syncs like a project
+ * (change_seq + tombstones) so every replica can list and use the voice. Relay jobs (`voice.relay`) let the cloud ask that
+ * desktop to generate speech.
+ */
+export const DDL_V6 = `
+CREATE TABLE IF NOT EXISTS voice_profiles (
+  id text PRIMARY KEY,
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  kind text NOT NULL,
+  engine text NOT NULL,
+  language text,
+  gender text,
+  description text,
+  consent jsonb NOT NULL,
+  device_id text,
+  vs_profile_id text,
+  sample_asset_id text,
+  created_by text NOT NULL,
+  created_at double precision NOT NULL,
+  updated_at double precision NOT NULL,
+  change_seq bigint
+);
+CREATE INDEX IF NOT EXISTS voice_profiles_ws_idx ON voice_profiles(workspace_id, change_seq);
+DROP TRIGGER IF EXISTS voice_profiles_change_seq ON voice_profiles;
+CREATE TRIGGER voice_profiles_change_seq BEFORE INSERT OR UPDATE ON voice_profiles FOR EACH ROW EXECUTE FUNCTION ps_bump_change_seq();
+DROP TRIGGER IF EXISTS voice_profiles_tombstone ON voice_profiles;
+CREATE TRIGGER voice_profiles_tombstone AFTER DELETE ON voice_profiles FOR EACH ROW EXECUTE FUNCTION ps_tombstone('voice_profile');
+
+-- republish a workspace's voices to a member who joins it (ps_membership_joined covers projects/assets/brand)
+CREATE OR REPLACE FUNCTION ps_membership_joined() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE projects SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  UPDATE assets SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  UPDATE brand_kits SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  UPDATE voice_profiles SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  RETURN NEW;
+END $$;
+`
+
 /** Ordered migrations after v1: [version, sql]. Append here; never edit a shipped entry. */
 export const MIGRATIONS: Array<[number, string]> = [
   [2, DDL_V2],
   [3, DDL_V3],
   [4, DDL_V4],
   [5, DDL_V5],
+  [6, DDL_V6],
 ]

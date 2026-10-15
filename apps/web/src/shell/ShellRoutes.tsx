@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import './dev/installMock'
 import './shell.css'
 import './pages.css'
+import './voicestudio/voicestudio.css'
 import { Layout } from './Layout'
 import { EmptyState, Spinner } from './ui'
 

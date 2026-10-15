@@ -215,7 +215,7 @@ export interface AssetRecord {
 // GET /api/jobs?projectId=&workspaceId= -> Job[]
 // POST /api/jobs/:id/cancel            -> Job
 // GET /api/events?workspaceId=         -> text/event-stream, events: `job` (Job), `asset` (AssetRecord), `project` ({id, version})
-export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render'
+export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task'
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
 export interface Job<R = unknown> {
@@ -257,7 +257,66 @@ export interface Voice {
   lang: string
   gender: string
   style: string
+  /** 'kokoro' (built-in) or a VoiceStudio voice profile ('clone' | 'design'); absent = kokoro. */
+  source?: 'kokoro' | 'clone' | 'design'
+  /** VoiceStudio engine id for profile voices. */
+  engine?: string
+  /** False when this replica can't generate it right now (cloud with no linked desktop online, runtime stopped…). */
+  available?: boolean
+  /** Why it isn't available, or where it runs ("Generated on Idris's desktop"). */
+  detail?: string
 }
+
+// ---- VoiceStudio voices (engine runs on the desktop edition only) ----
+// GET    /api/voice/profiles?workspaceId=          -> VoiceProfile[]              (both editions; synced metadata)
+// PATCH  /api/voice/profiles/:id {name?, description?, gender?, language?} -> VoiceProfile   (editor+)
+// DELETE /api/voice/profiles/:id                   -> {ok}                         (editor+; desktop also deletes it in VoiceStudio)
+// Desktop only (404 on cloud): GET /api/voicestudio/status, POST install|start|stop, and the /api/voicestudio/* feature
+// routes documented in docs/voicestudio.md. Cloud: TTS with a `vs:` voice becomes a `voice.relay` job that the desktop
+// owning the voice claims (GET /api/voice/relay/claim, POST /api/voice/relay/:id/progress|done|fail; device token).
+export interface VoiceProfile {
+  id: string
+  workspaceId: string
+  name: string
+  kind: 'clone' | 'design'
+  engine: string
+  language?: string
+  gender?: string
+  description?: string
+  consent: { statement: string; attestedBy: string; attestedAt: number; speaker?: string }
+  /** Desktop device that holds the reference audio and can generate it. */
+  deviceId?: string
+  /** True on the replica that can generate it locally (the owning desktop with VoiceStudio installed). */
+  local: boolean
+  /** Desktop only, when `local`: the VoiceStudio profile id (for dubbing / audiobook voice maps). Never synced. */
+  vsProfileId?: string
+  sampleAssetId?: string
+  createdBy: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface VoiceStudioStatus {
+  /** False on the cloud edition. */
+  supported: boolean
+  state: 'not-installed' | 'installing' | 'stopped' | 'starting' | 'running' | 'error'
+  /** Pinned VoiceStudio source revision this app installs. */
+  version: string
+  installedVersion?: string
+  device?: string
+  /** Install / start progress (0..1, -1 indeterminate). */
+  progress?: number
+  message?: string
+  error?: string
+  /** Where runtime, models and VoiceStudio data live. */
+  dir?: string
+}
+
+/** Voice ids of VoiceStudio profiles are `vs:<profileId>`; everything else is a Kokoro voice. */
+export const VOICE_PROFILE_PREFIX = 'vs:'
+export const isProfileVoice = (id: string | undefined): id is string => !!id && id.startsWith(VOICE_PROFILE_PREFIX)
+export const profileVoiceId = (profileId: string) => `${VOICE_PROFILE_PREFIX}${profileId}`
+export const profileIdOf = (voiceId: string) => voiceId.slice(VOICE_PROFILE_PREFIX.length)
 
 export interface WriteRequest {
   kind: 'voiceover' | 'script' | 'headline' | 'caption' | 'rewrite'
@@ -398,6 +457,10 @@ export interface DesktopSettings {
   /** Download cloud media eagerly ('all') or when first opened ('on-demand'). */
   mediaSync: 'all' | 'on-demand'
   autoSync: boolean
+  /** VoiceStudio runtime folder; empty = %LOCALAPPDATA%\Producer Studio\VoiceStudio. Takes effect after a reinstall. */
+  voiceStudioDir: string
+  /** Start the VoiceStudio engine when Producer Studio opens (once installed). */
+  voiceStudioAutoStart: boolean
 }
 
 export interface Device {
@@ -420,8 +483,10 @@ export interface SyncChanges {
   projects: SyncProject[]
   assets: Array<AssetRecord & { sha256?: string; changeSeq: number }>
   brandKits: Array<{ workspaceId: string; doc: BrandKitDoc; changeSeq: number }>
+  /** VoiceStudio voice profiles (metadata only; `local` is always false here). Optional: older clouds omit it. */
+  voiceProfiles?: Array<VoiceProfile & { changeSeq: number }>
   /** `workspaces`: spaces the user no longer belongs to (deleted, or membership removed). Optional: older clouds omit it. */
-  deleted: { projects: string[]; assets: string[]; workspaces?: string[] }
+  deleted: { projects: string[]; assets: string[]; workspaces?: string[]; voiceProfiles?: string[] }
   /** True when more changes remain after `cursor` (page again). */
   more: boolean
 }

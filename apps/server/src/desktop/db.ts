@@ -51,7 +51,7 @@ export async function kvDelete(key: string) {
 }
 
 export interface SyncRow {
-  kind: 'project' | 'asset' | 'brand'
+  kind: 'project' | 'asset' | 'brand' | 'voice'
   id: string
   cloudVersion: number | null
   localVersion: number | null

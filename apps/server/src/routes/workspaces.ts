@@ -87,7 +87,7 @@ const BrandSchema = z.object({
   fonts: z.object({ headline: z.string().min(1).max(60), body: z.string().min(1).max(60) }),
   logoAssetId: z.string().max(80).optional(),
   captionPreset: z.string().max(40).optional(),
-  voice: z.string().max(40).optional(),
+  voice: z.string().max(80).optional(),
 })
 
 export const workspaceRoutes = new Hono<AppEnv>()

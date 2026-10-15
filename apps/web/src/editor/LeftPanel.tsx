@@ -1,5 +1,6 @@
 // Left icon rail + collapsible asset panel.
 import type { Asset, AssetRecord, AudioItem } from '@producer/core'
+import { useVoices } from '../shell/components/VoiceCard'
 import { TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, itemEnd } from '@producer/core'
 import clsx from 'clsx'
 import {
@@ -387,6 +388,7 @@ function AudioPanel() {
 }
 
 function VoiceoverBox() {
+  const voices = useVoices()
   const [text, setText] = useState('')
   const [voice, setVoice] = useState<string>('af_heart')
   const [speed, setSpeed] = useState(1)
@@ -422,7 +424,8 @@ function VoiceoverBox() {
     sample.current = new Audio(api.voiceSampleUrl(voice))
     void sample.current.play().catch(() => toast('Sample unavailable'))
   }
-  const v = VOICES.find((x) => x.id === voice)
+  const v = voices.find((x) => x.id === voice) ?? VOICES.find((x) => x.id === voice)
+  const custom = voices.filter((x) => x.source === 'clone' || x.source === 'design')
   return (
     <div className="ed-vo">
       <div className="row" style={{ marginBottom: 8 }}>
@@ -433,6 +436,13 @@ function VoiceoverBox() {
       <textarea className="ed-textarea" rows={4} placeholder="Type what the narrator should say…" value={text} onChange={(e) => setText(e.target.value)} />
       <div className="row" style={{ gap: 6, marginTop: 8 }}>
         <select className="ed-select" value={voice} onChange={(e) => setVoice(e.target.value)} style={{ flex: 1 }}>
+          {custom.length > 0 && (
+            <optgroup label="My voices">
+              {custom.map((x) => (
+                <option key={x.id} value={x.id} disabled={x.available === false}>{x.name} — {x.available === false ? (x.detail ?? 'unavailable') : x.style}</option>
+              ))}
+            </optgroup>
+          )}
           {['American English', 'British English'].map((lang) => (
             <optgroup key={lang} label={lang}>
               {VOICES.filter((x) => x.lang === lang).map((x) => (

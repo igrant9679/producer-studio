@@ -618,6 +618,7 @@ on('POST', '/api/ai/tts', (_m, _q, b) => {
   return json(publicJob(j))
 })
 on('GET', '/api/ai/voices', () => json(VOICES.map((v) => ({ ...v }))))
+on('GET', '/api/voice/profiles', () => json([]))
 on('POST', '/api/ai/write', async (_m, _q, b) => {
   await delay(300)
   return writeStream(String(b.prompt ?? ''), String(b.kind ?? 'voiceover'))
@@ -698,7 +699,7 @@ const mockMode = (() => {
     return 'cloud'
   }
 })()
-const desktopSettings: DesktopSettings = { claudePath: '', claudeModel: '', dataDir: 'C:\\Users\\alex\\AppData\\Roaming\\Producer Studio\\data', mediaSync: 'on-demand', autoSync: true }
+const desktopSettings: DesktopSettings = { claudePath: '', claudeModel: '', dataDir: 'C:\\Users\\alex\\AppData\\Roaming\\Producer Studio\\data', mediaSync: 'on-demand', autoSync: true, voiceStudioDir: '', voiceStudioAutoStart: true }
 const sync: SyncStatus = {
   linked: true,
   cloudUrl: 'https://producerstudio.app',

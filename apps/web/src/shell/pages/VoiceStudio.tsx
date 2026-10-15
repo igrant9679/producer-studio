@@ -1,16 +1,23 @@
 import type { AssetRecord } from '@producer/core'
 import { addAsset, addItem, createAudioItem } from '@producer/core'
 import clsx from 'clsx'
-import { AudioLines, Clapperboard, Download, History, Mic, MoreHorizontal, Pause, Pencil, Play, Search, Sparkles, Trash2, Wand2, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { AudioLines, BookOpen, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, mediaUrl, waitForJob } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { InlineRename } from '../components/ProjectCard'
 import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } from '../components/VoiceCard'
 import { liveBus, useJobs } from '../stores'
-import { EmptyState, MenuList, Popover, Progress, Soon, Spinner, useAsync, useAudioPreview, usePageTitle } from '../ui'
+import { EmptyState, MenuList, Popover, Progress, Spinner, useAsync, useAudioPreview, usePageTitle } from '../ui'
+import { useIsDesktop } from '../system'
+import { MyVoices } from '../voicestudio/MyVoices'
+
+const Dubbing = lazy(() => import('../voicestudio/Dubbing'))
+const Audiobooks = lazy(() => import('../voicestudio/Audiobooks'))
+const AudioTools = lazy(() => import('../voicestudio/AudioTools'))
+const EnginePanel = lazy(() => import('../voicestudio/EnginePanel'))
 import { formatDuration, relativeTime } from '../util'
 
 const EXAMPLES: Array<{ label: string; text: string }> = [
@@ -171,13 +178,11 @@ function HistoryRow({ a, onChange, onRemove }: { a: AssetRecord; onChange: (a: A
   )
 }
 
-export default function VoiceStudio() {
-  usePageTitle('Voice Studio')
+function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: string; setVoice: (v: string) => void; onOpenVoices: () => void; onOpenTab: (t: Tab) => void }) {
   const workspaceId = useSession((s) => s.workspaceId)
   const voices = useVoices()
   const [text, setText] = useState('')
   const [name, setName] = useState('')
-  const [voice, setVoice] = useState('af_heart')
   const [speed, setSpeed] = useState(1)
   const [filter, setFilter] = useState<VoiceFilter>('All')
   const [q, setQ] = useState('')
@@ -192,10 +197,6 @@ export default function VoiceStudio() {
     return list.filter((a) => a.origin === 'tts').sort((x, y) => y.createdAt - x.createdAt)
   }, [workspaceId])
 
-  useEffect(() => {
-    if (!workspaceId) return
-    api.brand(workspaceId).then((b) => b.voice && setVoice(b.voice)).catch(() => undefined)
-  }, [workspaceId])
 
   useEffect(
     () =>
@@ -286,21 +287,9 @@ export default function VoiceStudio() {
     }
   }
 
+  const unavailable = selected?.available === false
   return (
-    <div className="ps-page">
-      <div className="ps-page-head">
-        <div>
-          <span className="eyebrow">Voice Studio</span>
-          <h1>Text to speech</h1>
-          <p>Write or paste a script, pick one of {voices.length} natural voices, and generate a studio-quality voiceover you can drop into any project.</p>
-        </div>
-        <span className="spacer" />
-        <div className="ps-seg">
-          <button className="on"><AudioLines size={14} /> Text to speech</button>
-          <button disabled title="Coming soon"><Mic size={14} /> Voice changer <Soon label="Soon" /></button>
-        </div>
-      </div>
-
+    <div>
       <div className="ps-vs">
         <div className="ps-vs-main">
           <div className={clsx('ps-vs-editor', writing && 'writing')}>
@@ -384,13 +373,13 @@ export default function VoiceStudio() {
               <span className="spacer" />
               <span className="muted" style={{ fontSize: '0.75rem' }}>{shown.length} of {voices.length}</span>
             </div>
-            <div className="ps-soon-card">
+            <button className="ps-soon-card vs-myvoices-cta" onClick={onOpenVoices}>
               <div>
-                <strong>My voices</strong>
-                <span>Record 10 seconds to create a custom voice</span>
+                <strong><Mic size={13} style={{ verticalAlign: -2 }} /> My voices</strong>
+                <span>Clone your voice from a short recording, or design one from a description</span>
               </div>
-              <Soon />
-            </div>
+              <ChevronRight size={16} />
+            </button>
             <div style={{ position: 'relative', margin: '12px 0 10px' }}>
               <Search size={14} style={{ position: 'absolute', left: 11, top: 11, color: 'var(--text-3)' }} />
               <input className="input" style={{ paddingLeft: 32 }} placeholder="Search voices" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search voices" />
@@ -421,21 +410,98 @@ export default function VoiceStudio() {
                 <Progress value={gen.progress} />
               </div>
             ) : (
-              <button className="btn primary ps-vs-go" disabled={!text.trim() || writing} onClick={generate}>
+              <button className="btn primary ps-vs-go" disabled={!text.trim() || writing || unavailable} onClick={generate}>
                 <AudioLines size={16} /> Generate{selected ? ` with ${selected.name}` : ''}
               </button>
             )}
             {!text.trim() && <div className="muted" style={{ fontSize: '0.75rem', textAlign: 'center', marginTop: 8 }}>Write a script to generate a voiceover.</div>}
+            {unavailable && selected?.detail && <div className="muted" style={{ fontSize: '0.75rem', textAlign: 'center', marginTop: 8 }}>{selected.detail}</div>}
+            {selected?.available && selected.detail && selected.source && <div className="muted" style={{ fontSize: '0.75rem', textAlign: 'center', marginTop: 8 }}>{selected.detail}</div>}
           </div>
-          <div className="ps-soon-card" style={{ marginTop: 12 }}>
+          <button className="ps-soon-card vs-myvoices-cta" style={{ marginTop: 12 }} onClick={() => onOpenTab('dub')}>
             <div>
-              <strong><Mic size={13} style={{ verticalAlign: -2 }} /> Voice changer</strong>
-              <span>Re-voice an existing recording with any voice</span>
+              <strong><Languages size={13} style={{ verticalAlign: -2 }} /> Voice changer &amp; dubbing</strong>
+              <span>Re-voice a recording with any of your voices, or dub a video into another language</span>
             </div>
-            <Soon />
-          </div>
+            <ChevronRight size={16} />
+          </button>
         </aside>
       </div>
+    </div>
+  )
+}
+
+type Tab = 'tts' | 'voices' | 'dub' | 'audiobook' | 'tools' | 'engine'
+
+const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode; desktopOnly?: boolean }> = [
+  { id: 'tts', label: 'Text to speech', icon: <AudioLines size={14} /> },
+  { id: 'voices', label: 'My voices', icon: <Mic size={14} /> },
+  { id: 'dub', label: 'Dubbing', icon: <Languages size={14} /> },
+  { id: 'audiobook', label: 'Audiobooks', icon: <BookOpen size={14} /> },
+  { id: 'tools', label: 'Audio tools', icon: <SlidersHorizontal size={14} /> },
+  { id: 'engine', label: 'Engine', icon: <Cpu size={14} />, desktopOnly: true },
+]
+
+const HEAD: Record<Tab, { title: string; body: string }> = {
+  tts: { title: 'Text to speech', body: 'Write or paste a script, pick a voice — built-in, cloned or designed — and generate a voiceover you can drop into any project.' },
+  voices: { title: 'My voices', body: 'Clone a voice from a short recording, design one from a description, or start from a preset. Your voices work everywhere you pick a voice.' },
+  dub: { title: 'Dubbing & voice changer', body: 'Dub a video into another language with timed, natural speech — or re-voice a recording with one of your voices.' },
+  audiobook: { title: 'Audiobooks', body: 'Turn a manuscript, EPUB or PDF into a narrated audiobook with chapters, character voices and mastering.' },
+  tools: { title: 'Audio tools', body: 'Isolate vocals from music and noise, and transcribe speech in hundreds of languages.' },
+  engine: { title: 'VoiceStudio engine', body: 'The local engine behind cloning, design, dubbing and audiobooks: setup, models, licences and status.' },
+}
+
+export default function VoiceStudio() {
+  usePageTitle('Voice Studio')
+  const workspaceId = useSession((s) => s.workspaceId)
+  const desktop = useIsDesktop()
+  const [params, setParams] = useSearchParams()
+  const tab = (TABS.find((t) => t.id === params.get('tab') && (desktop || !t.desktopOnly))?.id ?? 'tts') as Tab
+  const setTab = (t: Tab) => setParams((p) => {
+    const n = new URLSearchParams(p)
+    if (t === 'tts') n.delete('tab')
+    else n.set('tab', t)
+    return n
+  }, { replace: true })
+  const [voice, setVoice] = useState('af_heart')
+  useEffect(() => {
+    if (!workspaceId) return
+    api.brand(workspaceId).then((b) => b.voice && setVoice(b.voice)).catch(() => undefined)
+  }, [workspaceId])
+  const head = HEAD[tab]
+
+  return (
+    <div className="ps-page">
+      <div className="ps-page-head">
+        <div>
+          <span className="eyebrow">Voice Studio{desktop ? ' · powered by VoiceStudio' : ''}</span>
+          <h1>{head.title}</h1>
+          <p>{head.body}</p>
+        </div>
+      </div>
+      <div className="vs-tabs" role="tablist" aria-label="Voice Studio">
+        {TABS.filter((t) => desktop || !t.desktopOnly).map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={clsx('vs-tab', tab === t.id && 'on')} onClick={() => setTab(t.id)}>
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+      <Suspense fallback={<div className="muted" style={{ padding: 24 }}><Spinner /> Loading…</div>}>
+        {tab === 'tts' && <TextToSpeech voice={voice} setVoice={setVoice} onOpenVoices={() => setTab('voices')} onOpenTab={setTab} />}
+        {tab === 'voices' && (
+          <MyVoices
+            onUse={(id) => {
+              setVoice(id)
+              setTab('tts')
+            }}
+            onOpenEngine={() => setTab('engine')}
+          />
+        )}
+        {tab === 'dub' && <Dubbing onOpenEngine={() => setTab('engine')} />}
+        {tab === 'audiobook' && <Audiobooks onOpenEngine={() => setTab('engine')} />}
+        {tab === 'tools' && <AudioTools onOpenEngine={() => setTab('engine')} />}
+        {tab === 'engine' && <EnginePanel />}
+      </Suspense>
     </div>
   )
 }

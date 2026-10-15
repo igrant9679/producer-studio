@@ -181,7 +181,7 @@ export const api = {
   // ai
   transcribe: (assetId: string, language?: string) => req<Job<{ assetId: string; transcript: Transcript }>>('POST', '/ai/transcribe', { assetId, language }),
   tts: (body: TtsRequest) => req<Job<{ asset: AssetRecord; duration: number }>>('POST', '/ai/tts', body),
-  voices: () => req<Voice[]>('GET', '/ai/voices'),
+  voices: (workspaceId?: string) => req<Voice[]>('GET', `/ai/voices${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   voiceSampleUrl: (id: string) => `/api/ai/voices/${encodeURIComponent(id)}/sample`,
   write: (body: WriteRequest, onDelta: (text: string) => void, signal?: AbortSignal) =>
     postStream('/ai/write', body, (ev, data) => {

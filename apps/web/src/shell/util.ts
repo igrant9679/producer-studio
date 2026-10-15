@@ -71,6 +71,9 @@ export const JOB_LABELS: Record<JobKind, string> = {
   'ai.produce.script': 'Writing script',
   'ai.produce.assemble': 'Assembling video',
   'export.render': 'Rendering export',
+  'voice.relay': 'Generating on your desktop',
+  'voicestudio.install': 'Installing VoiceStudio',
+  'voicestudio.task': 'VoiceStudio',
 }
 
 export function initials(name: string | undefined): string {

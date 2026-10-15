@@ -2,7 +2,7 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
-import { VOICES } from '@producer/core'
+import { VOICES, isProfileVoice } from '@producer/core'
 import { SERVER_ROOT } from '../config'
 import { ctx } from '../context'
 import { CancelledError } from '../jobs/worker'
@@ -104,6 +104,8 @@ class TtsEngine {
 
 export const tts = new TtsEngine()
 
+/** A known Kokoro voice, a VoiceStudio profile voice (`vs:<id>`, checked when used), else the default. */
 export function validVoice(v: string | undefined): string {
+  if (isProfileVoice(v) && v.length <= 80) return v
   return VOICES.some((x) => x.id === v) ? v! : 'af_heart'
 }

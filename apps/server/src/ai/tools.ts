@@ -139,7 +139,7 @@ export const TOOL_SCHEMAS = {
   remove_filler_words: z.object({ itemId: ItemId }).describe('Cut filler words (um, uh, …) out of a video/audio item using its transcript.'),
   cut_transcript_ranges: z.object({ itemId: ItemId, ranges: z.array(z.object({ start: Time, end: Time })).min(1).describe('TIMELINE time ranges to remove') }).describe('Remove time ranges (e.g. words from get_transcript) from a media item; the edit ripples.'),
   set_aspect_ratio: z.object({ ratio: z.enum(ids(ASPECT_RATIOS)) }).describe('Change the canvas aspect ratio.'),
-  add_voiceover: z.object({ text: z.string().min(1).max(4000), voice: z.enum(ids(VOICES)).optional(), start: Time.optional(), speed: z.number().min(0.5).max(2).optional() }).describe('Generate a TTS voiceover and place it on an audio track.'),
+  add_voiceover: z.object({ text: z.string().min(1).max(4000), voice: z.string().max(80).optional().describe(`Voice id: a built-in voice (${ids(VOICES).join(', ')}) or a cloned/designed voice of this space (vs:<id>, see the brief or get_project). Default: the brand kit voice.`), start: Time.optional(), speed: z.number().min(0.5).max(2).optional() }).describe('Generate a TTS voiceover and place it on an audio track.'),
   separate_audio: z.object({ itemId: ItemId }).describe('Detach a video’s audio onto its own linked audio item.'),
   freeze_frame: z.object({ itemId: ItemId, time: Time.describe('Timeline seconds'), hold: z.number().min(0.2).max(30).optional() }).describe('Insert a freeze frame into a video item at a timeline time.'),
 } as const
