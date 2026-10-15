@@ -1,6 +1,6 @@
 import type { AiSettings, Device, DesktopSettings } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, Mic, Paintbrush, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, Download, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, Mic, Paintbrush, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { HttpError } from '../../lib/api'
@@ -8,7 +8,7 @@ import { scrollBehavior } from '../../lib/appearance'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { syncSummary } from '../SystemChrome'
-import { aiLabel, aiLabelHasModel, sysFetch, systemApi, useSystem } from '../system'
+import { aiLabel, aiLabelHasModel, DESKTOP_DOWNLOAD_URL, sysFetch, systemApi, useSystem } from '../system'
 import { AiProviders } from './AiProviders'
 import { DictationSettings } from '../voicestudio/Dictation'
 import { AppearanceSettings } from './AppearanceSettings'
@@ -466,6 +466,18 @@ export default function SettingsPage() {
                 </div>
                 <div className="eyebrow" style={{ marginBottom: 10 }}>Linked devices</div>
                 <Devices />
+                <div className="ps-set-row">
+                  <div>
+                    <strong>Producer Studio for Windows</strong>
+                    <span>
+                      Edit offline, keep media on your own drives and use Voice Studio’s voice cloning, dubbing and dictation. After installing, link it from its Settings →
+                      Account &amp; sync.
+                    </span>
+                  </div>
+                  <a className="btn primary" href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+                    <Download size={14} /> Download for Windows
+                  </a>
+                </div>
               </>
             )}
           </Section>
@@ -522,6 +534,9 @@ export default function SettingsPage() {
                     Local engine v{info?.version} · {desktopBridge()?.platform ?? 'desktop'} · {aiLabel(info)}
                   </span>
                 </div>
+                <a className="btn" href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+                  <Download size={14} /> Latest release
+                </a>
               </div>
             </Section>
           )}

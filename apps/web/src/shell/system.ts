@@ -90,6 +90,9 @@ export const useSystem = create<SystemState>((set) => ({
   setSync: (sync) => set((s) => ({ sync, info: s.info ? { ...s.info, sync } : s.info })),
 }))
 
+/** Latest Windows installer (GitHub release page; always the newest version). */
+export const DESKTOP_DOWNLOAD_URL = 'https://github.com/igrant9679/producer-studio/releases/latest'
+
 export const isDesktop = (info?: SystemInfo) => info?.mode === 'desktop'
 export const useIsDesktop = () => useSystem((s) => s.info?.mode === 'desktop')
 

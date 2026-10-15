@@ -6,6 +6,7 @@ import {
   Check,
   ChevronsUpDown,
   CircleHelp,
+  MonitorDown,
   Clapperboard,
   Film,
   FolderOpen,
@@ -41,7 +42,7 @@ import { AspectPickerModal, CreateSpaceModal, DeleteSpaceModal, HelpModal, Invit
 import { AiChip, DesktopBadge, SyncIndicator } from './SystemChrome'
 import { DictationController } from './voicestudio/Dictation'
 import { ThemeSwitcher } from './pages/AppearanceSettings'
-import { useSyncPolling, useSystem } from './system'
+import { DESKTOP_DOWNLOAD_URL, useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, useJobs, useUploads } from './stores'
 import { Avatar, Logo, MenuList, Popover, Progress, Spinner, spaceColor, useClickOutside, useFilePicker } from './ui'
 import { JOB_LABELS, formatDuration, relativeTime } from './util'
@@ -425,6 +426,7 @@ function AvatarMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
   const user = useSession((s) => s.user)
   const logout = useSession((s) => s.logout)
   const navigate = useNavigate()
+  const desktop = useSystem((s) => s.info?.mode === 'desktop')
   return (
     <Popover
       align="right"
@@ -458,6 +460,7 @@ function AvatarMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
               { label: 'Space members', icon: <Users size={15} />, onClick: () => navigate('/space') },
               { label: 'Settings', icon: <Settings size={15} />, onClick: () => navigate('/settings') },
               { label: 'Help & shortcuts', icon: <CircleHelp size={15} />, onClick: () => openModal('help') },
+              ...(desktop ? [] : [{ label: 'Get the Windows app', icon: <MonitorDown size={15} />, onClick: () => window.open(DESKTOP_DOWNLOAD_URL, '_blank', 'noopener') }]),
               { sep: true, label: '' },
               {
                 label: 'Sign out',

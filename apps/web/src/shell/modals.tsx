@@ -1,11 +1,12 @@
 // Modals opened from the shell chrome: aspect picker, create / rename / delete space, invite, help.
 import { ASPECT_RATIOS } from '@producer/core'
 import type { Workspace } from '@producer/core'
-import { Check, Copy, Keyboard, Link2, Mail, Trash2 } from 'lucide-react'
+import { Check, Copy, Download, Keyboard, Link2, Mail, MonitorDown, Trash2 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { api, HttpError } from '../lib/api'
 import { useSession } from '../lib/session'
 import { toast, toastError } from '../lib/toast'
+import { DESKTOP_DOWNLOAD_URL, useSystem } from './system'
 import { absoluteUrl, copyText } from './util'
 import { Logo, Modal, Spinner } from './ui'
 
@@ -251,11 +252,21 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
 
 export function HelpModal({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<'keys' | 'about'>('keys')
+  const info = useSystem((s) => s.info)
+  const desktop = info?.mode === 'desktop'
   return (
     <Modal title="Help" onClose={onClose} width={720}>
-      <div className="ps-seg" style={{ marginBottom: 18 }}>
-        <button className={tab === 'keys' ? 'on' : ''} onClick={() => setTab('keys')}><Keyboard size={14} /> Keyboard shortcuts</button>
-        <button className={tab === 'about' ? 'on' : ''} onClick={() => setTab('about')}>About</button>
+      <div className="row" style={{ marginBottom: 18, gap: 12, flexWrap: 'wrap' }}>
+        <div className="ps-seg">
+          <button className={tab === 'keys' ? 'on' : ''} onClick={() => setTab('keys')}><Keyboard size={14} /> Keyboard shortcuts</button>
+          <button className={tab === 'about' ? 'on' : ''} onClick={() => setTab('about')}>About</button>
+        </div>
+        <span className="spacer" />
+        {!desktop && (
+          <a className="btn sm" href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+            <MonitorDown size={14} /> Get the Windows app
+          </a>
+        )}
       </div>
       {tab === 'keys' ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 22 }}>
@@ -284,7 +295,23 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
             <li>Everything in a space — projects, media, brand kit — is shared with its members.</li>
             <li>Exports and share links live under <b>Exports &amp; sharing</b>.</li>
           </ul>
-          <p className="muted" style={{ fontSize: '0.75rem' }}>Version 0.1 · Phase 1</p>
+          <div className="row" style={{ gap: 14, padding: 14, margin: '18px 0 14px', border: '1px solid var(--border)', borderRadius: 12, flexWrap: 'wrap' }}>
+            <MonitorDown size={22} style={{ flex: 'none', color: 'var(--accent)' }} />
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <strong style={{ display: 'block' }}>Producer Studio for Windows</strong>
+              <span className="muted" style={{ fontSize: '0.8125rem' }}>
+                {desktop
+                  ? 'You’re using the desktop app. Installing a newer release over it keeps your projects and settings.'
+                  : 'Edit offline, keep media on your own drives, and clone voices, dub and dictate with Voice Studio. Link it to this account from its Settings → Account & sync.'}
+              </span>
+            </div>
+            <a className={desktop ? 'btn' : 'btn primary'} href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+              <Download size={14} /> {desktop ? 'Latest release' : 'Download for Windows'}
+            </a>
+          </div>
+          <p className="muted" style={{ fontSize: '0.75rem' }}>
+            {info?.version ? `Version ${info.version}` : 'Version unknown'} · {desktop ? 'desktop' : 'cloud'}
+          </p>
         </div>
       )}
     </Modal>

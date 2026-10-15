@@ -3,7 +3,7 @@ import { Download, Laptop, MonitorSmartphone, Power, ShieldCheck, Sparkles } fro
 import { useEffect, useState, type ReactNode } from 'react'
 import { useSession } from '../../lib/session'
 import { useAsync } from '../ui'
-import { systemApi, useIsDesktop } from '../system'
+import { DESKTOP_DOWNLOAD_URL, systemApi, useIsDesktop } from '../system'
 import { LICENSE_NOTES, useVsStatus, vsApi, vsGet, vsRunning, type VsStatus } from './vsApi'
 import { Spinner } from '../ui'
 import { toastError } from '../../lib/toast'
@@ -78,8 +78,7 @@ export function useEngine() {
   return { desktop, status, running: vsRunning(status) }
 }
 
-/** Latest Windows installer (GitHub release page; always the newest version). */
-export const DESKTOP_DOWNLOAD_URL = 'https://github.com/igrant9679/producer-studio/releases/latest'
+export { DESKTOP_DOWNLOAD_URL }
 
 /** Web edition: what VoiceStudio is, and how to use it through a linked desktop. */
 export function DesktopOnly({ feature, children }: { feature: string; children?: ReactNode }) {
