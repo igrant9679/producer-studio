@@ -61,6 +61,7 @@ import * as A from './actions'
 import { Menu, MenuItem, Slider } from './controls'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
 import { useAppearance } from '../lib/appearance'
+import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
 import {
   HEADER_W,
@@ -618,20 +619,40 @@ function TimelineToolbar({ viewW }: { viewW: number }) {
   return (
     <div className="tl-toolbar">
       <div className="row tl-tools">
-        <ToolBtn icon={<Scissors size={15} />} title="Split at playhead (Ctrl+B)" onClick={A.split} />
-        <ToolBtn icon={<Trash2 size={15} />} title="Delete (Del) · Ripple delete (Shift+Del)" onClick={() => A.remove()} disabled={!selection.length} />
-        <ToolBtn icon={<Snowflake size={15} />} title="Freeze frame (2 s)" onClick={A.freeze} />
-        <ToolBtn icon={<CopyPlus size={15} />} title="Duplicate (Ctrl+D)" onClick={A.duplicate} disabled={!selection.length} />
-        <ToolBtn icon={<SplitSquareHorizontal size={15} />} title="Separate audio" onClick={A.separate} disabled={!hasVideo} />
+        <ToolBtn icon={<Scissors size={15} />} title="Split" desc="Cut at the playhead: the clip becomes two you can move, trim or delete on their own." kbd="Ctrl+B" onClick={A.split} />
+        <ToolBtn
+          icon={<Trash2 size={15} />}
+          title="Delete"
+          desc={`Remove the selected clips. Shift+Del also closes the gap they leave.${selection.length ? '' : '\nSelect a clip first.'}`}
+          kbd="Del"
+          onClick={() => A.remove()}
+          disabled={!selection.length}
+        />
+        <ToolBtn icon={<Snowflake size={15} />} title="Freeze frame" desc="Hold the frame under the playhead still for 2 seconds." onClick={A.freeze} />
+        <ToolBtn icon={<CopyPlus size={15} />} title="Duplicate" desc={`Make a copy of the selected clips.${selection.length ? '' : '\nSelect a clip first.'}`} kbd="Ctrl+D" onClick={A.duplicate} disabled={!selection.length} />
+        <ToolBtn
+          icon={<SplitSquareHorizontal size={15} />}
+          title="Separate audio"
+          desc={`Put the selected video's sound on its own audio track, so you can trim, move or delete it separately.${hasVideo ? '' : '\nSelect a video clip first.'}`}
+          onClick={A.separate}
+          disabled={!hasVideo}
+        />
         <div className="tl-sep" />
-        <ToolBtn icon={<Magnet size={15} />} title={`Snapping ${snapping ? 'on' : 'off'} (S)`} active={snapping} onClick={() => useEditor.setState({ snapping: !snapping })} />
+        <ToolBtn
+          icon={<Magnet size={15} />}
+          title={`Snapping ${snapping ? 'on' : 'off'}`}
+          desc="While dragging, clips snap to the playhead and to each other's edges."
+          kbd="S"
+          active={snapping}
+          onClick={() => useEditor.setState({ snapping: !snapping })}
+        />
       </div>
       <div className="row tl-transport">
-        <ToolBtn icon={<SkipBack size={15} />} title="Go to start (Home)" onClick={() => A.seek(0)} />
-        <button className="tl-play" title="Play / pause (Space)" onClick={A.togglePlay}>
+        <ToolBtn icon={<SkipBack size={15} />} title="Go to start" kbd="Home" onClick={() => A.seek(0)} />
+        <button className="tl-play" {...tipProps(playing ? 'Pause' : 'Play', undefined, 'Space')} onClick={A.togglePlay}>
           {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
         </button>
-        <ToolBtn icon={<SkipForward size={15} />} title="Go to end (End)" onClick={() => A.seek(duration)} />
+        <ToolBtn icon={<SkipForward size={15} />} title="Go to end" kbd="End" onClick={() => A.seek(duration)} />
         <div className="tl-tc">
           <Timecode fps={fps} />
           <span className="sep">/</span>
@@ -639,7 +660,7 @@ function TimelineToolbar({ viewW }: { viewW: number }) {
         </div>
       </div>
       <div className="row tl-zoom">
-        <ToolBtn icon={<ZoomOut size={15} />} title="Zoom out (Ctrl+-)" onClick={() => useEditor.getState().setZoom(zoom / 1.4)} />
+        <ToolBtn icon={<ZoomOut size={15} />} title="Zoom out" desc="See more of the timeline at once." kbd="Ctrl+-" onClick={() => useEditor.getState().setZoom(zoom / 1.4)} />
         <input
           type="range"
           className="ed-range"
@@ -649,18 +670,18 @@ function TimelineToolbar({ viewW }: { viewW: number }) {
           value={zoomToSlider(zoom)}
           style={{ width: 110, ['--pct' as string]: `${zoomToSlider(zoom) * 100}%` }}
           onChange={(e) => useEditor.getState().setZoom(sliderToZoom(parseFloat(e.target.value)))}
-          title="Timeline zoom"
+          {...tipProps('Timeline zoom', 'Drag to zoom the timeline in or out.')}
         />
-        <ToolBtn icon={<ZoomIn size={15} />} title="Zoom in (Ctrl+=)" onClick={() => useEditor.getState().setZoom(zoom * 1.4)} />
-        <ToolBtn icon={<Maximize2 size={14} />} title="Fit timeline" onClick={() => useEditor.getState().setZoom(fitZoom(duration, viewW - HEADER_W))} />
+        <ToolBtn icon={<ZoomIn size={15} />} title="Zoom in" desc="See more detail, for precise cuts." kbd="Ctrl+=" onClick={() => useEditor.getState().setZoom(zoom * 1.4)} />
+        <ToolBtn icon={<Maximize2 size={14} />} title="Fit timeline" desc="Zoom so the whole project fits the view." onClick={() => useEditor.getState().setZoom(fitZoom(duration, viewW - HEADER_W))} />
       </div>
     </div>
   )
 }
 
-function ToolBtn({ icon, title, onClick, disabled, active }: { icon: React.ReactNode; title: string; onClick: () => void; disabled?: boolean; active?: boolean }) {
+function ToolBtn({ icon, title, desc, kbd, onClick, disabled, active }: { icon: React.ReactNode; title: string; desc?: string; kbd?: string; onClick: () => void; disabled?: boolean; active?: boolean }) {
   return (
-    <button className={clsx('tl-btn', active && 'on')} title={title} onClick={onClick} disabled={disabled}>
+    <button className={clsx('tl-btn', active && 'on')} {...tipProps(title, desc, kbd, 'top')} onClick={onClick} disabled={disabled}>
       {icon}
     </button>
   )

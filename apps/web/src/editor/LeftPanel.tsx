@@ -4,6 +4,7 @@ import { useVoices } from '../shell/components/VoiceCard'
 import { TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, itemEnd } from '@producer/core'
 import clsx from 'clsx'
 import {
+  AlertTriangle,
   ArrowLeftRight,
   AudioLines,
   Bot,
@@ -18,10 +19,12 @@ import {
   Pause,
   Play,
   Plus,
+  RotateCcw,
   Sparkles,
   Square,
   Subtitles,
   SwatchBook,
+  Trash2,
   Type,
   Upload,
   Wand2,
@@ -39,19 +42,20 @@ import { EffectsPanel, FiltersPanel, TransitionsPanel } from './panels/FxPanels'
 import { TranscriptPanel } from './panels/TranscriptPanel'
 import { type LeftTab, useEditor } from './store'
 import { shortDuration } from './timelineMath'
-import { libraryAssets, uploadFiles, useLibrary } from './uploads'
+import { libraryAssets, removeAsset, retryAsset, uploadFiles, useLibrary } from './uploads'
+import { tipProps } from '../lib/tooltip'
 
-const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode }> = [
-  { id: 'media', label: 'Media', icon: <Clapperboard size={18} /> },
-  { id: 'audio', label: 'Audio', icon: <AudioLines size={18} /> },
-  { id: 'text', label: 'Text', icon: <Type size={18} /> },
-  { id: 'captions', label: 'Captions', icon: <Subtitles size={18} /> },
-  { id: 'transcript', label: 'Transcript', icon: <FileText size={18} /> },
-  { id: 'effects', label: 'Effects', icon: <Sparkles size={18} /> },
-  { id: 'transitions', label: 'Transitions', icon: <ArrowLeftRight size={18} /> },
-  { id: 'filters', label: 'Filters', icon: <Palette size={18} /> },
-  { id: 'brand', label: 'Brand', icon: <SwatchBook size={18} /> },
-  { id: 'ai', label: 'AI', icon: <Bot size={18} /> },
+const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
+  { id: 'media', label: 'Media', icon: <Clapperboard size={18} />, desc: 'Your uploaded videos and images. Hover a clip to preview it; press + or drag it onto the timeline.' },
+  { id: 'audio', label: 'Audio', icon: <AudioLines size={18} />, desc: 'Audio uploads and voiceovers generated from text.' },
+  { id: 'text', label: 'Text', icon: <Type size={18} />, desc: 'Headings, body text, styled titles and shapes.' },
+  { id: 'captions', label: 'Captions', icon: <Subtitles size={18} />, desc: 'Auto captions from speech, manual captions, caption styles, SRT import and export.' },
+  { id: 'transcript', label: 'Transcript', icon: <FileText size={18} />, desc: 'Edit by text: select words to cut them, remove pauses and filler words, search what was said.' },
+  { id: 'effects', label: 'Effects', icon: <Sparkles size={18} />, desc: 'Looks and motion for the selected clip: blur, glow, camera shake, VHS and more.' },
+  { id: 'transitions', label: 'Transitions', icon: <ArrowLeftRight size={18} />, desc: 'How one clip turns into the next: crossfade, push, wipe, zoom.' },
+  { id: 'filters', label: 'Filters', icon: <Palette size={18} />, desc: 'Colour grades for the selected clip, with adjustable strength.' },
+  { id: 'brand', label: 'Brand', icon: <SwatchBook size={18} />, desc: "Your workspace's brand colours and fonts, applied to text, shapes or the background." },
+  { id: 'ai', label: 'AI', icon: <Bot size={18} />, desc: 'Ask the assistant to edit for you: trim, split, add text and captions, remove silences.' },
 ]
 
 export function LeftRail() {
@@ -64,14 +68,14 @@ export function LeftRail() {
           key={t.id}
           className={clsx(active === t.id && !collapsed && 'on', t.id === 'ai' && 'rail-ai')}
           onClick={() => useEditor.setState(active === t.id && !collapsed ? { leftCollapsed: true } : { activeLeftTab: t.id, leftCollapsed: false })}
-          title={t.label}
+          {...tipProps(t.label, t.desc, undefined, 'right')}
         >
           {t.icon}
           <span>{t.label}</span>
         </button>
       ))}
       <div className="spacer" />
-      <button onClick={() => useEditor.setState({ shortcutsOpen: true })} title="Keyboard shortcuts (?)">
+      <button onClick={() => useEditor.setState({ shortcutsOpen: true })} {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?', 'right')}>
         <Keyboard size={18} />
         <span>Keys</span>
       </button>
@@ -195,53 +199,182 @@ function MediaPanel() {
   )
 }
 
+/** "1.2 GB": file sizes for the hover card. */
+function fileSize(bytes?: number): string | undefined {
+  if (!bytes) return undefined
+  const u = ['B', 'KB', 'MB', 'GB']
+  let i = 0
+  let v = bytes
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${u[i]}`
+}
+
+/** What a clip's tile says about it. "uploading" with no upload running in this tab never finished. */
+function clipState(status: string, progress?: { p: number; message: string }, localUpload?: { progress: number }) {
+  if (status === 'ready') return { kind: 'ready' as const, label: '' }
+  if (status === 'error') return { kind: 'failed' as const, label: 'Failed' }
+  if (status === 'uploading') {
+    return localUpload ? { kind: 'busy' as const, label: `Uploading ${Math.round(localUpload.progress * 100)}%` } : { kind: 'failed' as const, label: "Upload didn't finish" }
+  }
+  if (progress && progress.p > 0) return { kind: 'busy' as const, label: `${progress.message || 'Processing'} ${Math.round(progress.p * 100)}%` }
+  return { kind: 'busy' as const, label: progress?.message || 'Processing' }
+}
+
 function AssetCard({ asset, ready, status }: { asset: Asset; ready: boolean; status: string }) {
   const [frac, setFrac] = useState<number | null>(null)
+  const [hovering, setHovering] = useState(false)
+  const [videoOk, setVideoOk] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const hoverTimer = useRef<number | undefined>(undefined)
   const inProject = useEditor((s) => !!s.project.assets[asset.id])
+  const record = useLibrary((s) => s.records.find((r) => r.asset.id === asset.id))
+  const progress = useLibrary((s) => s.progress[asset.id])
+  const localUpload = useLibrary((s) => s.uploads.find((u) => u.status === 'uploading' && u.name === asset.name))
+  const state = clipState(status, progress, status === 'uploading' ? localUpload : undefined)
   const strip = filmstripUrl(asset)
   const fs = asset.filmstrip
-  const th = thumbUrl(asset)
+  // A video's thumbnail exists once the server says so (asset.thumbnail). Asking earlier got a 404, the image hid
+  // itself, and the same URL never loaded again when processing finished: a black tile until the page reloaded.
+  const th = asset.kind === 'video' && !asset.thumbnail && status !== 'ready' ? undefined : thumbUrl(asset)
+  const [thumbFailed, setThumbFailed] = useState(false)
+  useEffect(() => setThumbFailed(false), [th, asset.thumbnail, status])
   const idx = fs && frac !== null ? Math.min(fs.frames - 1, Math.floor(frac * fs.frames)) : 0
+  // Hover preview: real frames from the edit proxy, following the pointer. The filmstrip shows until it loads.
+  const canPreview = ready && asset.kind === 'video'
   const add = () => {
-    if (!ready) return toast('Still processing — try again in a moment')
+    if (!ready) return toast(state.kind === 'failed' ? 'This clip failed: retry it or remove it' : 'Still processing, try again in a moment')
     A.addAssetAt(asset, useEditor.getState().playhead)
   }
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || !videoOk || frac === null || !asset.duration) return
+    const t = Math.max(0, Math.min(asset.duration - 0.05, frac * asset.duration))
+    if (Math.abs(v.currentTime - t) > 0.04) v.currentTime = t
+  }, [frac, videoOk, asset.duration])
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), [])
+
+  const facts = [
+    asset.kind === 'video' && asset.duration !== undefined ? shortDuration(asset.duration) : asset.kind === 'image' ? 'Image' : undefined,
+    asset.width && asset.height ? `${asset.width}×${asset.height}` : undefined,
+    fileSize(asset.sizeBytes),
+  ].filter(Boolean)
+  const tipDesc = [
+    facts.join(' · '),
+    state.kind === 'failed'
+      ? record?.error || (status === 'uploading' ? 'The upload stopped before the file reached storage. Remove this clip and upload the file again.' : 'Processing failed.')
+      : state.kind === 'busy'
+        ? `${state.label}. It can be used once it's ready.`
+        : 'Hover to preview · press + or double-click to add at the playhead · or drag it onto the timeline.',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
   return (
     <div
-      className={clsx('ed-asset', !ready && 'pending')}
+      className={clsx('ed-asset', !ready && 'pending', state.kind === 'failed' && 'failed')}
       draggable={ready}
       onDragStart={(e) => startDrag(e, { kind: 'asset', asset })}
       onDragEnd={endDrag}
       onDoubleClick={add}
-      title={`${asset.name}${asset.width ? ` · ${asset.width}×${asset.height}` : ''}`}
+      {...tipProps(asset.name, tipDesc)}
     >
       <div
         className="thumb"
+        onMouseEnter={() => {
+          if (!canPreview) return
+          hoverTimer.current = window.setTimeout(() => setHovering(true), 150)
+        }}
         onMouseMove={(e) => {
           const r = e.currentTarget.getBoundingClientRect()
           setFrac(Math.max(0, Math.min(0.999, (e.clientX - r.left) / r.width)))
         }}
-        onMouseLeave={() => setFrac(null)}
+        onMouseLeave={() => {
+          window.clearTimeout(hoverTimer.current)
+          setFrac(null)
+          setHovering(false)
+          setVideoOk(false)
+        }}
       >
         {strip && fs && frac !== null ? (
           <div className="sprite" style={{ backgroundImage: `url("${strip}")`, backgroundSize: `${fs.frames * 100}% 100%`, backgroundPosition: `${fs.frames > 1 ? (idx / (fs.frames - 1)) * 100 : 0}% 0` }} />
         ) : th ? (
-          <img src={th} alt="" draggable={false} loading="lazy" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+          !thumbFailed ? (
+            <img key={`${th}|${asset.thumbnail ?? ''}|${status}`} src={th} alt="" draggable={false} loading="lazy" onError={() => setThumbFailed(true)} />
+          ) : (
+            <div className="ph" />
+          )
         ) : (
           <div className="ph" />
         )}
-        {frac !== null && strip && <div className="scrub" style={{ left: `${frac * 100}%` }} />}
-        {asset.kind === 'video' && asset.duration !== undefined && <span className="dur">{shortDuration(asset.duration)}</span>}
+        {hovering && canPreview && (
+          <video
+            ref={videoRef}
+            className={clsx('hoverprev', videoOk && 'on')}
+            src={assetUrl(asset, asset.id, 'proxy')}
+            muted
+            playsInline
+            preload="auto"
+            onLoadedData={() => setVideoOk(true)}
+            onError={() => setVideoOk(false)}
+          />
+        )}
+        {frac !== null && (strip || videoOk) && <div className="scrub" style={{ left: `${frac * 100}%` }} />}
+        {asset.kind === 'video' && asset.duration !== undefined && (
+          <span className="dur">{frac !== null && videoOk ? shortDuration(frac * asset.duration) : shortDuration(asset.duration)}</span>
+        )}
         {asset.kind === 'image' && <span className="dur">IMG</span>}
-        {!ready && (
+        {state.kind === 'busy' && (
           <span className="proc">
-            <Loader2 size={14} className="spin" /> {status === 'error' ? 'Failed' : 'Processing'}
+            <Loader2 size={14} className="spin" /> {state.label}
           </span>
         )}
-        {inProject && <span className="used" title="Used in this project" />}
-        <button className="add" title="Add at playhead" onClick={add} disabled={!ready}>
-          <Plus size={14} />
-        </button>
+        {state.kind === 'failed' && (
+          <span className="proc failed">
+            <span className="why">
+              <AlertTriangle size={14} /> {state.label}
+            </span>
+            <span className="acts">
+              {status === 'error' && (
+                <button
+                  className="act"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void retryAsset(asset.id)
+                  }}
+                  {...tipProps('Retry', 'Process this clip again. Works when the file reached storage.')}
+                >
+                  <RotateCcw size={12} /> Retry
+                </button>
+              )}
+              <button
+                className="act"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (window.confirm(`Remove "${asset.name}" from your media library?`)) void removeAsset(asset.id)
+                }}
+                {...tipProps('Remove', 'Delete this clip from the media library. Upload the file again to replace it.')}
+              >
+                <Trash2 size={12} /> Remove
+              </button>
+            </span>
+          </span>
+        )}
+        {inProject && <span className="used" {...tipProps('Used in this project')} />}
+        {ready && (
+          <button
+            className="add"
+            onClick={(e) => {
+              e.stopPropagation()
+              add()
+            }}
+            {...tipProps('Add at playhead', 'Put this clip on the timeline where the playhead is.')}
+          >
+            <Plus size={14} />
+          </button>
+        )}
       </div>
       <div className="nm">{asset.name}</div>
     </div>

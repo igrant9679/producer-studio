@@ -8,6 +8,7 @@ import type { JobContext } from '../jobs/worker'
 import { log } from '../log'
 import { type AssetRow, assetPrefix, loadAsset, localSource, tmpDir, updateAsset } from '../services/assets'
 import { ffmpeg, ffmpegProgress, runOk } from './proc'
+import { describeStorageError } from '../services/storage-health'
 
 export interface ProbeResult {
   kind: 'video' | 'audio' | 'image'
@@ -130,6 +131,30 @@ export async function analyseAudio(file: string, signal?: AbortSignal): Promise<
   return { waveform: peaks, silences }
 }
 
+/**
+ * What a person sees on a clip that failed to process. Raw ffprobe output named a server file path and meant
+ * nothing to anyone ("moov atom not found | C:\\...\\source.mov: Invalid data found"); storage errors read as SDK
+ * internals. Keep the cause, drop the paths, say what to do.
+ */
+export function friendlyProcessingError(err: unknown): string {
+  const e = err as { name?: string; Code?: string; $metadata?: { httpStatusCode?: number }; message?: string }
+  if (e && typeof e === 'object' && ('$metadata' in e || e.Code)) return describeStorageError(err)
+  const msg = err instanceof Error ? err.message : String(err)
+  if (/moov atom not found/i.test(msg))
+    return "This file is incomplete or damaged: its video index (the 'moov atom') is missing, which usually means the recording or upload was cut off. Export it again and upload the new file."
+  if (/Invalid data found when processing input|could not find codec parameters|Unknown format/i.test(msg))
+    return "This file isn't a video, audio or image format the server can read. Convert it to MP4 (or MP3, PNG, JPG) and upload it again."
+  if (/ENOENT|no such file/i.test(msg)) return "The uploaded file couldn't be found in storage. Upload it again."
+  if (/ENOSPC/i.test(msg)) return 'The server ran out of disk space while processing this clip. Retry in a while.'
+  const clean = msg
+    .replace(/[A-Za-z]:\\[^\s:|]+/g, '…')
+    .replace(/(?:\/[\w.@-]+){2,}/g, '…')
+    .replace(/\[[\w,]+ @ 0x?[0-9a-f]+\]\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return `Processing failed: ${clean.slice(0, 300)}`
+}
+
 /** Process one asset (used by the asset.process job and inline after TTS/render). */
 export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal' | 'progress' | 'check'>): Promise<AssetRow> {
   let row = await loadAsset(assetId)
@@ -219,7 +244,7 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
   } catch (err) {
     const cancelled = jc.signal.aborted
     if (!cancelled) log.warn('asset processing failed', { assetId, err })
-    await updateAsset(assetId, { status: 'error', error: cancelled ? 'Processing cancelled' : err instanceof Error ? err.message.slice(0, 500) : String(err) }).catch(() => undefined)
+    await updateAsset(assetId, { status: 'error', error: cancelled ? 'Processing was cancelled. Retry to process it again.' : friendlyProcessingError(err).slice(0, 500) }).catch(() => undefined)
     throw err
   } finally {
     fs.rm(work, { recursive: true, force: true }, () => undefined)

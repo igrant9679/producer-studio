@@ -71,6 +71,7 @@ export function jobDto(j: typeof jobs.$inferSelect): Job {
     message: j.message,
     projectId: j.projectId ?? undefined,
     workspaceId: j.workspaceId,
+    ...(j.kind === 'asset.process' && typeof (j.input as { assetId?: unknown })?.assetId === 'string' ? { assetId: (j.input as { assetId: string }).assetId } : {}),
     result: j.result ?? undefined,
     error: j.error ?? undefined,
     createdAt: j.createdAt,

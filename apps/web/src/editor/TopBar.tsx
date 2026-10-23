@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { themeLabel, useAppearance } from '../lib/appearance'
+import { tipProps } from '../lib/tooltip'
 import { toast, toastError } from '../lib/toast'
 import * as A from './actions'
 import { Menu, MenuItem } from './controls'
@@ -48,7 +49,7 @@ export function TopBar() {
   return (
     <header className="ed-top">
       <div className="row ed-top-l">
-        <button className="ed-tbtn" title="Back to home" onClick={() => nav('/')}>
+        <button className="ed-tbtn" {...tipProps('Back to home', 'Your projects. This project is saved as you go.')} onClick={() => nav('/')}>
           <ArrowLeft size={16} />
         </button>
         <div className="ed-logo" title="Producer Studio">
@@ -72,18 +73,18 @@ export function TopBar() {
         <SaveStatus demo={demo} />
       </div>
       <div className="row ed-top-c">
-        <button className="ed-tbtn" title={canUndo ? `Undo ${uLabel} (Ctrl+Z)` : 'Nothing to undo'} disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
+        <button className="ed-tbtn" {...tipProps(canUndo ? `Undo ${uLabel}` : 'Nothing to undo', undefined, 'Ctrl+Z')} disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
           <Undo2 size={16} />
         </button>
-        <button className="ed-tbtn" title={canRedo ? `Redo ${rLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'} disabled={!canRedo} onClick={() => useEditor.getState().redo()}>
+        <button className="ed-tbtn" {...tipProps(canRedo ? `Redo ${rLabel}` : 'Nothing to redo', undefined, 'Ctrl+Shift+Z')} disabled={!canRedo} onClick={() => useEditor.getState().redo()}>
           <Redo2 size={16} />
         </button>
         <div className="ed-tsep" />
         <div className="ed-seg sm">
-          <button className={clsx(tool === 'select' && 'on')} title="Select (V)" onClick={() => useEditor.setState({ canvasTool: 'select' })}>
+          <button className={clsx(tool === 'select' && 'on')} {...tipProps('Select', 'Click things on the canvas to select, move, resize or rotate them.', 'V')} onClick={() => useEditor.setState({ canvasTool: 'select' })}>
             <MousePointer2 size={14} />
           </button>
-          <button className={clsx(tool === 'hand' && 'on')} title="Hand (H)" onClick={() => useEditor.setState({ canvasTool: 'hand' })}>
+          <button className={clsx(tool === 'hand' && 'on')} {...tipProps('Hand', 'Drag to pan around the canvas.', 'H')} onClick={() => useEditor.setState({ canvasTool: 'hand' })}>
             <Hand size={14} />
           </button>
         </div>
@@ -92,13 +93,13 @@ export function TopBar() {
       </div>
       <div className="row ed-top-r">
         <ThemeMenu />
-        <button className="ed-tbtn" title="Keyboard shortcuts (?)" onClick={() => useEditor.setState({ shortcutsOpen: true })}>
+        <button className="ed-tbtn" {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
           <Keyboard size={16} />
         </button>
-        <button className="btn sm" onClick={share} title="Create a review link">
+        <button className="btn sm" onClick={share} {...tipProps('Share', 'Create a review link to this project that you can send to others.')}>
           <Share2 size={14} /> Share
         </button>
-        <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })}>
+        <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the finished video (MP4, WebM or GIF, 720p to 4K).')}>
           <Upload size={14} /> Export
         </button>
       </div>
@@ -140,7 +141,7 @@ function ThemeMenu() {
   }
   return (
     <div className="ed-dd ed-dd-right">
-      <button className="ed-tbtn" title={`Theme: ${themeLabel(theme)} (Ctrl+Shift+L)`} aria-label="Theme" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button className="ed-tbtn" {...tipProps(`Theme: ${themeLabel(theme)}`, 'Light, dark or follow your system.', 'Ctrl+Shift+L')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
         {resolved === 'light' ? <Sun size={16} /> : <Moon size={16} />}
       </button>
       <Menu open={open} onClose={() => setOpen(false)}>
@@ -165,7 +166,7 @@ function ZoomMenu() {
   }
   return (
     <div className="ed-dd">
-      <button className="ed-ddbtn" onClick={() => setOpen(!open)} title="Canvas zoom (Ctrl+wheel on the canvas)">
+      <button className="ed-ddbtn" onClick={() => setOpen(!open)} {...tipProps('Canvas zoom', 'How large the preview is drawn. Ctrl + mouse wheel on the canvas also zooms.')}>
         <span className="mono">{pct}%</span> <ChevronDown size={13} />
       </button>
       <Menu open={open} onClose={() => setOpen(false)}>
@@ -186,7 +187,7 @@ function RatioMenu() {
   const cur = ASPECT_RATIOS.find((a) => Math.abs(a.width / a.height - w / h) < 0.001)
   return (
     <div className="ed-dd">
-      <button className="ed-ddbtn" onClick={() => setOpen(!open)} title="Aspect ratio">
+      <button className="ed-ddbtn" onClick={() => setOpen(!open)} {...tipProps('Aspect ratio', 'The shape of the video: 16:9 for YouTube, 9:16 for TikTok, Reels and Shorts, 1:1 for Instagram posts.')}>
         <span className="ed-ratioicon" style={{ aspectRatio: `${w}/${h}` }} />
         {cur?.name ?? `${w}×${h}`} <ChevronDown size={13} />
       </button>

@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import { X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from '../../lib/toast'
+import { tipProps } from '../../lib/tooltip'
 import * as A from '../actions'
 import { Slider } from '../controls'
 import { endDrag, startDrag, thumbUrl } from '../media'
@@ -82,7 +83,7 @@ export function EffectsPanel() {
                   onDragStart={(ev) => startDrag(ev, { kind: 'effect', type: e.id })}
                   onDragEnd={endDrag}
                   onClick={() => apply(e.id)}
-                  title={`${e.name} — click to apply to the selection or drag onto a clip`}
+                  {...tipProps(e.name, [e.description, 'Click to apply to the selected clip, or drag it onto a clip.'].filter(Boolean).join('\n'))}
                 >
                   <div className={`fx-prev fx-${e.id}`}>
                     <Sample src={a} />
@@ -143,7 +144,7 @@ export function TransitionsPanel() {
                 onDragStart={(ev) => startDrag(ev, { kind: 'transition', type: t.id })}
                 onDragEnd={endDrag}
                 onClick={() => apply(t.id)}
-                title={`${t.name} — click to apply or drag onto a cut`}
+                {...tipProps(t.name, [t.description, 'Click to apply to the cut after the selected clip, or drag it onto a cut between two clips.'].filter(Boolean).join('\n'))}
               >
                 <div className={`tr-prev tr-${t.id}`}>
                   <Sample src={a} className="a" />
@@ -211,7 +212,7 @@ export function FiltersPanel() {
                 onDragStart={(ev) => startDrag(ev, { kind: 'filter', id: f.id })}
                 onDragEnd={endDrag}
                 onClick={() => apply(f.id)}
-                title={`${f.name} — click to apply or drag onto a clip`}
+                {...tipProps(f.name, [f.description, 'Click to apply to the selected clip, or drag it onto a clip.'].filter(Boolean).join('\n'))}
               >
                 <div className="fx-prev">
                   <Sample src={a} style={{ filter: adjustToFilter(NEUTRAL_ADJUST, f.id, 100).filter || undefined }} />

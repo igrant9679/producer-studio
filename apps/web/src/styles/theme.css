@@ -397,3 +397,16 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
 .modal-backdrop { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(4px); display: grid; place-items: center; z-index: 1000; }
 .modal { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow); max-width: min(92vw, 720px); width: 100%; max-height: 90vh; overflow: auto; }
 :root[data-theme='light'] .modal { border-color: var(--border); box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2); }
+
+/* ---- tooltips (lib/tooltip.tsx: data-tip / data-tip-desc / data-tip-kbd) ---- */
+.ps-tip { position: fixed; z-index: 10000; max-width: 280px; pointer-events: none; background: var(--surface-3); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); padding: 7px 10px; font-size: 0.75rem; line-height: 1.4; animation: ps-tip-in 0.12s ease-out; }
+.ps-tip-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.ps-tip-head b { font-weight: 600; }
+.ps-tip-head kbd { font: 500 0.625rem var(--font-mono); color: var(--text-2); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 4px; padding: 1px 5px; white-space: nowrap; }
+.ps-tip-desc { color: var(--text-2); margin-top: 3px; white-space: pre-line; }
+@keyframes ps-tip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+
+/* ---- storage banner (shell/StorageBanner.tsx) ---- */
+.ps-storage-banner { display: flex; gap: 10px; align-items: flex-start; padding: 9px 14px; background: var(--amber-soft); border-bottom: 1px solid var(--amber-line); color: var(--text); font-size: 0.8125rem; line-height: 1.45; }
+.ps-storage-banner > svg { color: var(--amber); flex: none; margin-top: 2px; }
+.ps-storage-banner .why { color: var(--text-2); display: block; margin-top: 2px; }

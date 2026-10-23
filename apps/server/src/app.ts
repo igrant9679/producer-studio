@@ -25,6 +25,7 @@ import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { templateRoutes } from './routes/templates'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
+import { storageHealth } from './services/storage-health'
 
 const started = Date.now()
 
@@ -85,6 +86,9 @@ export function createApp() {
         db: ctx().database.driver,
         dbStatus: db,
         storage: ctx().storage.kind,
+        // reported, never gating: a deploy that brings new credentials must pass this check
+        storageStatus: storageHealth().status,
+        ...(storageHealth().error ? { storageError: storageHealth().error } : {}),
         uptimeSec: Math.round((Date.now() - started) / 1000),
         features: {
           whisper: Boolean(cfg.whisperCli && cfg.whisperModel && fs.existsSync(cfg.whisperCli) && fs.existsSync(cfg.whisperModel)),

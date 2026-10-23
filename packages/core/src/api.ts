@@ -227,6 +227,8 @@ export interface Job<R = unknown> {
   message: string
   projectId?: string
   workspaceId: string
+  /** asset.process: the clip being processed (so the media panel can show its progress). */
+  assetId?: string
   result?: R
   error?: string
   createdAt: number
@@ -432,6 +434,16 @@ export interface SystemInfo {
   /** Local capabilities (true on desktop; on cloud reflects the worker image). */
   capabilities: { transcribe: boolean; tts: boolean; render: boolean }
   sync?: SyncStatus
+  /** Whether the server can use its object storage right now (checked every few minutes). */
+  storage?: StorageHealth
+}
+
+/** Result of the server's storage self-check: write, read back and delete a small object. */
+export interface StorageHealth {
+  status: 'unknown' | 'ok' | 'error'
+  /** What failed and what to do about it (for a person, not a stack trace). */
+  error?: string
+  checkedAt?: number
 }
 
 export interface SyncStatus {

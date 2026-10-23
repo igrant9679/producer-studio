@@ -18,6 +18,7 @@ import { hydrateAssets } from '../services/projects'
 import { checkCredentials } from './auth'
 import { listWorkspaces } from './workspaces'
 import { voiceProfileDto } from './voice'
+import { storageHealth } from '../services/storage-health'
 
 const require = createRequire(import.meta.url)
 
@@ -63,6 +64,7 @@ systemRoutes.get('/', async (c) => {
     version: cfg.version,
     ai: { provider: provider.id, available: s.available, detail: s.detail, model: s.model },
     capabilities: capabilities(),
+    ...(cfg.mode === 'cloud' ? { storage: storageHealth() } : {}),
   }
   // desktop: sync state (account, cloud URL) only for the signed-in local session
   if (cfg.mode === 'desktop' && c.get('user')) {

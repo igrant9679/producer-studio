@@ -44,6 +44,7 @@ import { DictationController } from './voicestudio/Dictation'
 import { ThemeSwitcher } from './pages/AppearanceSettings'
 import { DESKTOP_DOWNLOAD_URL, useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, useJobs, useUploads } from './stores'
+import { StorageBanner } from './StorageBanner'
 import { Avatar, Logo, MenuList, Popover, Progress, Spinner, spaceColor, useClickOutside, useFilePicker } from './ui'
 import { JOB_LABELS, formatDuration, relativeTime } from './util'
 
@@ -574,6 +575,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <AvatarMenu openModal={setModal} />
         </header>
         <main className="ps-content" ref={contentRef}>
+          <StorageBanner />
           {children}
         </main>
       </div>

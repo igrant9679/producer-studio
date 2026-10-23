@@ -22,13 +22,13 @@ Everything in `packages/core/src/api.ts` is implemented with those shapes. Statu
 
 | Area | Route | |
 |---|---|---|
-| Health | `GET /api/health` | ✅ |
+| Health | `GET /api/health` (adds `storageStatus` ok/error/unknown and `storageError`; never gates the 200) | ✅🧪 |
 | System | `GET /api/system` → `SystemInfo` (public) | ✅🧪 |
 | Auth | `POST /api/auth/signup`, `/login`, `/logout`, `GET /api/auth/me` | ✅🧪 |
 | Workspaces | `GET/POST /api/workspaces`, `GET /:id/members`, `POST /:id/invites` (owner), `GET/PUT /:id/brand` | ✅🧪 |
 | Invites | `GET /api/invites/:token`, `POST /api/invites/:token/accept` (the `inviteUrl` is `/invite/:token`) | 🧪 |
 | Projects | `GET /api/projects?workspaceId=&trashed=&templates=`, `POST`, `GET/PUT/PATCH/DELETE /:id`, `POST /:id/duplicate` | ✅🧪 |
-| Uploads | `POST /api/uploads` → ticket; `PUT /api/uploads/:assetId/data` (local storage; S3 gets a presigned URL); `POST /api/assets/:id/complete` | ✅🧪 |
+| Uploads | `POST /api/uploads` → ticket; `PUT /api/uploads/:assetId/data` (local storage; S3 gets a presigned URL); `POST /api/assets/:id/complete` (also re-runs processing for an `error` asset whose file is in storage); `POST /api/assets/:id/abort {reason}` (the browser's PUT failed) | ✅🧪 |
 | Assets | `GET /api/assets?workspaceId=&kind=`, `GET/PATCH/DELETE /api/assets/:id` | ✅ |
 | Media | `GET/HEAD /api/media/:assetId/:variant` (`source`, `proxy`, `thumb`, `filmstrip`, `audio`); Range/206/416; S3 → 302 signed URL | ✅🧪 |
 | Jobs | `GET /api/jobs/:id`, `GET /api/jobs?projectId=|workspaceId=`, `POST /api/jobs/:id/cancel` | ✅🧪 |
@@ -57,6 +57,14 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   appear there once processing finishes).
 - **Uploads**: after `complete`, the asset is `processing`; watch SSE `asset` events (thumb + filmstrip + waveform arrive first,
   then the proxy, then status `ready`). `audio` = AAC extract of a video's soundtrack (falls back to source).
+  asset.process job events carry `assetId`, so a client can show per-clip progress (`message`, `progress`).
+- **Stuck clips** (23 Oct 2026, `services/asset-recovery.ts`): an asset never stays `uploading`/`processing` for good. The client
+  reports a refused PUT (`/abort`); the worker sweep (30 s after start, then every 5 min) fails uploads older than 2 h and
+  processing clips whose latest asset.process job ended after the clip last changed (error, cancelled, or the stale-recovery
+  give-up, which now fails the clip too). `error` holds a sentence for a person (`friendlyProcessingError`: no server paths).
+- **Storage self-check** (`services/storage-health.ts`, cloud mode): writes, reads and deletes `_health/<instance>.txt` on start
+  and every 5 min; the result is in `/api/health` and `/api/system` (`storage`), and the editor shows a banner while it fails.
+  Signed URLs are computed locally, so a revoked bucket key is otherwise invisible to the server.
 - **Saving**: `PUT /api/projects/:id {project, baseVersion}` → `{version, updatedAt}`; stale → 409
   `{code:'conflict', details:{version, project, summary}}` (`project` = current server doc, for merge / keep-both).
   Every save emits SSE `project {id, version}` (server-side jobs such as assemble also save and emit).

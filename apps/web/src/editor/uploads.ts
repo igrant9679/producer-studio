@@ -1,6 +1,6 @@
 // Workspace media library + uploads. Server: api.upload with progress, then SSE `asset` events (with a polling
 // fallback) until status 'ready'. Demo: files become local blob: assets probed in the browser.
-import type { Asset, AssetRecord } from '@producer/core'
+import type { Asset, AssetRecord, Job } from '@producer/core'
 import { addAsset, uid } from '@producer/core'
 import { create } from 'zustand'
 import { api, subscribeEvents } from '../lib/api'
@@ -21,9 +21,17 @@ interface LibState {
   loading: boolean
   uploads: UploadRow[]
   loaded: boolean
+  /** Live processing progress per clip, from asset.process job events. */
+  progress: Record<string, { p: number; message: string }>
 }
 
-export const useLibrary = create<LibState>(() => ({ records: [], loading: false, uploads: [], loaded: false }))
+export const useLibrary = create<LibState>(() => ({ records: [], loading: false, uploads: [], loaded: false, progress: {} }))
+
+function trackJob(j: Job) {
+  if (j.kind !== 'asset.process' || !j.assetId) return
+  const { [j.assetId]: _old, ...rest } = useLibrary.getState().progress
+  useLibrary.setState({ progress: j.status === 'running' || j.status === 'queued' ? { ...rest, [j.assetId]: { p: j.progress, message: j.message } } : rest })
+}
 
 function upsertRecord(r: AssetRecord) {
   const recs = useLibrary.getState().records
@@ -58,7 +66,7 @@ export async function loadLibrary(workspaceId: string) {
 /** One SSE connection per workspace: asset status for the library + `project` saves for the open project. */
 export function subscribeWorkspace(workspaceId: string, onProject: (p: { id: string; version: number }) => void): () => void {
   try {
-    return subscribeEvents(workspaceId, { asset: upsertRecord, project: onProject })
+    return subscribeEvents(workspaceId, { asset: upsertRecord, project: onProject, job: trackJob })
   } catch {
     return () => undefined
   }
@@ -162,6 +170,30 @@ export async function uploadFiles(files: File[] | FileList) {
     }
     // clear finished rows after a while
     setTimeout(() => useLibrary.setState({ uploads: useLibrary.getState().uploads.filter((u) => u.key !== key || u.status === 'processing' || u.status === 'uploading') }), 8000)
+  }
+}
+
+/** Re-run processing for a failed clip. A clip whose file never reached storage has to be uploaded again. */
+export async function retryAsset(id: string) {
+  try {
+    const r = await api.retryAsset(id)
+    upsertRecord(r)
+    if (r.status !== 'ready') void pollUntilReady(id)
+    toast('Processing again…')
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/has not arrived|not arrived yet/i.test(msg)) toast("This file never reached storage — upload it again (remove this one first).")
+    else toastError(e)
+  }
+}
+
+/** Remove a clip from the workspace library (and its stored files). */
+export async function removeAsset(id: string) {
+  try {
+    await api.deleteAsset(id)
+    useLibrary.setState({ records: useLibrary.getState().records.filter((r) => r.asset.id !== id) })
+  } catch (e) {
+    toastError(e)
   }
 }
 

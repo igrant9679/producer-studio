@@ -7,6 +7,7 @@ import { toast, toastError } from '../lib/toast'
 import { Canvas } from './Canvas'
 import { ExportDialog, ShortcutsDialog } from './Dialogs'
 import './editor.css'
+import { StorageBanner } from '../shell/StorageBanner'
 import { AssetPanel, LeftRail } from './LeftPanel'
 import { isFileDrag } from './media'
 import { flush, keepBoth, loadInto, onProjectEvent, overwriteServer, reloadTheirs, startAutosave } from './persistence'
@@ -159,6 +160,7 @@ function EditorShell() {
   return (
     <div className={`ed-root${leftCollapsed ? ' left-collapsed' : ''}`}>
       <TopBar />
+      <StorageBanner />
       {saveState === 'conflict' && <ConflictBanner />}
       <div className="ed-body">
         <LeftRail />

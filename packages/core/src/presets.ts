@@ -28,25 +28,27 @@ export interface FilterPreset {
   adjust: Partial<ColorAdjust>
   sepia?: number
   grayscale?: number
+  /** One line on what it looks like, for the editor's hover tip. */
+  description?: string
 }
 
 export const FILTERS: FilterPreset[] = [
-  { id: 'warm-gold', name: 'Warm Gold', category: 'Featured', adjust: { temperature: 35, saturation: 12, contrast: 8 } },
-  { id: 'clean-pop', name: 'Clean Pop', category: 'Featured', adjust: { contrast: 18, saturation: 22, brightness: 4 } },
-  { id: 'filmic-haze', name: 'Filmic Haze', category: 'Featured', adjust: { contrast: -12, brightness: 8, saturation: -10 }, sepia: 12 },
-  { id: 'teal-orange', name: 'Teal & Orange', category: 'Movies', adjust: { temperature: 18, contrast: 20, saturation: 15, tint: -8 } },
-  { id: 'noir', name: 'Noir', category: 'Mono', adjust: { contrast: 35 }, grayscale: 100 },
-  { id: 'silver', name: 'Silver', category: 'Mono', adjust: { contrast: 10, brightness: 6 }, grayscale: 100 },
-  { id: 'sepia-memory', name: 'Sepia Memory', category: 'Retro', adjust: { contrast: 6 }, sepia: 70 },
-  { id: 'faded-70s', name: 'Faded 70s', category: 'Retro', adjust: { contrast: -20, saturation: -25, temperature: 20 }, sepia: 25 },
-  { id: 'cool-morning', name: 'Cool Morning', category: 'Landscape', adjust: { temperature: -30, brightness: 6, saturation: 8 } },
-  { id: 'vivid-green', name: 'Vivid Nature', category: 'Landscape', adjust: { saturation: 35, contrast: 10, hue: -6 } },
-  { id: 'soft-skin', name: 'Soft Skin', category: 'Portrait', adjust: { brightness: 8, contrast: -8, temperature: 10, saturation: -5 } },
-  { id: 'cold-light', name: 'Cold Light', category: 'Portrait', adjust: { temperature: -20, contrast: 12, brightness: 4 } },
-  { id: 'daylight', name: 'Daylight', category: 'Life', adjust: { brightness: 10, saturation: 10 } },
-  { id: 'iced-fog', name: 'Iced Fog', category: 'Life', adjust: { temperature: -25, contrast: -15, brightness: 10, saturation: -20 } },
-  { id: 'blockbuster', name: 'Blockbuster', category: 'Movies', adjust: { contrast: 30, saturation: -8, temperature: -10, exposure: -6 } },
-  { id: 'dusk', name: 'Dusk', category: 'Movies', adjust: { temperature: 28, tint: 12, contrast: 14, exposure: -8 } },
+  { id: 'warm-gold', name: 'Warm Gold', category: 'Featured', adjust: { temperature: 35, saturation: 12, contrast: 8 }, description: 'Warmer, golden tones with a little extra contrast and colour.' },
+  { id: 'clean-pop', name: 'Clean Pop', category: 'Featured', adjust: { contrast: 18, saturation: 22, brightness: 4 }, description: 'Crisper contrast and livelier colour for an everyday clean look.' },
+  { id: 'filmic-haze', name: 'Filmic Haze', category: 'Featured', adjust: { contrast: -12, brightness: 8, saturation: -10 }, sepia: 12, description: 'Softer contrast, lifted shadows and a faint warm tint, like film.' },
+  { id: 'teal-orange', name: 'Teal & Orange', category: 'Movies', adjust: { temperature: 18, contrast: 20, saturation: 15, tint: -8 }, description: 'The blockbuster grade: warm skin tones against cooler shadows.' },
+  { id: 'noir', name: 'Noir', category: 'Mono', adjust: { contrast: 35 }, grayscale: 100, description: 'High-contrast black and white.' },
+  { id: 'silver', name: 'Silver', category: 'Mono', adjust: { contrast: 10, brightness: 6 }, grayscale: 100, description: 'Soft, bright black and white.' },
+  { id: 'sepia-memory', name: 'Sepia Memory', category: 'Retro', adjust: { contrast: 6 }, sepia: 70, description: 'Old-photo brown tones.' },
+  { id: 'faded-70s', name: 'Faded 70s', category: 'Retro', adjust: { contrast: -20, saturation: -25, temperature: 20 }, sepia: 25, description: 'Washed-out, warm colour, like a faded print.' },
+  { id: 'cool-morning', name: 'Cool Morning', category: 'Landscape', adjust: { temperature: -30, brightness: 6, saturation: 8 }, description: 'Cooler, brighter tones for an airy, early-light feel.' },
+  { id: 'vivid-green', name: 'Vivid Nature', category: 'Landscape', adjust: { saturation: 35, contrast: 10, hue: -6 }, description: 'Richer greens and colour for nature and landscapes.' },
+  { id: 'soft-skin', name: 'Soft Skin', category: 'Portrait', adjust: { brightness: 8, contrast: -8, temperature: 10, saturation: -5 }, description: 'Gentler contrast and warmth that flatters faces.' },
+  { id: 'cold-light', name: 'Cold Light', category: 'Portrait', adjust: { temperature: -20, contrast: 12, brightness: 4 }, description: 'Cool, clean light with a bit more contrast.' },
+  { id: 'daylight', name: 'Daylight', category: 'Life', adjust: { brightness: 10, saturation: 10 }, description: 'Brighter and a little more colourful.' },
+  { id: 'iced-fog', name: 'Iced Fog', category: 'Life', adjust: { temperature: -25, contrast: -15, brightness: 10, saturation: -20 }, description: 'Cold, low-contrast and muted, like a misty day.' },
+  { id: 'blockbuster', name: 'Blockbuster', category: 'Movies', adjust: { contrast: 30, saturation: -8, temperature: -10, exposure: -6 }, description: 'Punchy contrast, slightly cool and desaturated.' },
+  { id: 'dusk', name: 'Dusk', category: 'Movies', adjust: { temperature: 28, tint: 12, contrast: 14, exposure: -8 }, description: 'Warm, rosy, slightly darker evening light.' },
 ]
 
 export const ANIMATION_PRESETS: Array<{ id: AnimationPreset; name: string; textOnly?: boolean }> = [
@@ -73,34 +75,34 @@ export const COMBO_PRESETS = [
   { id: 'swing', name: 'Swing' },
 ] as const
 
-export const TRANSITIONS: Array<{ id: TransitionType; name: string; category: 'Basic' | 'Motion' | 'Stylised' }> = [
-  { id: 'crossfade', name: 'Crossfade', category: 'Basic' },
-  { id: 'dipBlack', name: 'Dip to black', category: 'Basic' },
-  { id: 'dipWhite', name: 'Flash white', category: 'Basic' },
-  { id: 'slideLeft', name: 'Push left', category: 'Motion' },
-  { id: 'slideRight', name: 'Push right', category: 'Motion' },
-  { id: 'slideUp', name: 'Push up', category: 'Motion' },
-  { id: 'slideDown', name: 'Push down', category: 'Motion' },
-  { id: 'zoomIn', name: 'Zoom through', category: 'Motion' },
-  { id: 'zoomOut', name: 'Pull back', category: 'Motion' },
-  { id: 'wipeLeft', name: 'Wipe left', category: 'Stylised' },
-  { id: 'wipeRight', name: 'Wipe right', category: 'Stylised' },
-  { id: 'blur', name: 'Blur dissolve', category: 'Stylised' },
-  { id: 'spin', name: 'Spin', category: 'Stylised' },
+export const TRANSITIONS: Array<{ id: TransitionType; name: string; category: 'Basic' | 'Motion' | 'Stylised'; description?: string }> = [
+  { id: 'crossfade', name: 'Crossfade', category: 'Basic', description: 'The next clip fades in over this one.' },
+  { id: 'dipBlack', name: 'Dip to black', category: 'Basic', description: 'Fades to black, then up into the next clip.' },
+  { id: 'dipWhite', name: 'Flash white', category: 'Basic', description: 'A quick flash of white between the clips.' },
+  { id: 'slideLeft', name: 'Push left', category: 'Motion', description: 'The next clip pushes this one off to the left.' },
+  { id: 'slideRight', name: 'Push right', category: 'Motion', description: 'The next clip pushes this one off to the right.' },
+  { id: 'slideUp', name: 'Push up', category: 'Motion', description: 'The next clip pushes this one up and out.' },
+  { id: 'slideDown', name: 'Push down', category: 'Motion', description: 'The next clip pushes this one down and out.' },
+  { id: 'zoomIn', name: 'Zoom through', category: 'Motion', description: 'Zooms forward through this clip into the next.' },
+  { id: 'zoomOut', name: 'Pull back', category: 'Motion', description: 'Pulls back from this clip to reveal the next.' },
+  { id: 'wipeLeft', name: 'Wipe left', category: 'Stylised', description: 'A hard edge sweeps to the left, revealing the next clip.' },
+  { id: 'wipeRight', name: 'Wipe right', category: 'Stylised', description: 'A hard edge sweeps to the right, revealing the next clip.' },
+  { id: 'blur', name: 'Blur dissolve', category: 'Stylised', description: 'This clip blurs out as the next one sharpens in.' },
+  { id: 'spin', name: 'Spin', category: 'Stylised', description: 'A quick spin from one clip into the next.' },
 ]
 
-export const EFFECTS: Array<{ id: EffectType; name: string; category: 'Basic' | 'Motion' | 'Retro' | 'Light' }> = [
-  { id: 'blur', name: 'Blur', category: 'Basic' },
-  { id: 'blackWhite', name: 'Black & white', category: 'Basic' },
-  { id: 'vignette', name: 'Vignette', category: 'Basic' },
-  { id: 'shake', name: 'Camera shake', category: 'Motion' },
-  { id: 'zoomPulse', name: 'Zoom pulse', category: 'Motion' },
-  { id: 'kenBurns', name: 'Ken Burns', category: 'Motion' },
-  { id: 'flash', name: 'Flash', category: 'Light' },
-  { id: 'glow', name: 'Soft glow', category: 'Light' },
-  { id: 'rgbSplit', name: 'RGB split', category: 'Retro' },
-  { id: 'vhs', name: 'VHS', category: 'Retro' },
-  { id: 'grain', name: 'Film grain', category: 'Retro' },
+export const EFFECTS: Array<{ id: EffectType; name: string; category: 'Basic' | 'Motion' | 'Retro' | 'Light'; description?: string }> = [
+  { id: 'blur', name: 'Blur', category: 'Basic', description: 'Softens the whole clip; adjust how strong.' },
+  { id: 'blackWhite', name: 'Black & white', category: 'Basic', description: 'Removes the colour.' },
+  { id: 'vignette', name: 'Vignette', category: 'Basic', description: 'Darkens the edges to draw the eye to the centre.' },
+  { id: 'shake', name: 'Camera shake', category: 'Motion', description: 'Handheld-camera wobble.' },
+  { id: 'zoomPulse', name: 'Zoom pulse', category: 'Motion', description: 'A gentle rhythmic zoom in and out.' },
+  { id: 'kenBurns', name: 'Ken Burns', category: 'Motion', description: 'Slow pan and zoom across the frame: brings stills to life.' },
+  { id: 'flash', name: 'Flash', category: 'Light', description: 'Bright flashes of light.' },
+  { id: 'glow', name: 'Soft glow', category: 'Light', description: 'A soft dreamy bloom around bright areas.' },
+  { id: 'rgbSplit', name: 'RGB split', category: 'Retro', description: 'Offsets the colour channels for a glitchy edge.' },
+  { id: 'vhs', name: 'VHS', category: 'Retro', description: 'Tape-style colour bleed, noise and lines.' },
+  { id: 'grain', name: 'Film grain', category: 'Retro', description: 'Fine film grain over the picture.' },
 ]
 
 /** Fonts bundled by the web app and the renderer (all SIL OFL, served locally). */

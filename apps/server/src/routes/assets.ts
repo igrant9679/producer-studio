@@ -14,6 +14,7 @@ import { enqueue } from '../jobs/queue'
 import { assertVariant, serveObject, type Variant } from '../media/serve'
 import { type AssetRow, MIME_BY_EXT, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset } from '../services/assets'
 import { UploadTooLargeError } from '../storage'
+import { abortUpload } from '../services/asset-recovery'
 
 export const uploadRoutes = new Hono<AppEnv>()
 
@@ -116,6 +117,16 @@ assetRoutes.post('/:id/complete', async (c) => {
   const updated = await updateAsset(row.id, { status: 'processing', size: st.size, error: null, sha256: hash })
   await enqueue('asset.process', { assetId: row.id }, { workspaceId: row.workspaceId, userId: u.id, projectId: row.projectId, message: 'Processing upload' })
   return c.json(assetRecord(updated))
+})
+
+// The browser's PUT to storage failed (refused, network, tab closing): say so now instead of "processing" forever.
+assetRoutes.post('/:id/abort', async (c) => {
+  const u = requireUser(c)
+  const row = await loadAsset(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const b = await body(c, z.object({ reason: z.string().max(300).optional() }))
+  await abortUpload(row.id, b.reason ?? '')
+  return c.json(assetRecord(await loadAsset(row.id)))
 })
 
 assetRoutes.get('/', async (c) => {

@@ -118,6 +118,20 @@ export async function postStream(path: string, body: unknown, onEvent: (event: s
 
 export const mediaUrl = (assetId: string, variant: 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' = 'source') => `/api/media/${encodeURIComponent(assetId)}/${variant}`
 
+/** Why a PUT to storage was refused, in words — S3 answers with an XML <Code> (e.g. InvalidAccessKeyId). */
+function storageRefusal(xhr: XMLHttpRequest): string {
+  let code = ''
+  try {
+    code = xhr.responseText.match(/<Code>([^<]+)<\/Code>/)?.[1] ?? ''
+  } catch {
+    /* response not readable */
+  }
+  const what = `${xhr.status}${code ? ` ${code}` : ''}`
+  if (xhr.status === 403) return `storage refused the upload (${what}) — the server's storage credentials may have been rotated`
+  if (xhr.status === 413) return `the file is too large for storage (${what})`
+  return `storage answered ${what}`
+}
+
 export const api = {
   // auth
   me: () => req<MeResponse>('GET', '/auth/me'),
@@ -160,18 +174,27 @@ export const api = {
       mime: file.type || 'application/octet-stream',
       size: file.size,
     })
-    await new Promise<void>((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open('PUT', ticket.url)
-      xhr.withCredentials = ticket.url.startsWith('/')
-      for (const [k, v] of Object.entries(ticket.headers)) xhr.setRequestHeader(k, v)
-      xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total)
-      xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status})`)))
-      xhr.onerror = () => reject(new Error('Upload failed'))
-      xhr.send(file)
-    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('PUT', ticket.url)
+        xhr.withCredentials = ticket.url.startsWith('/')
+        for (const [k, v] of Object.entries(ticket.headers)) xhr.setRequestHeader(k, v)
+        xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total)
+        xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(storageRefusal(xhr))))
+        xhr.onerror = () => reject(new Error("the file couldn't be sent to storage (it refused the connection or the network dropped)"))
+        xhr.send(file)
+      })
+    } catch (e) {
+      // Tell the server, or the clip sits on "Processing" in everyone's library for good.
+      const reason = e instanceof Error ? e.message : String(e)
+      await req('POST', `/assets/${ticket.assetId}/abort`, { reason }).catch(() => undefined)
+      throw new Error(`${file.name}: upload failed — ${reason}`)
+    }
     return req<AssetRecord>('POST', `/assets/${ticket.assetId}/complete`)
   },
+  /** Re-run processing for a clip that failed (its file must already be in storage). */
+  retryAsset: (id: string) => req<AssetRecord>('POST', `/assets/${id}/complete`),
 
   // jobs
   job: <R = unknown>(id: string) => req<Job<R>>('GET', `/jobs/${id}`),

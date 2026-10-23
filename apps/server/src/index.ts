@@ -7,6 +7,7 @@ import { registerHandlers } from './jobs/handlers'
 import { startWorker, stopWorker } from './jobs/worker'
 import { log } from './log'
 import { tts } from './ai/tts'
+import { startStorageMonitor, stopStorageMonitor } from './services/storage-health'
 
 const config = loadConfig()
 const c = await initCtx(config)
@@ -36,6 +37,8 @@ if (config.role === 'all' || config.role === 'api') {
   server = serve({ fetch: h.fetch, port: config.port })
 }
 if (config.role === 'all' || config.role === 'worker') startWorker({ concurrency: config.workerConcurrency })
+// cloud only: a desktop's local disk needs no watching, and its cloud media has its own error paths
+if (config.mode === 'cloud') startStorageMonitor()
 if (desktop) await desktop.startDesktopServices()
 
 let closing = false
@@ -44,6 +47,7 @@ async function shutdown(sig: string) {
   closing = true
   log.info('shutting down', { sig })
   stopWorker()
+  stopStorageMonitor()
   desktop?.stopDesktopServices()
   tts.stop()
   server?.close()

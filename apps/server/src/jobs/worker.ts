@@ -5,6 +5,7 @@ import type { JobKind } from '@producer/core'
 import { ctx } from '../context'
 import { jobs } from '../db/schema'
 import { log } from '../log'
+import { reconcileAssets } from '../services/asset-recovery'
 import { type JobRow, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, updateProgress } from './queue'
 
 export class CancelledError extends Error {
@@ -157,12 +158,20 @@ export function startWorker(opts: { concurrency: number }) {
     }
   }, 5000)
   const rec = setInterval(() => void recoverStale(90_000, workerId).catch(() => 0), 30_000)
+  // clips that can no longer finish (abandoned uploads, dead or cancelled processing) are marked failed
+  const sweep = () => void reconcileAssets().catch((err) => log.warn('asset reconcile failed', { err }))
+  const first = setTimeout(sweep, 30_000)
+  const recon = setInterval(sweep, 5 * 60_000)
   hb.unref()
   rec.unref()
+  first.unref()
+  recon.unref()
   stopWorkerFn = () => {
     stopped = true
     clearInterval(hb)
     clearInterval(rec)
+    clearTimeout(first)
+    clearInterval(recon)
     for (const ac of running.values()) ac.abort()
   }
   log.info('worker started', { workerId, concurrency: opts.concurrency })

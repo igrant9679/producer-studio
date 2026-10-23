@@ -5,6 +5,7 @@ import { ctx } from '../context'
 import { jobs } from '../db/schema'
 import { jobDto } from '../dto'
 import { newId } from '../ids'
+import { ASSET_ERRORS, failAssetOfJob } from '../services/asset-recovery'
 
 export type JobRow = typeof jobs.$inferSelect
 
@@ -103,6 +104,8 @@ export async function cancelJob(id: string): Promise<JobRow | null> {
   if (rows[0]) {
     emitJob(rows[0])
     cancelHooks.forEach((h) => h(id))
+    // a queued asset.process job never runs its own error path: its clip would stay "processing" for good
+    await failAssetOfJob(rows[0], ASSET_ERRORS.cancelled)
   }
   return row
 }
@@ -131,6 +134,8 @@ export async function recoverStale(staleMs: number, exceptWorker?: string): Prom
       .returning()
     if (rows[0]) {
       emitJob(rows[0])
+      // giving up on the job must not leave its clip "processing" forever
+      if (giveUp) await failAssetOfJob(rows[0], ASSET_ERRORS.workerGaveUp)
       n++
     }
   }

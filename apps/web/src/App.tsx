@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { EditorPage } from './editor/EditorPage'
 import { useSession } from './lib/session'
 import { useToasts } from './lib/toast'
+import { TooltipLayer } from './lib/tooltip'
 import { AuthPage } from './shell/AuthPage'
 import { ShellRoutes } from './shell/ShellRoutes'
 import { SharePage } from './shell/SharePage'
@@ -47,6 +48,7 @@ export function App() {
         <Route path="/*" element={<RequireAuth><ShellRoutes /></RequireAuth>} />
       </Routes>
       <Toasts />
+      <TooltipLayer />
     </>
   )
 }
