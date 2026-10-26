@@ -229,7 +229,7 @@ function kindStatus(k: Exclude<VisualKind, 'footage'>, caps: ProduceCapabilities
   if (k === 'aiVideo')
     return caps?.video
       ? { available: true, note: `${VISUAL_KIND_INFO.aiVideo.hint}. Billed to ${who(caps.video.provider)}, at most ${caps.maxAiClips} clips per video.` }
-      : { available: false, note: 'Needs an OpenAI or Gemini key that can make video, in Settings → AI' }
+      : { available: false, note: 'Needs a Gemini key in Settings → AI (OpenAI no longer offers video)' }
   return caps?.stock ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint} (from Pexels).` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }
 }
 

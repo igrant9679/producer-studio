@@ -36,7 +36,7 @@ Everything in `packages/core/src/api.ts` is implemented with those shapes. Statu
 | Transcribe | `POST /api/ai/transcribe` → Job `{assetId, transcript}` (whisper.cpp, word timings) | ✅ |
 | TTS | `POST /api/ai/tts` → Job `{asset, duration}`; `GET /api/ai/voices`; `GET /api/ai/voices/:id/sample` (cached WAV) | ✅ |
 | AI writer | `POST /api/ai/write` SSE `delta`/`done`/`error` | ⚠️ 503 without a key (verified) |
-| Producer | `POST /api/ai/produce/script` (⚠️ Claude), `POST /api/ai/produce/assemble` (✅ no Claude needed) | |
+| Producer | `POST /api/ai/produce/script` (⚠️ AI key; `assetIds` may be empty when `brief.source = 'idea'`), `POST /api/ai/produce/assemble` (✅ no text AI needed; idea scenes may make images/clips on the space's own key), `GET /api/ai/produce/capabilities?workspaceId=` → `ProduceCapabilities` | 🧪 |
 | Assistant | `POST /api/ai/assistant` SSE `text`/`tool`/`done`/`error` | ⚠️ tools 🧪 |
 | Export | `POST /api/projects/:id/export` → Job `ExportResult`; `GET /api/exports?projectId=` | ✅🧪 |
 | Share | `POST /api/projects/:id/share {exportId?}` → `ShareLink` (that export or the latest; reuses its link; 409 before any export); `GET /api/projects/:id/shares`; `DELETE /api/share/:token` (editor: stop sharing); `GET /api/share/:token` → `SharedVideo` (public: name, size, duration only) and `/api/share/:token/video` (public, Range). Links made before 26 Oct are pinned to their export on first view | ✅🧪 |
@@ -109,6 +109,14 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   is unchanged), whisper word timings for captions, then rebuilds the timeline: title card, per-scene footage cut to
   `voice + 0.5 + 1.4 s` (1.8 s close) with slow-down or held last frame, voice track at +0.5 s, headline per scene (look styles,
   brand colours), crossfades (slide-up into the close), caption track, close card. Saves `project.ai.status = 'assembled'`.
+- **Videos from an idea** (26 Oct 2026; `ai/scenes.ts`, `ai/scene-layout.ts`, `ai/generate/*`): with `brief.source = 'idea'` the
+  script job skips transcription and the writer plans each scene's `visual` (`SceneVisual`): `motion` (headline + up to 4 points),
+  `diagram` (steps, cycle, hub, bars, compare, timeline, stat), `image` (AI still + Ken Burns), `stock` (Pexels clip), `aiVideo`
+  (AI clip). Motion and diagrams are built from editable shape/text items on shared "Graphics n" (overlay) and "Graphic text n"
+  (text) tracks, each part revealed when the narration's word timings say it. Images and clips are made during assembly on
+  the workspace's own key (OpenAI or Gemini stills; Gemini Omni clips, at most 3 per video; Pexels stock via `PEXELS_API_KEY`),
+  stored as assets with `meta.generated` and reused while the prompt/search is unchanged; a scene whose visual can't be made
+  falls back to motion and the job result carries `notes`. Model ids and fallbacks: top of `ai/generate/capabilities.ts`.
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

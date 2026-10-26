@@ -103,6 +103,10 @@ describe('diagram layouts', () => {
           const tr = (item as { transform: { x: number; y: number } }).transform
           expect(Math.abs(tr.x), `${d.type} x`).toBeLessThanOrEqual(aspect.width / 2)
           expect(Math.abs(tr.y), `${d.type} y`).toBeLessThanOrEqual(aspect.height / 2)
+          // clear of the captions along the bottom (their band starts about a third of the height below the centre)
+          const half = item.type === 'shape' ? (item as { height: number }).height / 2 : item.type === 'text' ? (item as { style: { fontSize: number } }).style.fontSize * 0.6 : 0
+          // (the soft background glows are meant to bleed off the frame)
+          if (item.name !== 'Glow') expect(tr.y + half, `${d.type} bottom`).toBeLessThanOrEqual(aspect.height * (aspect.height > aspect.width ? 0.34 : 0.33))
         }
       }
     })

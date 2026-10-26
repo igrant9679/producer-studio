@@ -187,7 +187,8 @@ export function diagramItems(d: SceneDiagram, f: SceneFrame): Placed[] {
   const W = f.width
   const H = f.height
   const vertical = H > W
-  const cy = 50 * s // content centre, under the headline band
+  // content centre: under the headline band, and clear of the captions along the bottom (landscape has less room)
+  const cy = (vertical ? 50 : 20) * s
   const out: Placed[] = []
   const ring = { color: pal.accent, width: Math.max(3, Math.round(4 * s)) }
   switch (d.type) {
@@ -221,7 +222,7 @@ export function diagramItems(d: SceneDiagram, f: SceneFrame): Placed[] {
     }
     case 'cycle': {
       const n = d.items.length
-      const R = Math.min(W, H) * (vertical ? 0.3 : 0.27)
+      const R = Math.min(W, H) * (vertical ? 0.3 : 0.24)
       const times = revealTimes(d.items, f)
       out.push(box(f, f.start + 0.4, { name: 'Cycle ring', shape: 'ellipse', x: 0, y: cy, w: R * 2, h: R * 2, fill: 'transparent', stroke: ring, anim: { in: { preset: 'zoomIn', duration: 0.6 }, out: out_ } }))
       const pw = Math.min(330 * s, (2 * Math.PI * R) / n - 30 * s)
@@ -236,7 +237,7 @@ export function diagramItems(d: SceneDiagram, f: SceneFrame): Placed[] {
     }
     case 'hub': {
       const n = d.items.length
-      const R = Math.min(W, H) * (vertical ? 0.32 : 0.3)
+      const R = Math.min(W, H) * (vertical ? 0.32 : 0.25)
       const times = revealTimes(d.items, f)
       const cw = 320 * s
       const pw = Math.min(330 * s, R * 1.1)
@@ -255,7 +256,7 @@ export function diagramItems(d: SceneDiagram, f: SceneFrame): Placed[] {
     case 'bars': {
       const n = d.items.length
       const chartW = W * (vertical ? 0.84 : 0.7)
-      const chartH = H * (vertical ? 0.44 : 0.46)
+      const chartH = H * (vertical ? 0.44 : 0.4)
       const base = cy + chartH / 2
       const max = Math.max(...d.items.map((b) => Math.max(0, b.value)), 1e-9)
       const slot = chartW / n
