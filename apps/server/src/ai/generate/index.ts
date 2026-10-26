@@ -1,8 +1,7 @@
 // Media generation for videos made without recordings: AI stills, AI video clips, stock footage.
-// CONTRACT ONLY (stub): the implementation lands in images.ts / video.ts / stock.ts / capabilities.ts and is re-exported
-// from here with exactly these signatures. Generation is billed to the workspace's own OpenAI / Gemini key (Settings →
-// AI); stock footage uses the server's PEXELS_API_KEY (free).
-import { HttpError } from '../../http'
+// The contract (types + function signatures) lives here; the work is in images.ts / video.ts / stock.ts /
+// capabilities.ts. Generation is billed to the workspace's own OpenAI / Gemini key (Settings → AI), never the server's;
+// stock footage uses the server's PEXELS_API_KEY (free). Which models and why: see the top of capabilities.ts.
 
 export type GenAspect = '16:9' | '9:16' | '1:1'
 export type GenProvider = 'openai' | 'gemini'
@@ -34,34 +33,16 @@ export interface GeneratedFile {
   mime: string
   provider: string
   model: string
+  /** Pixel size of the file as written (ffprobe), when it could be read. Providers don't always honour the aspect. */
+  width?: number
+  height?: number
 }
 
-const notYet = () => new HttpError(503, 'server', 'Media generation is not available on this server yet')
-
-export async function generationCapabilities(_workspaceId: string): Promise<GenCapabilities> {
-  return { stock: false }
-}
-
-export async function generateImage(_opts: { workspaceId: string; prompt: string; aspect: GenAspect; outDir: string; signal?: AbortSignal }): Promise<GeneratedFile> {
-  throw notYet()
-}
-
-export async function generateVideo(_opts: {
-  workspaceId: string
-  prompt: string
-  aspect: GenAspect
-  seconds: number
-  outDir: string
-  signal?: AbortSignal
-  onProgress?: (fraction: number, message: string) => void
-}): Promise<GeneratedFile & { seconds: number }> {
-  throw notYet()
-}
-
-export async function searchStock(_opts: { query: string; aspect: GenAspect; minSeconds?: number; signal?: AbortSignal }): Promise<StockClip[]> {
-  throw notYet()
-}
-
-export async function downloadStock(_clip: StockClip, _outDir: string, _signal?: AbortSignal): Promise<GeneratedFile> {
-  throw notYet()
-}
+// generationCapabilities(workspaceId): Promise<GenCapabilities>
+export { generationCapabilities } from './capabilities'
+// generateImage({ workspaceId, prompt, aspect, outDir, signal? }): Promise<GeneratedFile>
+export { generateImage } from './images'
+// generateVideo({ workspaceId, prompt, aspect, seconds, outDir, signal?, onProgress? }): Promise<GeneratedFile & { seconds }>
+export { generateVideo } from './video'
+// searchStock({ query, aspect, minSeconds?, signal? }): Promise<StockClip[]>; downloadStock(clip, outDir, signal?)
+export { downloadStock, searchStock } from './stock'
