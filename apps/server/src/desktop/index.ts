@@ -4,6 +4,7 @@
 import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import * as z from 'zod/v4'
 import { type AppEnv, SESSION_COOKIE, requireUser } from '../auth'
+import { desktopSecret } from '../child-env'
 import { ctx } from '../context'
 import { HttpError, body, forbidden, requireRole } from '../http'
 import { log } from '../log'
@@ -37,7 +38,7 @@ export async function initDesktop() {
     if (input.op === 'import') return runImport(input, jc.job.userId, jc)
     throw new Error(`Unknown VoiceStudio task ${String((input as { op?: string }).op)}`)
   })
-  if (!process.env.DESKTOP_SECRET) log.warn('desktop: DESKTOP_SECRET is not set; POST /api/desktop/session is disabled')
+  if (!desktopSecret('DESKTOP_SECRET')) log.warn('desktop: DESKTOP_SECRET is not set; POST /api/desktop/session is disabled')
 }
 
 export async function startDesktopServices() {

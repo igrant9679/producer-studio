@@ -1,11 +1,13 @@
 // ClaudeProvider over the locally installed Claude Code CLI (desktop edition: the user's own Claude subscription).
-// Every run: `claude -p` with the prompt on stdin, `--output-format stream-json --verbose`, no session persistence,
-// `--strict-mcp-config` (ignore the user's MCP servers), built-in tools disabled unless a feature needs one, a
-// per-run temp working dir that is removed afterwards, and an environment stripped of anything that would point the
-// CLI at another session or an API key. Never `--dangerously-skip-permissions`.
+// Every run: `claude -p` with the prompt on stdin, `--output-format stream-json --verbose`, `--permission-mode default`
+// and `--setting-sources ""` (the user's own settings — permission mode, allow rules, hooks, CLAUDE.md — never apply),
+// `--strict-mcp-config` (ignore the user's MCP servers), no session persistence, built-in tools disabled unless a
+// feature needs one, a per-run temp working dir that is removed afterwards, and an environment stripped of anything
+// that would point the CLI at another session or an API key. Never `--dangerously-skip-permissions`. A CLI whose
+// --help doesn't list the REQUIRED_FLAGS is reported as too old rather than run without them.
 //   write()      – no tools; token streaming via --include-partial-messages.
 //   structured() – --json-schema derived from the zod schema; contact sheets written into the run dir and readable
-//                  with the Read tool only (--tools Read --allowedTools Read --add-dir <run>).
+//                  with the Read tool inside the run dir only (--tools Read --allowedTools Read(//<run>/**) --add-dir <run>).
 //   runAgent()   – a local stdio MCP server (scripts/mcp-server.mjs) exposes the same tools as the API provider;
 //                  each tools/call is bridged back into this process and run through req.runTool, so project
 //                  state, tool events and services (transcribe/TTS) are identical to the API provider.
@@ -28,6 +30,20 @@ import type { AgentRequest, ClaudeProvider, ProviderStatus, StructuredRequest } 
 const MCP_NAME = 'producer'
 const TIMEOUT = { write: 3 * 60_000, structured: 10 * 60_000, agent: 10 * 60_000 }
 const STATUS_TTL_MS = 30_000
+/** Passed on every run (they keep the user's settings, MCP servers and permission mode out of it), so no fallback. */
+export const REQUIRED_FLAGS = ['--permission-mode', '--setting-sources', '--strict-mcp-config']
+
+/**
+ * Permission rule that lets the Read tool open files under `dir` and nowhere else. The CLI's rule syntax wants
+ * absolute paths as `//path`, with Windows paths in POSIX form (C:\Users\x → /c/Users/x).
+ */
+export function readRule(dir: string): string {
+  const posix = dir
+    .replace(/\\/g, '/')
+    .replace(/^([A-Za-z]):\//, (_, d: string) => `/${d.toLowerCase()}/`)
+    .replace(/\/+$/, '')
+  return `Read(/${posix}/**)`
+}
 
 export function mcpServerScript(): string {
   return process.env.PRODUCER_MCP_SCRIPT || path.join(SERVER_ROOT, 'scripts', 'mcp-server.mjs')
@@ -41,6 +57,10 @@ interface Probe {
   flags?: Set<string>
   auth?: AuthStatus
   error?: string
+  /** --help failed or timed out, so we can't tell whether the required flags are there (asked again next probe). */
+  optionsUnknown?: boolean
+  /** Required flags this CLI doesn't list. */
+  missing?: string[]
 }
 
 function describe(p: Probe): ProviderStatus {
@@ -48,6 +68,8 @@ function describe(p: Probe): ProviderStatus {
   if (!p.install) return { available: false, detail: 'Claude Code CLI not found. Install Claude Code, or set its path in Settings → AI.', model }
   const ver = p.version && p.version !== 'unknown' ? `Claude Code ${p.version}` : 'Claude Code'
   if (p.error) return { available: false, detail: `${ver} at ${p.install.path} could not be started: ${p.error}`, model }
+  if (p.optionsUnknown) return { available: false, detail: `${ver} at ${p.install.path} didn’t list its options in time (claude --help). Try again in a moment.`, model }
+  if (p.missing?.length) return { available: false, detail: `${ver} is too old for Producer Studio (it lacks ${p.missing.join(', ')}). Update Claude Code and try again.`, model }
   if (!p.auth?.loggedIn) return { available: false, detail: `${ver} is installed but not signed in. Use “Sign in to Claude”.`, model }
   const who = [p.auth.email, p.auth.subscriptionType ? `${p.auth.subscriptionType} plan` : undefined].filter(Boolean).join(' · ')
   return { available: true, detail: `Signed in${who ? ` as ${who}` : ''} · ${ver}`, model }
@@ -86,6 +108,8 @@ export class ClaudeCliProvider implements ClaudeProvider {
           const info = await binaryInfo(install.path)
           p.version = info.version
           p.flags = info.flags
+          if (!info.helpOk) p.optionsUnknown = true
+          else p.missing = REQUIRED_FLAGS.filter((f) => !info.flags.has(f))
           p.auth = await authStatus(install.path)
         } catch (err) {
           p.error = err instanceof Error ? err.message : String(err)
@@ -113,8 +137,10 @@ export class ClaudeCliProvider implements ClaudeProvider {
   }
 
   private baseArgs(flags: Set<string>, systemFile: string): string[] {
-    const args = ['-p', '--output-format', 'stream-json', '--verbose']
-    for (const f of ['--no-session-persistence', '--strict-mcp-config', '--disable-slash-commands']) if (flags.has(f)) args.push(f)
+    // REQUIRED_FLAGS, unconditionally (ready() refuses a CLI that doesn't list them): an explicit permission mode, no
+    // user/project/local settings (their defaultMode, allow rules, hooks and CLAUDE.md files), no MCP servers but ours
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'default', '--setting-sources', '', '--strict-mcp-config']
+    for (const f of ['--no-session-persistence', '--disable-slash-commands']) if (flags.has(f)) args.push(f)
     if (flags.has('--permission-prompts')) args.push('--permission-prompts', 'none')
     args.push('--system-prompt-file', systemFile)
     const model = getSettings().claudeModel.trim()
@@ -123,7 +149,14 @@ export class ClaudeCliProvider implements ClaudeProvider {
   }
 
   private async withRunDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'producer-claude-'))
+    const made = fs.mkdtempSync(path.join(os.tmpdir(), 'producer-claude-'))
+    // the resolved long form (no 8.3 short names), so the Read rule matches the paths the CLI checks
+    let dir = made
+    try {
+      dir = fs.realpathSync.native(made)
+    } catch {
+      /* keep the path as created */
+    }
     try {
       return await fn(dir)
     } finally {
@@ -170,7 +203,8 @@ export class ClaudeCliProvider implements ClaudeProvider {
         ? `${req.prompt}\n\nReference images (open each one with the Read tool before answering):\n${files.join('\n')}\n\nReturn your answer as the structured output.`
         : `${req.prompt}\n\nReturn your answer as the structured output.`
       const args = [...this.baseArgs(flags, sys), '--json-schema', JSON.stringify(jsonSchemaOf(req.schema))]
-      if (files.length) args.push('--tools', 'Read', '--allowedTools', 'Read', '--add-dir', dir, '--max-turns', String(files.length + 4))
+      // Read, inside the run dir only: an instruction smuggled in through a transcript or brief can't open other files
+      if (files.length) args.push('--tools', 'Read', '--allowedTools', readRule(dir), '--add-dir', dir, '--max-turns', String(files.length + 4))
       else args.push('--tools', '', '--max-turns', '3')
       const r = await runClaude({
         bin,

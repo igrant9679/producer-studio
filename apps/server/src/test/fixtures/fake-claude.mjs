@@ -1,25 +1,38 @@
 // Stand-in for the Claude Code CLI in tests: same flags and stream-json output shape, no network.
 // With --mcp-config it launches the configured MCP server, lists its tools and calls split_at + add_text through it,
 // exactly as the real CLI would. FAKE_CLAUDE_LOG receives one JSON line per invocation (argv, cwd, selected env).
+// FAKE_CLAUDE_HELP=old plays an older CLI (no --permission-mode / --setting-sources / --strict-mcp-config; unknown
+// options are rejected like commander does); FAKE_CLAUDE_HELP=fail makes `--help` fail as a timed-out probe would.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const argv = process.argv.slice(2)
 if (process.env.FAKE_CLAUDE_LOG) {
+  const pick = (k) => process.env[k] ?? null
   fs.appendFileSync(
     process.env.FAKE_CLAUDE_LOG,
-    JSON.stringify({ argv, cwd: process.cwd(), env: { CLAUDECODE: process.env.CLAUDECODE ?? null, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? null, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT ?? null } }) + '\n',
+    JSON.stringify({ argv, cwd: process.cwd(), env: { CLAUDECODE: pick('CLAUDECODE'), ANTHROPIC_API_KEY: pick('ANTHROPIC_API_KEY'), CLAUDE_CODE_ENTRYPOINT: pick('CLAUDE_CODE_ENTRYPOINT'), DESKTOP_SECRET: pick('DESKTOP_SECRET'), DESKTOP_SECRET_KEY: pick('DESKTOP_SECRET_KEY') } }) + '\n',
   )
 }
 const loggedOut = process.env.FAKE_CLAUDE_LOGGED_OUT === '1'
+const helpMode = process.env.FAKE_CLAUDE_HELP
+const OLD = ['--add-dir', '--allowedTools', '--include-partial-messages', '--json-schema', '--max-turns', '--mcp-config', '--model', '--output-format', '--system-prompt', '--tools', '--verbose']
+const CURRENT = [...OLD, '--disable-slash-commands', '--no-session-persistence', '--permission-mode', '--permission-prompts', '--setting-sources', '--strict-mcp-config'].sort()
+const known = helpMode === 'old' ? OLD : CURRENT
 if (argv[0] === '--version') {
   console.log('9.9.9 (Claude Code)')
   process.exit(0)
 }
 if (argv[0] === '--help') {
-  console.log('Options: --add-dir --allowedTools --disable-slash-commands --include-partial-messages --json-schema --max-turns --mcp-config --model --no-session-persistence --output-format --permission-prompts --strict-mcp-config --system-prompt --tools --verbose')
+  if (helpMode === 'fail') process.exit(1)
+  console.log(`Options: ${known.join(' ')}`)
   process.exit(0)
+}
+const unknown = argv.find((a) => a.startsWith('--') && a !== '--system-prompt-file' && !known.includes(a))
+if (unknown) {
+  console.error(`error: unknown option '${unknown}'`)
+  process.exit(1)
 }
 if (argv[0] === 'auth' && argv[1] === 'status') {
   console.log(JSON.stringify({ loggedIn: !loggedOut, authMethod: loggedOut ? 'none' : 'claude.ai', email: loggedOut ? undefined : 'tester@example.com', subscriptionType: loggedOut ? undefined : 'max' }))

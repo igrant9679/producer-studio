@@ -14,9 +14,22 @@ export class CloudError extends Error {
   }
 }
 
+const LOOPBACK_HOST = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i
+
+/**
+ * The cloud URL as stored: https only, because linking sends the account password and every sync the device token.
+ * Plain http is accepted for this computer alone (a cloud running locally, as in development and tests).
+ */
 export function normalizeCloudUrl(raw: string): string {
-  const u = new URL(raw.trim())
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('The cloud URL must start with https://')
+  let u: URL
+  try {
+    u = new URL(raw.trim())
+  } catch {
+    throw new Error('That isn’t a valid URL. The cloud URL must start with https://')
+  }
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && LOOPBACK_HOST.test(u.hostname))) {
+    throw new Error(u.protocol === 'http:' ? 'The cloud URL must start with https:// (plain http would send your password and device token unencrypted)' : 'The cloud URL must start with https://')
+  }
   return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`
 }
 

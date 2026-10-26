@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { and, eq, inArray } from 'drizzle-orm'
 import { EXPORT_RESOLUTIONS, compileToHyperFrames, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
+import { childEnv } from '../child-env'
 import { REPO_ROOT } from '../config'
 import { ctx } from '../context'
 import { assets, exportsTable } from '../db/schema'
@@ -147,7 +148,7 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
 }
 
 function hfEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env }
+  const env = childEnv()
   // Windows hosts behind TLS inspection need the system trust store for any browser download
   if (process.platform === 'win32' && !/--use-system-ca/.test(env.NODE_OPTIONS ?? '')) env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --use-system-ca`.trim()
   if (!env.CHROME_PATH && ctx().config.chromePath && process.env.HF_USE_CACHED_CHROME === '1') env.CHROME_PATH = ctx().config.chromePath

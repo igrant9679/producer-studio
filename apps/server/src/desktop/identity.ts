@@ -6,6 +6,7 @@ import os from 'node:os'
 import { eq, sql } from 'drizzle-orm'
 import type { User } from '@producer/core'
 import { hashPassword } from '../auth'
+import { desktopSecret } from '../child-env'
 import { ctx } from '../context'
 import { sessions, users } from '../db/schema'
 import { newId, randomToken, sha256 } from '../ids'
@@ -75,7 +76,7 @@ export async function createLocalSession(userAgent?: string): Promise<{ token: s
 }
 
 export function secretMatches(given: string | undefined): boolean {
-  const expected = process.env.DESKTOP_SECRET
+  const expected = desktopSecret('DESKTOP_SECRET')
   if (!expected || !given || given.length !== expected.length) return false
   return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected))
 }

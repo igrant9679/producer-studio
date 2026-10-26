@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as z from 'zod/v4'
 import { addAsset, addItem, createProject, createVideoItem, type Asset, type Project } from '@producer/core'
 import { runAssistant, toolSpecs } from '../ai/assistant'
-import { ClaudeCliProvider, cliFailure, mcpServerScript, renderConversation } from '../ai/cli'
+import { ClaudeCliProvider, REQUIRED_FLAGS, cliFailure, mcpServerScript, readRule, renderConversation } from '../ai/cli'
 import { startToolBridge } from '../ai/cli/bridge'
 import { claudeCandidates, cliEnv, compareVersions, parseAuthStatus, pickClaude, type DetectDeps } from '../ai/cli/detect'
 import { extractJson, jsonSchemaOf } from '../ai/cli/schema'
@@ -143,6 +143,16 @@ describe('CLI detection', () => {
     const e = cliEnv({ PATH: 'x', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'sdk', CLAUDE_CODE_SSE_PORT: '1', CLAUDE_CODE_MESSAGING_TOKEN: 't', ANTHROPIC_BASE_URL: 'http://proxy', ANTHROPIC_API_KEY: 'sk', ANTHROPIC_MODEL: 'm', CLAUDE_CONFIG_DIR: 'keep' })
     expect(e).toMatchObject({ PATH: 'x', CLAUDE_CONFIG_DIR: 'keep' })
     for (const k of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT', 'CLAUDE_CODE_MESSAGING_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL']) expect(e[k]).toBeUndefined()
+    // the desktop secrets never reach the CLI (or the hooks and terminals it starts)
+    const d = cliEnv({ PATH: 'x', DESKTOP_SECRET: 's', DESKTOP_SECRET_KEY: 'k' }, { EXTRA: '1' })
+    expect(d).toMatchObject({ PATH: 'x', EXTRA: '1' })
+    expect(d.DESKTOP_SECRET).toBeUndefined()
+    expect(d.DESKTOP_SECRET_KEY).toBeUndefined()
+  })
+
+  it('scopes the Read permission to one folder in the CLI’s absolute-path rule syntax', () => {
+    expect(readRule('C:\\Users\\Jo Ann\\AppData\\Local\\Temp\\producer-claude-ab12')).toBe('Read(//c/Users/Jo Ann/AppData/Local/Temp/producer-claude-ab12/**)')
+    expect(readRule('/tmp/producer-claude-ab12/')).toBe('Read(//tmp/producer-claude-ab12/**)')
   })
 })
 
@@ -273,6 +283,8 @@ describe('ClaudeCliProvider against a fake claude binary', () => {
     process.env.FAKE_CLAUDE_LOG = log
     process.env.CLAUDECODE = '1'
     process.env.ANTHROPIC_API_KEY = 'sk-should-not-leak'
+    process.env.DESKTOP_SECRET = 'desktop-secret-should-not-leak'
+    process.env.DESKTOP_SECRET_KEY = 'desktop-key-should-not-leak'
     const { resetSettingsCache, saveSettings } = await import('../desktop/settings')
     resetSettingsCache()
     saveSettings({ claudePath: FAKE, claudeModel: 'sonnet' })
@@ -304,14 +316,17 @@ describe('ClaudeCliProvider against a fake claude binary', () => {
     const r = runs().at(-1)!
     expect(r.argv).toEqual(expect.arrayContaining(['--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--strict-mcp-config', '--include-partial-messages', '--model', 'sonnet']))
     expect(r.argv[r.argv.indexOf('--tools') + 1]).toBe('')
+    // an explicit permission mode and none of the user's own settings files (permission mode, allow rules, hooks)
+    expect(r.argv[r.argv.indexOf('--permission-mode') + 1]).toBe('default')
+    expect(r.argv[r.argv.indexOf('--setting-sources') + 1]).toBe('')
     expect(r.argv).not.toContain('--dangerously-skip-permissions')
-    expect(r.env).toEqual({ CLAUDECODE: null, ANTHROPIC_API_KEY: null, CLAUDE_CODE_ENTRYPOINT: null })
+    expect(r.env).toEqual({ CLAUDECODE: null, ANTHROPIC_API_KEY: null, CLAUDE_CODE_ENTRYPOINT: null, DESKTOP_SECRET: null, DESKTOP_SECRET_KEY: null })
     expect(path.basename(r.cwd)).toMatch(/^producer-claude-/)
     await new Promise((res) => setTimeout(res, 300))
     expect(fs.existsSync(r.cwd)).toBe(false)
   })
 
-  it('structured passes --json-schema, allows only Read for image files and validates with zod', async () => {
+  it('structured passes --json-schema, allows Read for the run dir only and validates with zod', async () => {
     const p = new ClaudeCliProvider()
     process.env.FAKE_STRUCTURED = JSON.stringify({ message: 'ok' })
     const schema = z.object({ message: z.string(), _schemaKeys: z.array(z.string()), _images: z.number() })
@@ -321,7 +336,9 @@ describe('ClaudeCliProvider against a fake claude binary', () => {
     const r = runs().at(-1)!
     expect(JSON.parse(r.argv[r.argv.indexOf('--json-schema') + 1]).type).toBe('object')
     expect(r.argv[r.argv.indexOf('--tools') + 1]).toBe('Read')
-    expect(r.argv[r.argv.indexOf('--allowedTools') + 1]).toBe('Read')
+    // never a bare "Read" (any file on the machine): only files under this run's temp dir
+    expect(r.argv[r.argv.indexOf('--allowedTools') + 1]).toBe(readRule(r.cwd))
+    expect(r.argv[r.argv.indexOf('--allowedTools') + 1]).toMatch(/^Read\(\/\/.+\/producer-claude-[^/]+\/\*\*\)$/)
     expect(r.argv[r.argv.indexOf('--add-dir') + 1]).toBe(r.cwd)
     await expect(p.structured({ system: 's', prompt: 'p', images: [], schema: z.object({ nope: z.string() }) })).rejects.toMatchObject({ status: 502 })
   })
@@ -362,5 +379,46 @@ describe('ClaudeCliProvider against a fake claude binary', () => {
     } finally {
       delete process.env.FAKE_CLAUDE_LOGGED_OUT
     }
+  })
+
+  // the probe cache is per binary path, so these use their own copies of the fake
+  async function withFake<T>(name: string, help: string | undefined, fn: (p: ClaudeCliProvider) => Promise<T>): Promise<T> {
+    const copy = path.join(path.dirname(log), name)
+    if (!fs.existsSync(copy)) fs.copyFileSync(FAKE, copy)
+    const { saveSettings } = await import('../desktop/settings')
+    saveSettings({ claudePath: copy })
+    if (help) process.env.FAKE_CLAUDE_HELP = help
+    else delete process.env.FAKE_CLAUDE_HELP
+    try {
+      return await fn(new ClaudeCliProvider())
+    } finally {
+      delete process.env.FAKE_CLAUDE_HELP
+      saveSettings({ claudePath: FAKE })
+    }
+  }
+
+  it('a CLI without the required flags is reported as too old and never run without them', async () => {
+    const before = runs().length
+    await withFake('fake-claude-old.mjs', 'old', async (p) => {
+      const s = await p.status()
+      expect(s.available).toBe(false)
+      expect(s.detail).toMatch(/too old/)
+      for (const f of REQUIRED_FLAGS) expect(s.detail).toContain(f)
+      await expect(p.write({ kind: 'headline', prompt: 'x' }, () => undefined)).rejects.toMatchObject({ status: 503, message: expect.stringMatching(/Update Claude Code/) })
+    })
+    expect(runs().length).toBe(before)
+  })
+
+  it('a --help probe that fails is not cached: the CLI is unavailable now and usable once it answers', async () => {
+    await withFake('fake-claude-slow.mjs', 'fail', async (p) => {
+      const s = await p.status()
+      expect(s.available).toBe(false)
+      expect(s.detail).toMatch(/didn’t list its options/)
+      await expect(p.write({ kind: 'headline', prompt: 'x' }, () => undefined)).rejects.toMatchObject({ status: 503 })
+    })
+    await withFake('fake-claude-slow.mjs', undefined, async (p) => {
+      expect(await p.status()).toMatchObject({ available: true })
+      expect(await p.write({ kind: 'headline', prompt: 'x' }, () => undefined)).toBe('Bright ideas, clearly told.')
+    })
   })
 })

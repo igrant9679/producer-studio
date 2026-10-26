@@ -177,11 +177,34 @@ voiceStudioRoutes.post('/voices/adopt', async (c) => {
 
 // ---------------- import VoiceStudio outputs into the library ----------------
 
+const IMPORT_ROOTS = /^\/(audio|voice_audio|dub|batch|audiobook|preview)(\/|$)/
+
+/**
+ * Whether `source` is a VoiceStudio output path the import may fetch. fetch() resolves `..` (also written `%2e%2e`,
+ * or with backslashes) before the request leaves, so `/audio/../system/…` would reach any VoiceStudio route: such
+ * paths are refused outright, and the prefix is checked on the path exactly as it will be requested.
+ */
+export function isImportSource(source: string): boolean {
+  if (/[\\\u0000-\u001f\u007f#]|%2e/i.test(source)) return false
+  const q = source.indexOf('?')
+  const pathPart = q < 0 ? source : source.slice(0, q)
+  if (pathPart.split('/').some((seg) => seg === '.' || seg === '..')) return false
+  let u: URL
+  try {
+    u = new URL(source, 'http://voicestudio.invalid')
+  } catch {
+    return false
+  }
+  // normalising must not change the path (no dot segments or stray characters, still on the same origin)
+  if (u.origin !== 'http://voicestudio.invalid' || u.pathname !== pathPart) return false
+  return IMPORT_ROOTS.test(u.pathname)
+}
+
 const ImportSchema = z.object({
   workspaceId: z.string().min(1),
   projectId: z.string().optional(),
   /** VoiceStudio path of the output, e.g. /audio/ab12cd34.wav, /dub/download/<job>?…, /dub/download-audio/<job>?lang=es */
-  source: z.string().min(2).max(1000).regex(/^\/(audio|voice_audio|dub|batch|audiobook|preview)\b/, 'Unsupported VoiceStudio output'),
+  source: z.string().min(2).max(1000).refine(isImportSource, 'Unsupported VoiceStudio output'),
   name: z.string().trim().min(1).max(200),
   kind: z.enum(['audio', 'video']),
   /** File extension hint when the response has no filename (".wav", ".mp4", ".m4b"…) */
@@ -341,6 +364,8 @@ export async function runImport(input: z.infer<typeof ImportSchema> & { op: 'imp
   const { assetRecord } = await import('../../dto')
   const work = tmpDir('vs-import')
   try {
+    // re-checked here too: a job queued before this check existed may still be waiting
+    if (!isImportSource(input.source)) throw new Error('Unsupported VoiceStudio output')
     jc.progress(0.05, 'Fetching from VoiceStudio')
     const res = await vs(input.source, { signal: jc.signal, timeoutMs: 60 * 60_000 })
     if (!res.ok || !res.body) throw new Error(`VoiceStudio couldn’t provide that file (HTTP ${res.status})`)
