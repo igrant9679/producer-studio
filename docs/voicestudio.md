@@ -31,7 +31,13 @@ Web UI (Voice Studio tabs) ── same-origin fetches only
   (certifi + Windows ROOT/CA stores) for the backend's Python (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`).
 - **Proxy allow-list** (`routes.ts`): profiles, generate, history, audio, design, gallery, archetypes, engines, models,
   dub, tasks, jobs, audiobook, stories, batch, transcribe, clean-audio, the engine-licence setting, OpenAI-style audio.
-  Blocked: `/system/*`, other `/api/settings/*`, telephony, marketplace, MCP, auth.
+  Blocked: `/system/*`, other `/api/settings/*`, telephony, marketplace, MCP, auth. `POST /api/voicestudio/import` only
+  fetches output paths (`/audio`, `/voice_audio`, `/dub`, `/batch`, `/audiobook`, `/preview`) and refuses `..`, `%2e`
+  and backslashes, which fetch() would otherwise resolve onto other routes.
+- **No auth on the backend port (known limit).** VoiceStudio 0.5.6 trusts every loopback caller: `OMNIVOICE_API_KEY`
+  only gates non-loopback clients (`core/auth.py`, `BearerKeyMiddleware`), so a per-launch key wouldn't keep other
+  local processes (or other Windows users on the machine) off the port. The allow-list above guards our own API, not
+  the backend itself. Closing this needs an upstream option to require the key on loopback.
 - `PS_VOICESTUDIO_URL` attaches to an already-running backend instead of spawning one (tests use a fake backend).
 
 ## Voices

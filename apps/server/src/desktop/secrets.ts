@@ -1,12 +1,13 @@
 // Encryption at rest for the cloud device token (AES-256-GCM).
 // The key comes from the Electron main process (DESKTOP_SECRET_KEY, base64 32 bytes): main generates it once and
 // keeps it protected by the OS keystore via Electron safeStorage (DPAPI on Windows, Keychain on macOS, libsecret on
-// Linux), handing it to the server only through the child's environment. Without Electron (dev scripts, tests) the key
-// falls back to a random file in the data folder — that protects nothing against someone who can read the data folder,
-// and the status says so.
+// Linux), handing it to the server only through the child's environment (the server moves it into memory at startup,
+// see child-env.ts). Without Electron (dev scripts, tests) the key falls back to a random file in the data folder —
+// that protects nothing against someone who can read the data folder, and the status says so.
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { desktopSecret } from '../child-env'
 import { ctx } from '../context'
 
 export interface Sealed {
@@ -19,7 +20,7 @@ export interface Sealed {
 }
 
 function key(): { key: Buffer; protection: Sealed['protection'] } {
-  const env = process.env.DESKTOP_SECRET_KEY
+  const env = desktopSecret('DESKTOP_SECRET_KEY')
   if (env) {
     const k = Buffer.from(env, 'base64')
     if (k.length === 32) return { key: k, protection: 'os' }

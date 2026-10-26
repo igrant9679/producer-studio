@@ -3,6 +3,7 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
 import { VOICES, isProfileVoice } from '@producer/core'
+import { childEnv } from '../child-env'
 import { SERVER_ROOT } from '../config'
 import { ctx } from '../context'
 import { CancelledError } from '../jobs/worker'
@@ -24,7 +25,7 @@ class TtsEngine {
     const script = path.join(SERVER_ROOT, 'scripts', 'tts-worker.mjs')
     const child = spawn(process.execPath, [script], {
       cwd: SERVER_ROOT,
-      env: { ...process.env, KOKORO_CACHE: ctx().config.kokoroCache ?? '' },
+      env: childEnv(process.env, { KOKORO_CACHE: ctx().config.kokoroCache ?? '' }),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     })

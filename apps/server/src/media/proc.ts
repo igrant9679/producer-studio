@@ -1,5 +1,6 @@
 // Child-process helpers: run with an AbortSignal (kills the process tree on cancel), capture output.
 import { spawn, type SpawnOptions } from 'node:child_process'
+import { childEnv } from '../child-env'
 import { CancelledError } from '../jobs/worker'
 import { ctx } from '../context'
 
@@ -45,7 +46,7 @@ export function run(cmd: string, args: string[], opts: RunOptions = {}): Promise
     const max = opts.maxCapture ?? 1_000_000
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
-      env: opts.env ?? process.env,
+      env: childEnv(opts.env ?? process.env),
       windowsHide: true,
       detached: process.platform !== 'win32',
       stdio: [opts.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],

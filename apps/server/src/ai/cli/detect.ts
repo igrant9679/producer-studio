@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { childEnv } from '../../child-env'
 
 export type ClaudeSource = 'settings' | 'desktop-bundle' | 'msix' | 'local-bin' | 'path'
 
@@ -92,7 +93,7 @@ export function claudeCandidates(configured: string | undefined, d: DetectDeps =
 function whichSync(cmd: string): Promise<string[]> {
   return new Promise((resolve) => {
     const tool = process.platform === 'win32' ? 'where' : 'which'
-    execFile(tool, [cmd], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
+    execFile(tool, [cmd], { windowsHide: true, timeout: 5000, env: childEnv() }, (err, stdout) => {
       if (err) return resolve([])
       resolve(
         String(stdout)
@@ -134,12 +135,13 @@ export async function findClaude(configured?: string): Promise<ClaudeInstall | n
 }
 
 // Environment for every CLI run: drop variables that would attach it to another Claude Code session or redirect it
-// away from the user's own subscription login (API keys, base URLs, host-session sockets).
+// away from the user's own subscription login (API keys, base URLs, host-session sockets), plus the desktop secrets
+// (childEnv): nothing the CLI or the sign-in terminal starts may open a local session or read our sealed keys.
 const STRIP = /^(CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_AGENT_SDK_.*|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PREVIEW_.*|ANTHROPIC_.*|ELECTRON_RUN_AS_NODE)$/i
 
 export function cliEnv(base: NodeJS.ProcessEnv = process.env, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(base)) if (!STRIP.test(k) && v !== undefined) env[k] = v
+  for (const [k, v] of Object.entries(childEnv(base))) if (!STRIP.test(k) && v !== undefined) env[k] = v
   env.DISABLE_AUTOUPDATER = '1'
   env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE = '1'
   return { ...env, ...extra }
@@ -201,6 +203,8 @@ interface BinaryInfo {
   version: string
   flags: Set<string>
   mtimeMs: number
+  /** False when `--help` failed or timed out: the supported flags are unknown, not absent. */
+  helpOk: boolean
 }
 
 const binaryCache = new Map<string, BinaryInfo>()
@@ -220,8 +224,9 @@ export async function binaryInfo(bin: string): Promise<BinaryInfo> {
   const flags = new Set(h.out.match(/--[a-z][a-z-]+/g) ?? [])
   // hidden-but-supported flags we rely on (present since 1.x)
   if (flags.has('--system-prompt')) flags.add('--system-prompt-file')
-  const info = { version, flags, mtimeMs }
-  if (v.code === 0) binaryCache.set(bin, info)
+  const info = { version, flags, mtimeMs, helpOk: h.code === 0 && flags.size > 0 }
+  // only a complete answer is cached: a --help that timed out on a cold start must not pin an empty flag set
+  if (v.code === 0 && info.helpOk) binaryCache.set(bin, info)
   return info
 }
 

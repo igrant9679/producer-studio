@@ -34,13 +34,17 @@ Producer Studio.exe (main)  ── spawns ──▶  Producer Studio.exe  (ELECT
 
 | Tool | Local build source | CI (`--download`) |
 |---|---|---|
-| whisper.cpp CLI + DLLs, `ggml-small.en.bin` | `WHISPER_DIR`, else the Producer 0.1 offline bundle (`%LOCALAPPDATA%\Programs\Producer\resources\app\resources\offline\tools\whisper`) | `whisper-bin-x64.zip` from the pinned whisper.cpp GitHub release + model from `huggingface.co/ggerganov/whisper.cpp` |
-| Kokoro-82M ONNX (quantized) | `KOKORO_DIR`, else the Producer offline `models/onnx-community/Kokoro-82M-v1.0-ONNX` | `huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX` (config, tokenizer, `onnx/model_quantized.onnx`) |
-| chrome-headless-shell (win64) | `CHROME_DIR`, else newest in `%USERPROFILE%\.cache\hyperframes\chrome\chrome-headless-shell` | `npx @puppeteer/browsers install chrome-headless-shell@$CHROME_HEADLESS_SHELL_VERSION` |
+| whisper.cpp CLI + DLLs, `ggml-small.en.bin` | `WHISPER_DIR`, else the Producer 0.1 offline bundle (`%LOCALAPPDATA%\Programs\Producer\resources\app\resources\offline\tools\whisper`) | `whisper-bin-x64.zip` from the whisper.cpp v1.7.6 GitHub release + model from `huggingface.co/ggerganov/whisper.cpp` at a pinned commit |
+| Kokoro-82M ONNX (quantized) | `KOKORO_DIR`, else the Producer offline `models/onnx-community/Kokoro-82M-v1.0-ONNX` | `huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX` at a pinned commit (config, tokenizer, `onnx/model_quantized.onnx`) |
+| chrome-headless-shell (win64) | `CHROME_DIR`, else newest in `%USERPROFILE%\.cache\hyperframes\chrome\chrome-headless-shell` | `npx @puppeteer/browsers@3.2.3 install chrome-headless-shell@$CHROME_HEADLESS_SHELL_VERSION` |
 
 CI recipe (Windows runner): `npm ci` → `npm run dist -w @producer/desktop -- --download`, caching
-`apps/desktop/build/tools` and electron-builder's cache (`%LOCALAPPDATA%\electron-builder\Cache`). Pin versions via the
-constants at the top of `fetch-tools.mjs` and verify checksums in CI before trusting new releases.
+`apps/desktop/build/tools` and electron-builder's cache (`%LOCALAPPDATA%\electron-builder\Cache`). With `--download`,
+every file is checked against a sha256 pinned at the top of `fetch-tools.mjs` (the whisper zip, the whisper model and
+each Kokoro file; cached copies are re-checked and fetched again on a mismatch), and Hugging Face files come from a
+commit (`resolve/<sha>`), never `main`. Chrome for Testing publishes no checksums, so chrome-headless-shell is pinned by
+version only. To move a pin, take the new sha256 from the GitHub release API (asset `digest`) or Hugging Face's
+`paths-info` API (`lfs.oid`) — the comment in `fetch-tools.mjs` has the calls; no large download is needed.
 
 ## Code signing (hooks in place, unsigned today)
 
@@ -69,15 +73,27 @@ Without them the build logs "signing" steps but produces unsigned binaries (Smar
   `127.0.0.1`/`localhost` (DNS-rebinding defence); every request is authenticated as usual (the only session source is
   `POST /api/desktop/session`, which needs the per-launch secret held by the main process); sign-up is disabled;
   CSP, `nosniff`, `no-referrer` on every response; `/api/system` only includes sync/account details for the session.
-- Claude CLI: never `--dangerously-skip-permissions`; built-in tools disabled (`--tools ""`) except `Read` for
-  contact sheets in the run's temp dir; `--strict-mcp-config`; `--allowedTools` lists only `mcp__producer__*`;
+- The per-launch secret and the safeStorage key reach the server in its environment; it moves both into memory at
+  startup (`apps/server/src/child-env.ts`) and every child environment is built without them, so ffmpeg, the renderer,
+  the TTS worker, the Claude CLI, VoiceStudio and the sign-in terminal never see them.
+- Claude CLI: never `--dangerously-skip-permissions`; `--permission-mode default` and `--setting-sources ""` (the
+  user's own Claude Code settings, hooks and CLAUDE.md files don't apply); built-in tools disabled (`--tools ""`) except
+  `Read` for contact sheets, allowed only inside the run's temp dir (`Read(//<run dir>/**)`); `--strict-mcp-config`;
+  a CLI whose `--help` doesn't list `--permission-mode`, `--setting-sources` and `--strict-mcp-config` is reported as
+  too old instead of being run without them (a `--help` that fails or times out is asked again, never cached);
+  `--allowedTools` lists only `mcp__producer__*`;
   environment stripped of `CLAUDECODE`, `CLAUDE_CODE_*`, `ANTHROPIC_*`; per-run temp dir removed afterwards; nothing
   is written to `~/.claude`. The MCP server talks back to the Producer server over a per-run named pipe with a random token.
 - Cloud device token: AES-256-GCM at rest with a per-install key protected by **Electron safeStorage** (DPAPI on
   Windows, Keychain on macOS, libsecret on Linux), passed to the server as `DESKTOP_SECRET_KEY`. **Limitation:** when
   safeStorage is unavailable (e.g. Linux without a keyring, or the server run outside Electron) the key falls back to
   `<data>/.device-key`, which protects nothing against someone who can read the data folder. Revoke the device from the
-  cloud (Settings → Linked devices) if a machine is lost.
+  cloud (Settings → Linked devices) if a machine is lost. If `keystore.bin` can't be decrypted (another OS user, a reset
+  keychain, a locked keyring) it is **not** replaced: a byte-identical copy is kept as `keystore.bin.unreadable-<time>`,
+  the launch continues without it (key-file fallback, so the device token and AI keys read as missing), and a dialog
+  offers Continue / Start over with a new key / Quit. Only "Start over" writes a new keystore.
+- The cloud URL must be `https://`; plain `http://` is accepted only for a cloud on this computer (`localhost`,
+  `127.x.x.x`, `[::1]`), since linking sends the account password and every sync the device token.
 - `PS_DESKTOP_SECRET` (≥ 16 chars) fixes the per-launch secret for UI automation in **dev builds only** (`!app.isPackaged`); packaged builds always generate a random secret.
 - AI provider keys (Settings → AI: Anthropic, Gemini, OpenAI) live in the `ai` block of `settings.json`, AES-256-GCM sealed with the same safeStorage-protected key as the device token; they are never synced and never returned by the local API (only `hasKey` + last 4).
 

@@ -15,6 +15,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import type { VoiceStudioStatus } from '@producer/core'
+import { childEnv } from '../../child-env'
 import { ctx } from '../../context'
 import { log } from '../../log'
 import { killTree, run } from '../../media/proc'
@@ -140,7 +141,7 @@ async function dirSize(dir: string): Promise<number> {
 const gb = (n: number) => `${(n / 1024 ** 3).toFixed(1)} GB`
 
 function baseEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env }
+  const env = childEnv()
   // never leak our own Python / Claude / Anthropic settings into VoiceStudio
   for (const k of Object.keys(env)) if (/^(PYTHONHOME|PYTHONPATH|CLAUDECODE|CLAUDE_CODE_|ANTHROPIC_|VIRTUAL_ENV|CONDA_)/.test(k)) delete env[k]
   return env
@@ -207,6 +208,9 @@ export function backendEnv(port: number): NodeJS.ProcessEnv {
   if (process.platform === 'win32') {
     Object.assign(env, { TORCHDYNAMO_DISABLE: '1', HF_HUB_DISABLE_SYMLINKS: '1', HF_HUB_DISABLE_SYMLINKS_WARNING: '1', FOR_DISABLE_CONSOLE_CTRL_HANDLER: '1' })
   }
+  // No API key: VoiceStudio 0.5.6 only asks non-loopback clients for one (core/auth.py resolve_principal and
+  // BearerKeyMiddleware let every 127.0.0.1 caller through), so a per-launch key wouldn't keep other local processes
+  // out. Binding to loopback only is the boundary we have (see docs/voicestudio.md).
   for (const k of ['OMNIVOICE_SERVER_MODE', 'OMNIVOICE_API_KEY', 'OMNIVOICE_BIND_HOST', 'OMNIVOICE_BACKEND_CMD']) delete env[k]
   const ca = p('ca-bundle.pem')
   if (fs.existsSync(ca)) Object.assign(env, { SSL_CERT_FILE: ca, REQUESTS_CA_BUNDLE: ca, CURL_CA_BUNDLE: ca, UV_SYSTEM_CERTS: '1', UV_NATIVE_TLS: '1' })

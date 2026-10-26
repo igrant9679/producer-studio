@@ -107,8 +107,9 @@ export class ServerProcess extends EventEmitter {
     const key = deviceKey()
     if (key) env.DESKTOP_SECRET_KEY = key
     else delete env.DESKTOP_SECRET_KEY
-    // never let a dev shell's cloud settings leak into the local server
-    for (const k of ['DATABASE_URL', 'S3_BUCKET', 'ANTHROPIC_API_KEY', 'PGLITE_DIR', 'ROLE', 'AI_PROVIDER']) delete env[k]
+    // never let a dev shell's cloud settings leak into the local server (nor the fixed dev secret: the server gets it as
+    // DESKTOP_SECRET, which it keeps out of its own children)
+    for (const k of ['DATABASE_URL', 'S3_BUCKET', 'ANTHROPIC_API_KEY', 'PGLITE_DIR', 'ROLE', 'AI_PROVIDER', 'PS_DESKTOP_SECRET']) delete env[k]
     this.log.write(`\n=== ${new Date().toISOString()} starting server on ${this.origin} (${app.isPackaged ? 'packaged' : 'dev'}) ===\n`)
     const child = spawn(process.execPath, l.serverArgs, { cwd: l.serverCwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' })
     this.child = child

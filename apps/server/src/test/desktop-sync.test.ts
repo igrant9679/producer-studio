@@ -153,6 +153,8 @@ describe('desktop identity & hardening', () => {
     const s = await desk.json('POST', '/api/desktop/session', {}, { 'x-desktop-secret': 'test-secret-0123456789' })
     expect(s.status).toBe(200)
     expect(s.body).toMatchObject({ cookie: 'ps_session', token: expect.any(String) })
+    // held in memory only: nothing the server spawns can inherit it
+    expect(process.env.DESKTOP_SECRET).toBeUndefined()
     desk.cookie = `ps_session=${s.body.token}`
     const me = await desk.json('GET', '/api/auth/me')
     expect(me.status).toBe(200)
@@ -471,6 +473,9 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
     expect(done.status).toBe('done')
     expect(done.result.asset).toMatchObject({ origin: 'voicestudio', asset: { name: 'Best take', kind: 'audio' } })
     expect((await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source: '/system/info', name: 'x', kind: 'audio' })).status).toBe(400)
+    // fetch() would resolve these to /system/info: refused before anything is queued
+    for (const source of ['/audio/../system/info', '/audio/%2e%2e/system/info', '/audio\\..\\system\\info'])
+      expect((await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source, name: 'x', kind: 'audio' })).status, source).toBe(400)
   })
 
   it('proxies the live dictation WebSocket only for this app’s signed-in pages, without leaking Origin or cookies', async () => {

@@ -7,6 +7,7 @@ import path from 'node:path'
 import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import { isDev } from './paths'
 import { setupDictation } from './dictation'
+import { deviceKey, keystoreProblem, resetDeviceKey } from './keystore'
 import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, nativeThemeMode, openExternal, setLocalOrigin } from './security'
 import { ServerProcess } from './server'
 
@@ -104,6 +105,46 @@ if (!app.requestSingleInstanceLock()) {
     if (!server) return
     await setSessionCookie()
     await mainWin?.loadURL(`${server.origin}${route}`)
+  }
+
+  /**
+   * The saved keys (cloud device token, AI keys) can't be unlocked: say so instead of quietly replacing them. Returns
+   * false when the person chose Quit. "Start over" makes a new key; the old keystore stays in its backup copy.
+   */
+  async function checkKeystore(): Promise<boolean> {
+    deviceKey()
+    const p = keystoreProblem()
+    if (!p) return true
+    logLine(`keystore could not be read: ${p.error} (file ${p.file}, copy ${p.backup ?? 'not made'})`)
+    const r = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'Producer Studio',
+      message: 'Producer Studio couldn’t unlock its saved keys.',
+      detail: [
+        `The system key store couldn’t decrypt ${p.file} (${p.error}).`,
+        'Until it can, your cloud link and saved AI keys can’t be read: sync will ask you to link again, and AI keys need entering again.',
+        p.backup ? `Nothing has been deleted. A copy is kept at ${p.backup}.` : 'Nothing has been deleted.',
+        'If this is temporary (for example a locked keychain), quit and open Producer Studio again. “Start over” makes a new key.',
+      ].join('\n\n'),
+      buttons: ['Continue', 'Start over with a new key', 'Quit'],
+      defaultId: 0,
+      cancelId: 0,
+    })
+    if (r.response === 2) {
+      quitting = true
+      app.quit()
+      return false
+    }
+    if (r.response === 1) {
+      try {
+        resetDeviceKey()
+        logLine('keystore: started over with a new key')
+      } catch (err) {
+        logLine(`keystore: could not start over: ${(err as Error).message}`)
+        dialog.showErrorBox('Producer Studio', `Couldn’t start over with a new key: ${(err as Error).message}`)
+      }
+    }
+    return true
   }
 
   async function startServer(): Promise<boolean> {
@@ -275,6 +316,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     hardenSession(session.defaultSession)
     splash = createSplash()
+    if (!(await checkKeystore())) return
     if (!(await startServer())) return
     server!.on('crash', (code) => void onCrash(code))
     menu()

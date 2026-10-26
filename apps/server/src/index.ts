@@ -1,6 +1,7 @@
 // Producer Studio server entry: API (Hono) and/or job worker, per ROLE=all|api|worker.
 import { serve } from '@hono/node-server'
 import { createApp } from './app'
+import { takeDesktopSecrets } from './child-env'
 import { loadConfig } from './config'
 import { initCtx } from './context'
 import { registerHandlers } from './jobs/handlers'
@@ -9,6 +10,8 @@ import { log } from './log'
 import { tts } from './ai/tts'
 import { startStorageMonitor, stopStorageMonitor } from './services/storage-health'
 
+// first, before anything can spawn a child: the desktop secrets live in memory only, never in our environment
+takeDesktopSecrets()
 const config = loadConfig()
 const c = await initCtx(config)
 registerHandlers()
