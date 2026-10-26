@@ -12,7 +12,7 @@ import { HttpError, body, invalid, requireRole } from '../http'
 import { newId } from '../ids'
 import { enqueue } from '../jobs/queue'
 import { assertVariant, serveObject, type Variant } from '../media/serve'
-import { type AssetRow, MIME_BY_EXT, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset } from '../services/assets'
+import { type AssetRow, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset, uploadMime } from '../services/assets'
 import { UploadTooLargeError } from '../storage'
 import { abortUpload } from '../services/asset-recovery'
 
@@ -46,8 +46,9 @@ uploadRoutes.post('/', async (c) => {
   }
   const max = ctx().config.maxUploadBytes
   if (b.size > max) throw new HttpError(413, 'quota', `File is larger than the ${Math.round(max / 1024 / 1024)} MB upload limit`)
-  const ext = extFor(b.filename, b.mime)
-  const mime = b.mime && b.mime !== 'application/octet-stream' ? b.mime : (MIME_BY_EXT[ext] ?? 'application/octet-stream')
+  const mime = uploadMime(b.mime, b.filename)
+  if (!mime) throw new HttpError(415, 'invalid', 'Only video, audio and image files can be uploaded')
+  const ext = extFor(b.filename, mime)
   const id = b.assetId ?? newId('as')
   const key = `${assetPrefix(b.workspaceId, id)}/source${ext}`
   const now = Date.now()

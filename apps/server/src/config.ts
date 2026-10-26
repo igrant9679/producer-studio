@@ -45,6 +45,30 @@ export interface Config {
   webDist: string
   chromePath?: string
   hyperframesProtocolTimeout?: string
+  /** Proxies in front of the server that append to X-Forwarded-For (Railway: 1). The client is that many hops from the end. */
+  trustProxyHops: number
+  /** Abuse brakes (cloud). In memory per process; 0 turns one off. */
+  limits: {
+    /** AI writing calls (write, assistant, produce script) per user per day, and per minute. */
+    aiPerDay: number
+    aiPerMinute: number
+    /** Sign-ups per client IP per hour, and across the server per hour. */
+    signupsPerHourPerIp: number
+    signupsPerHour: number
+    /** Device tokens a user can create per hour. */
+    devicesPerHour: number
+    /** Exports, voiceovers, transcriptions and Producer AI runs waiting or running in one workspace. */
+    queuedJobsPerWorkspace: number
+  }
+}
+
+/** A whole number from the environment; refuses to start on anything else (a typo must not silently mean "no limit"). */
+function envInt(env: NodeJS.ProcessEnv, name: string, fallback: number, min = 0): number {
+  const raw = env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  const n = Number(raw.trim())
+  if (!Number.isInteger(n) || n < min) throw new Error(`${name} must be a whole number of at least ${min} (got "${raw}")`)
+  return n
 }
 
 let ffmpegStatic: string | undefined
@@ -123,8 +147,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl: env.DATABASE_URL || undefined,
     pgliteDir: env.PGLITE_DIR ?? path.join(dataDir, 'pg'),
     publicUrl: env.PUBLIC_URL || undefined,
-    maxUploadBytes: Number(env.MAX_UPLOAD_MB ?? 4096) * 1024 * 1024,
-    workerConcurrency: Math.max(1, Number(env.WORKER_CONCURRENCY ?? 2)),
+    maxUploadBytes: envInt(env, 'MAX_UPLOAD_MB', 4096, 1) * 1024 * 1024,
+    workerConcurrency: envInt(env, 'WORKER_CONCURRENCY', 2, 1),
     s3,
     ffmpegPath: env.FFMPEG_PATH || ffmpegStatic || 'ffmpeg',
     ffprobePath: env.FFPROBE_PATH || ffprobeStatic || 'ffprobe',
@@ -139,5 +163,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     webDist: env.WEB_DIST || path.join(REPO_ROOT, 'apps', 'web', 'dist'),
     chromePath: env.CHROME_PATH || findChrome(),
     hyperframesProtocolTimeout: env.HYPERFRAMES_PROTOCOL_TIMEOUT || undefined,
+    trustProxyHops: envInt(env, 'TRUST_PROXY_HOPS', production ? 1 : 0),
+    limits: {
+      aiPerDay: envInt(env, 'AI_CALLS_PER_DAY', 200),
+      aiPerMinute: envInt(env, 'AI_CALLS_PER_MINUTE', 20),
+      signupsPerHourPerIp: envInt(env, 'SIGNUPS_PER_HOUR_PER_IP', 20),
+      signupsPerHour: envInt(env, 'SIGNUPS_PER_HOUR', 200),
+      devicesPerHour: envInt(env, 'DEVICES_PER_HOUR', 20),
+      queuedJobsPerWorkspace: envInt(env, 'QUEUED_JOBS_PER_WORKSPACE', 10),
+    },
   }
 }

@@ -19,6 +19,7 @@ const BrandPage = lazy(() => import('./pages/BrandPage'))
 const SpacePage = lazy(() => import('./pages/SpacePage'))
 const ExportsPage = lazy(() => import('./pages/ExportsPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const InvitePage = lazy(() => import('./pages/InvitePage'))
 const NotFound = lazy(() => import('./pages/NotFound'))
 
 function PageFallback() {
@@ -82,6 +83,7 @@ export function ShellRoutes() {
             <Route path="space" element={<SpacePage />} />
             <Route path="exports" element={<ExportsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="invite/:token" element={<InvitePage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

@@ -27,9 +27,9 @@ export function validateAuth(mode: 'login' | 'signup', v: { name: string; email:
   return e
 }
 
-/** Only allow same-origin relative redirects. */
+/** Only allow same-origin relative redirects (browsers read `/\host` like `//host`). */
 export function safeNext(next: string | null): string {
-  if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/login') || next.startsWith('/signup')) return '/'
+  if (!next || !next.startsWith('/') || next.startsWith('//') || next.includes('\\') || next.startsWith('/login') || next.startsWith('/signup')) return '/'
   return next
 }
 

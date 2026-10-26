@@ -51,7 +51,7 @@ export function kindFromMime(mime: string, filename = ''): 'video' | 'audio' | '
   if (mime.startsWith('image/')) return 'image'
   const ext = path.extname(filename).toLowerCase()
   if (['.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.opus'].includes(ext)) return 'audio'
-  if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg'].includes(ext)) return 'image'
+  if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif', '.heic', '.heif', '.tif', '.tiff', '.svg'].includes(ext)) return 'image'
   return 'video'
 }
 
@@ -61,18 +61,60 @@ export const MIME_BY_EXT: Record<string, string> = {
   '.mov': 'video/quicktime',
   '.webm': 'video/webm',
   '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+  '.wmv': 'video/x-ms-wmv',
+  '.flv': 'video/x-flv',
+  '.mpg': 'video/mpeg',
+  '.mpeg': 'video/mpeg',
+  '.mts': 'video/mp2t',
+  '.m2ts': 'video/mp2t',
+  '.3gp': 'video/3gpp',
   '.wav': 'audio/wav',
   '.mp3': 'audio/mpeg',
   '.m4a': 'audio/mp4',
   '.aac': 'audio/aac',
   '.flac': 'audio/flac',
   '.ogg': 'audio/ogg',
+  '.opus': 'audio/opus',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
   '.svg': 'image/svg+xml',
+}
+
+const RASTER_IMAGES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp', 'image/avif', 'image/heic', 'image/heif', 'image/tiff'])
+export const SVG_MIME = 'image/svg+xml'
+
+/**
+ * Types a browser may render inline from our origin: audio, video and raster images. Not SVG (it can carry script;
+ * it's stored, but only ever served as a download — see media/serve.ts), never HTML or script, which would run on the
+ * app's address for whoever opens the link (stored script injection).
+ */
+export function isMediaMime(mime: string): boolean {
+  const base = mime.split(';')[0].trim().toLowerCase()
+  return /^(video|audio)\/[a-z0-9][a-z0-9.+-]*$/.test(base) || RASTER_IMAGES.has(base)
+}
+
+/**
+ * The type we store for an upload: the declared one if it's media (or SVG, for logos), else the one its extension
+ * implies, else octet-stream (processing then decides whether ffmpeg can read it). Returns null for a file that is
+ * clearly not media — a declared non-media type with no media extension (HTML, scripts, documents).
+ */
+export function uploadMime(declared: string, filename: string): string | null {
+  const d = declared.split(';')[0].trim().toLowerCase()
+  if (d && (isMediaMime(d) || d === SVG_MIME)) return d
+  const byExt = MIME_BY_EXT[path.extname(filename).toLowerCase()]
+  if (byExt) return byExt
+  if (!d || d === 'application/octet-stream') return 'application/octet-stream'
+  return null
 }
 
 /** Create an asset row from a local file already produced on the server (TTS, render, freeze frame). */

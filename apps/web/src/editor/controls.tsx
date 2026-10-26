@@ -1,6 +1,6 @@
 // Small form controls for the editor panels (dense NLE styling, see editor.css).
 import type { AnimProp, Item } from '@producer/core'
-import { removeKeyframe, setKeyframe } from '@producer/core'
+import { isSafeColor, removeKeyframe, setKeyframe } from '@producer/core'
 import clsx from 'clsx'
 import { ChevronDown, ChevronRight, Diamond } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -189,7 +189,8 @@ export function ColorInput({ value, onChange }: { value: string; onChange: (v: s
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={() => {
-          if (toHex(text) || text.startsWith('rgb')) onChange(text)
+          // a hex, rgb()/hsl() with numbers only, or a colour name; anything else snaps back
+          if (isSafeColor(text)) onChange(text.trim())
           else setText(value)
         }}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}

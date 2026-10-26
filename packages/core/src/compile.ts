@@ -4,7 +4,7 @@
 import { itemEnd, projectDuration } from './ops'
 import { exportWindow } from './runtime'
 import type { AudioItem, Project, VideoItem } from './types'
-import { escapeHtml, round, sampleKeyframes } from './util'
+import { escapeHtml, round, safeColor, sampleKeyframes } from './util'
 
 export interface CompileOptions {
   /** Path (relative to index.html) of an asset's source file. */
@@ -115,6 +115,8 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
   }
   // captions and text layers are created by the renderer at runtime (no media)
   const projectJson = JSON.stringify(p).replace(/</g, '\\u003c')
+  // goes into a <style> block: only a checked colour, never the raw document string
+  const background = safeColor(p.background, '#000000')
   const assetMap: Record<string, string> = {}
   for (const id of Object.keys(p.assets)) assetMap[id] = opts.assetPath(id)
   const lastEnd = Math.max(...p.tracks.flatMap((t) => t.items.map(itemEnd)), 0)
@@ -129,9 +131,9 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
 <script src="${attr(opts.runtimePath)}"></script>
 <style>
 ${opts.fontFaceCss}
-html, body { margin: 0; padding: 0; background: ${p.background}; }
-#root { position: relative; width: 100%; height: 100%; overflow: hidden; background: ${p.background}; font-family: 'Inter', sans-serif; }
-#stage { position: absolute; left: 0; top: 0; width: ${p.width}px; height: ${p.height}px; overflow: hidden; background: ${p.background};${scaled ? ` transform: scale(${(outW / p.width).toFixed(6)}, ${(outH / p.height).toFixed(6)}); transform-origin: 0 0;` : ''} }
+html, body { margin: 0; padding: 0; background: ${background}; }
+#root { position: relative; width: 100%; height: 100%; overflow: hidden; background: ${background}; font-family: 'Inter', sans-serif; }
+#stage { position: absolute; left: 0; top: 0; width: ${p.width}px; height: ${p.height}px; overflow: hidden; background: ${background};${scaled ? ` transform: scale(${(outW / p.width).toFixed(6)}, ${(outH / p.height).toFixed(6)}); transform-origin: 0 0;` : ''} }
 </style>
 </head>
 <body>

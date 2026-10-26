@@ -102,7 +102,11 @@ export function normalizePreferences(raw: unknown): UserPreferences {
 // DELETE /api/workspaces/:id                          -> {ok: true}  (owner; personal spaces can't be deleted.
 //        Permanently removes the space's projects, media, exports, brand kit and AI keys for every member.)
 // GET  /api/workspaces/:id/members                    -> Member[]
-// POST /api/workspaces/:id/invites {email, role}      -> {ok, inviteUrl}
+// POST /api/workspaces/:id/invites {email, role}      -> {ok, inviteUrl, expiresAt}  (owner)
+// GET  /api/workspaces/:id/invites                    -> PendingInvite[]  (owner; not accepted, withdrawn or expired)
+// DELETE /api/workspaces/:id/invites/:token           -> {ok: true}       (owner; the link stops working)
+// GET  /api/invites/:token                            -> InviteInfo       (signed in)
+// POST /api/invites/:token/accept                     -> Workspace        (signed in as the invited email; single use)
 // GET  /api/workspaces/:id/brand                      -> BrandKitDoc
 // PUT  /api/workspaces/:id/brand  BrandKitDoc         -> BrandKitDoc
 export interface Member {
@@ -110,6 +114,35 @@ export interface Member {
   name: string
   email: string
   role: Role
+}
+
+/** How long an invite link works. */
+export const INVITE_TTL_MS = 7 * 24 * 3600 * 1000
+
+export interface PendingInvite {
+  token: string
+  email: string
+  role: Role
+  createdAt: number
+  expiresAt: number
+  inviteUrl: string
+}
+
+export type InviteStatus = 'pending' | 'accepted' | 'expired' | 'revoked'
+
+export interface InviteInfo {
+  workspaceId: string
+  workspaceName: string
+  role: Role
+  /** The address it was sent to; only that account can accept it. */
+  email: string
+  status: InviteStatus
+  expiresAt: number
+  acceptedAt?: number
+  /** The signed-in account's email is the invited one. */
+  forYou: boolean
+  /** The signed-in account is already a member of the space. */
+  member: boolean
 }
 
 export interface BrandKitDoc {

@@ -4,6 +4,7 @@
 import { evaluate, textBackgroundCss, textCss } from './evaluate'
 import { itemEnd, projectDuration } from './ops'
 import type { FrameLayer, Project, VideoItem } from './types'
+import { cssNumber, escapeHtml, safeColor } from './util'
 
 export type UrlResolver = (assetId: string, kind: 'media' | 'proxy') => string
 
@@ -43,12 +44,12 @@ export class StageRenderer {
     this.opts = opts
     root.style.position = 'relative'
     root.style.overflow = 'hidden'
-    root.style.background = project.background
+    root.style.background = safeColor(project.background, '#000000')
   }
 
   setProject(p: Project) {
     this.project = p
-    this.root.style.background = p.background
+    this.root.style.background = safeColor(p.background, '#000000')
     // drop elements for items that no longer exist
     const ids = new Set(p.tracks.flatMap((t) => t.items.map((i) => i.id)))
     for (const [id, el] of this.layers) if (!ids.has(id)) this.removeLayer(id, el)
@@ -226,17 +227,18 @@ export class StageRenderer {
       if (el.lastText !== layer.text.html || el.lastStyle !== styleKey) {
         const bgCss = textBackgroundCss(layer.text.style)
         el.content.style.cssText = textCss(layer.text.style) + ';position:relative;width:100%'
-        el.content.innerHTML = bgCss ? `<span style="${bgCss}">${layer.text.html}</span>` : layer.text.html
+        el.content.innerHTML = bgCss ? `<span style="${escapeHtml(bgCss)}">${layer.text.html}</span>` : layer.text.html
         el.lastText = layer.text.html
         el.lastStyle = styleKey
       }
     } else if (layer.shape) {
       const s = layer.shape
+      const fill = safeColor(s.fill, 'transparent')
       el.content.style.cssText =
-        `position:absolute;inset:0;background:${s.shape === 'line' ? 'transparent' : s.fill};` +
-        `border-radius:${s.shape === 'ellipse' ? '50%' : `${s.radius}px`};` +
-        (s.stroke ? `border:${s.stroke.width}px solid ${s.stroke.color};` : '') +
-        (s.shape === 'line' ? `border-top:${Math.max(2, s.height)}px solid ${s.fill};height:0;top:50%;` : '')
+        `position:absolute;inset:0;background:${s.shape === 'line' ? 'transparent' : fill};` +
+        `border-radius:${s.shape === 'ellipse' ? '50%' : `${cssNumber(s.radius)}px`};` +
+        (s.stroke ? `border:${cssNumber(s.stroke.width)}px solid ${safeColor(s.stroke.color, 'transparent')};` : '') +
+        (s.shape === 'line' ? `border-top:${Math.max(2, cssNumber(s.height))}px solid ${fill};height:0;top:50%;` : '')
     }
   }
 

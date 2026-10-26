@@ -7,7 +7,11 @@
 // minutes, keeps the outcome, and puts it in /api/health and /api/system so the editor can say so.
 //
 // It never fails the health check (that stays about the database): Railway gates deploys on /api/health, and
-// the deploy that picks up new credentials must not be blocked by the old ones being bad.
+// the deploy that picks up new credentials must not be blocked by the old ones being bad. The public health check
+// carries only the status; the reason (it can name the bucket's key setup) is in /api/system for signed-in people.
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import type { StorageHealth } from '@producer/core'
 import { ctx } from '../context'
 import { log } from '../log'
@@ -54,7 +58,14 @@ export async function checkStorage(): Promise<StorageHealth> {
   const key = `_health/${ctx().instanceId}.txt`
   const checkedAt = Date.now()
   try {
-    await storage.put(key, Buffer.from(`storage check ${new Date(checkedAt).toISOString()}\n`), { contentType: 'text/plain' })
+    // a file, not a Buffer: putFile is the streamed path proxies, thumbnails, renders and voiceovers take
+    const tmp = path.join(os.tmpdir(), `ps-health-${ctx().instanceId}.txt`)
+    await fs.writeFile(tmp, `storage check ${new Date(checkedAt).toISOString()}\n`)
+    try {
+      await storage.putFile(key, tmp, 'text/plain')
+    } finally {
+      await fs.rm(tmp, { force: true })
+    }
     const st = await storage.stat(key)
     if (!st) throw new Error('A test file was written but could not be read back')
     await storage.delete(key)

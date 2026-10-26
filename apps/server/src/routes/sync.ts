@@ -11,6 +11,7 @@ import { assets, brandKits, devices, memberships, projects, tombstones, voicePro
 import { assetRecord, projectSummary } from '../dto'
 import { HttpError, body, memberRole, notFound, unauthorized } from '../http'
 import { newId, randomToken, sha256 } from '../ids'
+import { limitDevices } from '../limits'
 import { getProvider } from '../ai/provider'
 import { builtinProvider, invalidateBuiltin } from '../ai/resolve'
 import { whisperAvailable } from '../ai/whisper'
@@ -88,6 +89,7 @@ deviceRoutes.post('/', async (c) => {
   let user = c.get('user')
   if (!user && b.email && b.password) user = await checkCredentials(c, b.email, b.password)
   if (!user) throw unauthorized()
+  limitDevices(user.id)
   const token = `psd_${randomToken(32)}`
   const id = newId('dev')
   await ctx().db.insert(devices).values({ id, userId: user.id, name: b.name, tokenHash: sha256(token), createdAt: Date.now() })

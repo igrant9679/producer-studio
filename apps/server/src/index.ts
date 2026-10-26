@@ -25,9 +25,11 @@ if (config.role === 'all' || config.role === 'api') {
   })
   // desktop: live dictation WebSocket → VoiceStudio
   if (desktop) desktop.attachUpgrades(server as unknown as import('node:http').Server, config.port)
-  // uploads and renders can be long-lived; don't let Node cut them off
+  // A request must arrive in full within this time (slow-body clients can't hold connections open forever). With
+  // S3, uploads go straight to the bucket and the largest body here is a project save; with local storage the
+  // upload itself comes through this server, so there's no cap. Responses (SSE, media) aren't affected.
   const s = server as unknown as { requestTimeout?: number; headersTimeout?: number }
-  s.requestTimeout = 0
+  s.requestTimeout = config.s3 ? 10 * 60_000 : 0
   s.headersTimeout = 120_000
 } else {
   // worker-only services still expose health for the platform's checks

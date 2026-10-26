@@ -3,6 +3,7 @@ import { Readable } from 'node:stream'
 import type { Context } from 'hono'
 import { ctx } from '../context'
 import { HttpError, notFound } from '../http'
+import { SVG_MIME, isMediaMime } from '../services/assets'
 
 export type Variant = 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio'
 
@@ -34,26 +35,43 @@ export function parseRange(header: string | undefined, size: number): { start: n
   return { start, end }
 }
 
+/** `inline` or `attachment` with an ASCII fallback + RFC 5987 UTF-8 name (header values must be Latin-1). */
+export function contentDisposition(kind: 'inline' | 'attachment', filename: string): string {
+  const ascii = filename.replace(/["\\\r\n]/g, '').replace(/[^\x20-\x7e]/g, '_')
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename.replace(/[\r\n]/g, ''))}`
+}
+
+/**
+ * What the browser is told about a stored object. Media plays inline. SVG keeps its type (so `<img>` can draw a
+ * logo) but is a download if opened directly: `<img>` ignores Content-Disposition and never runs an SVG's scripts,
+ * while a navigation would. Anything else (a type stored before uploads were checked, or a desktop's synced file)
+ * is an opaque download. Neither can run as a page on our origin or the bucket's.
+ */
+export function deliveryOf(t: ServeTarget): { contentType: string; disposition?: string; inline: boolean } {
+  if (isMediaMime(t.contentType)) return { contentType: t.contentType, disposition: t.filename ? contentDisposition('inline', t.filename) : undefined, inline: true }
+  const svg = t.contentType.split(';')[0].trim().toLowerCase() === SVG_MIME
+  return { contentType: svg ? SVG_MIME : 'application/octet-stream', disposition: contentDisposition('attachment', t.filename ?? (svg ? 'image.svg' : 'download')), inline: false }
+}
+
 export async function serveObject(c: Context, t: ServeTarget, opts: { cache?: string; redirect?: boolean } = {}): Promise<Response> {
   const storage = ctx().storage
+  const d = deliveryOf(t)
   if (storage.presignGet && opts.redirect !== false) {
-    const url = await storage.presignGet(t.key, { expiresSec: 900, contentType: t.contentType, filename: t.filename })
+    const url = await storage.presignGet(t.key, { expiresSec: 900, contentType: d.contentType, disposition: d.disposition })
     return c.redirect(url, 302)
   }
   const st = await storage.stat(t.key)
   if (!st) throw notFound('Media not available')
   const headers = new Headers({
-    'Content-Type': t.contentType,
+    'Content-Type': d.contentType,
     'Accept-Ranges': 'bytes',
     'Cache-Control': opts.cache ?? 'private, max-age=3600',
     'Last-Modified': new Date(st.mtimeMs).toUTCString(),
     ETag: `"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`,
+    'X-Content-Type-Options': 'nosniff',
   })
-  if (t.filename) {
-    // header values must be Latin-1: ASCII fallback + RFC 5987 UTF-8 name (e.g. "Sample A — test.mp4")
-    const ascii = t.filename.replace(/["\\\r\n]/g, '').replace(/[^\x20-\x7e]/g, '_')
-    headers.set('Content-Disposition', `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(t.filename.replace(/[\r\n]/g, ''))}`)
-  }
+  if (d.disposition) headers.set('Content-Disposition', d.disposition)
+  if (!d.inline) headers.set('Content-Security-Policy', 'sandbox')
   const etag = headers.get('ETag')!
   if (c.req.header('if-none-match') === etag) return new Response(null, { status: 304, headers })
   const ifRange = c.req.header('if-range')

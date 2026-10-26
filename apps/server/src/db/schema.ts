@@ -54,6 +54,9 @@ export const invites = pgTable('invites', {
   createdAt: ms('created_at').notNull(),
   acceptedAt: ms('accepted_at'),
   acceptedBy: text('accepted_by'),
+  /** v7; null on rows made before it (they expire 7 days after createdAt). */
+  expiresAt: ms('expires_at'),
+  revokedAt: ms('revoked_at'),
 })
 
 export const projects = pgTable('projects', {

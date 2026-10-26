@@ -12,6 +12,9 @@ import {
   findItem,
   freezeFrame,
   generateCaptions,
+  isSafeColor,
+  safeColor,
+  textBackgroundCss,
   importSrt,
   exportSrt,
   mainTrack,
@@ -271,5 +274,38 @@ describe('compile', () => {
     expect(html).toContain('data-media-start="0"')
     expect(html).toContain("window.__timelines['main']")
     expect((html.match(/<audio /g) ?? []).length).toBe(2)
+  })
+})
+
+describe('colours from the document', () => {
+  it('accepts plain colours and refuses anything that could close a declaration or tag', () => {
+    for (const ok of ['#fff', '#ffe14d', '#0b183080', 'rgba(0,0,0,.75)', 'rgb(1 2 3 / 50%)', 'hsl(200deg 50% 40%)', 'transparent', 'red']) expect(isSafeColor(ok)).toBe(true)
+    for (const bad of ['rgb(1,2,3)"><img src=x onerror=alert(1)>', 'rgb(0,0,0)}</style><script>alert(1)</script>', 'red;background:url(//x)', 'expression(alert(1))', '', 42, undefined])
+      expect(isSafeColor(bad)).toBe(false)
+    expect(safeColor('rgb(1,2,3)"><img src=x>', '#000000')).toBe('#000000')
+  })
+
+  it('never puts a caption highlight into markup unchecked', () => {
+    let p = addItem(addAsset(createProject(), asset('a')), createVideoItem(asset('a'), 0))
+    p = generateCaptions(p)
+    const track = p.tracks.find((t) => t.kind === 'caption')!
+    track.captionStyle = { ...track.captionStyle!, mode: 'karaoke', highlightColor: 'rgb(1,2,3)"><img src=x onerror=alert(1)>' }
+    const html = evaluate(p, 0.3).layers.find((l) => l.text)?.text?.html ?? ''
+    expect(html).toContain('<span style="color:#ffe14d">')
+    expect(html).not.toContain('<img')
+  })
+
+  it('keeps a hostile project background out of the export page', () => {
+    const p = { ...twoClips(), background: 'rgb(0,0,0)}</style><script>alert(1)</script>' }
+    const html = compileToHyperFrames(p, { assetPath: (id) => `assets/${id}.mp4`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '' })
+    expect(html).not.toContain('alert(1)</script>')
+    expect(html).toContain('background: #000000;')
+  })
+
+  it('draws a text background from rgb() as well as hex', () => {
+    expect(textBackgroundCss({ background: { color: '#336699', opacity: 0.5, radius: 4, padding: 10 } } as never)).toContain('rgba(51,102,153,0.5)')
+    const css = textBackgroundCss({ background: { color: 'rgb(10,20,30)', opacity: 0.5, radius: 4, padding: 10 } } as never)
+    expect(css).toContain('color-mix(in srgb, rgb(10,20,30) 50%, transparent)')
+    expect(css).not.toContain('NaN')
   })
 })

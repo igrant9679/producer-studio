@@ -22,11 +22,11 @@ Everything in `packages/core/src/api.ts` is implemented with those shapes. Statu
 
 | Area | Route | |
 |---|---|---|
-| Health | `GET /api/health` (adds `storageStatus` ok/error/unknown and `storageError`; never gates the 200) | ✅🧪 |
+| Health | `GET /api/health` (adds `storageStatus` ok/error/unknown; never gates the 200; the reason is only in `/api/system` `storage`, for signed-in people) | ✅🧪 |
 | System | `GET /api/system` → `SystemInfo` (public) | ✅🧪 |
 | Auth | `POST /api/auth/signup`, `/login`, `/logout`, `GET /api/auth/me` | ✅🧪 |
-| Workspaces | `GET/POST /api/workspaces`, `GET /:id/members`, `POST /:id/invites` (owner), `GET/PUT /:id/brand` | ✅🧪 |
-| Invites | `GET /api/invites/:token`, `POST /api/invites/:token/accept` (the `inviteUrl` is `/invite/:token`) | 🧪 |
+| Workspaces | `GET/POST /api/workspaces`, `GET /:id/members`, `POST /:id/invites` (owner), `GET /:id/invites` + `DELETE /:id/invites/:token` (owner: pending list, withdraw), `GET/PUT /:id/brand` | ✅🧪 |
+| Invites | `GET /api/invites/:token` → `InviteInfo`, `POST /api/invites/:token/accept`; the web page is `/invite/:token`. Only the invited email can accept, once, within 7 days | ✅🧪 |
 | Projects | `GET /api/projects?workspaceId=&trashed=&templates=`, `POST`, `GET/PUT/PATCH/DELETE /:id`, `POST /:id/duplicate` | ✅🧪 |
 | Uploads | `POST /api/uploads` → ticket; `PUT /api/uploads/:assetId/data` (local storage; S3 gets a presigned URL); `POST /api/assets/:id/complete` (also re-runs processing for an `error` asset whose file is in storage); `POST /api/assets/:id/abort {reason}` (the browser's PUT failed) | ✅🧪 |
 | Assets | `GET /api/assets?workspaceId=&kind=`, `GET/PATCH/DELETE /api/assets/:id` | ✅ |
@@ -51,7 +51,19 @@ export of a 20 s 1080p project at 720p draft ~50 s.
 
 - **Auth**: `ps_session` httpOnly cookie (30-day sliding). Any route also accepts `Authorization: Bearer <device token>`.
   401 `{code:'unauthorized'}` when signed out; non-members get **404** on workspace resources, viewers get **403** on writes.
-  Login is rate-limited per IP+email (429 `{code:'quota'}` after 8 failures in 15 min).
+  Login is rate-limited (429 `{code:'quota'}`): 8 failures in 15 min per IP+email, 30 per email, 50 per IP. The client IP is
+  the `TRUST_PROXY_HOPS`-th X-Forwarded-For entry from the end (the hop Railway appends), never the client-chosen first one.
+- **Hardening (25 Oct 2026, evaluation phase 0)**: cloud responses carry a CSP (`script-src 'self'`, `frame-ancestors 'none'`),
+  nosniff, `X-Frame-Options: DENY`, HSTS in production (`security.ts`). Request bodies are capped before they are read: 64 MB
+  for project create/save and the assistant, 8 MB for `/api/ai`, `/api/voice`, `/api/sync`, 1 MB for everything else (413
+  `{code:'quota'}`); the local upload stream keeps its `MAX_UPLOAD_MB` cap. Uploads must be video, audio or an image
+  (415 for HTML, scripts, documents; an unknown type with no media extension is kept as octet-stream for processing to
+  judge), and media is served inline only for video, audio and raster images. SVG (logos) keeps its type, so `<img>`
+  draws it, but is `attachment` + `CSP: sandbox`; anything else stored goes out as `application/octet-stream`,
+  `attachment`, `CSP: sandbox`. Abuse limits (`limits.ts`, env in `.env.example`):
+  AI writing per user per day/minute, sign-ups per IP/hour, device tokens per user/hour, and queued exports / voiceovers /
+  transcriptions / Producer AI runs per workspace (429 `{code:'quota'}`; upload processing is never capped). Source maps are
+  built hidden and `.map` files are never served.
 - **Asset URLs**: in asset records and in `project.assets`, `src`, `proxySrc`, `thumbnail` and `filmstrip.src` are already
   `/api/media/...` URLs. `GET /api/projects/:id` refreshes `project.assets` from the assets table (proxy/filmstrip/transcript
   appear there once processing finishes).
@@ -62,8 +74,8 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   reports a refused PUT (`/abort`); the worker sweep (30 s after start, then every 5 min) fails uploads older than 2 h and
   processing clips whose latest asset.process job ended after the clip last changed (error, cancelled, or the stale-recovery
   give-up, which now fails the clip too). `error` holds a sentence for a person (`friendlyProcessingError`: no server paths).
-- **Storage self-check** (`services/storage-health.ts`, cloud mode): writes, reads and deletes `_health/<instance>.txt` on start
-  and every 5 min; the result is in `/api/health` and `/api/system` (`storage`), and the editor shows a banner while it fails.
+- **Storage self-check** (`services/storage-health.ts`, cloud mode): writes (through the streamed `putFile` path that proxies and
+  renders use), reads and deletes `_health/<instance>.txt` on start and every 5 min; the result is in `/api/health` and `/api/system` (`storage`), and the editor shows a banner while it fails.
   Signed URLs are computed locally, so a revoked bucket key is otherwise invisible to the server.
 - **Saving**: `PUT /api/projects/:id {project, baseVersion}` → `{version, updatedAt}`; stale → 409
   `{code:'conflict', details:{version, project, summary}}` (`project` = current server doc, for merge / keep-both).

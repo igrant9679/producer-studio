@@ -25,7 +25,7 @@ import type {
   User,
   Workspace,
 } from '@producer/core'
-import { VOICES, createProject as coreCreateProject } from '@producer/core'
+import { INVITE_TTL_MS, VOICES, createProject as coreCreateProject } from '@producer/core'
 
 type Json = Record<string, unknown>
 
@@ -448,13 +448,58 @@ on('DELETE', '/api/workspaces/([^/]+)', async (m) => {
   return json({ ok: true })
 })
 on('GET', '/api/workspaces/([^/]+)/members', (m) => json(members[m[1]] ?? []))
+// like the server: an invite is a pending link for one address (owners only) until that account accepts it
+const mockInvites: Array<{ token: string; workspaceId: string; email: string; role: Member['role']; createdAt: number; expiresAt: number; acceptedAt?: number; revokedAt?: number }> = []
+const ownerOnly = (wsId: string) => (workspaces.find((x) => x.id === wsId)?.role === 'owner' ? null : fail(403, 'Only workspace owners can do that', 'forbidden'))
 on('POST', '/api/workspaces/([^/]+)/invites', async (m, _q, b) => {
   await delay(300)
+  const denied = ownerOnly(m[1])
+  if (denied) return denied
   const token = Math.random().toString(36).slice(2, 12)
-  const w = workspaces.find((x) => x.id === m[1])
-  if (w) w.memberCount++
-  ;(members[m[1]] ??= []).push({ userId: nid('u'), name: String(b.email).split('@')[0], email: String(b.email), role: (b.role as Member['role']) ?? 'editor' })
-  return json({ ok: true, inviteUrl: `${location.origin}/invite/${token}` })
+  const now = Date.now()
+  const expiresAt = now + INVITE_TTL_MS
+  mockInvites.push({ token, workspaceId: m[1], email: String(b.email).toLowerCase(), role: (b.role as Member['role']) ?? 'editor', createdAt: now, expiresAt })
+  return json({ ok: true, inviteUrl: `${location.origin}/invite/${token}`, expiresAt })
+})
+on('GET', '/api/workspaces/([^/]+)/invites', (m) => {
+  const denied = ownerOnly(m[1])
+  if (denied) return denied
+  return json(
+    mockInvites
+      .filter((i) => i.workspaceId === m[1] && !i.acceptedAt && !i.revokedAt && i.expiresAt > Date.now())
+      .map((i) => ({ token: i.token, email: i.email, role: i.role, createdAt: i.createdAt, expiresAt: i.expiresAt, inviteUrl: `${location.origin}/invite/${i.token}` })),
+  )
+})
+on('DELETE', '/api/workspaces/([^/]+)/invites/([^/]+)', (m) => {
+  const denied = ownerOnly(m[1])
+  if (denied) return denied
+  const inv = mockInvites.find((i) => i.workspaceId === m[1] && i.token === m[2] && !i.acceptedAt)
+  if (!inv) return fail(404, 'Invite not found, or it was already used', 'not_found')
+  inv.revokedAt = Date.now()
+  return json({ ok: true })
+})
+on('GET', '/api/invites/([^/]+)', (m) => {
+  const inv = mockInvites.find((i) => i.token === m[1])
+  const u = currentUser()
+  if (!inv || !u) return fail(404, 'Invite not found', 'not_found')
+  const ws = workspaces.find((w) => w.id === inv.workspaceId)
+  const status = inv.acceptedAt ? 'accepted' : inv.revokedAt ? 'revoked' : inv.expiresAt <= Date.now() ? 'expired' : 'pending'
+  return json({ workspaceId: inv.workspaceId, workspaceName: ws?.name ?? '', role: inv.role, email: inv.email, status, expiresAt: inv.expiresAt, acceptedAt: inv.acceptedAt, forYou: inv.email === u.email.toLowerCase(), member: !!ws })
+})
+on('POST', '/api/invites/([^/]+)/accept', (m) => {
+  const inv = mockInvites.find((i) => i.token === m[1])
+  const u = currentUser()
+  if (!inv || !u) return fail(404, 'Invite not found', 'not_found')
+  if (inv.email !== u.email.toLowerCase()) return fail(403, `This invite is for ${inv.email}. Sign in with that address to accept it.`, 'forbidden')
+  if (inv.acceptedAt) return fail(409, 'This invite has already been used', 'conflict')
+  if (inv.revokedAt || inv.expiresAt <= Date.now()) return fail(410, 'This invite has expired or was withdrawn', 'conflict')
+  inv.acceptedAt = Date.now()
+  const ws = workspaces.find((w) => w.id === inv.workspaceId)
+  if (ws) {
+    ws.memberCount++
+    ;(members[ws.id] ??= []).push({ userId: u.id, name: u.name, email: u.email, role: inv.role })
+  }
+  return json(ws)
 })
 on('GET', '/api/workspaces/([^/]+)/brand', (m) => json(brands[m[1]] ?? { name: '', colors: [], fonts: { headline: 'Space Grotesk', body: 'Inter' } }))
 on('PUT', '/api/workspaces/([^/]+)/brand', async (m, _q, b) => {

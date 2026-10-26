@@ -52,7 +52,7 @@ type ModalKind = 'aspect' | 'space' | 'invite' | 'help' | 'rename-space' | 'dele
 
 function NavItem({ to, icon, label, end, badge }: { to: string; icon: ReactNode; label: string; end?: boolean; badge?: string }) {
   return (
-    <NavLink to={to} end={end} className={({ isActive: a }) => clsx('ps-nav-link', a && 'active')} data-tip={label}>
+    <NavLink to={to} end={end} className={({ isActive: a }) => clsx('ps-nav-link', a && 'active')} data-tip={label} data-tip-side="right" aria-label={label}>
       {icon}
       <span className="ps-nav-text">{label}</span>
       {badge && <span className="ps-nav-badge">{badge}</span>}
@@ -130,7 +130,7 @@ function CreateMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
     <Popover
       style={{ width: 290 }}
       trigger={({ toggle, open }) => (
-        <button className="btn primary ps-create-btn" onClick={toggle} aria-expanded={open} aria-haspopup="menu" data-tip="Create new">
+        <button className="btn primary ps-create-btn" onClick={toggle} aria-expanded={open} aria-haspopup="menu" data-tip="Create new" data-tip-side="right" aria-label="Create new">
           <Plus size={18} />
           <span className="ps-nav-text" style={{ flex: 'none' }}>Create new</span>
         </button>
@@ -541,7 +541,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <SpaceSwitcher openModal={setModal} />
             <div style={{ marginTop: 6 }}>
               <NavItem to="/space" icon={<Users size={18} />} label="Members" />
-              <button className="ps-nav-link" onClick={() => setModal('invite')} data-tip="Invite members">
+              <button className="ps-nav-link" onClick={() => setModal('invite')} data-tip="Invite members" data-tip-side="right" aria-label="Invite members">
                 <UserPlus size={18} />
                 <span className="ps-nav-text">Invite members</span>
               </button>
@@ -551,7 +551,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
         <div className="ps-nav-foot">
           <NavItem to="/settings" icon={<Settings size={18} />} label="Settings" />
-          <button className="ps-nav-link" onClick={() => setModal('help')} data-tip="Help & shortcuts">
+          <button className="ps-nav-link" onClick={() => setModal('help')} data-tip="Help & shortcuts" data-tip-side="right" aria-label="Help & shortcuts">
             <CircleHelp size={18} />
             <span className="ps-nav-text">Help &amp; shortcuts</span>
           </button>

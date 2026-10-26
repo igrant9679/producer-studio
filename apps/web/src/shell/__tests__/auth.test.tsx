@@ -27,6 +27,7 @@ describe('safeNext', () => {
     expect(safeNext(null)).toBe('/')
     expect(safeNext('https://evil.test')).toBe('/')
     expect(safeNext('//evil.test/x')).toBe('/')
+    expect(safeNext('/\\evil.test')).toBe('/')
     expect(safeNext('/login')).toBe('/')
   })
 })

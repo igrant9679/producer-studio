@@ -114,34 +114,57 @@ export function requireUser(c: Context<AppEnv>): UserRow {
   return u
 }
 
-// ---- login rate limit (in memory, per IP + email) ----
+// ---- login rate limit (in memory): failures per IP + email, per email, and per IP ----
 const attempts = new Map<string, { fails: number; resetAt: number }>()
 const WINDOW_MS = 15 * 60 * 1000
-const MAX_FAILS = 8
+/** One person mistyping (IP + email); one account sprayed from many addresses (email); one address spraying many accounts (IP). */
+const MAX_FAILS = { pair: 8, email: 30, ip: 50 }
 
-export function checkLoginRate(key: string) {
-  const a = attempts.get(key)
+function loginKeys(ip: string, email: string) {
+  return [
+    { key: `pair|${ip}|${email}`, max: MAX_FAILS.pair },
+    { key: `email|${email}`, max: MAX_FAILS.email },
+    { key: `ip|${ip}`, max: MAX_FAILS.ip },
+  ]
+}
+
+export function checkLoginRate(ip: string, email: string) {
   const now = Date.now()
-  if (a && a.resetAt > now && a.fails >= MAX_FAILS) {
-    throw new HttpError(429, 'quota', `Too many sign-in attempts. Try again in ${Math.ceil((a.resetAt - now) / 60000)} minutes.`)
+  for (const { key, max } of loginKeys(ip, email)) {
+    const a = attempts.get(key)
+    if (a && a.resetAt > now && a.fails >= max) {
+      throw new HttpError(429, 'quota', `Too many sign-in attempts. Try again in ${Math.ceil((a.resetAt - now) / 60000)} minutes.`)
+    }
   }
 }
 
-export function recordLoginFailure(key: string) {
+export function recordLoginFailure(ip: string, email: string) {
   const now = Date.now()
-  const a = attempts.get(key)
-  if (!a || a.resetAt <= now) attempts.set(key, { fails: 1, resetAt: now + WINDOW_MS })
-  else a.fails++
+  for (const { key } of loginKeys(ip, email)) {
+    const a = attempts.get(key)
+    if (!a || a.resetAt <= now) attempts.set(key, { fails: 1, resetAt: now + WINDOW_MS })
+    else a.fails++
+  }
   if (attempts.size > 10_000) for (const [k, v] of attempts) if (v.resetAt <= now) attempts.delete(k)
 }
 
-export function clearLoginFailures(key: string) {
-  attempts.delete(key)
+/** A correct password clears this person's own counter; the per-email and per-IP ones run out on their own. */
+export function clearLoginFailures(ip: string, email: string) {
+  attempts.delete(`pair|${ip}|${email}`)
 }
 
+/**
+ * The client's address. X-Forwarded-For is client-controlled except for the entries our own proxies append, so with
+ * TRUST_PROXY_HOPS = n the client is the n-th entry from the end (Railway's edge appends one). 0 = the socket peer.
+ */
 export function clientIp(c: Context): string {
+  const hops = ctx().config.trustProxyHops
   const fwd = c.req.header('x-forwarded-for')
-  if (fwd) return fwd.split(',')[0].trim()
+  if (hops > 0 && fwd) {
+    const parts = fwd.split(',').map((s) => s.trim()).filter(Boolean)
+    const ip = parts[parts.length - hops]
+    if (ip) return ip
+  }
   const incoming = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming
   return incoming?.socket?.remoteAddress ?? 'unknown'
 }

@@ -26,6 +26,7 @@ import { templateRoutes } from './routes/templates'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
 import { storageHealth } from './services/storage-health'
+import { bodyLimitFor, cloudHeaders } from './security'
 
 const started = Date.now()
 
@@ -62,6 +63,7 @@ export function createApp() {
 
   // desktop: Host allow-list, loopback peers, CSP — before any route (health and the SPA included)
   if (ctx().config.mode === 'desktop') app.use('*', desktopGuard)
+  else app.use('*', cloudHeaders)
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.message, code: err.code, ...(err.details !== undefined ? { details: err.details } : {}) }, err.status as 400)
@@ -86,9 +88,9 @@ export function createApp() {
         db: ctx().database.driver,
         dbStatus: db,
         storage: ctx().storage.kind,
-        // reported, never gating: a deploy that brings new credentials must pass this check
+        // reported, never gating: a deploy that brings new credentials must pass this check. The reason is for
+        // signed-in people only (/api/system): this endpoint is public.
         storageStatus: storageHealth().status,
-        ...(storageHealth().error ? { storageError: storageHealth().error } : {}),
         uptimeSec: Math.round((Date.now() - started) / 1000),
         features: {
           whisper: Boolean(cfg.whisperCli && cfg.whisperModel && fs.existsSync(cfg.whisperCli) && fs.existsSync(cfg.whisperModel)),
@@ -99,9 +101,13 @@ export function createApp() {
     )
   })
 
+  // every request body is capped before anything reads it (sign-in included); the upload stream has its own cap
+  app.use('/api/*', async (c, next) => {
+    const max = bodyLimitFor(c.req.method, c.req.path)
+    if (max === null) return next()
+    return bodyLimit({ maxSize: max, onError: (x) => x.json({ error: 'Request body too large', code: 'quota' }, 413) })(c, next)
+  })
   app.use('/api/*', sessionMiddleware)
-  app.use('/api/projects/:id', bodyLimit({ maxSize: 64 * 1024 * 1024 }))
-  app.use('/api/ai/assistant', bodyLimit({ maxSize: 64 * 1024 * 1024 }))
 
   // desktop-only routes first: they shadow signup and (while linked) workspace creation
   if (ctx().config.mode === 'desktop') app.route('/api', desktopRoutes)
@@ -133,9 +139,19 @@ export function createApp() {
     const dist = ctx().config.webDist
     const index = path.join(dist, 'index.html')
     if (!fs.existsSync(index)) return c.text('Producer Studio API is running. Build the web app (npm run build -w @producer/web) to serve the UI here.', 200)
-    const rel = decodeURIComponent(c.req.path).replace(/^\/+/, '')
-    let file = path.resolve(dist, rel)
-    if (!file.startsWith(path.resolve(dist)) || !rel || !fs.existsSync(file) || !fs.statSync(file).isFile()) file = index
+    let rel: string
+    try {
+      rel = decodeURIComponent(c.req.path).replace(/^\/+/, '')
+    } catch {
+      return c.text('Bad request', 400)
+    }
+    const root = path.resolve(dist)
+    let file = path.resolve(root, rel)
+    const inside = path.relative(root, file)
+    const contained = Boolean(inside) && !inside.startsWith('..') && !path.isAbsolute(inside)
+    // source maps stay on the build machine: they hold the app's full source
+    if (path.extname(file) === '.map') return c.text('Not found', 404)
+    if (!contained || !rel || !fs.existsSync(file) || !fs.statSync(file).isFile()) file = index
     const ext = path.extname(file)
     const immutable = file !== index && /[\\/]assets[\\/]/.test(file)
     return new Response(Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream, {

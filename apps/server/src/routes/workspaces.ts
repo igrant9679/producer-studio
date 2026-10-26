@@ -1,11 +1,11 @@
 import { Hono } from 'hono'
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
-import { FONTS, type BrandKitDoc, type Member, type Role, type Workspace } from '@producer/core'
+import { FONTS, INVITE_TTL_MS, type BrandKitDoc, type InviteInfo, type InviteStatus, type Member, type PendingInvite, type Role, type Workspace } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { brandKits, exportsTable, invites, jobs, memberships, projects, shareLinks, users, workspaces } from '../db/schema'
-import { HttpError, body, notFound, requireRole } from '../http'
+import { HttpError, body, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { newId, randomToken } from '../ids'
 
 export async function createWorkspace(userId: string, name: string, personal = false): Promise<Workspace> {
@@ -127,14 +127,55 @@ workspaceRoutes.get('/:id/members', async (c) => {
   return c.json(rows as Member[])
 })
 
+const inviteUrl = (token: string) => `${ctx().config.publicUrl ?? ''}/invite/${token}`
+
+type InviteRow = typeof invites.$inferSelect
+
+/** Rows made before v7 have no expires_at: they count 7 days from creation. */
+const inviteExpiry = (inv: InviteRow) => inv.expiresAt ?? inv.createdAt + INVITE_TTL_MS
+
+function inviteStatus(inv: InviteRow, now = Date.now()): InviteStatus {
+  if (inv.acceptedAt) return 'accepted'
+  if (inv.revokedAt) return 'revoked'
+  if (inviteExpiry(inv) <= now) return 'expired'
+  return 'pending'
+}
+
 workspaceRoutes.post('/:id/invites', async (c) => {
   const u = requireUser(c)
   const id = c.req.param('id')
   await requireRole(u.id, id, 'owner')
-  const b = await body(c, z.object({ email: z.string().trim().email(), role: z.enum(['owner', 'editor', 'viewer']).default('editor') }))
+  const b = await body(c, z.object({ email: z.string().trim().email().max(254), role: z.enum(['owner', 'editor', 'viewer']).default('editor') }))
   const token = randomToken(24)
-  await ctx().db.insert(invites).values({ token, workspaceId: id, email: b.email.toLowerCase(), role: b.role, createdBy: u.id, createdAt: Date.now() })
-  return c.json({ ok: true, inviteUrl: `${ctx().config.publicUrl ?? ''}/invite/${token}` })
+  const now = Date.now()
+  const expiresAt = now + INVITE_TTL_MS
+  await ctx().db.insert(invites).values({ token, workspaceId: id, email: b.email.toLowerCase(), role: b.role, createdBy: u.id, createdAt: now, expiresAt })
+  return c.json({ ok: true, inviteUrl: inviteUrl(token), expiresAt })
+})
+
+workspaceRoutes.get('/:id/invites', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  await requireRole(u.id, id, 'owner')
+  const rows = await ctx().db.select().from(invites).where(eq(invites.workspaceId, id)).orderBy(desc(invites.createdAt)).limit(200)
+  const now = Date.now()
+  const list: PendingInvite[] = rows
+    .filter((r) => inviteStatus(r, now) === 'pending')
+    .map((r) => ({ token: r.token, email: r.email, role: r.role as Role, createdAt: r.createdAt, expiresAt: inviteExpiry(r), inviteUrl: inviteUrl(r.token) }))
+  return c.json(list)
+})
+
+workspaceRoutes.delete('/:id/invites/:token', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  await requireRole(u.id, id, 'owner')
+  const rows = await ctx()
+    .db.update(invites)
+    .set({ revokedAt: Date.now() })
+    .where(and(eq(invites.token, c.req.param('token')), eq(invites.workspaceId, id), isNull(invites.acceptedAt)))
+    .returning({ token: invites.token })
+  if (!rows.length) throw notFound('Invite not found, or it was already used')
+  return c.json({ ok: true })
 })
 
 workspaceRoutes.get('/:id/brand', async (c) => {
@@ -162,27 +203,61 @@ workspaceRoutes.put('/:id/brand', async (c) => {
 // ---- invites (mounted at /api/invites) ----
 export const inviteRoutes = new Hono<AppEnv>()
 
-inviteRoutes.get('/:token', async (c) => {
-  requireUser(c)
-  const inv = (await ctx().db.select().from(invites).where(eq(invites.token, c.req.param('token'))).limit(1))[0]
+async function loadInvite(token: string): Promise<InviteRow> {
+  const inv = (await ctx().db.select().from(invites).where(eq(invites.token, token)).limit(1))[0]
   if (!inv) throw notFound('Invite not found')
+  return inv
+}
+
+inviteRoutes.get('/:token', async (c) => {
+  const u = requireUser(c)
+  const inv = await loadInvite(c.req.param('token'))
   const ws = (await ctx().db.select().from(workspaces).where(eq(workspaces.id, inv.workspaceId)).limit(1))[0]
-  return c.json({ workspaceId: inv.workspaceId, workspaceName: ws?.name ?? '', role: inv.role, email: inv.email, accepted: inv.acceptedAt != null })
+  const info: InviteInfo = {
+    workspaceId: inv.workspaceId,
+    workspaceName: ws?.name ?? '',
+    role: inv.role as Role,
+    email: inv.email,
+    status: inviteStatus(inv),
+    expiresAt: inviteExpiry(inv),
+    ...(inv.acceptedAt ? { acceptedAt: inv.acceptedAt } : {}),
+    forYou: u.email.toLowerCase() === inv.email.toLowerCase(),
+    member: (await memberRole(u.id, inv.workspaceId)) !== null,
+  }
+  return c.json(info)
 })
 
+/**
+ * Accept: only the account the invite was sent to, only once, only while it's live. The claim is one conditional
+ * UPDATE, so two people racing on one link can't both join. An existing member keeps their role unless the
+ * invite raises it.
+ */
 inviteRoutes.post('/:token/accept', async (c) => {
   const u = requireUser(c)
   const db = ctx().db
-  const inv = (await db.select().from(invites).where(eq(invites.token, c.req.param('token'))).limit(1))[0]
-  if (!inv) throw notFound('Invite not found')
-  if (inv.acceptedAt && inv.acceptedBy !== u.id) throw new HttpError(409, 'conflict', 'This invite has already been used')
-  const existing = await db
-    .select()
-    .from(memberships)
-    .where(and(eq(memberships.workspaceId, inv.workspaceId), eq(memberships.userId, u.id)))
-    .limit(1)
-  if (!existing.length) await db.insert(memberships).values({ workspaceId: inv.workspaceId, userId: u.id, role: inv.role, createdAt: Date.now() })
-  await db.update(invites).set({ acceptedAt: Date.now(), acceptedBy: u.id }).where(eq(invites.token, inv.token))
+  const inv = await loadInvite(c.req.param('token'))
+  if (u.email.toLowerCase() !== inv.email.toLowerCase())
+    throw new HttpError(403, 'forbidden', `This invite is for ${inv.email}. Sign in with that address to accept it.`)
+  const status = inviteStatus(inv)
+  if (status === 'accepted') {
+    if (inv.acceptedBy === u.id) return c.json((await listWorkspaces(u.id)).find((w) => w.id === inv.workspaceId))
+    throw new HttpError(409, 'conflict', 'This invite has already been used')
+  }
+  if (status === 'revoked') throw new HttpError(410, 'conflict', 'This invite was withdrawn by an owner of the space')
+  if (status === 'expired') throw new HttpError(410, 'conflict', 'This invite has expired. Ask an owner of the space for a new one.')
+  const now = Date.now()
+  await db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(invites)
+      .set({ acceptedAt: now, acceptedBy: u.id })
+      .where(and(eq(invites.token, inv.token), isNull(invites.acceptedAt), isNull(invites.revokedAt)))
+      .returning({ token: invites.token })
+    if (!claimed.length) throw new HttpError(409, 'conflict', 'This invite has already been used')
+    const existing = (await tx.select().from(memberships).where(and(eq(memberships.workspaceId, inv.workspaceId), eq(memberships.userId, u.id))).limit(1))[0]
+    if (!existing) await tx.insert(memberships).values({ workspaceId: inv.workspaceId, userId: u.id, role: inv.role, createdAt: now })
+    else if (!roleAtLeast(existing.role as Role, inv.role as Role))
+      await tx.update(memberships).set({ role: inv.role }).where(and(eq(memberships.workspaceId, inv.workspaceId), eq(memberships.userId, u.id)))
+  })
   const ws = (await listWorkspaces(u.id)).find((w) => w.id === inv.workspaceId)
   return c.json(ws)
 })

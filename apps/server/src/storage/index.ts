@@ -19,8 +19,8 @@ export interface Storage {
   deletePrefix(prefix: string): Promise<void>
   /** S3 only: presigned PUT URL. */
   presignPut?(key: string, contentType: string, expiresSec?: number): Promise<string>
-  /** S3 only: presigned GET URL. */
-  presignGet?(key: string, opts?: { expiresSec?: number; contentType?: string; filename?: string }): Promise<string>
+  /** S3 only: presigned GET URL; `disposition` is a full Content-Disposition value (see media/serve.ts). */
+  presignGet?(key: string, opts?: { expiresSec?: number; contentType?: string; disposition?: string }): Promise<string>
   /** Local only: absolute path of an object on disk. */
   localPath?(key: string): string
 }

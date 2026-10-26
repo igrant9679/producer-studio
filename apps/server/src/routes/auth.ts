@@ -19,6 +19,7 @@ import { users } from '../db/schema'
 import { userDto } from '../dto'
 import { HttpError, body } from '../http'
 import { newId } from '../ids'
+import { limitSignup } from '../limits'
 import { createWorkspace, listWorkspaces } from './workspaces'
 
 const COLORS = ['#ff5a5f', '#35e0ff', '#ffb020', '#7c5cff', '#2ecc71', '#ff7ac6', '#4fd1c5', '#ff8a3d']
@@ -51,6 +52,7 @@ export const authRoutes = new Hono<AppEnv>()
 
 authRoutes.post('/signup', async (c) => {
   const b = await body(c, z.object({ email: z.string().trim().email().max(254), password: z.string().min(8).max(200), name: z.string().trim().min(1).max(80) }))
+  limitSignup(clientIp(c))
   const id = await createUser(b.email, b.password, b.name)
   await createSession(c, id)
   return c.json(await meResponse(id))
@@ -59,16 +61,16 @@ authRoutes.post('/signup', async (c) => {
 /** Verify email + password with the per-IP+email rate limit; returns the user or throws 401/429. */
 export async function checkCredentials(c: Context, emailIn: string, password: string) {
   const email = emailIn.trim().toLowerCase()
-  const key = `${clientIp(c)}|${email}`
-  checkLoginRate(key)
+  const ip = clientIp(c)
+  checkLoginRate(ip, email)
   const u = (await ctx().db.select().from(users).where(eq(users.email, email)).limit(1))[0]
   // always run scrypt so response time doesn't reveal whether the account exists
   const ok = u ? await verifyPassword(password, u.passwordHash) : (await hashPassword(password), false)
   if (!u || !ok) {
-    recordLoginFailure(key)
+    recordLoginFailure(ip, email)
     throw new HttpError(401, 'unauthorized', 'Email or password is incorrect')
   }
-  clearLoginFailures(key)
+  clearLoginFailures(ip, email)
   return u
 }
 

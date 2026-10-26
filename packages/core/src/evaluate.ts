@@ -18,7 +18,7 @@ import type {
   VideoItem,
   VisualItem,
 } from './types'
-import { clamp, ease, escapeHtml, hash01, sampleKeyframes } from './util'
+import { clamp, cssNumber, ease, escapeHtml, hash01, round, safeColor, sampleKeyframes } from './util'
 
 interface Mods {
   tx: number
@@ -256,7 +256,7 @@ function captionHtml(c: CaptionItem, local: number, mode: 'line' | 'word' | 'kar
     return fmt(cur.w)
   }
   return c.words
-    .map((w) => (local >= w.start && local < w.end + 0.05 ? `<span style="color:${highlight}">${fmt(w.w)}</span>` : fmt(w.w)))
+    .map((w) => (local >= w.start && local < w.end + 0.05 ? `<span style="color:${escapeHtml(safeColor(highlight, '#ffe14d'))}">${fmt(w.w)}</span>` : fmt(w.w)))
     .join(' ')
 }
 
@@ -498,10 +498,10 @@ export function evaluate(p: Project, t: number): FrameState {
 export function textCss(style: TextItem['style']): string {
   const s = style
   const shadows: string[] = []
-  if (s.shadow) shadows.push(`${s.shadow.x}px ${s.shadow.y}px ${s.shadow.blur}px ${s.shadow.color}`)
-  if (s.glow) shadows.push(`0 0 ${s.glow.blur}px ${s.glow.color}`, `0 0 ${s.glow.blur * 2}px ${s.glow.color}`)
+  if (s.shadow) shadows.push(`${s.shadow.x}px ${s.shadow.y}px ${s.shadow.blur}px ${safeColor(s.shadow.color, 'transparent')}`)
+  if (s.glow) shadows.push(`0 0 ${s.glow.blur}px ${safeColor(s.glow.color, 'transparent')}`, `0 0 ${s.glow.blur * 2}px ${safeColor(s.glow.color, 'transparent')}`)
   const css = [
-    `font-family:'${s.fontFamily}', Inter, system-ui, sans-serif`,
+    `font-family:'${String(s.fontFamily ?? '').replace(/['"\\;{}<>]/g, '')}', Inter, system-ui, sans-serif`,
     `font-size:${s.fontSize}px`,
     `font-weight:${s.fontWeight}`,
     `font-style:${s.italic ? 'italic' : 'normal'}`,
@@ -509,11 +509,11 @@ export function textCss(style: TextItem['style']): string {
     `text-align:${s.align}`,
     `letter-spacing:${s.letterSpacing}px`,
     `line-height:${s.lineHeight}`,
-    `color:${s.color}`,
+    `color:${safeColor(s.color, '#ffffff')}`,
     `white-space:pre-wrap`,
     `overflow-wrap:break-word`,
   ]
-  if (s.stroke && s.stroke.width > 0) css.push(`-webkit-text-stroke:${s.stroke.width}px ${s.stroke.color}`, `paint-order:stroke fill`)
+  if (s.stroke && s.stroke.width > 0) css.push(`-webkit-text-stroke:${s.stroke.width}px ${safeColor(s.stroke.color, '#000000')}`, `paint-order:stroke fill`)
   if (shadows.length) css.push(`text-shadow:${shadows.join(', ')}`)
   return css.join(';')
 }
@@ -522,10 +522,19 @@ export function textCss(style: TextItem['style']): string {
 export function textBackgroundCss(style: TextItem['style']): string {
   const b = style.background
   if (!b) return ''
-  const hex = b.color.replace('#', '')
-  const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex
-  const r = parseInt(full.slice(0, 2), 16)
-  const g = parseInt(full.slice(2, 4), 16)
-  const bl = parseInt(full.slice(4, 6), 16)
-  return `background:rgba(${r},${g},${bl},${b.opacity});border-radius:${b.radius}px;padding:${b.padding * 0.5}px ${b.padding}px;box-decoration-break:clone;-webkit-box-decoration-break:clone`
+  // this string lands in an HTML attribute (runtime innerHTML): only checked colours and plain numbers
+  const color = safeColor(b.color, '#000000')
+  const opacity = clamp(cssNumber(b.opacity, 1), 0, 1)
+  const radius = cssNumber(b.radius)
+  const padding = cssNumber(b.padding)
+  let fill: string
+  if (color.startsWith('#') && (color.length === 4 || color.length === 7)) {
+    const hex = color.slice(1)
+    const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex
+    fill = `rgba(${parseInt(full.slice(0, 2), 16)},${parseInt(full.slice(2, 4), 16)},${parseInt(full.slice(4, 6), 16)},${opacity})`
+  } else {
+    // rgb(), hsl(), named or hex-with-alpha: let the browser mix in the opacity
+    fill = `color-mix(in srgb, ${color} ${round(opacity * 100, 2)}%, transparent)`
+  }
+  return `background:${fill};border-radius:${radius}px;padding:${padding * 0.5}px ${padding}px;box-decoration-break:clone;-webkit-box-decoration-break:clone`
 }

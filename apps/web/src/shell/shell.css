@@ -242,14 +242,8 @@
   .ps-page { padding: 26px 26px 64px; }
   .ps-topbar { padding: 0 20px; }
 }
+/* collapsed nav labels come from the shared tooltip layer (lib/tooltip.tsx), which skips them while the label shows */
 .ps-nav [data-tip] { position: relative; }
-@media (max-width: 1200px) {
-  .ps-nav [data-tip]:hover::after {
-    content: attr(data-tip); position: absolute; left: calc(100% + 12px); top: 50%; transform: translateY(-50%);
-    background: var(--surface-3); border: 1px solid var(--border-strong); padding: 5px 9px; border-radius: 6px;
-    font-size: 0.75rem; font-weight: 600; color: var(--text); white-space: nowrap; z-index: 80; pointer-events: none;
-  }
-}
 
 /* ---------- system chrome (desktop badge, AI chip, sync) ---------- */
 .ps-nav-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }

@@ -1,7 +1,9 @@
-import { Crown, Eye, Pencil, Plus, Settings2, Trash2, UserPlus, Users } from 'lucide-react'
+import { Check, Clock, Copy, Crown, Eye, Pencil, Plus, Settings2, Trash2, UserPlus, Users } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
+import { toast, toastError } from '../../lib/toast'
+import { absoluteUrl, copyText } from '../util'
 import { CreateSpaceModal, DeleteSpaceModal, InviteForm, RenameSpaceModal } from '../modals'
 import { Avatar, EmptyState, spaceColor, useAsync, usePageTitle } from '../ui'
 
@@ -20,8 +22,19 @@ export default function SpacePage() {
   const ws = workspaces.find((w) => w.id === workspaceId)
   const [modal, setModal] = useState<'create' | 'rename' | 'delete'>()
   const members = useAsync(() => (workspaceId ? api.members(workspaceId) : Promise.resolve([])), [workspaceId])
-  const canInvite = ws?.role === 'owner' || ws?.role === 'editor'
   const isOwner = ws?.role === 'owner'
+  const pending = useAsync(() => (workspaceId && isOwner ? api.invites(workspaceId) : Promise.resolve([])), [workspaceId, isOwner])
+  const [copied, setCopied] = useState<string>()
+  async function withdraw(token: string, email: string) {
+    if (!workspaceId) return
+    try {
+      await api.revokeInvite(workspaceId, token)
+      toast(`Withdrew the invite for ${email}`)
+      pending.reload()
+    } catch (e) {
+      toastError(e)
+    }
+  }
 
   return (
     <div className="ps-page narrow">
@@ -39,9 +52,42 @@ export default function SpacePage() {
       </div>
 
       <section className="card ps-brand-sec" style={{ marginBottom: 18 }}>
-        <div className="ps-brand-sec-head"><UserPlus size={15} /> <strong>Invite people</strong><span className="muted">They’ll get an invite link to join {ws?.name}</span></div>
+        <div className="ps-brand-sec-head"><UserPlus size={15} /> <strong>Invite people</strong><span className="muted">Make a link for one person to join {ws?.name}</span></div>
         {ws?.personal && <div className="ps-alert info" style={{ marginBottom: 12 }}>Personal spaces are just for you. Create a team space to collaborate — projects, media and the brand kit are shared with everyone in it.</div>}
-        {canInvite && workspaceId ? <InviteForm workspaceId={workspaceId} onInvited={members.reload} /> : <div className="muted">Only owners and editors can invite people.</div>}
+        {isOwner && workspaceId ? (
+          <InviteForm
+            workspaceId={workspaceId}
+            onInvited={() => {
+              members.reload()
+              pending.reload()
+            }}
+          />
+        ) : (
+          <div className="muted">Only owners of this space can invite people.</div>
+        )}
+        {isOwner && !!pending.data?.length && (
+          <div className="ps-members" style={{ marginTop: 16 }}>
+            <div className="muted" style={{ fontSize: '0.75rem', marginBottom: 6 }}>Waiting to be accepted</div>
+            {pending.data.map((p) => (
+              <div key={p.token} className="ps-member">
+                <Clock size={18} style={{ color: 'var(--text-3)', flex: 'none' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <strong>{p.email}</strong>
+                  <span>{ROLE[p.role]?.label ?? p.role} · link works until {new Date(p.expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
+                </div>
+                <button
+                  className="btn sm"
+                  onClick={async () => {
+                    if (await copyText(absoluteUrl(p.inviteUrl))) setCopied(p.token)
+                  }}
+                >
+                  {copied === p.token ? <Check size={14} /> : <Copy size={14} />} {copied === p.token ? 'Copied' : 'Copy link'}
+                </button>
+                <button className="btn sm ghost" onClick={() => void withdraw(p.token, p.email)}>Withdraw</button>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="card ps-brand-sec">

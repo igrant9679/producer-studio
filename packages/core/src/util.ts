@@ -84,3 +84,29 @@ export function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
 }
+
+const HEX_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
+// numbers, %, deg, commas, slashes and spaces only: nothing that can close a declaration, attribute or tag
+const FN_COLOR = /^(?:rgba?|hsla?)\(\s*[-+0-9.%,/\s]*(?:deg)?[-+0-9.%,/\s]*\)$/i
+const NAMED_COLOR = /^[a-z]{3,20}$/i
+
+/** True for a plain CSS colour: hex, rgb()/rgba()/hsl()/hsla() with numbers only, or a keyword (red, transparent). */
+export function isSafeColor(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length > 64) return false
+  const s = v.trim()
+  return HEX_COLOR.test(s) || FN_COLOR.test(s) || NAMED_COLOR.test(s)
+}
+
+/**
+ * A colour that is safe to put into CSS or an HTML attribute, else `fallback`. Project documents are user data
+ * (and shared with the whole workspace), so every colour goes through this before it reaches markup.
+ */
+export function safeColor(v: unknown, fallback: string): string {
+  return isSafeColor(v) ? v.trim() : fallback
+}
+
+/** A finite number for CSS, else `fallback` (document fields are typed, but stored documents are user data). */
+export function cssNumber(v: unknown, fallback = 0): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : fallback
+}

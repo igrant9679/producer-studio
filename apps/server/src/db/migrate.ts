@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -320,6 +320,16 @@ BEGIN
 END $$;
 `
 
+/**
+ * v7 — invites expire (7 days from creation; older rows count from created_at) and can be withdrawn by an owner.
+ * An invite is accepted only by the account whose email it was sent to.
+ */
+export const DDL_V7 = `
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS expires_at double precision;
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS revoked_at double precision;
+CREATE INDEX IF NOT EXISTS invites_ws_idx ON invites(workspace_id);
+`
+
 /** Ordered migrations after v1: [version, sql]. Append here; never edit a shipped entry. */
 export const MIGRATIONS: Array<[number, string]> = [
   [2, DDL_V2],
@@ -327,4 +337,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [4, DDL_V4],
   [5, DDL_V5],
   [6, DDL_V6],
+  [7, DDL_V7],
 ]

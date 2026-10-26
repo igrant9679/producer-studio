@@ -174,6 +174,7 @@ export function DeleteSpaceModal({ ws, onClose }: { ws: Workspace; onClose: () =
 
 export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited?: () => void }) {
   const [email, setEmail] = useState('')
+  const [sentTo, setSentTo] = useState('')
   const [role, setRole] = useState('editor')
   const [busy, setBusy] = useState(false)
   const [url, setUrl] = useState<string>()
@@ -187,6 +188,7 @@ export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; on
     try {
       const r = await api.invite(workspaceId, email.trim(), role)
       setUrl(absoluteUrl(r.inviteUrl))
+      setSentTo(email.trim())
       setCopied(false)
       onInvited?.()
     } catch (e2) {
@@ -207,14 +209,14 @@ export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; on
           <option value="viewer">Viewer</option>
           <option value="owner">Owner</option>
         </select>
-        <button className="btn primary" disabled={busy || !email}>{busy && <Spinner />} Send invite</button>
+        <button className="btn primary" disabled={busy || !email}>{busy && <Spinner />} Create invite link</button>
       </form>
       {err && <div className="ps-field-err">{err}</div>}
       {url && (
         <div className="ps-alert info" style={{ marginTop: 14, alignItems: 'center' }}>
           <Link2 size={16} style={{ flex: 'none' }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, marginBottom: 2 }}>Invite link ready — share it with {email}</div>
+            <div style={{ fontWeight: 600, marginBottom: 2 }}>Invite link ready. Send it to {sentTo}: only that address can use it, once, within 7 days.</div>
             <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', wordBreak: 'break-all' }}>{url}</code>
           </div>
           <button
@@ -237,7 +239,11 @@ export function InviteModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title={`Invite to ${ws?.name ?? 'space'}`} subtitle="Invitees get access to this space's projects, media and brand kit." onClose={onClose} width={620}>
       {ws?.personal && <div className="ps-alert info" style={{ marginBottom: 14 }}>This is your personal space. For team work, create a shared space and invite people there.</div>}
-      {workspaceId && <InviteForm workspaceId={workspaceId} />}
+      {ws?.role !== 'owner' ? (
+        <div className="muted">Only owners of {ws?.name ?? 'this space'} can invite people. Ask one of them to send you a link for your teammate.</div>
+      ) : (
+        workspaceId && <InviteForm workspaceId={workspaceId} />
+      )}
     </Modal>
   )
 }

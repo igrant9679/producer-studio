@@ -29,6 +29,11 @@ export class S3Storage implements Storage {
       endpoint: cfg.endpoint,
       forcePathStyle: cfg.forcePathStyle,
       credentials: cfg.accessKeyId && cfg.secretAccessKey ? { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey } : undefined,
+      // The SDK's default adds CRC32 checksums: a presigned upload URL then carries the checksum of an empty body
+      // (which a validating bucket rejects against the real bytes) and streamed puts use aws-chunked trailers that
+      // S3-compatible stores don't all accept. Only send checksums where an operation requires one.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
     })
   }
 
@@ -106,14 +111,14 @@ export class S3Storage implements Storage {
     return getSignedUrl(this.client, new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType }), { expiresIn: expiresSec })
   }
 
-  presignGet(key: string, opts: { expiresSec?: number; contentType?: string; filename?: string } = {}) {
+  presignGet(key: string, opts: { expiresSec?: number; contentType?: string; disposition?: string } = {}) {
     return getSignedUrl(
       this.client,
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: key,
         ResponseContentType: opts.contentType,
-        ResponseContentDisposition: opts.filename ? `inline; filename="${opts.filename.replace(/"/g, '')}"` : undefined,
+        ResponseContentDisposition: opts.disposition,
       }),
       { expiresIn: opts.expiresSec ?? 900 },
     )

@@ -8,6 +8,7 @@ import { exportDto, jobDto, projectSummary } from '../dto'
 import { HttpError, body, invalid, notFound, requireRole } from '../http'
 import { randomToken } from '../ids'
 import { enqueue } from '../jobs/queue'
+import { assertQueueRoom } from '../limits'
 import { serveObject } from '../media/serve'
 import { loadAsset } from '../services/assets'
 import { loadProjectRow } from '../services/projects'
@@ -30,6 +31,7 @@ projectExportRoutes.post('/:id/export', async (c) => {
   await requireRole(u.id, row.workspaceId, 'editor')
   const b = await body(c, ExportSchema)
   if (row.duration <= 0) throw new HttpError(400, 'invalid', 'The project is empty — add something to the timeline first')
+  await assertQueueRoom(row.workspaceId)
   const j = await enqueue('export.render', { ...b, projectId: row.id }, { workspaceId: row.workspaceId, userId: u.id, projectId: row.id, message: 'Waiting to render' })
   return c.json(jobDto(j))
 })
