@@ -694,6 +694,17 @@ on('POST', '/api/ai/write', async (_m, _q, b) => {
   await delay(300)
   return writeStream(String(b.prompt ?? ''), String(b.kind ?? 'voiceover'))
 })
+// like the server for a space with no AI image/video key and no stock key: animated text and diagrams only
+on('GET', '/api/ai/produce/capabilities', () => json({ stock: false, kinds: ['motion', 'diagram'], maxAiClips: 3 }))
+function fakeIdeaScenes(title: string): ScriptScene[] {
+  const t = title || 'Your idea'
+  return [
+    { id: 's01', title: 'Hook', headline: t, narration: `Here is ${t.toLowerCase()} in under a minute.`, footage: [], visual: { kind: 'motion', points: ['Clear', 'Quick', 'Yours'] } },
+    { id: 's02', title: 'How it works', headline: 'Three steps', narration: 'Plan it, build it, then ship it.', footage: [], visual: { kind: 'diagram', diagram: { type: 'steps', items: ['Plan', 'Build', 'Ship'] } } },
+    { id: 's03', title: 'Why it matters', headline: 'Faster', narration: 'Teams finish three times faster.', footage: [], visual: { kind: 'diagram', diagram: { type: 'stat', value: '3x', label: 'faster' } } },
+    { id: 's04', title: 'Close', headline: 'Start today', narration: 'Start today.', footage: [], visual: { kind: 'motion', points: [] } },
+  ]
+}
 on('POST', '/api/ai/produce/script', (_m, _q, b) => {
   const p = projects.find((x) => x.id === b.projectId)
   const brief = b.brief as { title?: string }
@@ -701,7 +712,7 @@ on('POST', '/api/ai/produce/script', (_m, _q, b) => {
     projectId: String(b.projectId),
     message: 'Writing script',
     onDone: () => {
-      const scenes = fakeScenes(b.assetIds as string[], brief?.title ?? '')
+      const scenes = (b.brief as { source?: string }).source === 'idea' ? fakeIdeaScenes(brief?.title ?? '') : fakeScenes(b.assetIds as string[], brief?.title ?? '')
       if (p) {
         const d = docFor(p)
         d.ai = { ...(d.ai ?? {}), brief: b.brief as NonNullable<Project['ai']>['brief'], script: { scenes }, status: 'scripted' }

@@ -17,6 +17,7 @@ import type {
   PendingInvite,
   PreferencesResponse,
   Member,
+  ProduceCapabilities,
   ProduceScriptRequest,
   Project,
   ProjectDocResponse,
@@ -221,7 +222,8 @@ export const api = {
       if (ev === 'delta') onDelta((data as { text: string }).text)
     }, signal),
   produceScript: (body: ProduceScriptRequest) => req<Job<{ script: { scenes: ScriptScene[] } }>>('POST', '/ai/produce/script', body),
-  produceAssemble: (projectId: string, scenes: ScriptScene[]) => req<Job<{ version: number }>>('POST', '/ai/produce/assemble', { projectId, scenes }),
+  produceAssemble: (projectId: string, scenes: ScriptScene[]) => req<Job<{ version: number; notes?: string[] }>>('POST', '/ai/produce/assemble', { projectId, scenes }),
+  produceCapabilities: (workspaceId: string) => req<ProduceCapabilities>('GET', `/ai/produce/capabilities${qs({ workspaceId })}`),
   assistant: (body: AssistantRequest, on: { text?: (d: string) => void; tool?: (name: string, summary: string) => void }, signal?: AbortSignal) =>
     new Promise<AssistantResult>((resolve, reject) => {
       let result: AssistantResult | undefined

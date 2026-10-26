@@ -5,9 +5,9 @@ export type Brief = NonNullable<ProducerMeta['brief']>
 export type StepId = 'upload' | 'brief' | 'generate' | 'review' | 'assemble'
 
 export const STEPS: Array<{ id: StepId; label: string; hint: string }> = [
-  { id: 'upload', label: 'Recordings', hint: 'Upload footage' },
+  { id: 'upload', label: 'Start', hint: 'Recordings or an idea' },
   { id: 'brief', label: 'Brief', hint: 'Audience, look & voice' },
-  { id: 'generate', label: 'Write', hint: 'Transcribe & script' },
+  { id: 'generate', label: 'Write', hint: 'Plan & script' },
   { id: 'review', label: 'Review', hint: 'Edit the script' },
   { id: 'assemble', label: 'Assemble', hint: 'Narrate & cut' },
 ]
@@ -42,6 +42,8 @@ export interface WizardState {
     interrupted?: boolean
   }
   assembledVersion?: number
+  /** Scenes whose visual couldn't be made at assembly (they used animated text instead), with why. */
+  assembleNotes?: string[]
 }
 
 export const TONES = ['Confident', 'Friendly', 'Professional', 'Energetic', 'Calm', 'Playful']
@@ -75,6 +77,14 @@ export function readyAssetIds(s: Pick<WizardState, 'assets'>): string[] {
   return s.assets.filter((a) => a.status === 'ready' && a.assetId).map((a) => a.assetId!)
 }
 
+/** Made from an idea (no recordings) rather than from uploaded footage. */
+export function isIdea(s: Pick<WizardState, 'brief'>): boolean {
+  return s.brief.source === 'idea'
+}
+
+/** Lengths offered for a video made from an idea (seconds). */
+export const IDEA_LENGTHS = [30, 60, 90, 120, 180]
+
 export function sceneWords(text: string): number {
   return text.trim() ? text.trim().split(/\s+/).length : 0
 }
@@ -104,6 +114,7 @@ export function validateBrief(b: Brief): Partial<Record<keyof Brief, string>> {
 export function canAdvance(s: WizardState, step: StepId = s.step): { ok: boolean; reason?: string } {
   switch (step) {
     case 'upload': {
+      if (isIdea(s)) return (s.brief.idea ?? '').trim().length >= 10 ? { ok: true } : { ok: false, reason: 'Describe the video in a sentence or more' }
       if (s.assets.some((a) => a.status === 'uploading' || a.status === 'processing')) return { ok: false, reason: 'Waiting for uploads to finish processing' }
       if (!readyAssetIds(s).length) return { ok: false, reason: 'Add at least one recording' }
       return { ok: true }
@@ -142,14 +153,15 @@ export function moveScene(scenes: ScriptScene[], from: number, to: number): Scri
 }
 
 let sceneSeq = 0
-export function newScene(assetId?: string, after?: ScriptScene): ScriptScene {
+export function newScene(assetId?: string, after?: ScriptScene, idea = false): ScriptScene {
   const start = after?.footage[after.footage.length - 1]?.end ?? 0
   return {
     id: `sc_new_${Date.now().toString(36)}_${++sceneSeq}`,
     title: 'New scene',
     headline: '',
     narration: '',
-    footage: assetId ? [{ assetId, start, end: start + 5 }] : [],
+    footage: assetId && !idea ? [{ assetId, start, end: start + 5 }] : [],
+    ...(idea ? { visual: { kind: 'motion' as const, points: [] } } : {}),
   }
 }
 
@@ -194,7 +206,7 @@ export function stateFromProject(res: ProjectDocResponse): WizardState {
   })
   const brief: Brief = ai.brief ?? { ...defaultBrief(), title: summary.name }
   const status = ai.status
-  const step: StepId = status === 'assembled' ? 'assemble' : scenes.length ? 'review' : assets.length ? 'brief' : 'upload'
+  const step: StepId = status === 'assembled' ? 'assemble' : scenes.length ? 'review' : assets.length || brief.source === 'idea' ? 'brief' : 'upload'
   return {
     step,
     projectId: summary.id,
