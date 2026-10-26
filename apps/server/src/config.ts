@@ -47,6 +47,8 @@ export interface Config {
   hyperframesProtocolTimeout?: string
   /** Proxies in front of the server that append to X-Forwarded-For (Railway: 1). The client is that many hops from the end. */
   trustProxyHops: number
+  /** Pexels API key (stock footage search for videos made without recordings); unset = no stock footage. */
+  pexelsApiKey?: string
   /** Abuse brakes (cloud). In memory per process; 0 turns one off. */
   limits: {
     /** AI writing calls (write, assistant, produce script) per user per day, and per minute. */
@@ -164,6 +166,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     chromePath: env.CHROME_PATH || findChrome(),
     hyperframesProtocolTimeout: env.HYPERFRAMES_PROTOCOL_TIMEOUT || undefined,
     trustProxyHops: envInt(env, 'TRUST_PROXY_HOPS', production ? 1 : 0),
+    pexelsApiKey: env.PEXELS_API_KEY?.trim() || undefined,
     limits: {
       aiPerDay: envInt(env, 'AI_CALLS_PER_DAY', 200),
       aiPerMinute: envInt(env, 'AI_CALLS_PER_MINUTE', 20),
