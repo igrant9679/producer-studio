@@ -1,11 +1,11 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, gt } from 'drizzle-orm'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
-import { jobs } from '../db/schema'
+import { devices, jobs, sessions } from '../db/schema'
 import { jobDto } from '../dto'
-import { invalid, notFound, requireRole } from '../http'
+import { HttpError, invalid, memberRole, notFound, requireRole } from '../http'
 import { cancelJob, getJob } from '../jobs/queue'
 
 export const jobRoutes = new Hono<AppEnv>()
@@ -45,36 +45,68 @@ jobRoutes.post('/:id/cancel', async (c) => {
 
 export const eventRoutes = new Hono<AppEnv>()
 
+/** Live-update streams per user (tabs, desktops); more than this is a leak or abuse, not use. */
+const MAX_STREAMS_PER_USER = 20
+/** Events waiting for a reader that has stopped reading; past this the stream is dropped (the client reconnects). */
+const MAX_QUEUED_EVENTS = 2000
+/** How often an open stream re-checks that its reader may still see the workspace. */
+const RECHECK_MS = 20_000
+const openStreams = new Map<string, number>()
+
 eventRoutes.get('/', async (c) => {
   const u = requireUser(c)
   const workspaceId = c.req.query('workspaceId')
   if (!workspaceId) throw invalid('workspaceId is required')
   await requireRole(u.id, workspaceId, 'viewer')
+  if ((openStreams.get(u.id) ?? 0) >= MAX_STREAMS_PER_USER) throw new HttpError(429, 'quota', 'Too many open live-update connections. Close some tabs.')
+  const sessionId = c.get('sessionId')
+  const deviceId = c.get('deviceId')
+  const db = ctx().db
+  /** Still a member, and the session or device token that opened the stream still exists (not signed out or revoked). */
+  const stillAllowed = async () => {
+    if (!(await memberRole(u.id, workspaceId))) return false
+    if (sessionId) return (await db.select({ id: sessions.id }).from(sessions).where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, Date.now()))).limit(1)).length > 0
+    if (deviceId) return (await db.select({ id: devices.id }).from(devices).where(eq(devices.id, deviceId)).limit(1)).length > 0
+    return true
+  }
   c.header('X-Accel-Buffering', 'no')
   c.header('Cache-Control', 'no-cache, no-transform')
   return streamSSE(c, async (stream) => {
+    openStreams.set(u.id, (openStreams.get(u.id) ?? 0) + 1)
     const queue: Array<{ event: string; data: string }> = []
     let wake: (() => void) | undefined
+    let closed = false
+    let recheck = false
+    const close = () => {
+      closed = true
+      wake?.()
+    }
     const unsub = ctx().bus.subscribe(workspaceId, (e) => {
+      // membership changes and deletes arrive as workspace events: re-check access as soon as it's sent
+      if (e.event === 'workspace') recheck = true
+      if (queue.length >= MAX_QUEUED_EVENTS) return close()
       queue.push({ event: e.event, data: JSON.stringify(e.data) })
       wake?.()
     })
-    let closed = false
-    stream.onAbort(() => {
-      closed = true
-      unsub()
-      wake?.()
-    })
+    stream.onAbort(close)
     await stream.write(': connected\n\n')
     const ka = setInterval(() => {
       void stream.write(': keepalive\n\n').catch(() => undefined)
-    }, 20_000)
+      recheck = true
+      wake?.()
+    }, RECHECK_MS)
     try {
       while (!closed) {
-        while (queue.length) {
+        // send first, then check: someone just removed still gets the workspace event that makes their app move on
+        while (queue.length && !closed) {
           const m = queue.shift()!
           await stream.writeSSE({ event: m.event, data: m.data })
         }
+        if (recheck) {
+          recheck = false
+          if (!(await stillAllowed())) break
+        }
+        if (closed || recheck || queue.length) continue
         await new Promise<void>((r) => {
           wake = r
         })
@@ -83,6 +115,9 @@ eventRoutes.get('/', async (c) => {
     } finally {
       clearInterval(ka)
       unsub()
+      const n = (openStreams.get(u.id) ?? 1) - 1
+      if (n > 0) openStreams.set(u.id, n)
+      else openStreams.delete(u.id)
     }
   })
 })

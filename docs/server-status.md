@@ -25,23 +25,23 @@ Everything in `packages/core/src/api.ts` is implemented with those shapes. Statu
 | Health | `GET /api/health` (adds `storageStatus` ok/error/unknown; never gates the 200; the reason is only in `/api/system` `storage`, for signed-in people) | ✅🧪 |
 | System | `GET /api/system` → `SystemInfo` (public) | ✅🧪 |
 | Auth | `POST /api/auth/signup`, `/login`, `/logout`, `GET /api/auth/me` | ✅🧪 |
-| Workspaces | `GET/POST /api/workspaces`, `GET /:id/members`, `POST /:id/invites` (owner), `GET /:id/invites` + `DELETE /:id/invites/:token` (owner: pending list, withdraw), `GET/PUT /:id/brand` | ✅🧪 |
+| Workspaces | `GET/POST /api/workspaces`, `GET /:id/members`, `POST /:id/invites` (owner), `GET /:id/invites` + `DELETE /:id/invites/:token` (owner: pending list, withdraw), `PATCH /:id/members/:userId {role}` (owner), `DELETE /:id/members/:userId` (owner removes; anyone leaves; never the last owner, never someone's own personal space; their pending invites are withdrawn), `GET/PUT /:id/brand` | ✅🧪 |
 | Invites | `GET /api/invites/:token` → `InviteInfo`, `POST /api/invites/:token/accept`; the web page is `/invite/:token`. Only the invited email can accept, once, within 7 days | ✅🧪 |
 | Projects | `GET /api/projects?workspaceId=&trashed=&templates=`, `POST`, `GET/PUT/PATCH/DELETE /:id`, `POST /:id/duplicate` | ✅🧪 |
 | Uploads | `POST /api/uploads` → ticket; `PUT /api/uploads/:assetId/data` (local storage; S3 gets a presigned URL); `POST /api/assets/:id/complete` (also re-runs processing for an `error` asset whose file is in storage); `POST /api/assets/:id/abort {reason}` (the browser's PUT failed) | ✅🧪 |
 | Assets | `GET /api/assets?workspaceId=&kind=`, `GET/PATCH/DELETE /api/assets/:id` | ✅ |
 | Media | `GET/HEAD /api/media/:assetId/:variant` (`source`, `proxy`, `thumb`, `filmstrip`, `audio`); Range/206/416; S3 → 302 signed URL | ✅🧪 |
 | Jobs | `GET /api/jobs/:id`, `GET /api/jobs?projectId=|workspaceId=`, `POST /api/jobs/:id/cancel` | ✅🧪 |
-| Events | `GET /api/events?workspaceId=` SSE: `job`, `asset`, `project`, plus `: keepalive` every 20 s | ✅ |
+| Events | `GET /api/events?workspaceId=` SSE: `job`, `asset`, `project`, `workspace` (rename, delete, `members: true`), plus `: keepalive` every 20 s. Access is re-checked every 20 s and after every `workspace` event (membership, session, device token); the stream closes when it's gone. At most 20 streams per user; a reader 2,000 events behind is dropped | ✅🧪 |
 | Transcribe | `POST /api/ai/transcribe` → Job `{assetId, transcript}` (whisper.cpp, word timings) | ✅ |
 | TTS | `POST /api/ai/tts` → Job `{asset, duration}`; `GET /api/ai/voices`; `GET /api/ai/voices/:id/sample` (cached WAV) | ✅ |
 | AI writer | `POST /api/ai/write` SSE `delta`/`done`/`error` | ⚠️ 503 without a key (verified) |
 | Producer | `POST /api/ai/produce/script` (⚠️ Claude), `POST /api/ai/produce/assemble` (✅ no Claude needed) | |
 | Assistant | `POST /api/ai/assistant` SSE `text`/`tool`/`done`/`error` | ⚠️ tools 🧪 |
 | Export | `POST /api/projects/:id/export` → Job `ExportResult`; `GET /api/exports?projectId=` | ✅🧪 |
-| Share | `POST /api/projects/:id/share` → `{url:'/r/:token', token}`; `GET /api/share/:token` and `/api/share/:token/video` (public, Range) | ✅ |
+| Share | `POST /api/projects/:id/share {exportId?}` → `ShareLink` (that export or the latest; reuses its link; 409 before any export); `GET /api/projects/:id/shares`; `DELETE /api/share/:token` (editor: stop sharing); `GET /api/share/:token` → `SharedVideo` (public: name, size, duration only) and `/api/share/:token/video` (public, Range). Links made before 26 Oct are pinned to their export on first view | ✅🧪 |
 | Templates | `GET /api/templates?workspaceId=` (8 built-in `tpl:<look>` + workspace templates); `GET /api/templates/tpl:<id>/preview` (PNG) | ✅🧪 |
-| Devices | `POST /api/devices {name}` (cookie/Bearer, or `{name, email, password}` with no auth) → `{deviceId, token}`; `GET`; `DELETE /:id` | ✅🧪 |
+| Devices | `POST /api/devices {name}` (session cookie, or `{name, email, password}`; a device token can't create another) → `{deviceId, token}`; `GET`; `DELETE /:id`. A token unused for 90 days stops working | ✅🧪 |
 | Sync feed | `GET /api/sync/changes?since=<cursor>&limit=` → `SyncChanges` | ✅🧪 |
 
 Timings on this machine: a 6 s 720p upload processes in ~3 s; TTS of 2 sentences ~2 s warm; whisper small.en on 9 s ~3 s;
@@ -64,6 +64,15 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   AI writing per user per day/minute, sign-ups per IP/hour, device tokens per user/hour, and queued exports / voiceovers /
   transcriptions / Producer AI runs per workspace (429 `{code:'quota'}`; upload processing is never capped). Source maps are
   built hidden and `.map` files are never served.
+- **Hardening, phase 1 (26 Oct 2026)**: S3 upload URLs sign the declared length (the bucket takes no other size), and
+  `complete` refuses (and deletes) anything over `MAX_UPLOAD_MB`; processing always checks a declared sha256 on S3 and fails
+  the clip on a mismatch. Of two concurrent `complete`s only one queues processing; concurrent duplicates that hit a
+  unique key answer 409 instead of 500. Another workspace's project/asset id gets a plain 409 (no `exists` detail), and
+  a `projectId` naming another workspace's project is refused (404). A workspace's saved AI key that can't be decrypted
+  answers 503 "enter it again" instead of falling back to the server's key. Desktop voice-profile pushes: only the
+  creating device or user may update, consent is written once at creation, timestamps are clamped to server time.
+  The worker prunes expired sessions, finished jobs older than 30 days and spent invites older than 30 days
+  (`services/retention.ts`, 3 min after start, then every 6 h).
 - **Asset URLs**: in asset records and in `project.assets`, `src`, `proxySrc`, `thumbnail` and `filmstrip.src` are already
   `/api/media/...` URLs. `GET /api/projects/:id` refreshes `project.assets` from the assets table (proxy/filmstrip/transcript
   appear there once processing finishes).

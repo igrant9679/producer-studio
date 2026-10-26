@@ -48,6 +48,14 @@ const STATIC_TYPES: Record<string, string> = {
   '.wasm': 'application/wasm',
 }
 
+/** Postgres/PGlite unique_violation (23505), possibly wrapped by Drizzle as the error's `cause`. */
+function isUniqueViolation(err: unknown): boolean {
+  for (let e = err as { code?: unknown; cause?: unknown } | undefined, depth = 0; e && depth < 4; e = e.cause as typeof e, depth++) {
+    if (e.code === '23505') return true
+  }
+  return false
+}
+
 export function createApp() {
   const app = new Hono<AppEnv>()
 
@@ -69,6 +77,8 @@ export function createApp() {
     if (err instanceof HttpError) return c.json({ error: err.message, code: err.code, ...(err.details !== undefined ? { details: err.details } : {}) }, err.status as 400)
     const status = (err as { status?: number }).status
     if (status === 413) return c.json({ error: 'Request body too large', code: 'quota' }, 413)
+    // two identical requests at once (a double click, a retry): the second hits a unique key, which is a conflict
+    if (isUniqueViolation(err)) return c.json({ error: 'This already exists. Refresh and try again.', code: 'conflict' }, 409)
     log.error('unhandled error', { path: c.req.path, err })
     return c.json({ error: 'Internal server error', code: 'server' }, 500)
   })

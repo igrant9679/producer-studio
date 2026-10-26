@@ -1,5 +1,5 @@
 import type { ExportRecord, ProjectSummary } from '@producer/core'
-import { CalendarClock, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Film, Link2, Send } from 'lucide-react'
+import { CalendarClock, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Film, Link2, Link2Off, Send } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
@@ -8,7 +8,7 @@ import { toast, toastError } from '../../lib/toast'
 import { EmptyState, Soon, Spinner, Thumb, useAsync, usePageTitle } from '../ui'
 import { absoluteUrl, copyText, formatBytes, formatDuration, relativeTime } from '../util'
 
-type Row = ExportRecord & { project: ProjectSummary }
+type Row = ExportRecord & { project: ProjectSummary; shareToken?: string }
 
 function ScheduleCalendar() {
   const [offset, setOffset] = useState(0)
@@ -52,10 +52,16 @@ export default function ExportsPage() {
   const workspaceId = useSession((s) => s.workspaceId)
   const [copied, setCopied] = useState<string>()
   const [sharing, setSharing] = useState<string>()
-  const { data, loading, error, reload } = useAsync(async () => {
+  const { data, loading, error, reload, setData } = useAsync(async () => {
     if (!workspaceId) return [] as Row[]
     const projects = (await api.projects(workspaceId)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 24)
-    const lists = await Promise.all(projects.map((p) => api.exports(p.id).then((l) => l.map((e) => ({ ...e, project: p }))).catch(() => [] as Row[])))
+    const lists = await Promise.all(
+      projects.map(async (p) => {
+        const [exports, links] = await Promise.all([api.exports(p.id).catch(() => []), api.shares(p.id).catch(() => [])])
+        const byExport = new Map(links.map((l) => [l.exportId, l.token]))
+        return exports.map((e): Row => ({ ...e, project: p, shareToken: byExport.get(e.exportId) }))
+      }),
+    )
     return lists.flat().sort((a, b) => b.createdAt - a.createdAt)
   }, [workspaceId])
   const total = useMemo(() => (data ?? []).reduce((t, r) => t + (r.sizeBytes || 0), 0), [data])
@@ -64,12 +70,27 @@ export default function ExportsPage() {
     setSharing(r.exportId)
     try {
       const s = await api.share(r.projectId, r.exportId)
+      setData((cur) => (cur ?? []).map((x) => (x.exportId === r.exportId ? { ...x, shareToken: s.token } : x)))
       const url = absoluteUrl(s.url)
       if (await copyText(url)) {
         setCopied(r.exportId)
         toast('Share link copied')
         setTimeout(() => setCopied((c) => (c === r.exportId ? undefined : c)), 2500)
       } else toast(url)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSharing(undefined)
+    }
+  }
+
+  async function unshare(r: Row) {
+    if (!r.shareToken) return
+    setSharing(r.exportId)
+    try {
+      await api.unshare(r.shareToken)
+      setData((cur) => (cur ?? []).map((x) => (x.exportId === r.exportId ? { ...x, shareToken: undefined } : x)))
+      toast('Stopped sharing: that link no longer works')
     } catch (e) {
       toastError(e)
     } finally {
@@ -121,6 +142,11 @@ export default function ExportsPage() {
                 <button className="btn sm primary" onClick={() => share(r)} disabled={sharing === r.exportId}>
                   {sharing === r.exportId ? <Spinner size={13} /> : copied === r.exportId ? <Check size={13} /> : <Link2 size={13} />} {copied === r.exportId ? 'Copied' : 'Copy link'}
                 </button>
+                {r.shareToken && (
+                  <button className="btn sm ghost" onClick={() => void unshare(r)} disabled={sharing === r.exportId} data-tip="Stop sharing" data-tip-desc="The link stops working for everyone who has it" aria-label="Stop sharing">
+                    <Link2Off size={13} />
+                  </button>
+                )}
               </div>
             </div>
           ))}

@@ -107,8 +107,12 @@ export class S3Storage implements Storage {
     } while (token)
   }
 
-  presignPut(key: string, contentType: string, expiresSec = 3600) {
-    return getSignedUrl(this.client, new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType }), { expiresIn: expiresSec })
+  presignPut(key: string, contentType: string, opts: { size?: number; expiresSec?: number } = {}) {
+    // Content-Length is part of the signature, so the declared size is the only size the bucket will take
+    // (otherwise a client could declare 1 byte, pass the upload limit, and PUT up to 5 GB).
+    return getSignedUrl(this.client, new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType, ContentLength: opts.size }), {
+      expiresIn: opts.expiresSec ?? 3600,
+    })
   }
 
   presignGet(key: string, opts: { expiresSec?: number; contentType?: string; disposition?: string } = {}) {

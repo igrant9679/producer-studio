@@ -194,6 +194,19 @@ describe('AI settings API (cloud)', () => {
     expect((await A.client.json('PUT', '/api/ai/settings', { workspaceId: ws, models: { openai: 'bad model!' } })).status).toBe(400)
   })
 
+  it("a saved key that can't be decrypted stops with a reason instead of using the server's key", async () => {
+    const A = await signup(t.app, 'Rotated')
+    const ws = A.workspaceId
+    await A.client.json('PUT', '/api/ai/keys/openai', { workspaceId: ws, key: OPENAI_KEY })
+    expect((await getProvider(ws, 'writer')).id).toBe('openai')
+    // as if SECRETS_KEY changed: the sealed key no longer opens
+    await ctx().db.update(aiKeys).set({ tag: Buffer.alloc(16).toString('base64') }).where(and(eq(aiKeys.workspaceId, ws), eq(aiKeys.provider, 'openai')))
+    const r = await resolveProvider(ws, 'writer')
+    expect(r.provider.id).toBe('openai')
+    expect(await r.provider.status()).toMatchObject({ available: false, detail: expect.stringContaining('can’t be read') })
+    await expect(requireProvider(ws, 'writer')).rejects.toMatchObject({ status: 503, message: expect.stringContaining('enter it again') })
+  })
+
   it('only owners manage keys and settings; editors and viewers read the masked settings', async () => {
     const A = await signup(t.app, 'Boss')
     await A.client.json('PUT', '/api/ai/keys/openai', { workspaceId: A.workspaceId, key: OPENAI_KEY })

@@ -86,9 +86,11 @@ const deviceDto = (d: typeof devices.$inferSelect): Device => ({ id: d.id, name:
  */
 deviceRoutes.post('/', async (c) => {
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(100), email: z.string().max(254).optional(), password: z.string().max(200).optional() }))
-  let user = c.get('user')
+  // A device token can't mint more device tokens: revoking a leaked one must end that access, not leave a copy behind.
+  // Linking takes a password, or a browser session.
+  let user = c.get('deviceId') ? null : c.get('user')
   if (!user && b.email && b.password) user = await checkCredentials(c, b.email, b.password)
-  if (!user) throw unauthorized()
+  if (!user) throw c.get('deviceId') ? new HttpError(403, 'forbidden', 'Link a new app with your email and password') : unauthorized()
   limitDevices(user.id)
   const token = `psd_${randomToken(32)}`
   const id = newId('dev')

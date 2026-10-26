@@ -139,13 +139,19 @@ voiceRoutes.put('/profiles/:id', async (c) => {
   await requireRole(userId, b.workspaceId, 'editor')
   const cur = (await ctx().db.select().from(voiceProfiles).where(eq(voiceProfiles.id, id)).limit(1))[0]
   if (cur && cur.workspaceId !== b.workspaceId) throw new HttpError(409, 'conflict', 'That voice belongs to another space')
-  if (cur && cur.updatedAt >= b.updatedAt) return c.json(voiceProfileDto(cur)) // cloud copy is as new or newer
-  const values = { workspaceId: b.workspaceId, name: b.name, kind: b.kind, engine: b.engine, language: b.language ?? null, gender: b.gender ?? null, description: b.description ?? null, consent: b.consent, updatedAt: b.updatedAt }
+  // only the computer that made the voice (or the person who made it) pushes changes to it
+  if (cur && cur.deviceId !== deviceId && cur.createdBy !== userId) throw new HttpError(403, 'forbidden', 'Only the computer that made this voice can change it')
+  // timestamps from a device's clock can't be in the future, or a copy could pin itself as "newest" for good
+  const now = Date.now()
+  const updatedAt = Math.min(b.updatedAt, now)
+  if (cur && cur.updatedAt >= updatedAt) return c.json(voiceProfileDto(cur)) // cloud copy is as new or newer
+  const values = { workspaceId: b.workspaceId, name: b.name, kind: b.kind, engine: b.engine, language: b.language ?? null, gender: b.gender ?? null, description: b.description ?? null, updatedAt }
+  // the consent record is written once, when the voice is created, and never replaced afterwards
   const [row] = cur
     ? await ctx().db.update(voiceProfiles).set(values).where(eq(voiceProfiles.id, id)).returning()
     : await ctx()
         .db.insert(voiceProfiles)
-        .values({ id, ...values, deviceId, createdBy: userId, createdAt: b.createdAt })
+        .values({ id, ...values, consent: { ...b.consent, attestedAt: Math.min(b.consent.attestedAt, now) }, deviceId, createdBy: userId, createdAt: Math.min(b.createdAt, now) })
         .returning()
   return c.json(voiceProfileDto(row))
 })

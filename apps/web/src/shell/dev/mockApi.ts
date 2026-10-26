@@ -448,6 +448,32 @@ on('DELETE', '/api/workspaces/([^/]+)', async (m) => {
   return json({ ok: true })
 })
 on('GET', '/api/workspaces/([^/]+)/members', (m) => json(members[m[1]] ?? []))
+// like the server: owners change roles and remove people, anyone leaves; a space keeps at least one owner
+on('PATCH', '/api/workspaces/([^/]+)/members/([^/]+)', (m, _q, b) => {
+  const denied = ownerOnly(m[1])
+  if (denied) return denied
+  const list = members[m[1]] ?? []
+  const target = list.find((x) => x.userId === m[2])
+  if (!target) return fail(404, 'This person is not a member of the space', 'not_found')
+  if (target.role === 'owner' && b.role !== 'owner' && list.filter((x) => x.role === 'owner').length <= 1) return fail(409, 'A space needs at least one owner. Make someone else an owner first.', 'conflict')
+  target.role = b.role as Member['role']
+  return json({ ok: true, role: target.role })
+})
+on('DELETE', '/api/workspaces/([^/]+)/members/([^/]+)', (m) => {
+  const self = currentUser()?.id === m[2]
+  if (!self) {
+    const denied = ownerOnly(m[1])
+    if (denied) return denied
+  }
+  const list = members[m[1]] ?? []
+  const target = list.find((x) => x.userId === m[2])
+  if (!target) return fail(404, 'This person is not a member of the space', 'not_found')
+  if (target.role === 'owner' && list.filter((x) => x.role === 'owner').length <= 1) return fail(409, 'A space needs at least one owner.', 'conflict')
+  members[m[1]] = list.filter((x) => x.userId !== m[2])
+  const w = workspaces.find((x) => x.id === m[1])
+  if (w) w.memberCount = Math.max(1, w.memberCount - 1)
+  return json({ ok: true })
+})
 // like the server: an invite is a pending link for one address (owners only) until that account accepts it
 const mockInvites: Array<{ token: string; workspaceId: string; email: string; role: Member['role']; createdAt: number; expiresAt: number; acceptedAt?: number; revokedAt?: number }> = []
 const ownerOnly = (wsId: string) => (workspaces.find((x) => x.id === wsId)?.role === 'owner' ? null : fail(403, 'Only workspace owners can do that', 'forbidden'))
@@ -708,11 +734,25 @@ on('POST', '/api/ai/produce/assemble', (_m, _q, b) => {
 })
 
 on('GET', '/api/exports', (_m, q) => json(exportsByProject[q.get('projectId') ?? ''] ?? []))
+// like the server: one link per export (reused), nothing to share before an export, and links can be stopped
 on('POST', '/api/projects/([^/]+)/share', async (m, _q, b) => {
   await delay(200)
-  const token = Math.random().toString(36).slice(2, 10)
-  shares[token] = { projectId: m[1], exportId: b.exportId as string | undefined }
-  return json({ url: `${location.origin}/r/${token}`, token })
+  const exportId = (b.exportId as string | undefined) ?? exportsByProject[m[1]]?.[0]?.exportId
+  if (!exportId) return fail(409, 'Export the video first: a share link shows a finished export.', 'conflict')
+  let token = Object.keys(shares).find((t) => shares[t].projectId === m[1] && shares[t].exportId === exportId)
+  if (!token) {
+    token = Math.random().toString(36).slice(2, 10)
+    shares[token] = { projectId: m[1], exportId }
+  }
+  return json({ token, url: `${location.origin}/r/${token}`, exportId, createdAt: Date.now() })
+})
+on('GET', '/api/projects/([^/]+)/shares', (m) =>
+  json(Object.entries(shares).filter(([, s]) => s.projectId === m[1] && s.exportId).map(([token, s]) => ({ token, url: `${location.origin}/r/${token}`, exportId: s.exportId, createdAt: Date.now() }))),
+)
+on('DELETE', '/api/share/([^/]+)', (m) => {
+  if (!shares[m[1]]) return fail(404, 'This link is invalid or has been removed', 'not_found')
+  delete shares[m[1]]
+  return json({ ok: true })
 })
 on('GET', '/api/share/([^/]+)', async (m) => {
   await delay(300)
@@ -720,7 +760,8 @@ on('GET', '/api/share/([^/]+)', async (m) => {
   const p = s && projects.find((x) => x.id === s.projectId)
   if (!p) return fail(404, 'This link has expired or does not exist', 'not_found')
   const ex = (exportsByProject[p.id] ?? []).find((e) => e.exportId === s.exportId) ?? exportsByProject[p.id]?.[0]
-  return json({ project: summary(p), videoUrl: ex?.url })
+  const sp = summary(p)
+  return json({ project: { name: sp.name, width: sp.width, height: sp.height, duration: sp.duration, updatedAt: sp.updatedAt }, videoUrl: ex?.url })
 })
 on('GET', '/api/templates', async (_m, q) => {
   await delay(300)

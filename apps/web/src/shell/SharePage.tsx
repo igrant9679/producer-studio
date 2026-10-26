@@ -1,4 +1,4 @@
-import type { ProjectSummary } from '@producer/core'
+import type { SharedVideo } from '@producer/core'
 import { ArrowRight, Film, LinkIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
@@ -8,10 +8,7 @@ import './share.css'
 import { Logo, Spinner } from './ui'
 import { formatDuration, relativeTime } from './util'
 
-interface ShareData {
-  project: ProjectSummary
-  videoUrl?: string
-}
+type ShareData = SharedVideo
 
 export function SharePage() {
   const { token } = useParams()
@@ -75,7 +72,7 @@ export function SharePage() {
           <div className="ps-share-stage" style={{ maxWidth: ratio < 1.2 ? `min(100%, calc(78vh * ${ratio}))` : undefined }}>
             <div className="ps-share-player" style={{ aspectRatio: String(ratio) }}>
               {data.videoUrl ? (
-                <video src={data.videoUrl} poster={data.project.thumbnailUrl} controls playsInline autoPlay />
+                <video src={data.videoUrl} controls playsInline autoPlay />
               ) : (
                 <div className="ps-share-novideo">
                   <Film size={28} />

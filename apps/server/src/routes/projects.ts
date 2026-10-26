@@ -71,7 +71,8 @@ projectRoutes.post('/', async (c) => {
   const id = b.id ?? uid('p')
   if (b.id) {
     const existing = await loadProjectRow(b.id).catch(() => null)
-    if (existing && existing.workspaceId !== b.workspaceId) throw new HttpError(409, 'conflict', 'A project with this id already exists', { exists: true })
+    // another workspace's id: the same answer as any collision, so it says nothing about what exists elsewhere
+    if (existing && existing.workspaceId !== b.workspaceId) throw new HttpError(409, 'conflict', 'This project id is taken. Duplicate the project to save a copy.')
     if (existing) {
       // idempotent retry of the same create
       const res: ProjectDocResponse = { summary: projectSummary(existing), project: await hydrateAssets(existing.doc, existing.workspaceId), version: existing.version }

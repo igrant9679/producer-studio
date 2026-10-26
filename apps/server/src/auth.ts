@@ -29,6 +29,8 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
 
 export const SESSION_COOKIE = 'ps_session'
 const SESSION_MS = 30 * 24 * 3600 * 1000
+/** Device tokens (desktop links) stop working after this long without a request. */
+export const DEVICE_IDLE_MS = 90 * 24 * 3600 * 1000
 const REFRESH_AFTER_MS = 24 * 3600 * 1000
 
 export type UserRow = typeof users.$inferSelect
@@ -77,9 +79,11 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
       .limit(1)
     const row = rows[0]
     if (!row) throw new HttpError(401, 'unauthorized', 'Invalid or revoked device token')
+    const now = Date.now()
+    // a token nobody has used for months is more likely leaked than needed: the app links again with a password
+    if (now - (row.d.lastSeenAt ?? row.d.createdAt) > DEVICE_IDLE_MS) throw new HttpError(401, 'unauthorized', 'This app link expired after 90 days unused. Link the app again.')
     c.set('user', row.u)
     c.set('deviceId', row.d.id)
-    const now = Date.now()
     if (!row.d.lastSeenAt || now - row.d.lastSeenAt > 60_000) await ctx().db.update(devices).set({ lastSeenAt: now }).where(eq(devices.id, row.d.id))
     return next()
   }

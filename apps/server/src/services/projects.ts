@@ -46,6 +46,16 @@ export async function loadProjectRow(id: string): Promise<ProjectRow> {
   return row
 }
 
+/**
+ * A project id sent alongside work in `workspaceId` must not name another workspace's project. An id the cloud
+ * doesn't know yet is fine: desktops push media before the project that uses it.
+ */
+export async function assertProjectInWorkspace(projectId: string | null | undefined, workspaceId: string): Promise<void> {
+  if (!projectId) return
+  const row = (await ctx().db.select({ ws: projects.workspaceId }).from(projects).where(eq(projects.id, projectId)).limit(1))[0]
+  if (row && row.ws !== workspaceId) throw notFound('Project not found')
+}
+
 /** Refresh embedded asset records from the assets table (proxy/filmstrip/transcript may have arrived later). */
 export async function hydrateAssets(p: Project, workspaceId: string): Promise<Project> {
   const ids = Object.keys(p.assets ?? {})

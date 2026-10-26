@@ -164,7 +164,13 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
   try {
     jc.progress(0.02, 'Reading media')
     const src = await localSource(row, work)
-    if (!row.sha256) row = await updateAsset(row.id, { sha256: await sha256File(src) })
+    // Local storage checked the hash on `complete`; S3 uploads went straight to the bucket, so check here. A declared
+    // hash that doesn't match means a truncated or altered upload — every desktop would refuse that clip forever.
+    if (!row.sha256 || !storage.localPath) {
+      const actual = await sha256File(src)
+      if (row.sha256 && row.sha256 !== actual) throw new Error("The uploaded file doesn't match the one that was sent (its fingerprint differs): the upload was cut short or altered. Upload it again.")
+      if (!row.sha256) row = await updateAsset(row.id, { sha256: actual })
+    }
     const info = await probe(src, jc.signal)
     jc.check()
     const meta: AssetMeta = { ...(row.meta ?? {}), duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasAudio: info.hasAudio, codec: info.codec }

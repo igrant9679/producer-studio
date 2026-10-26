@@ -127,6 +127,64 @@ workspaceRoutes.get('/:id/members', async (c) => {
   return c.json(rows as Member[])
 })
 
+/** Tell everyone's open screens (and the person affected) that the member list changed. */
+function membersChanged(workspaceId: string) {
+  ctx().bus.publish(workspaceId, 'workspace', { id: workspaceId, deleted: false, members: true }, { id: workspaceId, inline: { id: workspaceId, deleted: false, members: true } })
+}
+
+async function ownerCount(workspaceId: string): Promise<number> {
+  const [r] = await ctx()
+    .db.select({ n: sql<number>`count(*)::int` })
+    .from(memberships)
+    .where(and(eq(memberships.workspaceId, workspaceId), eq(memberships.role, 'owner')))
+  return Number(r?.n ?? 0)
+}
+
+/** Change a member's role (owner). A space always keeps at least one owner. */
+workspaceRoutes.patch('/:id/members/:userId', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  const target = c.req.param('userId')
+  await requireRole(u.id, id, 'owner')
+  const b = await body(c, z.object({ role: z.enum(['owner', 'editor', 'viewer']) }))
+  const current = await memberRole(target, id)
+  if (!current) throw notFound('This person is not a member of the space')
+  if (current === 'owner' && b.role !== 'owner' && (await ownerCount(id)) <= 1)
+    throw new HttpError(409, 'conflict', 'A space needs at least one owner. Make someone else an owner first.')
+  await ctx().db.update(memberships).set({ role: b.role }).where(and(eq(memberships.workspaceId, id), eq(memberships.userId, target)))
+  membersChanged(id)
+  return c.json({ ok: true, role: b.role })
+})
+
+/**
+ * Remove a member (owner), or leave (anyone, for themselves). The last owner can't go; a personal space is its
+ * owner's for good. Their pending invites to this space are withdrawn too, so an old link can't bring them back.
+ */
+workspaceRoutes.delete('/:id/members/:userId', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  const target = c.req.param('userId')
+  const self = target === u.id
+  await requireRole(u.id, id, self ? 'viewer' : 'owner')
+  const current = await memberRole(target, id)
+  if (!current) throw notFound('This person is not a member of the space')
+  const ws = (await ctx().db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]
+  if (ws?.personal && ws.createdBy === target) throw new HttpError(409, 'conflict', 'This is their personal space; it can’t be left.')
+  if (current === 'owner' && (await ownerCount(id)) <= 1)
+    throw new HttpError(409, 'conflict', self ? 'You’re the only owner. Make someone else an owner before you leave.' : 'A space needs at least one owner.')
+  const email = (await ctx().db.select({ email: users.email }).from(users).where(eq(users.id, target)).limit(1))[0]?.email
+  await ctx().db.transaction(async (tx) => {
+    await tx.delete(memberships).where(and(eq(memberships.workspaceId, id), eq(memberships.userId, target)))
+    if (email)
+      await tx
+        .update(invites)
+        .set({ revokedAt: Date.now() })
+        .where(and(eq(invites.workspaceId, id), eq(invites.email, email.toLowerCase()), isNull(invites.acceptedAt), isNull(invites.revokedAt)))
+  })
+  membersChanged(id)
+  return c.json({ ok: true })
+})
+
 const inviteUrl = (token: string) => `${ctx().config.publicUrl ?? ''}/invite/${token}`
 
 type InviteRow = typeof invites.$inferSelect

@@ -77,7 +77,9 @@ describe('global ids', () => {
     expect(again.body.summary.name).toBe('From desktop')
     const clash = await B.client.json('POST', '/api/projects', { workspaceId: B.workspaceId, id })
     expect(clash.status).toBe(409)
-    expect(clash.body).toMatchObject({ code: 'conflict', details: { exists: true } })
+    // a conflict, but nothing that says the id exists in someone else's workspace
+    expect(clash.body.code).toBe('conflict')
+    expect(clash.body.details).toBeUndefined()
     expect((await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, id: 'bad id!' })).status).toBe(400)
   })
 

@@ -7,6 +7,7 @@
 import crypto from 'node:crypto'
 import type { AiChoice, AiFeature, AiKeyProvider, AiSettings } from '@producer/core'
 import { ctx } from '../context'
+import { HttpError } from '../http'
 import { buildKeyProvider } from './keys'
 import type { AiProvider, AiScope } from './provider'
 import { type AiSettingsDoc, FEATURES, KEY_PROVIDERS, keyMeta, loadDoc, readKey } from './store'
@@ -74,6 +75,24 @@ class FailedKeyProvider implements AiProvider {
   runAgent: AiProvider['runAgent'] = (req) => this.inner.runAgent(req)
 }
 
+/**
+ * The workspace chose a provider and saved its key, but the key can't be decrypted (SECRETS_KEY changed). Its work
+ * must not quietly go to the server's own key instead: the owner picked another provider, and the operator pays.
+ */
+class UnreadableKeyProvider implements AiProvider {
+  constructor(readonly id: AiProvider['id']) {}
+  private readonly reason = 'The saved AI key for this space can’t be read any more (the server’s secrets key changed). An owner needs to enter it again in Settings → AI.'
+  async status() {
+    return { available: false, detail: this.reason }
+  }
+  private refuse(): never {
+    throw new HttpError(503, 'server', this.reason)
+  }
+  write: AiProvider['write'] = async () => this.refuse()
+  structured: AiProvider['structured'] = async () => this.refuse()
+  runAgent: AiProvider['runAgent'] = async () => this.refuse()
+}
+
 export interface Resolved {
   provider: AiProvider
   /** Which step picked it. */
@@ -94,7 +113,8 @@ export async function resolveProvider(scope: AiScope, feature?: AiFeature, prelo
     if (choice === 'builtin') return { provider: await builtinProvider(), source, choice }
     if (!keys.has(choice)) continue
     const p = await keyProvider(scoped, choice, doc)
-    if (p) return { provider: p, source, choice }
+    // a saved key that can't be opened stops here (503 with the reason), never falls through to the built-in key
+    return { provider: p ?? new UnreadableKeyProvider(choice as AiProvider['id']), source, choice }
   }
   return { provider: await builtinProvider(), source: 'builtin', choice: 'builtin' }
 }

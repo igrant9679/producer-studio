@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { Hono } from 'hono'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, inArray } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { UploadTicket } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
@@ -15,6 +15,7 @@ import { assertVariant, serveObject, type Variant } from '../media/serve'
 import { type AssetRow, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset, uploadMime } from '../services/assets'
 import { UploadTooLargeError } from '../storage'
 import { abortUpload } from '../services/asset-recovery'
+import { assertProjectInWorkspace } from '../services/projects'
 
 export const uploadRoutes = new Hono<AppEnv>()
 
@@ -37,11 +38,13 @@ uploadRoutes.post('/', async (c) => {
     }),
   )
   await requireRole(u.id, b.workspaceId, 'editor')
+  await assertProjectInWorkspace(b.projectId, b.workspaceId)
   if (b.assetId) {
     const existing = (await ctx().db.select().from(assets).where(eq(assets.id, b.assetId)).limit(1))[0]
     if (existing) {
-      const same = existing.workspaceId === b.workspaceId
-      throw new HttpError(409, 'conflict', 'This asset already exists', { exists: true, ...(same ? { asset: assetRecord(existing), sha256: existing.sha256 ?? undefined } : {}) })
+      // a replica re-pushing its own asset learns it's there; another workspace's id gets a plain conflict
+      if (existing.workspaceId !== b.workspaceId) throw new HttpError(409, 'conflict', 'This asset id is taken')
+      throw new HttpError(409, 'conflict', 'This asset already exists', { exists: true, asset: assetRecord(existing), sha256: existing.sha256 ?? undefined })
     }
   }
   const max = ctx().config.maxUploadBytes
@@ -75,7 +78,7 @@ uploadRoutes.post('/', async (c) => {
   emitAsset(row)
   const storage = ctx().storage
   const ticket: UploadTicket = storage.presignPut
-    ? { assetId: id, url: await storage.presignPut(key, mime), method: 'PUT', headers: { 'content-type': mime } }
+    ? { assetId: id, url: await storage.presignPut(key, mime, { size: b.size }), method: 'PUT', headers: { 'content-type': mime } }
     : { assetId: id, url: `/api/uploads/${id}/data`, method: 'PUT', headers: { 'content-type': mime } }
   return c.json(ticket)
 })
@@ -108,6 +111,14 @@ assetRoutes.post('/:id/complete', async (c) => {
   if (row.status !== 'uploading' && row.status !== 'error') return c.json(assetRecord(row))
   const st = await ctx().storage.stat(row.sourceKey)
   if (!st) throw new HttpError(409, 'conflict', 'Upload has not arrived yet — PUT the file to the ticket URL first')
+  // the bucket only takes the signed length, but tickets from before that (or other storage) could carry more
+  const max = ctx().config.maxUploadBytes
+  if (st.size > max) {
+    await ctx().storage.delete(row.sourceKey).catch(() => undefined)
+    const msg = `This file is larger than the ${Math.round(max / 1024 / 1024)} MB upload limit`
+    await updateAsset(row.id, { status: 'error', error: `${msg}.` })
+    throw new HttpError(413, 'quota', msg)
+  }
   // content hash: computed here for local storage (streamed), or by asset.process for S3
   let hash = row.sha256
   if (ctx().storage.localPath) {
@@ -115,9 +126,16 @@ assetRoutes.post('/:id/complete', async (c) => {
     if (hash && hash !== actual) throw new HttpError(400, 'invalid', 'Uploaded bytes do not match the declared sha256')
     hash = actual
   }
-  const updated = await updateAsset(row.id, { status: 'processing', size: st.size, error: null, sha256: hash })
+  // one conditional update: of two `complete` calls at once, only one moves the clip on and queues processing
+  const [claimed] = await ctx()
+    .db.update(assets)
+    .set({ status: 'processing', size: st.size, error: null, sha256: hash, updatedAt: Date.now() })
+    .where(and(eq(assets.id, row.id), inArray(assets.status, ['uploading', 'error'])))
+    .returning()
+  if (!claimed) return c.json(assetRecord(await loadAsset(row.id)))
+  emitAsset(claimed)
   await enqueue('asset.process', { assetId: row.id }, { workspaceId: row.workspaceId, userId: u.id, projectId: row.projectId, message: 'Processing upload' })
-  return c.json(assetRecord(updated))
+  return c.json(assetRecord(claimed))
 })
 
 // The browser's PUT to storage failed (refused, network, tab closing): say so now instead of "processing" forever.

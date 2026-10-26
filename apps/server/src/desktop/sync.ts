@@ -613,9 +613,13 @@ export class SyncEngine {
       }
       const ext = path.extname(a.sourceKey)
       const filename = path.extname(a.name) ? a.name : `${a.name}${ext}`
+      const file = ctx().storage.localPath?.(a.sourceKey)
+      if (!file) continue
+      // declare the file's real size: the cloud signs it into the upload URL and the bucket refuses any other length
+      const bytes = fs.statSync(file).size
       let ticket: UploadTicket
       try {
-        ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: a.size, assetId: a.id, sha256: sha, origin: a.origin, ...(a.meta?.tts ? { tts: a.meta.tts } : {}), ...(a.projectId ? { projectId: a.projectId } : {}) })
+        ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: bytes, assetId: a.id, sha256: sha, origin: a.origin, ...(a.meta?.tts ? { tts: a.meta.tts } : {}), ...(a.projectId ? { projectId: a.projectId } : {}) })
       } catch (err) {
         if (err instanceof CloudError && err.status === 409 && (err.body?.details as { exists?: boolean } | undefined)?.exists) {
           await putSync('asset', a.id, { uploaded: true, remote: false })
@@ -623,9 +627,6 @@ export class SyncEngine {
         }
         throw err
       }
-      const file = ctx().storage.localPath?.(a.sourceKey)
-      if (!file) continue
-      const bytes = fs.statSync(file).size
       const body = Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream
       const put = await c.request('PUT', ticket.url, { body, headers: { ...ticket.headers, 'content-length': String(bytes) } })
       if (!put.ok) {

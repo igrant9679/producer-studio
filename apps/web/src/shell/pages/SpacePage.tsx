@@ -1,11 +1,13 @@
 import { Check, Clock, Copy, Crown, Eye, Pencil, Plus, Settings2, Trash2, UserPlus, Users } from 'lucide-react'
+import type { Member } from '@producer/core'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { absoluteUrl, copyText } from '../util'
 import { CreateSpaceModal, DeleteSpaceModal, InviteForm, RenameSpaceModal } from '../modals'
-import { Avatar, EmptyState, spaceColor, useAsync, usePageTitle } from '../ui'
+import { Avatar, EmptyState, Modal, Spinner, spaceColor, useAsync, usePageTitle } from '../ui'
 
 const ROLE: Record<string, { label: string; icon: React.ReactNode; desc: string }> = {
   owner: { label: 'Owner', icon: <Crown size={13} />, desc: 'Manage members, brand kit and everything in the space' },
@@ -25,6 +27,46 @@ export default function SpacePage() {
   const isOwner = ws?.role === 'owner'
   const pending = useAsync(() => (workspaceId && isOwner ? api.invites(workspaceId) : Promise.resolve([])), [workspaceId, isOwner])
   const [copied, setCopied] = useState<string>()
+  const navigate = useNavigate()
+  const refreshWorkspaces = useSession((s) => s.refreshWorkspaces)
+  const [removing, setRemoving] = useState<Member>()
+  const [busy, setBusy] = useState<string>()
+  async function changeRole(m: Member, role: Member['role']) {
+    if (!workspaceId || role === m.role) return
+    setBusy(m.userId)
+    try {
+      await api.setMemberRole(workspaceId, m.userId, role)
+      members.setData((cur) => (cur ?? []).map((x) => (x.userId === m.userId ? { ...x, role } : x)))
+      if (m.userId === user?.id) await refreshWorkspaces()
+      toast(`${m.name} is now ${ROLE[role]?.label.toLowerCase() ?? role}`)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(undefined)
+    }
+  }
+  async function remove(m: Member) {
+    if (!workspaceId) return
+    const leaving = m.userId === user?.id
+    setBusy(m.userId)
+    try {
+      await api.removeMember(workspaceId, m.userId)
+      setRemoving(undefined)
+      if (leaving) {
+        await refreshWorkspaces()
+        toast(`You left “${ws?.name ?? 'the space'}”`)
+        navigate('/')
+      } else {
+        members.setData((cur) => (cur ?? []).filter((x) => x.userId !== m.userId))
+        pending.reload()
+        toast(`Removed ${m.name}`)
+      }
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(undefined)
+    }
+  }
   async function withdraw(token: string, email: string) {
     if (!workspaceId) return
     try {
@@ -107,12 +149,22 @@ export default function SpacePage() {
                   <strong>{m.name}{m.userId === user?.id && <span className="muted" style={{ fontWeight: 500 }}> (you)</span>}</strong>
                   <span>{m.email}</span>
                 </div>
-                <span className={`ps-role ${m.role}`} title={ROLE[m.role]?.desc}>{ROLE[m.role]?.icon} {ROLE[m.role]?.label ?? m.role}</span>
+                {isOwner ? (
+                  <select className="input" style={{ width: 120 }} value={m.role} disabled={busy === m.userId} onChange={(e) => void changeRole(m, e.target.value as Member['role'])} aria-label={`Role for ${m.name}`} title={ROLE[m.role]?.desc}>
+                    <option value="owner">Owner</option>
+                    <option value="editor">Editor</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                ) : (
+                  <span className={`ps-role ${m.role}`} title={ROLE[m.role]?.desc}>{ROLE[m.role]?.icon} {ROLE[m.role]?.label ?? m.role}</span>
+                )}
+                {m.userId === user?.id
+                  ? !(ws?.personal && isOwner) && <button className="btn sm ghost" disabled={busy === m.userId} onClick={() => setRemoving(m)}>Leave</button>
+                  : isOwner && <button className="btn sm ghost" disabled={busy === m.userId} onClick={() => setRemoving(m)} aria-label={`Remove ${m.name}`}>Remove</button>}
               </div>
             ))}
           </div>
         )}
-        <div className="muted" style={{ fontSize: '0.75rem', marginTop: 14 }}>Changing roles and removing members is coming soon.</div>
       </section>
 
       {isOwner && ws && (
@@ -152,6 +204,28 @@ export default function SpacePage() {
             ))}
           </div>
         </section>
+      )}
+      {removing && (
+        <Modal
+          title={removing.userId === user?.id ? `Leave “${ws?.name}”?` : `Remove ${removing.name} from “${ws?.name}”?`}
+          subtitle={
+            removing.userId === user?.id
+              ? 'You’ll lose access to its projects, media and brand kit. An owner can invite you back.'
+              : 'They lose access to its projects, media and brand kit at once, and any invite still waiting for them is withdrawn. Their work stays in the space.'
+          }
+          onClose={() => setRemoving(undefined)}
+          width={460}
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => setRemoving(undefined)} autoFocus>Cancel</button>
+              <button className="btn danger" onClick={() => void remove(removing)} disabled={busy === removing.userId}>
+                {busy === removing.userId && <Spinner />} {removing.userId === user?.id ? 'Leave space' : 'Remove'}
+              </button>
+            </>
+          }
+        >
+          <span />
+        </Modal>
       )}
       {modal === 'create' && <CreateSpaceModal onClose={() => setModal(undefined)} />}
       {modal === 'rename' && ws && <RenameSpaceModal ws={ws} onClose={() => setModal(undefined)} />}

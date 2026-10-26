@@ -22,6 +22,7 @@ import type {
   ProjectDocResponse,
   ProjectSummary,
   ScriptScene,
+  ShareLink,
   SyncStatus,
   SystemInfo,
   TemplateSummary,
@@ -150,6 +151,9 @@ export const api = {
   deleteWorkspace: (id: string) => req<{ ok: true }>('DELETE', `/workspaces/${id}`),
   members: (id: string) => req<Member[]>('GET', `/workspaces/${id}/members`),
   invite: (id: string, email: string, role: string) => req<{ ok: true; inviteUrl: string; expiresAt: number }>('POST', `/workspaces/${id}/invites`, { email, role }),
+  setMemberRole: (id: string, userId: string, role: Member['role']) => req<{ ok: true; role: Member['role'] }>('PATCH', `/workspaces/${id}/members/${encodeURIComponent(userId)}`, { role }),
+  /** Remove a member (owner), or leave when `userId` is your own. */
+  removeMember: (id: string, userId: string) => req<{ ok: true }>('DELETE', `/workspaces/${id}/members/${encodeURIComponent(userId)}`),
   invites: (id: string) => req<PendingInvite[]>('GET', `/workspaces/${id}/invites`),
   revokeInvite: (id: string, token: string) => req<{ ok: true }>('DELETE', `/workspaces/${id}/invites/${encodeURIComponent(token)}`),
   inviteInfo: (token: string) => req<InviteInfo>('GET', `/invites/${encodeURIComponent(token)}`),
@@ -234,7 +238,9 @@ export const api = {
   // export / share / templates
   exportProject: (id: string, body: ExportRequest) => req<Job<ExportResult>>('POST', `/projects/${id}/export`, body),
   exports: (projectId: string) => req<ExportRecord[]>('GET', `/exports${qs({ projectId })}`),
-  share: (id: string, exportId?: string) => req<{ url: string; token: string }>('POST', `/projects/${id}/share`, { exportId }),
+  share: (id: string, exportId?: string) => req<ShareLink>('POST', `/projects/${id}/share`, { exportId }),
+  shares: (id: string) => req<ShareLink[]>('GET', `/projects/${id}/shares`),
+  unshare: (token: string) => req<{ ok: true }>('DELETE', `/share/${encodeURIComponent(token)}`),
   templates: (workspaceId: string) => req<TemplateSummary[]>('GET', `/templates${qs({ workspaceId })}`),
 
   // system / desktop / sync

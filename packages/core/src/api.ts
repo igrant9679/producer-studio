@@ -392,8 +392,22 @@ export interface AssistantResult {
 // ---- export & share ----
 // POST /api/projects/:id/export  ExportRequest     -> Job<ExportResult>
 // GET  /api/exports?projectId=                    -> ExportRecord[]
-// POST /api/projects/:id/share   {exportId?}      -> {url, token}
-// GET  /api/share/:token                          -> {project: ProjectSummary, videoUrl?}  (public, no auth)
+// POST /api/projects/:id/share   {exportId?}      -> ShareLink  (editor; the given or latest export; reuses that
+//        export's existing link; 409 when nothing has been exported yet)
+// GET  /api/projects/:id/shares                   -> ShareLink[]  (viewer)
+// DELETE /api/share/:token                        -> {ok: true}   (editor; the link stops working)
+// GET  /api/share/:token                          -> SharedVideo  (public, no auth: only what the page shows)
+export interface ShareLink {
+  token: string
+  url: string
+  exportId: string
+  createdAt: number
+}
+
+export interface SharedVideo {
+  project: { name: string; width: number; height: number; duration: number; updatedAt: number }
+  videoUrl?: string
+}
 export interface ExportRequest {
   resolution: '720p' | '1080p' | '1440p' | '4k'
   fps: 24 | 25 | 30 | 50 | 60

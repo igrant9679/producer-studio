@@ -6,6 +6,7 @@ import { ctx } from '../context'
 import { jobs } from '../db/schema'
 import { log } from '../log'
 import { reconcileAssets } from '../services/asset-recovery'
+import { pruneOldRows } from '../services/retention'
 import { type JobRow, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, updateProgress } from './queue'
 
 export class CancelledError extends Error {
@@ -162,16 +163,24 @@ export function startWorker(opts: { concurrency: number }) {
   const sweep = () => void reconcileAssets().catch((err) => log.warn('asset reconcile failed', { err }))
   const first = setTimeout(sweep, 30_000)
   const recon = setInterval(sweep, 5 * 60_000)
+  // expired sessions, old finished jobs and spent invites
+  const prune = () => void pruneOldRows().catch((err) => log.warn('pruning old rows failed', { err }))
+  const firstPrune = setTimeout(prune, 3 * 60_000)
+  const pruning = setInterval(prune, 6 * 3600_000)
   hb.unref()
   rec.unref()
   first.unref()
   recon.unref()
+  firstPrune.unref()
+  pruning.unref()
   stopWorkerFn = () => {
     stopped = true
     clearInterval(hb)
     clearInterval(rec)
     clearTimeout(first)
     clearInterval(recon)
+    clearTimeout(firstPrune)
+    clearInterval(pruning)
     for (const ac of running.values()) ac.abort()
   }
   log.info('worker started', { workerId, concurrency: opts.concurrency })
