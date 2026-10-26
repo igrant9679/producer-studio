@@ -33,7 +33,7 @@ uploadRoutes.post('/', async (c) => {
       assetId: z.string().regex(/^[A-Za-z0-9_-]{6,80}$/).optional(),
       sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
       /** Desktop replicas keep how the asset was made (generated voiceovers stay in Voice Studio's history). */
-      origin: z.enum(['upload', 'tts', 'voicestudio', 'dub', 'ai', 'freeze']).optional(),
+      origin: z.enum(['upload', 'tts', 'voicestudio', 'dub', 'ai', 'stock', 'freeze']).optional(),
       tts: z.object({ text: z.string().max(10000), voice: z.string().max(80), speed: z.number().min(0.5).max(2) }).optional(),
     }),
   )

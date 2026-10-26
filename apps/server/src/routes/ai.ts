@@ -3,7 +3,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import * as z from 'zod/v4'
-import { VOICES, isProfileVoice, profileIdOf, type AssistantRequest, type Project } from '@producer/core'
+import { VOICES, isProfileVoice, profileIdOf, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { jobDto } from '../dto'
@@ -22,6 +22,9 @@ import { ensureTranscript, synthesizeToAsset } from '../ai/speech'
 import { tts, validVoice } from '../ai/tts'
 import { whisperAvailable } from '../ai/whisper'
 import { enqueueRelay } from '../services/voice'
+import { generationCapabilities } from '../ai/generate'
+import { MAX_AI_CLIPS, allowedVisualKinds } from '../ai/produce'
+import { VisualSchema } from '../ai/scenes'
 import { profileVoices } from './voice'
 
 export const aiRoutes = new Hono<AppEnv>()
@@ -142,11 +145,18 @@ const BriefSchema = z.object({
   voice: z.string().max(80).default('af_heart'),
   aspect: z.enum(['16:9', '9:16', '1:1']).default('16:9'),
   notes: z.string().max(4000).optional(),
+  source: z.enum(['recordings', 'idea']).optional(),
+  idea: z.string().max(20000).optional(),
+  lengthSec: z.number().int().min(15).max(600).optional(),
+  visualKinds: z.array(z.enum(['motion', 'diagram', 'image', 'stock', 'aiVideo'])).max(6).optional(),
 })
 
 aiRoutes.post('/produce/script', async (c) => {
   const u = requireUser(c)
-  const b = await body(c, z.object({ projectId: z.string().min(1), assetIds: z.array(z.string()).min(1).max(20), brief: BriefSchema }))
+  const b = await body(c, z.object({ projectId: z.string().min(1), assetIds: z.array(z.string()).max(20).default([]), brief: BriefSchema }))
+  // recordings mode needs at least one; idea mode needs the idea (or at least a title)
+  if (b.brief.source !== 'idea' && !b.assetIds.length) throw new HttpError(400, 'invalid', 'Add at least one recording, or make the video from an idea')
+  if (b.brief.source === 'idea' && !(b.brief.idea?.trim() || b.brief.title.trim())) throw new HttpError(400, 'invalid', 'Describe the idea for the video')
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
   await requireProvider(row.workspaceId, 'script')
@@ -163,7 +173,18 @@ const SceneSchema = z.object({
   narration: z.string().min(1).max(5000),
   footage: z.array(z.object({ assetId: z.string(), start: z.number().min(0), end: z.number().min(0) })).max(20),
   visuals: z.string().max(2000).optional(),
+  visual: VisualSchema.optional(),
   voice: z.object({ assetId: z.string(), duration: z.number() }).optional(),
+})
+
+/** What Producer AI can make for this space without recordings (which keys exist, whether stock footage is set up). */
+aiRoutes.get('/produce/capabilities', async (c) => {
+  const u = requireUser(c)
+  const ws = c.req.query('workspaceId')
+  if (!ws) throw new HttpError(400, 'invalid', 'workspaceId is required')
+  await requireRole(u.id, ws, 'viewer')
+  const caps = await generationCapabilities(ws)
+  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'image', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS } satisfies ProduceCapabilities)
 })
 
 aiRoutes.post('/produce/assemble', async (c) => {

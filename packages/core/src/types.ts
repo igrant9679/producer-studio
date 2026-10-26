@@ -357,6 +357,33 @@ export interface Project {
   updatedAt: number
 }
 
+/** A diagram drawn from editable shapes and text, its parts appearing as the narration reaches them. */
+export type SceneDiagram =
+  | { type: 'steps'; items: string[] }
+  | { type: 'cycle'; items: string[] }
+  | { type: 'hub'; center: string; items: string[] }
+  | { type: 'bars'; items: Array<{ label: string; value: number }>; unit?: string }
+  | { type: 'compare'; left: { title: string; points: string[] }; right: { title: string; points: string[] } }
+  | { type: 'timeline'; items: Array<{ label: string; detail?: string }> }
+  | { type: 'stat'; value: string; label: string }
+
+export type DiagramType = SceneDiagram['type']
+
+/**
+ * What fills the screen during a scene. Absent or `footage`: windows from the uploaded recordings (a title card when
+ * there are none). The rest need no recording: animated text, a diagram, an AI still with slow motion, a stock clip,
+ * or an AI-generated clip (`assetId` once generated or downloaded, so re-assembling reuses it).
+ */
+export type SceneVisual =
+  | { kind: 'footage' }
+  | { kind: 'motion'; points?: string[] }
+  | { kind: 'diagram'; diagram: SceneDiagram }
+  | { kind: 'image'; prompt: string; assetId?: Id }
+  | { kind: 'stock'; query: string; assetId?: Id; credit?: { author: string; url: string } }
+  | { kind: 'aiVideo'; prompt: string; assetId?: Id }
+
+export type VisualKind = SceneVisual['kind']
+
 export interface ScriptScene {
   id: string
   title: string
@@ -365,6 +392,8 @@ export interface ScriptScene {
   /** Source footage windows in seconds. */
   footage: Array<{ assetId: Id; start: number; end: number }>
   visuals?: string
+  /** What fills the screen (videos made from an idea); absent = footage windows as before. */
+  visual?: SceneVisual
   voice?: { assetId: Id; duration: number }
 }
 
@@ -378,6 +407,14 @@ export interface ProducerMeta {
     voice: string
     aspect: '16:9' | '9:16' | '1:1'
     notes?: string
+    /** Where the video comes from: uploaded recordings (default), or an idea / pasted script with no recordings. */
+    source?: 'recordings' | 'idea'
+    /** The topic, outline or full script to make the video from (source = idea). */
+    idea?: string
+    /** Target length in seconds (source = idea). */
+    lengthSec?: number
+    /** Scene visuals the writer may use (source = idea); AI images and clips also need a key that can make them. */
+    visualKinds?: VisualKind[]
   }
   script?: { scenes: ScriptScene[]; message?: string }
   status?: 'draft' | 'transcribed' | 'scripted' | 'voiced' | 'assembled'

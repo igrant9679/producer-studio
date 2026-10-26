@@ -6,6 +6,7 @@ import * as z from 'zod/v4'
 import {
   captionStyleFromPreset,
   createAudioItem,
+  createImageItem,
   createProject,
   createShapeItem,
   createTextItem,
@@ -14,13 +15,16 @@ import {
   defaultTextStyle,
   generateCaptions,
   round,
+  uid,
   type Asset,
   type Item,
   type ProducerMeta,
   type Project,
   type ScriptScene,
+  type Track,
   type Transcript,
   type VideoItem,
+  type VisualKind,
 } from '@producer/core'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
@@ -28,7 +32,9 @@ import { assetDoc } from '../dto'
 import { HttpError, invalid } from '../http'
 import { type JobContext, subContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
-import { type AssetRow, localSource, tmpDir } from '../services/assets'
+import { type AssetRow, createAssetFromFile, localSource, tmpDir } from '../services/assets'
+import { processAsset } from '../media/process'
+import { log } from '../log'
 import { getLook, headlineStyle, labelStyle, lookPalette, sizeForAspect } from '../services/looks'
 import { loadProjectRow, saveProjectDoc } from '../services/projects'
 import { getBrand } from '../routes/workspaces'
@@ -36,6 +42,9 @@ import { requireProvider } from './provider'
 import { houseRules } from './rules'
 import { ensureTranscript, synthesizeToAsset, transcribeAsset } from './speech'
 import { whisperAvailable } from './whisper'
+import { downloadStock, generateImage, generateVideo, generationCapabilities, searchStock } from './generate'
+import { IDEA_SYSTEM, IdeaScriptSchema, VISUAL_KINDS, buildIdeaPrompt, normalizeIdeaScript } from './scenes'
+import { type Placed, type SceneFrame, diagramItems, motionItems, slotIndex } from './scene-layout'
 
 export type Brief = NonNullable<ProducerMeta['brief']>
 
@@ -161,8 +170,37 @@ async function workspaceAssets(workspaceId: string, ids: string[]): Promise<Asse
   return ids.map((id) => rows.find((r) => r.id === id)!)
 }
 
+/** The visual kinds an idea-mode script may use: those asked for that this workspace can make (motion always). */
+export async function allowedVisualKinds(workspaceId: string, requested?: VisualKind[]): Promise<VisualKind[]> {
+  const caps = await generationCapabilities(workspaceId)
+  // AI video is opt-in (slow, and billed per second to the workspace's key); the rest default on when available
+  const want = new Set<VisualKind>(requested?.length ? requested : ['motion', 'diagram', 'image', 'stock'])
+  want.add('motion')
+  return VISUAL_KINDS.filter((k) => want.has(k) && (k === 'image' ? !!caps.image : k === 'aiVideo' ? !!caps.video : k === 'stock' ? caps.stock : true))
+}
+
+/** Idea mode (no recordings): the writer plans every scene and picks the visual that explains it. */
+async function produceIdeaScript(jc: JobContext, input: { projectId: string; brief: Brief }): Promise<{ script: { scenes: ScriptScene[]; message?: string } }> {
+  const provider = await requireProvider(jc.job.workspaceId, 'script')
+  const row = await loadProjectRow(input.projectId)
+  const kinds = await allowedVisualKinds(row.workspaceId, input.brief.visualKinds)
+  const { rules, example } = houseRules()
+  jc.progress(0.1, 'Writing the script')
+  const raw = await provider.structured({ system: IDEA_SYSTEM, prompt: buildIdeaPrompt({ brief: input.brief, kinds, rules, example }), images: [], schema: IdeaScriptSchema, signal: jc.signal })
+  const check = IdeaScriptSchema.safeParse(raw)
+  if (!check.success) throw new HttpError(502, 'server', 'The AI response did not match the script format')
+  const scenes = normalizeIdeaScript(check.data, kinds)
+  jc.check()
+  const fresh = await loadProjectRow(input.projectId)
+  const ai: ProducerMeta = { ...(fresh.doc.ai ?? {}), brief: input.brief, script: { scenes, message: check.data.message }, status: 'scripted' }
+  await saveProjectDoc(input.projectId, { ...fresh.doc, ai })
+  jc.progress(1, `${scenes.length} scenes`)
+  return { script: { scenes, message: check.data.message } }
+}
+
 export async function produceScript(jc: JobContext): Promise<{ script: { scenes: ScriptScene[]; message?: string } }> {
   const input = jc.job.input as { projectId: string; assetIds: string[]; brief: Brief }
+  if (input.brief.source === 'idea') return produceIdeaScript(jc, input)
   const provider = await requireProvider(jc.job.workspaceId, 'script') // fail fast (503) when AI isn't configured
   const row = await loadProjectRow(input.projectId)
   const rows = await workspaceAssets(row.workspaceId, input.assetIds)
@@ -248,6 +286,8 @@ export interface AssembleInput {
   footage: Map<string, Asset>
   /** generated voice per scene id */
   voices: Map<string, { asset: Asset; duration: number }>
+  /** AI still, stock clip or AI clip made for a scene (by scene id) */
+  generated?: Map<string, Asset>
   brand?: import('@producer/core').BrandKitDoc | null
 }
 
@@ -266,6 +306,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   const labels = createTrack('text', { name: 'Labels' })
   const voice = createTrack('audio', { name: 'Voiceover' })
   const mainItems: Item[] = []
+  const graphics: Placed[][] = []
   const addAsset = (a: Asset) => {
     p.assets[a.id] = a
   }
@@ -304,26 +345,38 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     const voiceDur = v?.duration ?? Math.max(2, scene.narration.split(/\s+/).length / 2.8)
     const dur = round(voiceDur + LEAD + (isLast ? CLOSE_TAIL : TAIL), 1)
     const sceneStart = t
-    // footage windows cut to fill the scene; slow slightly or hold the last frame when short
-    const windows = scene.footage.filter((f) => inp.footage.has(f.assetId) && f.end > f.start)
+    const visual = scene.visual ?? { kind: 'footage' as const }
+    const gen = inp.generated?.get(scene.id)
+    const clip = (id: string) => inp.footage.get(id) ?? (gen?.id === id ? gen : undefined)
+    // footage windows: the recordings' own, or the whole stock / AI clip made for this scene (filling the frame)
+    let windows = visual.kind === 'footage' ? scene.footage.filter((f) => inp.footage.has(f.assetId) && f.end > f.start) : []
+    const madeClip = gen?.kind === 'video' && (visual.kind === 'stock' || visual.kind === 'aiVideo')
+    if (madeClip) windows = [{ assetId: gen.id, start: 0, end: gen.duration ?? dur }]
+    const fit = madeClip ? 'cover' : 'contain'
+    const still = gen?.kind === 'image' && visual.kind === 'image' ? gen : undefined
     const pieces: Item[] = []
     if (windows.length) {
+      // cut to fill the scene; slow slightly or hold the last frame when short
       const total = windows.reduce((n, f) => n + (f.end - f.start), 0)
       const speed = total >= dur ? 1 : total >= dur * 0.6 ? round(Math.max(0.6, total / dur), 3) : 1
       let remaining = dur
       for (const f of windows) {
         if (remaining <= 0.05) break
-        const asset = inp.footage.get(f.assetId)!
+        const asset = clip(f.assetId)!
         const len = Math.min((f.end - f.start) / speed, remaining)
-        pieces.push(createVideoItem(asset, 0, { name: `${scene.id} · ${asset.name}`, in: f.start, duration: round(len, 3), speed, muted: true, volume: 0, fit: 'contain' }))
+        pieces.push(createVideoItem(asset, 0, { name: `${scene.id} · ${asset.name}`, in: f.start, duration: round(len, 3), speed, muted: true, volume: 0, fit }))
         remaining -= len
       }
       if (remaining > 0.05) {
         const last = pieces[pieces.length - 1] as VideoItem
         const holdAt = round(last.in + last.duration * last.speed - 1 / p.fps, 3)
-        pieces.push(createVideoItem(inp.footage.get(last.assetId)!, 0, { name: `${scene.id} · hold`, in: last.in, duration: round(remaining, 3), freezeAt: Math.max(0, holdAt), muted: true, volume: 0, fit: 'contain' }))
+        pieces.push(createVideoItem(clip(last.assetId)!, 0, { name: `${scene.id} · hold`, in: last.in, duration: round(remaining, 3), freezeAt: Math.max(0, holdAt), muted: true, volume: 0, fit }))
       }
-      for (const f of windows) addAsset(inp.footage.get(f.assetId)!)
+      for (const f of windows) addAsset(clip(f.assetId)!)
+    } else if (still) {
+      // an AI still, brought to life with a slow pan and zoom
+      addAsset(still)
+      pieces.push(createImageItem(still, 0, { name: `${scene.id} · ${still.name}`, duration: dur, fit: 'cover', effects: [{ id: uid('fx'), type: 'kenBurns', intensity: 70 }] }))
     } else {
       pieces.push(createShapeItem(0, { name: `${scene.id} · card`, duration: dur, width, height, fill: pal.canvas, radius: 0 }))
     }
@@ -343,18 +396,38 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
       voice.items.push(createAudioItem(v.asset, round(sceneStart + LEAD, 4), { name: `${scene.id} voice`, duration: round(v.duration, 3), tts: { text: scene.narration, voice: inp.brief.voice, speed: 1 } }))
     }
     // headline (top band, captions own the bottom) + chapter label
-    const noFootage = !windows.length
-    const headY = noFootage ? -20 * scale : -height * (vertical ? 0.36 : 0.37)
+    const fullFrame = windows.length > 0 || !!still
+    const points = visual.kind === 'motion' ? (visual.points ?? []).filter(Boolean) : []
+    const diagram = visual.kind === 'diagram' ? visual.diagram : undefined
+    // a card with only the headline: centred and big; above points or a diagram: smaller, in the top band
+    const centred = !fullFrame && !points.length && !diagram
+    const headY = centred ? -20 * scale : diagram ? -height * 0.38 : points.length ? -height * (vertical ? 0.3 : 0.28) : -height * (vertical ? 0.36 : 0.37)
+    const headSize = centred ? (vertical ? 96 : 110) : diagram ? (vertical ? 60 : 66) : points.length ? (vertical ? 80 : 92) : vertical ? 64 : 72
     cards.items.push(
       createTextItem(round(sceneStart + 0.3, 4), 'heading', {
         name: `${scene.id} headline`,
         text: scene.headline || scene.title,
         duration: round(dur - 0.5, 3),
-        style: headlineStyle(pal, width, Math.round((noFootage ? (vertical ? 96 : 110) : vertical ? 64 : 72) * scale), noFootage ? {} : { background: { color: pal.canvas, radius: 14, padding: Math.round(18 * scale), opacity: 0.88 }, boxWidth: Math.round(width * 0.86) }),
+        style: headlineStyle(pal, width, Math.round(headSize * scale), fullFrame ? { background: { color: pal.canvas, radius: 14, padding: Math.round(18 * scale), opacity: 0.88 }, boxWidth: Math.round(width * 0.86) } : {}),
         transform: { x: 0, y: round(headY, 1), scale: 1, rotation: 0 },
         animations: { in: { preset: 'rise', duration: 0.5 }, out: { preset: 'fade', duration: 0.3 } },
       }),
     )
+    // motion points and diagrams: editable shapes and text revealed as the narration names each part
+    if (points.length || diagram) {
+      const frame: SceneFrame = {
+        start: sceneStart,
+        duration: dur,
+        voiceStart: sceneStart + LEAD,
+        voiceDuration: voiceDur,
+        words: (v?.asset.transcript?.segments ?? []).flatMap((sg) => sg.words ?? []).map((w) => ({ w: w.w, start: w.start })),
+        width,
+        height,
+        pal,
+      }
+      graphics.push(diagram ? diagramItems(diagram, frame) : motionItems(points, frame))
+    }
+    const noFootage = centred
     if (noFootage && scene.title) {
       labels.items.push(
         createTextItem(round(sceneStart + 0.5, 4), 'heading', {
@@ -395,7 +468,20 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   )
 
   main.items = mainItems
-  p.tracks = [voice, main, cards, labels].filter((tr) => tr.main || tr.items.length)
+  // graphics: each scene fills slots 1..n of shared stacks (shape tracks below text tracks); scenes never overlap
+  const shapeTracks: Track[] = []
+  const textTracks: Track[] = []
+  for (const placed of graphics) {
+    const slots = slotIndex(placed)
+    for (const pl of placed) {
+      const k = slots.get(pl) ?? 0
+      const stack = pl.layer === 'shape' ? shapeTracks : textTracks
+      while (stack.length <= k) stack.push(createTrack(pl.layer === 'shape' ? 'overlay' : 'text', { name: pl.layer === 'shape' ? `Graphics ${stack.length + 1}` : `Graphic text ${stack.length + 1}` }))
+      stack[k].items.push(pl.item)
+    }
+  }
+  for (const tr of [...shapeTracks, ...textTracks]) tr.items.sort((a, b) => a.start - b.start)
+  p.tracks = [voice, main, ...shapeTracks, ...textTracks, cards, labels].filter((tr) => tr.main || tr.items.length)
   // captions from the voice transcripts
   const captionStyle = captionStyleFromPreset(inp.brand?.captionPreset ?? 'clean')
   captionStyle.style = { ...captionStyle.style, fontFamily: pal.bodyFont, boxWidth: Math.round(width * 0.8), fontSize: Math.round(captionStyle.style.fontSize * scale) }
@@ -445,13 +531,110 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
     }
     v.asset = { ...v.asset, transcript }
   }
-  // 3. timeline
+  // 3. generated visuals (videos made from an idea): AI stills, stock clips, AI clips
+  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices })
+  // 4. timeline
   jc.progress(0.92, 'Assembling timeline')
-  const scenes = input.scenes.map((s) => ({ ...s, voice: voices.has(s.id) ? { assetId: voices.get(s.id)!.asset.id, duration: voices.get(s.id)!.duration } : undefined }))
-  const built = buildProducerTimeline({ project: doc, brief, scenes, footage, voices, brand })
+  const scenes = made.scenes.map((s) => ({ ...s, voice: voices.has(s.id) ? { assetId: voices.get(s.id)!.asset.id, duration: voices.get(s.id)!.duration } : undefined }))
+  const built = buildProducerTimeline({ project: doc, brief, scenes, footage, voices, generated: made.generated, brand })
   built.ai = { ...(doc.ai ?? {}), brief, script: { ...(doc.ai?.script ?? {}), scenes }, status: 'assembled' }
   const saved = await saveProjectDoc(row.id, built)
-  jc.progress(1, 'Assembled')
-  return { version: saved.version }
+  jc.progress(1, made.notes.length ? `Assembled · ${made.notes.length} scene${made.notes.length === 1 ? '' : 's'} used animated text instead` : 'Assembled')
+  return { version: saved.version, ...(made.notes.length ? { notes: made.notes } : {}) }
+}
+
+/** At most this many AI clips per video: each costs real money on the workspace's key and minutes to make. */
+export const MAX_AI_CLIPS = 3
+
+/**
+ * Make (or reuse) each scene's AI still / stock clip / AI clip. Something made earlier for the same prompt is reused
+ * (no second bill); a scene whose visual can't be made falls back to animated text, and says why in `notes`.
+ */
+async function makeSceneVisuals(
+  jc: JobContext,
+  o: { workspaceId: string; userId: string; projectId: string; aspect: Brief['aspect']; scenes: ScriptScene[]; voices: Map<string, { asset: Asset; duration: number }> },
+): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; notes: string[] }> {
+  const generated = new Map<string, Asset>()
+  const notes: string[] = []
+  const scenes = o.scenes.map((s) => ({ ...s }))
+  const todo = scenes.filter((s) => s.visual && (s.visual.kind === 'image' || s.visual.kind === 'stock' || s.visual.kind === 'aiVideo'))
+  if (!todo.length) return { scenes, generated, notes }
+  const work = tmpDir('scene-visuals')
+  let clips = 0
+  try {
+    for (let i = 0; i < todo.length; i++) {
+      const s = todo[i]
+      const v = s.visual as Extract<NonNullable<ScriptScene['visual']>, { kind: 'image' | 'stock' | 'aiVideo' }>
+      const ask = v.kind === 'stock' ? v.query : v.prompt
+      jc.check()
+      const sub = subContext(jc, 0.6 + (i / todo.length) * 0.3, 0.6 + ((i + 1) / todo.length) * 0.3, `${v.kind === 'image' ? 'Making an image' : v.kind === 'stock' ? 'Finding footage' : 'Making a video clip'} for ${s.id}`)
+      // reuse what was made for this scene before, while the request is the same
+      if (v.assetId) {
+        const prev = (await ctx().db.select().from(assets).where(and(eq(assets.id, v.assetId), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
+        if (prev && prev.status === 'ready' && prev.meta?.generated?.kind === v.kind && prev.meta.generated.prompt === ask) {
+          generated.set(s.id, assetDoc(prev))
+          continue
+        }
+      }
+      if (v.kind === 'aiVideo' && clips >= MAX_AI_CLIPS) {
+        notes.push(`${s.id}: only ${MAX_AI_CLIPS} AI clips are made per video`)
+        s.visual = { kind: 'motion', points: [] }
+        continue
+      }
+      const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
+      try {
+        const made = await makeOne(sub, { ...o, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work })
+        if (v.kind === 'aiVideo') clips++
+        generated.set(s.id, made.asset)
+        s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
+      } catch (err) {
+        if (jc.signal.aborted) throw err
+        const why = err instanceof HttpError ? err.message : 'it could not be made'
+        log.warn('scene visual failed', { scene: s.id, kind: v.kind, err })
+        notes.push(`${s.id}: ${why}`)
+        s.visual = { kind: 'motion', points: [] }
+      }
+    }
+  } finally {
+    fs.rm(work, { recursive: true, force: true }, () => undefined)
+  }
+  return { scenes, generated, notes }
+}
+
+async function makeOne(
+  jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
+  o: { workspaceId: string; userId: string; projectId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: 'image' | 'stock' | 'aiVideo' }; ask: string; seconds: number; work: string },
+): Promise<{ asset: Asset; credit?: { author: string; url: string } }> {
+  const { kind } = o.visual
+  let file: { file: string; mime: string; provider: string; model: string }
+  let credit: { author: string; url: string } | undefined
+  if (kind === 'image') {
+    jc.progress(0.05, 'Making an image')
+    file = await generateImage({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, outDir: o.work, signal: jc.signal })
+  } else if (kind === 'stock') {
+    jc.progress(0.05, 'Searching stock footage')
+    const found = await searchStock({ query: o.ask, aspect: o.aspect, minSeconds: Math.min(20, o.seconds), signal: jc.signal })
+    if (!found.length) throw new HttpError(404, 'not_found', `no stock footage matched “${o.ask}”`)
+    jc.progress(0.3, 'Downloading footage')
+    file = await downloadStock(found[0], o.work, jc.signal)
+    credit = { author: found[0].author, url: found[0].pageUrl }
+  } else {
+    file = await generateVideo({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, seconds: o.seconds, outDir: o.work, signal: jc.signal, onProgress: (f, m) => jc.progress(0.05 + f * 0.75, m) })
+  }
+  jc.check()
+  const row = await createAssetFromFile({
+    workspaceId: o.workspaceId,
+    userId: o.userId,
+    projectId: o.projectId,
+    filePath: file.file,
+    name: `${o.scene.id} · ${o.scene.headline || o.scene.title}`.slice(0, 200),
+    mime: file.mime,
+    kind: kind === 'image' ? 'image' : 'video',
+    origin: kind === 'stock' ? 'stock' : 'ai',
+    meta: { generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}) } },
+  })
+  jc.progress(0.85, 'Preparing it for the editor')
+  const ready = await processAsset(row.id, jc)
+  return { asset: assetDoc(ready), credit }
 }
 

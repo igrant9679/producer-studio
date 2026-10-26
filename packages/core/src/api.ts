@@ -364,8 +364,23 @@ export interface WriteRequest {
 
 export interface ProduceScriptRequest {
   projectId: string
+  /** Recordings to build from; empty when brief.source is 'idea'. */
   assetIds: string[]
   brief: NonNullable<ProducerMeta['brief']>
+}
+
+// GET /api/ai/produce/capabilities?workspaceId=   -> ProduceCapabilities  (what a video made from an idea can use here)
+export interface ProduceCapabilities {
+  /** AI stills: the workspace has an OpenAI or Gemini key that can make them (billed to that key). */
+  image?: { provider: 'openai' | 'gemini'; model: string }
+  /** AI video clips (billed per second to the workspace's key). */
+  video?: { provider: 'openai' | 'gemini'; model: string; maxSeconds: number }
+  /** Stock footage search (the server has a Pexels key). */
+  stock: boolean
+  /** Scene visuals available here (motion and diagram always). */
+  kinds: import('./types').VisualKind[]
+  /** AI clips made per video at most. */
+  maxAiClips: number
 }
 
 export interface AssistantMessage {
