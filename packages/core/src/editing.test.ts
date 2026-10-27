@@ -25,6 +25,7 @@ import {
   updateItem,
   updateTrack,
   type Asset,
+  type Item,
   type Project,
   type Track,
   type VideoItem,
@@ -152,5 +153,26 @@ describe('trim below zero (EDT-35)', () => {
     // the frame at the old start (source 8 at time 5) is still at time 5
     expect((item(r, 'late') as VideoItem).in).toBe(3)
     expect(item(r, 'late').duration).toBe(7)
+  })
+})
+
+describe('freeze at a clip edge (EDT-11)', () => {
+  const tag = (i: Item) => ((i as VideoItem).freezeAt !== undefined ? 'hold' : i.id)
+  const order = (p: Project) => mainTrack(p)!.items.map((i) => [tag(i), i.start, i.duration])
+
+  it('at the start of a clip the hold goes before it, showing its first frame', () => {
+    const q = freezeFrame(twoClips(), 'vb', 10.01)
+    expect(order(q)).toEqual([['va', 0, 10], ['hold', 10, 2], ['vb', 12, 6]])
+    expect((mainTrack(q)!.items[1] as VideoItem).freezeAt).toBeCloseTo(0.01, 3)
+  })
+
+  it('at the very end it goes after the clip', () => {
+    const q = freezeFrame(twoClips(), 'va', 9.99)
+    expect(order(q)).toEqual([['va', 0, 10], ['hold', 10, 2], ['vb', 12, 6]])
+  })
+
+  it('on an overlay track the clip and everything after it make room', () => {
+    const q = freezeFrame(overlayPair(), 'o1', 0.01)
+    expect(findItem(q, 'o1')!.track.items.map((i) => [tag(i), i.start])).toEqual([['hold', 0], ['o1', 2], ['o2', 6]])
   })
 })

@@ -550,7 +550,10 @@ export function separateAudio(p0: Project, itemId: string): Project {
   return p
 }
 
-/** Insert a freeze frame of `holdSec` at timeline time t on a video item (splits and inserts a held segment). */
+/**
+ * Insert a freeze frame of `holdSec` at timeline time t on a video item (splits and inserts a held segment). Too near
+ * an edge to cut, the hold goes before the clip at its start edge, or after it at its end.
+ */
 export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2): Project {
   const f = findItem(p0, itemId)
   if (!editable(f) || f.item.type !== 'video') return p0
@@ -558,14 +561,17 @@ export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2)
   const srcTime = sourceAt(v, t)
   const { project: split, rightId } = splitItem(p0, itemId, t)
   const p = clone(split)
+  const before = !rightId && t - v.start < v.duration / 2
+  const at = rightId ? t : before ? v.start : itemEnd(v)
   // the held picture has no sound, so it is linked to nothing
-  const freeze: VideoItem = { ...clone(v), id: uid('v'), start: t, duration: holdSec, freezeAt: round(srcTime, 4), fadeIn: 0, fadeOut: 0, animations: {}, transitionOut: undefined, keyframes: {}, linkId: undefined }
+  const freeze: VideoItem = { ...clone(v), id: uid('v'), start: at, duration: holdSec, freezeAt: round(srcTime, 4), fadeIn: 0, fadeOut: 0, animations: {}, transitionOut: undefined, keyframes: {}, linkId: undefined }
   const track = findTrack(p, f.track.id)!
-  const insertAt = rightId ? track.items.findIndex((i) => i.id === rightId) : track.items.length
+  const at0 = track.items.findIndex((i) => i.id === (rightId ?? itemId))
+  const insertAt = rightId || before ? at0 : at0 + 1
   if (!track.main) {
     const links = new Set<string>()
     for (const i of track.items)
-      if (i.start >= t - EPS) {
+      if (i.start >= at - EPS) {
         i.start = round(i.start + holdSec, 4)
         if (i.linkId) links.add(i.linkId)
       }
