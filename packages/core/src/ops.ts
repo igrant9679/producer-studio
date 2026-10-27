@@ -53,6 +53,18 @@ export function findItem(p: Project, itemId: string): Found | null {
   return null
 }
 
+/**
+ * Whether a found item may be edited: neither it nor its track is locked. Every op and every editor control asks
+ * this one question, so a lock holds against splits, trims, handles, nudges, panels, drops and the assistant alike.
+ */
+export function editable(f: Found | null | undefined): f is Found {
+  return !!f && !f.item.locked && !f.track.locked
+}
+
+export function isEditable(p: Project, itemId: string): boolean {
+  return editable(findItem(p, itemId))
+}
+
 export function findTrack(p: Project, trackId: string): Track | undefined {
   return p.tracks.find((t) => t.id === trackId)
 }
@@ -146,7 +158,8 @@ export function packMain(p: Project) {
  */
 function placeItem(p: Project, item: Item, trackId: string | undefined): Track {
   let track = trackId ? findTrack(p, trackId) : undefined
-  if (track && !acceptsItem(track.kind, item.type)) track = undefined
+  // a locked track takes nothing new: the item lands on a free track instead
+  if (track && (track.locked || !acceptsItem(track.kind, item.type))) track = undefined
   if (track?.main) {
     sortItems(track)
     // insert before the first item whose midpoint is after the drop point
@@ -195,7 +208,9 @@ export function addAsset(p0: Project, asset: Project['assets'][string]): Project
 export function updateItem<T extends Item>(p0: Project, itemId: string, patch: Partial<T>): Project {
   const p = clone(p0)
   const f = findItem(p, itemId)
-  if (!f) return p0
+  // locking and unlocking an item is the one change a locked item takes
+  const onlyLock = Object.keys(patch).every((k) => k === 'locked')
+  if (!f || (!(onlyLock && !f.track.locked) && !editable(f))) return p0
   Object.assign(f.item, clone(patch))
   if (f.track.main) packMain(p)
   else sortItems(f.track)
@@ -217,7 +232,7 @@ export function updateProject(p0: Project, patch: Partial<Pick<Project, 'name' |
 export function moveItem(p0: Project, itemId: string, to: { start: number; trackId?: string }): Project {
   const p = clone(p0)
   const f = findItem(p, itemId)
-  if (!f || f.item.locked || f.track.locked) return p0
+  if (!editable(f)) return p0
   const delta = to.start - f.item.start
   f.track.items.splice(f.index, 1)
   if (f.track.main) packMain(p)
@@ -270,7 +285,7 @@ function timeAt(it: VideoItem | AudioItem, src: number): number {
 export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: number): Project {
   const p = clone(p0)
   const f = findItem(p, itemId)
-  if (!f || f.item.locked) return p0
+  if (!editable(f)) return p0
   const it = f.item
   const minDur = 1 / p.fps
   const span = mediaSpan(p, it)
@@ -334,7 +349,7 @@ function shiftKeyframes(kfs: Partial<Record<AnimProp, Keyframe[]>>, by: number, 
 export function splitItem(p0: Project, itemId: string, t: number): { project: Project; rightId?: string } {
   const p = clone(p0)
   const f = findItem(p, itemId)
-  if (!f || f.item.locked) return { project: p0 }
+  if (!editable(f)) return { project: p0 }
   const linkId = f.item.linkId
   const right = cutAt(p, f.track, f.index, t)
   if (!right) return { project: p0 }
@@ -345,7 +360,7 @@ export function splitItem(p0: Project, itemId: string, t: number): { project: Pr
       for (let i = 0; i < tr.items.length; i++) {
         const o = tr.items[i]
         if (o.linkId !== linkId || o.id === itemId) continue
-        const r = o.locked ? null : cutAt(p, tr, i, t)
+        const r = o.locked || tr.locked ? null : cutAt(p, tr, i, t)
         if (r) {
           r.linkId = right.linkId
           i++
@@ -407,12 +422,16 @@ export function deleteItems(p0: Project, ids: string[], opts: { ripple?: boolean
   const p = clone(p0)
   const set = new Set(ids)
   // links led by a clip staying on the main track move with that clip when the main track packs, not by a ripple
-  const anchored = new Set(mainTrack(p)?.items.filter((i) => i.linkId && !set.has(i.id)).map((i) => i.linkId!))
+  const m = mainTrack(p)
+  const anchored = new Set(m?.items.filter((i) => i.linkId && (!set.has(i.id) || i.locked || m.locked)).map((i) => i.linkId!))
   const shifts = new Map<Item, number>()
+  let any = false
   for (const t of p.tracks) {
     if (t.locked) continue
-    const removed = t.items.filter((i) => set.has(i.id))
-    t.items = t.items.filter((i) => !set.has(i.id))
+    const removed = t.items.filter((i) => set.has(i.id) && !i.locked)
+    if (!removed.length) continue
+    any = true
+    t.items = t.items.filter((i) => !removed.includes(i))
     if (opts.ripple && !t.main && removed.length) {
       // close the gap left by each removed item on that track
       for (const i of t.items) {
@@ -429,6 +448,7 @@ export function deleteItems(p0: Project, ids: string[], opts: { ripple?: boolean
       const by = i.linkId && byLink.has(i.linkId) ? byLink.get(i.linkId) : shifts.get(i)
       if (by) i.start = round(i.start - by, 4)
     }
+  if (!any) return p0
   packMain(p)
   pruneEmptyTracks(p)
   return touch(p)
@@ -439,7 +459,7 @@ export function duplicateItems(p0: Project, ids: string[]): { project: Project; 
   const newIds: string[] = []
   for (const id of ids) {
     const f = findItem(p, id)
-    if (!f) continue
+    if (!editable(f)) continue
     const copy = clone(f.item)
     copy.id = uid(f.item.id.split('_')[0] || 'i')
     copy.start = itemEnd(f.item)
@@ -470,7 +490,7 @@ export function pasteItems(p0: Project, items: Item[], t: number): { project: Pr
 export function setKeyframe(p0: Project, itemId: string, prop: AnimProp, localT: number, value: number, easeName?: Keyframe['ease']): Project {
   const p = clone(p0)
   const f = findItem(p, itemId)
-  if (!f || !('keyframes' in f.item)) return p0
+  if (!editable(f) || !('keyframes' in f.item)) return p0
   const kfs = (f.item.keyframes[prop] ??= [])
   const t = round(Math.max(0, Math.min(localT, f.item.duration)), 4)
   const existing = kfs.find((k) => Math.abs(k.t - t) < 1 / (p.fps * 2))
@@ -485,7 +505,7 @@ export function setKeyframe(p0: Project, itemId: string, prop: AnimProp, localT:
 export function removeKeyframe(p0: Project, itemId: string, prop: AnimProp, localT: number): Project {
   const p = clone(p0)
   const f = findItem(p, itemId)
-  if (!f || !('keyframes' in f.item)) return p0
+  if (!editable(f) || !('keyframes' in f.item)) return p0
   const kfs = f.item.keyframes[prop]
   if (!kfs) return p0
   f.item.keyframes[prop] = kfs.filter((k) => Math.abs(k.t - localT) >= 1 / (p.fps * 2))
@@ -496,14 +516,14 @@ export function removeKeyframe(p0: Project, itemId: string, prop: AnimProp, loca
 /** Detach a video's audio onto an audio track as a linked item; mutes the video. */
 export function separateAudio(p0: Project, itemId: string): Project {
   const f = findItem(p0, itemId)
-  if (!f || f.item.type !== 'video') return p0
+  if (!editable(f) || f.item.type !== 'video') return p0
   const v = f.item
   const asset = p0.assets[v.assetId]
   if (!asset || asset.hasAudio === false) return p0
   const linkId = v.linkId ?? uid('l')
   const audio = createAudioItem(asset, v.start, { in: v.in, speed: v.speed, duration: v.duration, volume: v.volume, fadeIn: v.fadeIn, fadeOut: v.fadeOut, linkId, name: `${v.name ?? asset.name} audio` })
   let p = updateItem<VideoItem>(p0, itemId, { muted: true, linkId })
-  const audioTrack = p.tracks.find((t) => t.kind === 'audio' && !overlaps(t, audio.start, itemEnd(audio), new Set()))
+  const audioTrack = p.tracks.find((t) => t.kind === 'audio' && !t.locked && !overlaps(t, audio.start, itemEnd(audio), new Set()))
   p = addItem(p, audio, audioTrack?.id)
   return p
 }
@@ -511,7 +531,7 @@ export function separateAudio(p0: Project, itemId: string): Project {
 /** Insert a freeze frame of `holdSec` at timeline time t on a video item (splits and inserts a held segment). */
 export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2): Project {
   const f = findItem(p0, itemId)
-  if (!f || f.item.type !== 'video') return p0
+  if (!editable(f) || f.item.type !== 'video') return p0
   const v = f.item
   const srcTime = sourceAt(v, t)
   const { project: split, rightId } = splitItem(p0, itemId, t)
@@ -649,7 +669,7 @@ export function itemWords(p: Project, itemId: string): Array<TranscriptWord & { 
  */
 export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ start: number; end: number }>): Project {
   const f = findItem(p0, itemId)
-  if (!f || (f.item.type !== 'video' && f.item.type !== 'audio')) return p0
+  if (!editable(f) || (f.item.type !== 'video' && f.item.type !== 'audio')) return p0
   // a freeze frame has no source range to cut (pause removal used to cut pieces out of it)
   if (f.item.type === 'video' && f.item.freezeAt !== undefined) return p0
   const it0 = f.item

@@ -1,7 +1,7 @@
 // Centre canvas: StageRenderer preview + selection overlay (move / scale / rotate / text width), centre-line
 // snapping, inline text editing, floating object toolbar, hand/zoom, drop target for media.
 import type { FrameLayer, ImageItem, Item, TextItem, VideoItem, VisualItem } from '@producer/core'
-import { StageRenderer, evaluate, findItem, textCss, updateItem, updateTrack } from '@producer/core'
+import { StageRenderer, editable, evaluate, findItem, textCss, updateItem, updateTrack } from '@producer/core'
 import clsx from 'clsx'
 import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
@@ -25,6 +25,8 @@ interface Geo {
   w: number
   h: number
   rot: number
+  /** The item or its track is locked: no handles, no toolbar. */
+  locked: boolean
 }
 
 export function Canvas() {
@@ -160,7 +162,7 @@ export function Canvas() {
   const beginMove = (e: React.PointerEvent, id: string) => {
     const s0 = useEditor.getState()
     const f = findItem(s0.project, id)
-    if (!f || f.track.locked || f.item.locked) return
+    if (!editable(f)) return
     const orig = s0.project
     const it = f.item
     const sx = e.clientX
@@ -211,7 +213,7 @@ export function Canvas() {
     const id = hitTest(e.clientX, e.clientY)
     if (!id) return
     const f = findItem(useEditor.getState().project, id)
-    if (f?.item.type === 'text') useEditor.setState({ selection: [id], editingTextId: id, playing: false })
+    if (f?.item.type === 'text' && editable(f)) useEditor.setState({ selection: [id], editingTextId: id, playing: false })
     if (f?.item.type === 'caption') useEditor.setState({ selection: [id], activeRightTab: 'caption' })
   }
 
@@ -220,7 +222,7 @@ export function Canvas() {
     if ((e.target as HTMLElement).closest('input, textarea')) return
     const s = useEditor.getState()
     const f = s.selection.length === 1 ? findItem(s.project, s.selection[0]) : null
-    if (!f || !('transform' in f.item)) return
+    if (!editable(f) || !('transform' in f.item)) return
     e.preventDefault()
     e.stopPropagation()
     const d = e.shiftKey ? 10 : 1
@@ -388,7 +390,7 @@ function useLayerGeo(scale: number): Geo | null {
         const el = document.querySelector(`.cv-stage [data-ps-layer="${id}"]`) as HTMLElement | null
         h = el?.offsetHeight ?? 0
       }
-      geo = { layer, item: f.item, cx: layer.box.cx * scale, cy: layer.box.cy * scale, w: layer.box.width * Math.abs(sx) * scale, h: h * Math.abs(sy) * scale, rot }
+      geo = { layer, item: f.item, cx: layer.box.cx * scale, cy: layer.box.cy * scale, w: layer.box.width * Math.abs(sx) * scale, h: h * Math.abs(sy) * scale, rot, locked: !editable(f) }
       measured.current = h
     }
   }
@@ -478,14 +480,14 @@ function SelectionOverlay({ scale, boxRef, beginMove, margin }: { scale: number;
     track(move)
   }
 
-  const handles = !playing && !isCaption && !editing
+  const handles = !playing && !isCaption && !editing && !geo.locked
   return (
     <>
       <div
         className={clsx('cv-sel', isCaption && 'caption', playing && 'dim')}
         style={{ left: geo.cx, top: geo.cy, width: Math.max(8, geo.w), height: Math.max(8, geo.h), transform: `translate(-50%,-50%) rotate(${geo.rot}deg)` }}
       >
-        {isCaption && !playing && (
+        {isCaption && !playing && !geo.locked && (
           <div className="cv-handle cv-body" onPointerDown={(e) => { e.stopPropagation(); beginMove(e, item.id) }} title="Drag to move captions" />
         )}
         {handles && (
@@ -506,7 +508,7 @@ function SelectionOverlay({ scale, boxRef, beginMove, margin }: { scale: number;
           </>
         )}
       </div>
-      {!playing && !editing && <ObjectToolbar geo={geo} margin={margin} boxH={boxRef.current?.offsetHeight ?? 0} />}
+      {!playing && !editing && !geo.locked && <ObjectToolbar geo={geo} margin={margin} boxH={boxRef.current?.offsetHeight ?? 0} />}
     </>
   )
 }

@@ -13,6 +13,7 @@ import {
   findItem,
   freezeFrame,
   insertTrack,
+  isEditable,
   itemEnd,
   mainTrack,
   pasteItems,
@@ -42,6 +43,15 @@ export function primarySelected(): Item | undefined {
   return s.selection.length ? findItem(s.project, s.selection[s.selection.length - 1])?.item : undefined
 }
 
+export const LOCKED_NOTE = 'This clip is on a locked track. Unlock the track to edit it.'
+
+/** Ids from `ids` that can be edited; says so when a lock leaves none. */
+function editableIds(ids: string[], p = S().project): string[] {
+  const ok = ids.filter((id) => isEditable(p, id))
+  if (ids.length && !ok.length) toast(LOCKED_NOTE)
+  return ok
+}
+
 export function split() {
   const { project, playhead, selection } = S()
   let ids: string[]
@@ -51,12 +61,14 @@ export function split() {
     toast(selection.length ? 'Move the playhead over the selected clip to split it' : 'Nothing under the playhead to split')
     return
   }
+  ids = editableIds(ids)
+  if (!ids.length) return
   S().commit(splitAt(project, playhead, ids), 'Split')
 }
 
 export function remove(ripple = false) {
   const { project, selection } = S()
-  if (!selection.length) return
+  if (!selection.length || !editableIds(selection).length) return
   let p = project
   if (ripple) {
     // ripple on non-main tracks too; core packs main anyway
@@ -77,7 +89,7 @@ export function copy() {
 
 export function cut() {
   const items = selectedItems()
-  if (!items.length) return
+  if (!items.length || !editableIds(items.map((i) => i.id)).length) return
   S().set({ clipboard: clone(items) })
   remove(false)
 }
@@ -91,8 +103,9 @@ export function paste() {
 
 export function duplicate() {
   const { selection, project } = S()
-  if (!selection.length) return
-  const { project: p, newIds } = duplicateItems(project, selection)
+  const ids = editableIds(selection)
+  if (!ids.length) return
+  const { project: p, newIds } = duplicateItems(project, ids)
   S().commit(p, 'Duplicate', { selection: newIds })
 }
 
@@ -104,6 +117,7 @@ export function selectAll() {
 export function separate() {
   const vids = selectedItems().filter((i) => i.type === 'video')
   if (!vids.length) return toast('Select a video clip to separate its audio')
+  if (!editableIds(vids.map((v) => v.id)).length) return
   let p = S().project
   for (const v of vids) p = separateAudio(p, v.id)
   if (p === S().project) return toast('This clip has no audio to separate')
@@ -115,6 +129,7 @@ export function freeze() {
   const v = selectedItems().find((i) => i.type === 'video' && i.start <= playhead && itemEnd(i) > playhead)
     ?? (mainTrack(project)?.items ?? []).find((i) => i.type === 'video' && i.start <= playhead && itemEnd(i) > playhead)
   if (!v) return toast('Put the playhead over a video clip to freeze a frame')
+  if (!editableIds([v.id]).length) return
   S().commit(freezeFrame(project, v.id, playhead, 2), 'Freeze frame')
 }
 

@@ -14,6 +14,7 @@ import {
   NEUTRAL_ADJUST,
   adjustToFilter,
   captionStyleFromPreset,
+  editable,
   findItem,
   projectDuration,
   presetCanvasSize,
@@ -54,6 +55,8 @@ export function PropertiesPanel() {
   const items = A.selectedItems(project, selection)
   const item = items.length === 1 ? items[0] : undefined
   const f = item ? findItem(project, item.id) : null
+  // a locked clip (or a clip on a locked track) shows its settings but takes no edits
+  const locked = !!f && !editable(f)
 
   let tabs: Array<{ id: string; label: string }> = []
   if (!item) tabs = items.length > 1 ? [{ id: 'multi', label: 'Selection' }] : [{ id: 'project', label: 'Project' }]
@@ -95,17 +98,20 @@ export function PropertiesPanel() {
       </div>
       <div className="ed-props-body">
         {item && <ItemHeader item={item} track={f!.track} />}
+        {locked && <p className="ed-note" role="note">{A.LOCKED_NOTE}</p>}
         {tab === 'project' && <ProjectTab project={project} />}
         {tab === 'multi' && <MultiTab items={items} />}
-        {item && tab === 'basic' && 'transform' in item && <BasicTab item={item as VisualItem} main={!!f?.track.main} />}
-        {item && tab === 'adjust' && (item.type === 'video' || item.type === 'image') && <AdjustTab item={item} />}
-        {item && tab === 'background' && (item.type === 'video' || item.type === 'image') && <BackgroundTab item={item} project={project} />}
-        {item && tab === 'animation' && 'animations' in item && <AnimationTab item={item as VisualItem} />}
-        {item && tab === 'speed' && (item.type === 'video' || item.type === 'audio') && <SpeedTab item={item} project={project} />}
-        {item && tab === 'audio' && (item.type === 'video' || item.type === 'audio') && <AudioTab item={item} />}
-        {item && tab === 'text' && item.type === 'text' && <TextTab item={item} />}
-        {item && tab === 'shape' && item.type === 'shape' && <ShapeTab item={item} />}
-        {item && tab === 'caption' && item.type === 'caption' && <CaptionTab item={item} track={f!.track} />}
+        <fieldset disabled={locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          {item && tab === 'basic' && 'transform' in item && <BasicTab item={item as VisualItem} main={!!f?.track.main} />}
+          {item && tab === 'adjust' && (item.type === 'video' || item.type === 'image') && <AdjustTab item={item} />}
+          {item && tab === 'background' && (item.type === 'video' || item.type === 'image') && <BackgroundTab item={item} project={project} />}
+          {item && tab === 'animation' && 'animations' in item && <AnimationTab item={item as VisualItem} />}
+          {item && tab === 'speed' && (item.type === 'video' || item.type === 'audio') && <SpeedTab item={item} project={project} />}
+          {item && tab === 'audio' && (item.type === 'video' || item.type === 'audio') && <AudioTab item={item} />}
+          {item && tab === 'text' && item.type === 'text' && <TextTab item={item} />}
+          {item && tab === 'shape' && item.type === 'shape' && <ShapeTab item={item} />}
+          {item && tab === 'caption' && item.type === 'caption' && <CaptionTab item={item} track={f!.track} />}
+        </fieldset>
       </div>
     </aside>
   )
