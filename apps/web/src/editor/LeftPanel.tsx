@@ -520,7 +520,7 @@ function AudioPanel() {
   )
 }
 
-function VoiceoverBox() {
+export function VoiceoverBox() {
   const voices = useVoices()
   const [text, setText] = useState('')
   const [voice, setVoice] = useState<string>('af_heart')
@@ -533,18 +533,24 @@ function VoiceoverBox() {
     if (!text.trim()) return toast('Write the voiceover script first')
     if (!s.workspaceId) return toast('No workspace')
     setBusy(0)
+    // it lands where the playhead was when it was asked for, in the project it was asked for
+    const at = s.playhead
+    const session = s.session
     try {
       const job = await api.tts({ workspaceId: s.workspaceId, projectId: s.projectId, text, voice, speed, name: `Voiceover · ${text.slice(0, 24)}` })
       const done = await waitForJob<{ asset: AssetRecord; duration: number }>(job.id, (j) => setBusy(j.progress < 0 ? 0 : j.progress))
       const res = done.result!
       const st = useEditor.getState()
+      if (st.session !== session) {
+        toast('Your voiceover is ready in the project you made it for, under Uploads in its Audio panel.')
+        return
+      }
       let p = addAsset(st.project, res.asset.asset)
-      const at = st.playhead
       const item = createAudioItem(res.asset.asset, at, { duration: res.duration || res.asset.asset.duration || 3, name: 'Voiceover', tts: { text, voice, speed } })
       const free = p.tracks.find((t) => t.kind === 'audio' && !t.locked && !t.items.some((i) => i.start < at + item.duration && itemEnd(i) > at))
       p = addItem(p, item as AudioItem, free?.id)
       st.commit(p, 'Add voiceover', { selection: [item.id] })
-      toast('Voiceover added at the playhead')
+      toast(`Voiceover added at ${shortDuration(at)}`)
     } catch (e) {
       toastError(e)
     } finally {

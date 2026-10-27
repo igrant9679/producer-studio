@@ -180,7 +180,8 @@ export function timecode(sec: number, fps: number): string {
 
 /** Short duration label for clip badges: "4.2s" / "1:05". */
 export function shortDuration(sec: number): string {
-  if (sec < 60) return `${sec < 10 ? sec.toFixed(1) : Math.round(sec)}s`
-  const m = Math.floor(sec / 60)
-  return `${m}:${String(Math.round(sec % 60)).padStart(2, '0')}`
+  if (sec < 59.5) return `${sec < 9.95 ? sec.toFixed(1) : Math.round(sec)}s`
+  // round the whole length first: 119.6 s is 2:00, never 1:60
+  const whole = Math.round(sec)
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
 }

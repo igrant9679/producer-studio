@@ -3,7 +3,7 @@ import type { ExportRecord, ExportRequest, ExportResult, Job } from '@producer/c
 import { EXPORT_FPS, EXPORT_RESOLUTIONS, projectDuration } from '@producer/core'
 import clsx from 'clsx'
 import { Check, Copy, Download, Film, Loader2, TriangleAlert, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import { Field, Segmented } from './controls'
@@ -30,7 +30,6 @@ export function ExportDialog() {
   const demo = useEditor((s) => s.demo)
   const projectId = useEditor((s) => s.projectId)
   const close = () => useEditor.setState({ exportOpen: false })
-  useEsc(close)
   const [name, setName] = useState(project.name)
   const [resolution, setRes] = useState<ExportRequest['resolution']>('1080p')
   const [fps, setFps] = useState<ExportRequest['fps']>(([24, 25, 30, 50, 60].includes(project.fps) ? project.fps : 30) as ExportRequest['fps'])
@@ -39,6 +38,8 @@ export function ExportDialog() {
   const [job, setJob] = useState<Job<ExportResult> | null>(null)
   const [result, setResult] = useState<ExportResult | null>(null)
   const [running, setRunning] = useState(false)
+  // mid-render, Escape doesn't throw away the progress (Cancel still closes)
+  useEsc(useCallback(() => !running && useEditor.setState({ exportOpen: false }), [running]))
   const [prev, setPrev] = useState<ExportRecord[]>([])
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)

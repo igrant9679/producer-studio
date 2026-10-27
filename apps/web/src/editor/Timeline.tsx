@@ -393,8 +393,14 @@ function TimelineBody() {
         p = moveItem(orig, id, { start, trackId: ok ? tr.id : f.track.id })
       }
     } else {
-      // multi: shift in time on their own tracks (sorted so linked partners don't double-shift)
-      const sorted = [...d.ids].sort((a, b) => (d.dt > 0 ? starts.get(b)! - starts.get(a)! : starts.get(a)! - starts.get(b)!))
+      // multi: shift in time on their own tracks (sorted so linked partners don't double-shift). A main-track clip
+      // leads its linked audio: the audio follows it, never moves on its own
+      const leaders = new Set(d.ids.map((id) => findItem(orig, id)).filter((f) => f?.track.main && f.item.linkId).map((f) => f!.item.linkId))
+      const moving = d.ids.filter((id) => {
+        const f = findItem(orig, id)
+        return !(f && !f.track.main && f.item.linkId && leaders.has(f.item.linkId))
+      })
+      const sorted = [...moving].sort((a, b) => (d.dt > 0 ? starts.get(b)! - starts.get(a)! : starts.get(a)! - starts.get(b)!))
       for (const id of sorted) {
         const cur = findItem(p, id)
         if (!cur) continue
@@ -889,6 +895,8 @@ interface ClipProps {
 const ClipView = memo(function ClipView({ item, track, project, zoom, height, selected, dragging, onPointerDown, onTrimDown, onContextMenu, cut }: ClipProps) {
   const left = item.start * zoom
   const width = Math.max(2, item.duration * zoom)
+  // the trim edges never cover a narrow clip: its middle stays free to grab and move (none under 10 px)
+  const grip = width >= 24 ? 8 : width >= 10 ? Math.max(2, Math.floor((width - 6) / 2)) : 0
   const asset = 'assetId' in item ? project.assets[item.assetId] : undefined
   const color = kindColor(track, item)
   const [dropOn, setDropOn] = useState(false)
@@ -945,6 +953,7 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
     <>
       <div
         className={clsx('tl-clip', `t-${item.type}`, selected && 'sel', dragging && 'dragging', dropOn && 'drop', (track.locked || item.locked) && 'locked', muted && 'muted')}
+        data-item={item.id}
         style={{ left, width, height: height - 2, ['--clip' as string]: color }}
         onPointerDown={onPointerDown}
         onContextMenu={onContextMenu}
@@ -966,8 +975,8 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
           {'effects' in item && item.effects.length > 0 && width > 120 && <span className="badge">FX {item.effects.length}</span>}
           {(item.type === 'video' || item.type === 'image') && item.filter && width > 150 && <span className="badge">{FILTERS.find((f) => f.id === item.filter!.id)?.name ?? 'Filter'}</span>}
         </div>
-        {(item.type === 'video' || item.type === 'audio') && item.fadeIn > 0 && <div className="tl-fade in" style={{ width: item.fadeIn * zoom }} />}
-        {(item.type === 'video' || item.type === 'audio') && item.fadeOut > 0 && <div className="tl-fade out" style={{ width: item.fadeOut * zoom }} />}
+        {(item.type === 'video' || item.type === 'audio') && item.fadeIn > 0 && <div className="tl-fade in" style={{ width: Math.min(width, item.fadeIn * zoom) }} />}
+        {(item.type === 'video' || item.type === 'audio') && item.fadeOut > 0 && <div className="tl-fade out" style={{ width: Math.min(width, item.fadeOut * zoom) }} />}
         {kfTimes.map((t) => (
           <button
             key={t}
@@ -983,10 +992,10 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
             <Diamond size={8} fill="currentColor" />
           </button>
         ))}
-        {!track.locked && !item.locked && (
+        {!track.locked && !item.locked && grip > 0 && (
           <>
-            <div className="tl-trim l" onPointerDown={(e) => onTrimDown(e, 'start')} />
-            <div className="tl-trim r" onPointerDown={(e) => onTrimDown(e, 'end')} />
+            <div className="tl-trim l" style={grip < 8 ? { width: grip } : undefined} onPointerDown={(e) => onTrimDown(e, 'start')} />
+            <div className="tl-trim r" style={grip < 8 ? { width: grip } : undefined} onPointerDown={(e) => onTrimDown(e, 'end')} />
           </>
         )}
       </div>
