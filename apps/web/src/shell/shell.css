@@ -269,6 +269,7 @@
 .ps-sync-stats strong.warn { color: var(--amber); }
 .ps-sync-stats span { font-size: 0.6562rem; color: var(--text-3); }
 .ps-conflicts { border-top: 1px solid var(--border); padding-top: 4px; }
+.ps-sync-pop { max-height: calc(100vh - 64px); overflow-y: auto; }
 .ps-conflict { padding: 8px 6px 10px; border-bottom: 1px solid var(--border); }
 .ps-conflict:last-child { border-bottom: 0; }
 .ps-conflict-name { margin-bottom: 8px; }

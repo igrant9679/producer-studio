@@ -27,7 +27,7 @@ import { log } from '../log'
 import { assetPrefix, extFor, hashObject } from '../services/assets'
 import { derived, hydrateAssets, insertProject } from '../services/projects'
 import { CloudClient, CloudError, normalizeCloudUrl } from './cloud'
-import { type FailureKind, addNotice, clearFailure, clearSync, deleteSync, failureKey, failureMap, kvGet, kvSet, listNotices, putSync, rawQuery, recordFailure, removeNotice, setFailure, syncRow, syncRows, type SyncRow } from './db'
+import { type FailureKind, addNotice, clearFailure, clearFailures, clearSync, deleteSync, failureKey, failureMap, kvGet, kvSet, listNotices, putSync, rawQuery, recordFailure, removeNotice, setFailure, syncRow, syncRows, type SyncRow } from './db'
 import { adoptCloudIdentity, localUserId } from './identity'
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
 import { prefetchAllMedia } from './media'
@@ -314,6 +314,9 @@ export class SyncEngine {
       // another account (or cloud): the previous account's spaces are set aside here, never merged into this one
       await this.setAsideAccount(last, me.user.email)
     }
+    if (!last || last.cloudUrl !== cloudUrl) await kvSet('safeCursor', false)
+    // what failed for another account means nothing here (it shows up again if it still fails)
+    if (!last || last.cloudUrl !== cloudUrl || last.cloudUserId !== me.user.id) await clearFailures()
     await this.resumeAccount(cloudUrl, me.user.id)
     await adoptCloudIdentity(me.user)
     await this.mirrorWorkspaces(me.workspaces)

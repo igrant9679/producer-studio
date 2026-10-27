@@ -805,6 +805,11 @@ const sync: SyncStatus = {
   lastSyncAt: now - 2 * MIN,
   pending: 2,
   conflicts: [{ projectId: 'p_onboard', name: 'Onboarding walkthrough v2', localVersion: 7, cloudVersion: 9 }],
+  failures: [{ kind: 'asset', id: 'as_huge', name: 'Drone pass 8K.mov', error: 'File is larger than the 4096 MB upload limit', attempts: 3, skipped: false, at: now - 4 * MIN, nextAt: now + 4 * MIN }],
+  notices: [
+    { id: 'n_kept', message: '“Spring promo” was deleted here, but edited in the cloud since. The cloud version was kept and is back in your projects; delete it again if you still want it gone.', at: now - 30 * MIN },
+    { id: 'n_brand', message: 'The brand kit “Alex’s colours” made on this computer before linking wasn’t used, because “Alex’s space” already has one in the cloud. It was kept aside.', at: now - 2 * DAY, action: 'Use this computer’s kit' },
+  ],
 }
 const devices: Device[] = [
   { id: 'dev_1', name: 'Alex’s MacBook Pro', createdAt: now - 12 * DAY, lastSeenAt: now - 20 * MIN },
@@ -862,6 +867,19 @@ on('POST', '/api/sync/link', desktopOnly(async (_m, _q, b) => {
 on('POST', '/api/sync/unlink', desktopOnly(async () => {
   await delay(300)
   Object.assign(sync, { linked: false, cloudUrl: undefined, account: undefined, state: 'unlinked', lastSyncAt: undefined, conflicts: [] })
+  return json(sync)
+}))
+on('POST', '/api/sync/failures/([^/]+)/([^/]+)', desktopOnly(async (m, _q, b) => {
+  await delay(400)
+  const f = sync.failures?.find((x) => x.kind === m[1] && x.id === decodeURIComponent(m[2]))
+  if (!f) return fail(404, 'That item is no longer waiting to sync', 'not_found')
+  if (b.action === 'skip') Object.assign(f, { skipped: true, nextAt: undefined })
+  else Object.assign(f, { skipped: false, attempts: f.attempts + 1, at: Date.now(), nextAt: Date.now() + 8 * MIN })
+  return json(sync)
+}))
+on('POST', '/api/sync/notices/([^/]+)', desktopOnly(async (m) => {
+  await delay(200)
+  sync.notices = sync.notices?.filter((n) => n.id !== decodeURIComponent(m[1]))
   return json(sync)
 }))
 on('POST', '/api/projects/([^/]+)/sync', desktopOnly(async (m, _q, b) => {

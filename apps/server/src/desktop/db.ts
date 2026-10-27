@@ -186,6 +186,10 @@ export async function clearFailure(kind: FailureKind, id: string) {
   await ctx().db.execute(sql`DELETE FROM desktop_sync_failures WHERE kind = ${kind} AND id = ${id}`)
 }
 
+export async function clearFailures() {
+  await ctx().db.execute(sql`DELETE FROM desktop_sync_failures`)
+}
+
 /** Retry (due now, not skipped) or Skip. False when there is no such failure. */
 export async function setFailure(kind: FailureKind, id: string, patch: { skipped: boolean }): Promise<boolean> {
   const rows = await query<{ id: string }>(sql`

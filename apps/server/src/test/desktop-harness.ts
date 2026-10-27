@@ -78,7 +78,16 @@ export async function startCloud(env: Record<string, string> = {}): Promise<Clou
     if (i > 600 || proc.exitCode != null) throw new Error(`cloud did not start: ${err}`)
     await new Promise((r) => setTimeout(r, 150))
   }
-  const http = () => new Http((u, init) => fetch(`${url}${u}`, init))
+  // a pooled keep-alive socket the cloud has just closed resets the next request on it; the test client tries once more
+  const send = async (u: string, init: RequestInit) => {
+    try {
+      return await fetch(`${url}${u}`, init)
+    } catch (err) {
+      if ((err as { cause?: { code?: string } }).cause?.code !== 'ECONNRESET') throw err
+      return fetch(`${url}${u}`, init)
+    }
+  }
+  const http = () => new Http(send)
   let n = 0
   return {
     url,
