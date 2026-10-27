@@ -137,7 +137,7 @@ export default function ExportsPage() {
                 <span className="kbd">{formatBytes(r.sizeBytes)}</span>
               </div>
               <div className="row" style={{ gap: 6 }}>
-                <a className="btn sm" href={r.url} target="_blank" rel="noreferrer" title="Open"><ExternalLink size={13} /></a>
+                <a className="btn sm" href={r.url} target="_blank" rel="noreferrer" data-tip="Open in a new tab" aria-label={`Open ${r.name || r.project.name} in a new tab`}><ExternalLink size={13} /></a>
                 <a className="btn sm" href={r.url} download={`${r.name || r.project.name}.mp4`}><Download size={13} /> Download</a>
                 <button className="btn sm primary" onClick={() => share(r)} disabled={sharing === r.exportId}>
                   {sharing === r.exportId ? <Spinner size={13} /> : copied === r.exportId ? <Check size={13} /> : <Link2 size={13} />} {copied === r.exportId ? 'Copied' : 'Copy link'}

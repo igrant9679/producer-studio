@@ -1,26 +1,61 @@
-import { AlertTriangle, RotateCcw } from 'lucide-react'
+import { AlertTriangle, Lock, RotateCcw } from 'lucide-react'
 import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import './dev/installMock'
 import './shell.css'
 import './pages.css'
 import './voicestudio/voicestudio.css'
 import { Layout } from './Layout'
-import { EmptyState, Spinner } from './ui'
+import { EmptyState, Spinner, useEditGate } from './ui'
 
-const HomePage = lazy(() => import('./pages/HomePage'))
-const EditorHome = lazy(() => import('./pages/EditorHome'))
-const ProducerWizard = lazy(() => import('./producer/ProducerWizard'))
-const VoiceStudio = lazy(() => import('./pages/VoiceStudio'))
-const TemplatesPage = lazy(() => import('./pages/TemplatesPage'))
-const LibraryPage = lazy(() => import('./pages/LibraryPage'))
-const ToolsPage = lazy(() => import('./pages/ToolsPage'))
-const BrandPage = lazy(() => import('./pages/BrandPage'))
-const SpacePage = lazy(() => import('./pages/SpacePage'))
-const ExportsPage = lazy(() => import('./pages/ExportsPage'))
-const SettingsPage = lazy(() => import('./pages/SettingsPage'))
-const InvitePage = lazy(() => import('./pages/InvitePage'))
+// Each page's code, by the first segment of its path. main.tsx starts the current page's download while the
+// sign-in check is still out (preloadRoute), and React.lazy picks up the same module.
+const pages = {
+  '': () => import('./pages/HomePage'),
+  editor: () => import('./pages/EditorHome'),
+  producer: () => import('./producer/ProducerWizard'),
+  voice: () => import('./pages/VoiceStudio'),
+  templates: () => import('./pages/TemplatesPage'),
+  library: () => import('./pages/LibraryPage'),
+  tools: () => import('./pages/ToolsPage'),
+  brand: () => import('./pages/BrandPage'),
+  space: () => import('./pages/SpacePage'),
+  exports: () => import('./pages/ExportsPage'),
+  settings: () => import('./pages/SettingsPage'),
+  invite: () => import('./pages/InvitePage'),
+}
+
+/** Start loading the code for the shell page at `pathname` (no-op for paths that aren't shell pages). */
+export function preloadRoute(pathname: string) {
+  const seg = pathname.split('/')[1] ?? ''
+  const load = pages[seg as keyof typeof pages]
+  if (load) void load().catch(() => undefined)
+}
+
+const HomePage = lazy(pages[''])
+const EditorHome = lazy(pages.editor)
+const ProducerWizard = lazy(pages.producer)
+const VoiceStudio = lazy(pages.voice)
+const TemplatesPage = lazy(pages.templates)
+const LibraryPage = lazy(pages.library)
+const ToolsPage = lazy(pages.tools)
+const BrandPage = lazy(pages.brand)
+const SpacePage = lazy(pages.space)
+const ExportsPage = lazy(pages.exports)
+const SettingsPage = lazy(pages.settings)
+const InvitePage = lazy(pages.invite)
 const NotFound = lazy(() => import('./pages/NotFound'))
+
+/** Producer AI only makes new things: a viewer gets who can use it instead of a wizard that fails at the end. */
+function RequireEdit({ children, what }: { children: ReactNode; what: string }) {
+  const gate = useEditGate()
+  if (gate.canEdit) return <>{children}</>
+  return (
+    <div className="ps-page narrow" style={{ paddingTop: 70 }}>
+      <EmptyState icon={<Lock size={24} />} title={`${what} needs an editor`} body={gate.tip} action={<Link className="btn" to="/library">Open the Library</Link>} />
+    </div>
+  )
+}
 
 function PageFallback() {
   return (
@@ -73,8 +108,8 @@ export function ShellRoutes() {
             <Route index element={<HomePage />} />
             <Route path="editor" element={<EditorHome />} />
             <Route path="producer" element={<Navigate to="/producer/new" replace />} />
-            <Route path="producer/new" element={<ProducerWizard />} />
-            <Route path="producer/:projectId" element={<ProducerWizard />} />
+            <Route path="producer/new" element={<RequireEdit what="Producer AI"><ProducerWizard /></RequireEdit>} />
+            <Route path="producer/:projectId" element={<RequireEdit what="Producer AI"><ProducerWizard /></RequireEdit>} />
             <Route path="voice" element={<VoiceStudio />} />
             <Route path="templates" element={<TemplatesPage />} />
             <Route path="library" element={<LibraryPage />} />

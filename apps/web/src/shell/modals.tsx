@@ -8,7 +8,7 @@ import { useSession } from '../lib/session'
 import { toast, toastError } from '../lib/toast'
 import { DESKTOP_DOWNLOAD_URL, useSystem } from './system'
 import { absoluteUrl, copyText } from './util'
-import { Logo, Modal, Spinner } from './ui'
+import { ConfirmDialog, Logo, Modal, Spinner, TabPanel, Tabs } from './ui'
 
 export function AspectBox({ w, h, max = 56 }: { w: number; h: number; max?: number }) {
   const s = max / Math.max(w, h)
@@ -180,9 +180,16 @@ export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; on
   const [url, setUrl] = useState<string>()
   const [err, setErr] = useState<string>()
   const [copied, setCopied] = useState(false)
-  async function submit(e: FormEvent) {
+  const [confirmOwner, setConfirmOwner] = useState(false)
+  function submit(e: FormEvent) {
     e.preventDefault()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return setErr('Enter a valid email address')
+    // an owner can delete the space and remove everyone in it: make that a deliberate choice
+    if (role === 'owner') return setConfirmOwner(true)
+    void create()
+  }
+  async function create() {
+    setConfirmOwner(false)
     setBusy(true)
     setErr(undefined)
     try {
@@ -229,17 +236,31 @@ export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; on
           </button>
         </div>
       )}
+      {confirmOwner && (
+        <ConfirmDialog
+          title={`Invite ${email.trim()} as an owner?`}
+          body="Owners can invite and remove people, change everyone’s role, rename the space and delete it with everything in it. Editors can do everything else."
+          confirmLabel="Create owner invite"
+          onConfirm={() => void create()}
+          onClose={() => setConfirmOwner(false)}
+        />
+      )}
     </div>
   )
 }
+
+/** Who may invite to a space: its owners, and nobody on a personal space. */
+export const canInvite = (ws: Workspace | undefined) => !!ws && ws.role === 'owner' && !ws.personal
+export const ONLY_OWNERS_INVITE = 'Only owners of this space can invite people'
 
 export function InviteModal({ onClose }: { onClose: () => void }) {
   const workspaceId = useSession((s) => s.workspaceId)
   const ws = useSession((s) => s.workspaces.find((w) => w.id === s.workspaceId))
   return (
-    <Modal title={`Invite to ${ws?.name ?? 'space'}`} subtitle="Invitees get access to this space's projects, media and brand kit." onClose={onClose} width={620}>
-      {ws?.personal && <div className="ps-alert info" style={{ marginBottom: 14 }}>This is your personal space. For team work, create a shared space and invite people there.</div>}
-      {ws?.role !== 'owner' ? (
+    <Modal title={`Invite to ${ws?.name ?? 'space'}`} subtitle={ws?.personal ? undefined : "Invitees get access to this space's projects, media and brand kit."} onClose={onClose} width={620}>
+      {ws?.personal ? (
+        <div className="ps-alert info">This is your personal space, just for you. To work with others, create a team space and invite people there.</div>
+      ) : ws?.role !== 'owner' ? (
         <div className="muted">Only owners of {ws?.name ?? 'this space'} can invite people. Ask one of them to send you a link for your teammate.</div>
       ) : (
         workspaceId && <InviteForm workspaceId={workspaceId} />
@@ -263,10 +284,17 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Help" onClose={onClose} width={720}>
       <div className="row" style={{ marginBottom: 18, gap: 12, flexWrap: 'wrap' }}>
-        <div className="ps-seg">
-          <button className={tab === 'keys' ? 'on' : ''} onClick={() => setTab('keys')}><Keyboard size={14} /> Keyboard shortcuts</button>
-          <button className={tab === 'about' ? 'on' : ''} onClick={() => setTab('about')}>About</button>
-        </div>
+        <Tabs
+          id="help"
+          className="ps-seg"
+          label="Help"
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { id: 'keys', label: 'Keyboard shortcuts', icon: <Keyboard size={14} /> },
+            { id: 'about', label: 'About' },
+          ]}
+        />
         <span className="spacer" />
         {!desktop && (
           <a className="btn sm" href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
@@ -274,52 +302,54 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
           </a>
         )}
       </div>
-      {tab === 'keys' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 22 }}>
-          {SHORTCUTS.map(([group, rows]) => (
-            <div key={group}>
-              <div className="eyebrow" style={{ marginBottom: 10 }}>{group}</div>
-              {rows.map(([label, key]) => (
-                <div key={label} className="row" style={{ padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ color: 'var(--text-2)' }}>{label}</span>
-                  <span className="spacer" />
-                  <span className="kbd">{key}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div>
-          <Logo />
-          <p style={{ color: 'var(--text-2)', marginTop: 16 }}>
-            Producer Studio turns screen recordings into finished, on-brand videos. <b>Producer AI</b> transcribes your footage, writes a script with Claude, narrates it and assembles
-            the cut; the <b>Video Editor</b> gives you a full multi-track timeline to finish it; <b>Voice Studio</b> generates voiceovers from text.
-          </p>
-          <ul style={{ color: 'var(--text-2)', paddingLeft: 18, lineHeight: 1.8 }}>
-            <li>Upload recordings from <b>Create new → Upload media</b> or drag files onto the Library.</li>
-            <li>Everything in a space — projects, media, brand kit — is shared with its members.</li>
-            <li>Exports and share links live under <b>Exports &amp; sharing</b>.</li>
-          </ul>
-          <div className="row" style={{ gap: 14, padding: 14, margin: '18px 0 14px', border: '1px solid var(--border)', borderRadius: 12, flexWrap: 'wrap' }}>
-            <MonitorDown size={22} style={{ flex: 'none', color: 'var(--accent)' }} />
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <strong style={{ display: 'block' }}>Producer Studio for Windows</strong>
-              <span className="muted" style={{ fontSize: '0.8125rem' }}>
-                {desktop
-                  ? 'You’re using the desktop app. Installing a newer release over it keeps your projects and settings.'
-                  : 'Edit offline, keep media on your own drives, and clone voices, dub and dictate with Voice Studio. Link it to this account from its Settings → Account & sync.'}
-              </span>
-            </div>
-            <a className={desktop ? 'btn' : 'btn primary'} href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
-              <Download size={14} /> {desktop ? 'Latest release' : 'Download for Windows'}
-            </a>
+      <TabPanel tabs="help" value={tab}>
+        {tab === 'keys' ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: 22 }}>
+            {SHORTCUTS.map(([group, rows]) => (
+              <div key={group}>
+                <div className="eyebrow" style={{ marginBottom: 10 }}>{group}</div>
+                {rows.map(([label, key]) => (
+                  <div key={label} className="row" style={{ padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                    <span style={{ color: 'var(--text-2)' }}>{label}</span>
+                    <span className="spacer" />
+                    <span className="kbd">{key}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
-          <p className="muted" style={{ fontSize: '0.75rem' }}>
-            {info?.version ? `Version ${info.version}` : 'Version unknown'} · {desktop ? 'desktop' : 'cloud'}
-          </p>
-        </div>
-      )}
+        ) : (
+          <div>
+            <Logo />
+            <p style={{ color: 'var(--text-2)', marginTop: 16 }}>
+              Producer Studio turns screen recordings into finished, on-brand videos. <b>Producer AI</b> transcribes your footage, writes a script with Claude, narrates it and assembles
+              the cut; the <b>Video Editor</b> gives you a full multi-track timeline to finish it; <b>Voice Studio</b> generates voiceovers from text.
+            </p>
+            <ul style={{ color: 'var(--text-2)', paddingLeft: 18, lineHeight: 1.8 }}>
+              <li>Upload recordings from <b>Create new → Upload media</b> or drag files onto the Library.</li>
+              <li>Everything in a space — projects, media, brand kit — is shared with its members.</li>
+              <li>Exports and share links live under <b>Exports &amp; sharing</b>.</li>
+            </ul>
+            <div className="row" style={{ gap: 14, padding: 14, margin: '18px 0 14px', border: '1px solid var(--border)', borderRadius: 12, flexWrap: 'wrap' }}>
+              <MonitorDown size={22} style={{ flex: 'none', color: 'var(--accent)' }} />
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <strong style={{ display: 'block' }}>Producer Studio for Windows</strong>
+                <span className="muted" style={{ fontSize: '0.8125rem' }}>
+                  {desktop
+                    ? 'You’re using the desktop app. Installing a newer release over it keeps your projects and settings.'
+                    : 'Edit offline, keep media on your own drives, and clone voices, dub and dictate with Voice Studio. Link it to this account from its Settings → Account & sync.'}
+                </span>
+              </div>
+              <a className={desktop ? 'btn' : 'btn primary'} href={DESKTOP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+                <Download size={14} /> {desktop ? 'Latest release' : 'Download for Windows'}
+              </a>
+            </div>
+            <p className="muted" style={{ fontSize: '0.75rem' }}>
+              {info?.version ? `Version ${info.version}` : 'Version unknown'} · {desktop ? 'desktop' : 'cloud'}
+            </p>
+          </div>
+        )}
+      </TabPanel>
     </Modal>
   )
 }

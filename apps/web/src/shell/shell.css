@@ -138,14 +138,18 @@
 .ps-pcard-meta > div:first-child { flex: 1; min-width: 0; }
 .ps-pcard-name { font-weight: 600; font-size: 0.8438rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ps-pcard-sub { font-size: 0.75rem; color: var(--text-3); margin-top: 2px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* card actions appear on hover, and are always there for the keyboard (focus inside the card) and on touch screens */
 .ps-pcard-menu { opacity: 0; transition: opacity .12s; }
-.ps-pcard:hover .ps-pcard-menu, .ps-pcard-menu[aria-expanded='true'] { opacity: 1; }
+.ps-pcard:hover .ps-pcard-menu, .ps-pcard:focus-within .ps-pcard-menu, .ps-pcard-menu[aria-expanded='true'] { opacity: 1; }
 .ps-check {
   position: absolute; top: 16px; left: 16px; z-index: 2; width: 22px; height: 22px; border-radius: 6px;
   border: 1.5px solid rgba(255, 255, 255, 0.7); background: var(--media-dim); display: grid; place-items: center;
   opacity: 0; transition: opacity .12s; cursor: pointer; color: var(--on-cyan); padding: 0;
 }
-.ps-pcard:hover .ps-check, .ps-check.on, .selecting .ps-check { opacity: 1; }
+.ps-pcard:hover .ps-check, .ps-pcard:focus-within .ps-check, .ps-check.on, .selecting .ps-check { opacity: 1; }
+@media (hover: none) {
+  .ps-pcard-menu, .ps-check { opacity: 1; }
+}
 .ps-check.on { background: var(--cyan); border-color: var(--cyan); }
 .ps-kind-pill { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; font: 600 0.625rem/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; padding: 3px 6px; border-radius: 4px; background: var(--surface-3); color: var(--text-2); }
 .ps-kind-pill.is-ai { background: var(--accent-soft); color: var(--accent); }
@@ -185,6 +189,9 @@
 .ps-alert { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); font-size: 0.8125rem; }
 .ps-alert.info { border-color: var(--cyan-line); background: var(--cyan-soft); color: var(--info-text); }
 .ps-inline-input { height: 28px; padding: 0 8px; font-size: 0.8125rem; }
+/* a button that reads as text (a row's name that opens it) */
+.ps-text-btn { background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 4px; }
+.ps-text-btn:hover { text-decoration: underline; }
 .ps-app select.input { appearance: none; padding-right: 30px; background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%), linear-gradient(135deg, var(--text-3) 50%, transparent 50%); background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px; background-size: 5px 5px; background-repeat: no-repeat; }
 
 /* ---------- jobs popover ---------- */
@@ -227,8 +234,8 @@
 .ps-qcard p { margin: 0; font-size: 0.7812rem; color: var(--text-2); line-height: 1.45; }
 .ps-qcard .ps-soon { position: absolute; top: 16px; right: 16px; }
 
-/* ---------- responsive: collapse nav to icons ---------- */
-@media (max-width: 1200px) {
+/* ---------- responsive: collapse nav to icons (below 1000 px it becomes a drawer, further down) ---------- */
+@media (min-width: 1000px) and (max-width: 1200px) {
   .ps-app { grid-template-columns: 72px minmax(0, 1fr); }
   .ps-nav-head { padding: 16px 0 12px; display: grid; place-items: center; }
   .ps-logo-word, .ps-nav-text, .ps-nav-section > .eyebrow, .ps-nav-badge, .ps-space-meta, .ps-create-btn .ps-nav-text, .ps-nav-caret { display: none; }
@@ -239,6 +246,10 @@
   .ps-nav-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .ps-space-btn { padding: 8px; justify-content: center; }
   .ps-nav-foot { padding: 10px; }
+  .ps-desktop-badge { display: none; }
+  .ps-nav-head { justify-content: center; }
+}
+@media (max-width: 1200px) {
   .ps-page { padding: 26px 26px 64px; }
   .ps-topbar { padding: 0 20px; }
 }
@@ -280,8 +291,6 @@
 .ps-sync-badge.local { color: rgba(255, 255, 255, 0.8); }
 .ps-sync-badge.conflict { color: #0c0e14; background: #ffc24d; }
 @media (max-width: 1200px) {
-  .ps-desktop-badge { display: none; }
-  .ps-nav-head { justify-content: center; }
   .ps-ai-chip-text { display: none; }
   .ps-ai-chip { width: 30px; padding: 0; justify-content: center; }
 }
@@ -292,6 +301,58 @@
 :root[data-theme='light'] .ps-pop { background: var(--surface); border-color: var(--border); }
 :root[data-theme='light'] .ps-menu-item:hover, :root[data-theme='light'] .ps-menu-item:focus-visible { background: var(--surface-2); }
 :root[data-theme='light'] .ps-nav { border-right-color: var(--border); }
-:root[data-theme='light'] .ps-nav [data-tip]:hover::after { background: #1e2433; border-color: #1e2433; color: #f4f6fb; }
 .ps-menu-theme { padding: 4px 6px 4px 10px; }
 .ps-menu-theme-label { font-size: 0.8125rem; color: var(--text-2); }
+
+/* ---------- first load (boot.tsx) ---------- */
+.ps-boot-search { height: calc(var(--h-control) + 2px); width: min(520px, 55%); border-radius: 10px; }
+.ps-boot-editor { height: 100%; background: var(--bg); }
+.ps-boot-editor-top { height: var(--h-edtop, 48px); display: flex; align-items: center; gap: 14px; padding: 0 12px; background: var(--bg-2); border-bottom: 1px solid var(--border); }
+/* the editor on a phone */
+.ps-small-note { display: none; }
+@media (max-width: 760px) {
+  .ps-small-note {
+    display: flex; align-items: center; gap: 10px; position: fixed; z-index: 1100; left: 8px; right: 8px; bottom: 8px; padding: 10px 12px;
+    border-radius: 12px; border: 1px solid var(--cyan-line); background: var(--surface-2); color: var(--text); font-size: 0.8125rem; box-shadow: var(--shadow-pop);
+  }
+  .ps-small-note > span { flex: 1; min-width: 0; }
+}
+
+/* ---------- viewers ---------- */
+.ps-viewer-note {
+  display: flex; align-items: center; gap: 10px; max-width: 1320px; margin: 14px auto 0; padding: 9px 14px;
+  border-radius: 10px; border: 1px solid var(--cyan-line); background: var(--cyan-soft); color: var(--info-text); font-size: 0.8125rem;
+}
+.ps-content > .ps-viewer-note { width: calc(100% - 2 * var(--pad-page-x)); }
+
+/* ---------- phone and small tablet (below 1000 px): drawer nav, search icon, extras in the account menu ---------- */
+.ps-menu-btn, .ps-search-toggle { display: none; }
+.ps-pop { max-width: calc(100vw - 16px); }
+@media (min-width: 1000px) {
+  .ps-menu-item.ps-narrow-only { display: none; }
+}
+@media (max-width: 999.98px) {
+  .ps-app { grid-template-columns: minmax(0, 1fr); }
+  .ps-nav {
+    position: fixed; z-index: 900; top: 0; bottom: 0; left: 0; width: min(288px, 86vw);
+    transform: translateX(-100%); visibility: hidden; transition: transform .2s ease, visibility .2s;
+  }
+  .ps-nav.open { transform: none; visibility: visible; box-shadow: var(--shadow-pop); }
+  .ps-nav-scrim { position: fixed; inset: 0; z-index: 899; background: var(--scrim); }
+  .ps-menu-btn, .ps-search-toggle { display: inline-flex; }
+  .ps-topbar { padding: 0 10px; gap: 6px; }
+  .ps-topbar-extra, .ps-sync-label { display: none; }
+  .ps-search { display: none; }
+  .ps-search.expanded {
+    display: block; position: absolute; z-index: 5; left: 8px; right: 8px; top: 50%; transform: translateY(-50%);
+    min-width: 0; max-width: none;
+  }
+  /* top-bar popovers (jobs, account, sync) span the screen instead of hanging off its edge */
+  .ps-topbar .ps-pop:not(.ps-search-pop) { position: fixed; left: 8px !important; right: 8px !important; top: calc(var(--h-topbar) + 4px) !important; bottom: auto !important; width: auto !important; }
+  .ps-page { padding: 20px 16px 56px; }
+  .ps-page-head h1 { font-size: 1.625rem; }
+  .ps-content > .ps-viewer-note { width: calc(100% - 32px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ps-nav { transition: none; }
+}

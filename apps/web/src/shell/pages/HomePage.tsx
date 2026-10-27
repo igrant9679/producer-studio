@@ -8,12 +8,13 @@ import { useCreateAndOpen, type EditorTab } from '../actions'
 import { ProjectCard } from '../components/ProjectCard'
 import { AspectPickerModal } from '../modals'
 import { setProducerHandoff } from '../producer/handoff'
-import { CardSkeletons, EmptyState, useAsync, useFilePicker, usePageTitle } from '../ui'
+import { CardSkeletons, EmptyState, useAsync, useEditGate, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes } from '../util'
 
-export function QuickCard({ icon, title, body, onClick, glow, iconBg, iconFg, soon }: { icon: ReactNode; title: string; body: string; onClick?: () => void; glow?: string; iconBg?: string; iconFg?: string; soon?: boolean }) {
+/** `lockedTip`: the card makes something and the viewer can't (useEditGate's tip): disabled, saying who can. */
+export function QuickCard({ icon, title, body, onClick, glow, iconBg, iconFg, soon, lockedTip }: { icon: ReactNode; title: string; body: string; onClick?: () => void; glow?: string; iconBg?: string; iconFg?: string; soon?: boolean; lockedTip?: string }) {
   return (
-    <button className={`ps-qcard ${soon ? 'disabled' : ''}`} onClick={soon ? undefined : onClick} style={{ ['--glow' as string]: glow, ['--icon-bg' as string]: iconBg, ['--icon-fg' as string]: iconFg }} aria-disabled={soon}>
+    <button className={`ps-qcard ${soon || lockedTip ? 'disabled' : ''}`} onClick={soon ? undefined : onClick} disabled={!!lockedTip} data-tip={lockedTip} style={{ ['--glow' as string]: glow, ['--icon-bg' as string]: iconBg, ['--icon-fg' as string]: iconFg }} aria-disabled={soon}>
       <div className="ps-qcard-icon">{icon}</div>
       <h3>{title}</h3>
       <p>{body}</p>
@@ -48,10 +49,12 @@ export default function HomePage() {
   const [files, setFiles] = useState<File[]>([])
   const [aspectModal, setAspectModal] = useState(false)
   const [create, creating] = useCreateAndOpen()
+  const gate = useEditGate()
   const recent = useRecentProjects(8)
   const pick = useFilePicker('video/*', true, (f) => setFiles((cur) => [...cur, ...f]))
 
   function makeIt() {
+    if (!gate.canEdit) return
     setProducerHandoff({ prompt: prompt.trim(), aspect, files })
     navigate('/producer/new')
   }
@@ -76,7 +79,7 @@ export default function HomePage() {
           onDrop={(e) => {
             e.preventDefault()
             const f = Array.from(e.dataTransfer.files).filter((x) => x.type.startsWith('video/'))
-            if (f.length) setFiles((cur) => [...cur, ...f])
+            if (f.length && gate.canEdit) setFiles((cur) => [...cur, ...f])
           }}
         >
           <textarea
@@ -117,7 +120,7 @@ export default function HomePage() {
             </div>
             <span className="spacer" />
             <span className="ps-prompt-model"><Sparkles size={13} /> Producer AI</span>
-            <button className="btn primary ps-make" type="submit">
+            <button className="btn primary ps-make" type="submit" {...gate.props}>
               Make it <ArrowRight size={16} />
             </button>
           </div>
@@ -138,12 +141,12 @@ export default function HomePage() {
           <Link to="/tools" className="btn ghost sm">All tools <ArrowUpRight size={14} /></Link>
         </div>
         <div className="ps-grid ps-quick">
-          <QuickCard icon={<Clapperboard size={20} />} title="Video Editor" body="Start a blank multi-track timeline in any aspect ratio." onClick={() => setAspectModal(true)} />
-          <QuickCard icon={<Sparkles size={20} />} title="Producer AI from a recording" body="Upload a capture; get a scripted, narrated, branded cut." onClick={() => navigate('/producer/new')} {...VIOLET} />
-          <QuickCard icon={<Captions size={20} />} title="Auto captions" body="Transcribe speech into styled, word-timed captions." onClick={tool('captions', 'Auto captions')} {...CYAN} />
-          <QuickCard icon={<FileText size={20} />} title="Transcript editing" body="Edit the video by deleting words from its transcript." onClick={tool('transcript', 'Transcript edit')} {...AMBER} />
+          <QuickCard icon={<Clapperboard size={20} />} title="Video Editor" body="Start a blank multi-track timeline in any aspect ratio." onClick={() => setAspectModal(true)} lockedTip={gate.tip} />
+          <QuickCard icon={<Sparkles size={20} />} title="Producer AI from a recording" body="Upload a capture; get a scripted, narrated, branded cut." onClick={() => navigate('/producer/new')} lockedTip={gate.tip} {...VIOLET} />
+          <QuickCard icon={<Captions size={20} />} title="Auto captions" body="Transcribe speech into styled, word-timed captions." onClick={tool('captions', 'Auto captions')} lockedTip={gate.tip} {...CYAN} />
+          <QuickCard icon={<FileText size={20} />} title="Transcript editing" body="Edit the video by deleting words from its transcript." onClick={tool('transcript', 'Transcript edit')} lockedTip={gate.tip} {...AMBER} />
           <QuickCard icon={<AudioLines size={20} />} title="Voiceover" body="Type a script and generate natural narration." onClick={() => navigate('/voice')} {...GREEN} />
-          <QuickCard icon={<ScissorsLineDashed size={20} />} title="Remove pauses" body="Cut silences and filler words in one click." onClick={tool('transcript', 'Remove pauses')} />
+          <QuickCard icon={<ScissorsLineDashed size={20} />} title="Remove pauses" body="Cut silences and filler words in one click." onClick={tool('transcript', 'Remove pauses')} lockedTip={gate.tip} />
         </div>
       </section>
 
@@ -172,8 +175,8 @@ export default function HomePage() {
             body="Describe a video above, or start from a recording and let Producer AI do the first cut for you."
             action={
               <div className="row">
-                <button className="btn primary" onClick={() => navigate('/producer/new')}><Sparkles size={15} /> New from recording</button>
-                <button className="btn" onClick={() => setAspectModal(true)}>Blank project</button>
+                <button className="btn primary" {...gate.props} onClick={() => navigate('/producer/new')}><Sparkles size={15} /> New from recording</button>
+                <button className="btn" {...gate.props} onClick={() => setAspectModal(true)}>Blank project</button>
               </div>
             }
           />

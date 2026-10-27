@@ -357,6 +357,8 @@ export function AiProviders({
   useEffect(() => {
     if (!desktop && !workspaceId) return
     let alive = true
+    // another space's keys and choices must not show (or be edited) while this one's load is out, or after it fails
+    setS(undefined)
     setErr(undefined)
     systemApi
       .aiSettings(workspaceId)
@@ -406,8 +408,8 @@ export function AiProviders({
           <Lock size={15} style={{ flex: 'none' }} /> Your workspace owner manages AI keys. You can see which providers are set up here.
         </div>
       )}
-      {s && ORDER.map((p) => <KeyCard key={p} provider={p} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />)}
-      {s && <ProviderSelectors s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
+      {s && ORDER.map((p) => <KeyCard key={`${workspaceId ?? ''}:${p}`} provider={p} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />)}
+      {s && <ProviderSelectors key={workspaceId ?? ''} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
     </div>
   )
 }

@@ -257,6 +257,10 @@
   .ps-vs-side, .ps-brand-preview { position: static; }
   .ps-aspect-quick { grid-template-columns: repeat(3, 1fr); }
 }
+@media (max-width: 600px) {
+  .ps-quick, .ps-cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ps-aspect-quick { grid-template-columns: repeat(2, 1fr); }
+}
 
 /* ---------- Settings ---------- */
 .ps-set { display: flex; flex-direction: column; gap: 16px; }

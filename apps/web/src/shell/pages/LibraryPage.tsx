@@ -29,10 +29,10 @@ import { api, mediaUrl } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { InlineRename, KindPill, ProjectCard, ProjectThumb } from '../components/ProjectCard'
-import { liveBus, uploadFiles, useUploads } from '../stores'
+import { liveBus, uploadFiles, uploadsIn, useUploads } from '../stores'
 import { SyncBadge } from '../SystemChrome'
 import { projectSyncBadge, useIsDesktop, useSystem } from '../system'
-import { CardSkeletons, EmptyState, MenuList, Modal, Popover, Progress, Spinner, Thumb, useAsync, useFilePicker, type MenuItemDef, usePageTitle } from '../ui'
+import { CardSkeletons, ConfirmDialog, EmptyState, MenuList, Modal, Popover, Progress, Spinner, TabPanel, Tabs, Thumb, useAsync, useEditGate, useFilePicker, type MenuItemDef, usePageTitle } from '../ui'
 import { absoluteUrl, aspectLabel, copyText, formatBytes, formatDuration, relativeTime } from '../util'
 import { filterAssets, filterProjects, mergeProjects, ORIGIN_LABEL, PROJECT_FILTERS, SORTS, toggleInSet, type AssetFilter, type ProjectFilter, type SortKey } from './libraryLogic'
 
@@ -46,25 +46,9 @@ function readView(): 'grid' | 'list' {
   }
 }
 
+/** A delete confirmation: opens on Cancel, so Enter never deletes. */
 function ConfirmModal({ title, body, confirm, onConfirm, onClose, busy }: { title: string; body: string; confirm: string; onConfirm: () => void; onClose: () => void; busy?: boolean }) {
-  return (
-    <Modal
-      title={title}
-      subtitle={body}
-      onClose={onClose}
-      width={460}
-      footer={
-        <>
-          <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn danger" onClick={onConfirm} disabled={busy} autoFocus>
-            {busy && <Spinner />} {confirm}
-          </button>
-        </>
-      }
-    >
-      <span />
-    </Modal>
-  )
+  return <ConfirmDialog title={title} body={body} confirmLabel={confirm} onConfirm={onConfirm} onClose={onClose} busy={busy} />
 }
 
 // ---------------- projects / trash ----------------
@@ -80,6 +64,9 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
   const [busy, setBusy] = useState(false)
   const desktop = useIsDesktop()
   const sync = useSystem((s) => s.sync)
+  const gate = useEditGate()
+  // what a viewer can't do shows disabled, with who can
+  const w = { disabled: !gate.canEdit, tip: gate.tip }
   const { data, loading, error, reload, setData } = useAsync(async () => {
     if (!workspaceId) return []
     if (trash) return api.projects(workspaceId, { trashed: true })
@@ -146,17 +133,18 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
   function menuFor(p: ProjectSummary): MenuItemDef[] {
     if (trash)
       return [
-        { label: 'Restore', icon: <ArchiveRestore size={15} />, onClick: () => void restoreIds([p.id]) },
+        { label: 'Restore', icon: <ArchiveRestore size={15} />, ...w, onClick: () => void restoreIds([p.id]) },
         { sep: true, label: '' },
-        { label: 'Delete forever', icon: <Trash2 size={15} />, danger: true, onClick: () => setConfirm({ ids: [p.id] }) },
+        { label: 'Delete forever', icon: <Trash2 size={15} />, danger: true, ...w, onClick: () => setConfirm({ ids: [p.id] }) },
       ]
     return [
       { label: 'Open in editor', icon: <FolderOpen size={15} />, onClick: () => navigate(`/edit/${p.id}`) },
-      ...(p.kind === 'producer' ? [{ label: 'Resume in Producer AI', icon: <Sparkles size={15} />, onClick: () => navigate(`/producer/${p.id}`) }] : []),
-      { label: 'Rename', icon: <Pencil size={15} />, onClick: () => setRenaming(p.id) },
+      ...(p.kind === 'producer' ? [{ label: 'Resume in Producer AI', icon: <Sparkles size={15} />, ...w, onClick: () => navigate(`/producer/${p.id}`) }] : []),
+      { label: 'Rename', icon: <Pencil size={15} />, ...w, onClick: () => setRenaming(p.id) },
       {
         label: 'Duplicate',
         icon: <Copy size={15} />,
+        ...w,
         onClick: () =>
           void act(async () => {
             const c = await api.duplicateProject(p.id)
@@ -166,6 +154,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
       {
         label: 'Copy share link',
         icon: <Link2 size={15} />,
+        ...w,
         onClick: () =>
           void act(async () => {
             const r = await api.share(p.id)
@@ -176,6 +165,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
       {
         label: p.isTemplate ? 'Remove from templates' : 'Save as template',
         icon: <LayoutTemplate size={15} />,
+        ...w,
         onClick: () =>
           void act(async () => {
             patchLocal(p.id, { isTemplate: !p.isTemplate })
@@ -184,7 +174,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
       },
       { label: 'Select', icon: <CheckSquare size={15} />, onClick: () => setSel((s) => toggleInSet(s, p.id)) },
       { sep: true, label: '' },
-      { label: 'Move to trash', icon: <Trash2 size={15} />, danger: true, onClick: () => void trashIds([p.id]) },
+      { label: 'Move to trash', icon: <Trash2 size={15} />, danger: true, ...w, onClick: () => void trashIds([p.id]) },
     ]
   }
 
@@ -200,9 +190,9 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
     <>
       <div className="ps-lib-toolbar">
         {!trash && (
-          <div className="row" style={{ gap: 6 }} role="tablist" aria-label="Project type">
+          <div className="row" style={{ gap: 6 }} role="group" aria-label="Project type">
             {PROJECT_FILTERS.map((f) => (
-              <button key={f.id} role="tab" aria-selected={filter === f.id} className={clsx('chip', filter === f.id && 'active')} onClick={() => setFilter(f.id)}>{f.label}</button>
+              <button key={f.id} aria-pressed={filter === f.id} className={clsx('chip', filter === f.id && 'active')} onClick={() => setFilter(f.id)}>{f.label}</button>
             ))}
           </div>
         )}
@@ -225,11 +215,11 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
           <span className="spacer" />
           {trash ? (
             <>
-              <button className="btn sm" onClick={() => void restoreIds([...sel])}><ArchiveRestore size={14} /> Restore</button>
-              <button className="btn sm" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={() => setConfirm({ ids: [...sel] })}><Trash2 size={14} /> Delete forever</button>
+              <button className="btn sm" {...gate.props} onClick={() => void restoreIds([...sel])}><ArchiveRestore size={14} /> Restore</button>
+              <button className="btn sm" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} {...gate.props} onClick={() => setConfirm({ ids: [...sel] })}><Trash2 size={14} /> Delete forever</button>
             </>
           ) : (
-            <button className="btn sm" onClick={() => void trashIds([...sel])}><Trash2 size={14} /> Move to trash</button>
+            <button className="btn sm" {...gate.props} onClick={() => void trashIds([...sel])}><Trash2 size={14} /> Move to trash</button>
           )}
         </div>
       )}
@@ -244,7 +234,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
         ) : q || filter !== 'all' ? (
           <EmptyState icon={<Search size={24} />} title="Nothing matches" body={q ? `No projects match “${q}”.` : 'No projects of this type yet.'} action={<button className="btn" onClick={() => { setFilter('all'); navigate('/library') }}>Clear filters</button>} />
         ) : (
-          <EmptyState icon={<FolderOpen size={24} />} title="No projects yet" body="Start a blank edit or let Producer AI build a first cut from a recording." action={<div className="row"><button className="btn primary" onClick={() => navigate('/producer/new')}><Sparkles size={15} /> New from recording</button><button className="btn" onClick={() => navigate('/editor')}>Blank project</button></div>} />
+          <EmptyState icon={<FolderOpen size={24} />} title="No projects yet" body="Start a blank edit or let Producer AI build a first cut from a recording." action={<div className="row"><button className="btn primary" {...gate.props} onClick={() => navigate('/producer/new')}><Sparkles size={15} /> New from recording</button><button className="btn" {...gate.props} onClick={() => navigate('/editor')}>Blank project</button></div>} />
         )
       ) : view === 'grid' ? (
         <div className={clsx('ps-grid', selecting && 'selecting')}>
@@ -291,7 +281,24 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
                   <td>
                     <div className="row" style={{ gap: 12 }}>
                       <div style={{ width: 72, flex: 'none' }}><ProjectThumb p={{ ...p, duration: 0 }} /></div>
-                      {renaming === p.id ? <InlineRename value={p.name} onSave={rename(p)} onCancel={() => setRenaming(undefined)} /> : <strong className="ps-cell-name">{p.name}</strong>}
+                      {renaming === p.id ? (
+                        <InlineRename value={p.name} onSave={rename(p)} onCancel={() => setRenaming(undefined)} />
+                      ) : trash ? (
+                        <strong className="ps-cell-name">{p.name}</strong>
+                      ) : (
+                        // the row opens on click; this is the same for the keyboard
+                        <button
+                          type="button"
+                          className="ps-cell-name ps-text-btn"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (selecting) setSel((s) => toggleInSet(s, p.id))
+                            else open(p)
+                          }}
+                        >
+                          {p.name}
+                        </button>
+                      )}
                     </div>
                   </td>
                   <td><KindPill p={p} />{!p.isTemplate && p.kind === 'edit' && <span className="muted">Edit</span>}</td>
@@ -356,6 +363,7 @@ function AssetsTab({ q }: { q: string }) {
   const [confirm, setConfirm] = useState<AssetRecord>()
   const [busy, setBusy] = useState(false)
   const uploads = useUploads((s) => s.items)
+  const gate = useEditGate()
   const { data, loading, error, reload, setData } = useAsync(() => (workspaceId ? api.assets(workspaceId) : Promise.resolve([])), [workspaceId])
   const upsert = useCallback(
     (a: AssetRecord) => {
@@ -368,10 +376,10 @@ function AssetsTab({ q }: { q: string }) {
     [workspaceId, setData],
   )
   useEffect(() => liveBus.onAsset(upsert), [upsert])
-  const upload = (files: File[]) => workspaceId && files.length && void uploadFiles(workspaceId, files)
+  const upload = (files: File[]) => workspaceId && gate.canEdit && files.length && void uploadFiles(workspaceId, files)
   const pick = useFilePicker('video/*,audio/*,image/*', true, upload)
   const list = useMemo(() => filterAssets(data ?? [], { filter, q, sort }), [data, filter, q, sort])
-  const pending = uploads.filter((u) => u.status === 'uploading')
+  const pending = uploadsIn(uploads, workspaceId).filter((u) => u.status === 'uploading')
 
   async function remove(a: AssetRecord) {
     setBusy(true)
@@ -399,7 +407,7 @@ function AssetsTab({ q }: { q: string }) {
     <div
       className={clsx('ps-assets', drag && 'dragging')}
       onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes('Files')) return
+        if (!e.dataTransfer.types.includes('Files') || !gate.canEdit) return
         e.preventDefault()
         setDrag(true)
       }}
@@ -416,7 +424,7 @@ function AssetsTab({ q }: { q: string }) {
       <div className="ps-lib-toolbar">
         <div className="row" style={{ gap: 6 }}>
           {filters.map((f) => (
-            <button key={f.id} className={clsx('chip', filter === f.id && 'active')} onClick={() => setFilter(f.id)}>{f.icon}{f.label}</button>
+            <button key={f.id} aria-pressed={filter === f.id} className={clsx('chip', filter === f.id && 'active')} onClick={() => setFilter(f.id)}>{f.icon}{f.label}</button>
           ))}
         </div>
         <span className="spacer" />
@@ -425,7 +433,7 @@ function AssetsTab({ q }: { q: string }) {
           <option value="name">Name A–Z</option>
           <option value="duration">Longest first</option>
         </select>
-        <button className="btn primary sm" onClick={pick}><Upload size={14} /> Upload</button>
+        <button className="btn primary sm" {...gate.props} onClick={pick}><Upload size={14} /> Upload</button>
       </div>
 
       {drag && (
@@ -443,7 +451,7 @@ function AssetsTab({ q }: { q: string }) {
         q || filter !== 'all' ? (
           <EmptyState icon={<Search size={24} />} title="No media matches" body="Try another type or search term." />
         ) : (
-          <EmptyState icon={<Upload size={24} />} title="Drop files anywhere here" body="Upload recordings, music, voiceovers and images. Everything in this space’s library is available in the editor and to Producer AI." action={<button className="btn primary" onClick={pick}><Upload size={15} /> Upload media</button>} />
+          <EmptyState icon={<Upload size={24} />} title="Drop files anywhere here" body="Upload recordings, music, voiceovers and images. Everything in this space’s library is available in the editor and to Producer AI." action={<button className="btn primary" {...gate.props} onClick={pick}><Upload size={15} /> Upload media</button>} />
         )
       ) : (
         <div className="ps-grid">
@@ -494,10 +502,10 @@ function AssetsTab({ q }: { q: string }) {
                 <Popover align="right" style={{ width: 190 }} trigger={({ toggle, open }) => <button className="btn ghost sm icon ps-pcard-menu" onClick={toggle} aria-expanded={open} aria-label={`More actions for ${a.asset.name}`}><MoreHorizontal size={16} /></button>}>
                   {(close) => (
                     <>
-                      <MenuList close={close} items={[{ label: 'Preview', icon: <Eye size={15} />, disabled: a.status !== 'ready', onClick: () => setPreview(a) }, { label: 'Rename', icon: <Pencil size={15} />, onClick: () => setRenaming(a.asset.id) }]} />
+                      <MenuList close={close} items={[{ label: 'Preview', icon: <Eye size={15} />, disabled: a.status !== 'ready', onClick: () => setPreview(a) }, { label: 'Rename', icon: <Pencil size={15} />, disabled: !gate.canEdit, tip: gate.tip, onClick: () => setRenaming(a.asset.id) }]} />
                       <a className="ps-menu-item" href={mediaUrl(a.asset.id, 'source')} download={a.asset.name} onClick={close}><Download size={15} /> Download</a>
                       <div className="ps-menu-sep" />
-                      <MenuList close={close} items={[{ label: 'Delete', icon: <Trash2 size={15} />, danger: true, onClick: () => setConfirm(a) }]} />
+                      <MenuList close={close} items={[{ label: 'Delete', icon: <Trash2 size={15} />, danger: true, disabled: !gate.canEdit, tip: gate.tip, onClick: () => setConfirm(a) }]} />
                     </>
                   )}
                 </Popover>
@@ -538,18 +546,26 @@ export default function LibraryPage() {
           <h1>Library</h1>
         </div>
         <span className="spacer" />
-        <div style={{ position: 'relative', width: 300 }}>
+        <div style={{ position: 'relative', width: 'min(300px, 100%)' }}>
           <Search size={15} style={{ position: 'absolute', left: 12, top: 11, color: 'var(--text-3)' }} />
           <input className="input" style={{ paddingLeft: 34 }} placeholder={tab === 'assets' ? 'Filter media' : 'Filter projects'} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filter library" />
           {q && <button className="btn ghost sm icon" style={{ position: 'absolute', right: 4, top: 4 }} onClick={() => setQ('')} aria-label="Clear filter"><X size={13} /></button>}
         </div>
       </div>
-      <div className="ps-tabs" role="tablist">
-        <button role="tab" aria-selected={tab === 'projects'} className={tab === 'projects' ? 'on' : ''} onClick={() => setTab('projects')}><FolderOpen size={15} /> Projects</button>
-        <button role="tab" aria-selected={tab === 'assets'} className={tab === 'assets' ? 'on' : ''} onClick={() => setTab('assets')}><Video size={15} /> Assets</button>
-        <button role="tab" aria-selected={tab === 'trash'} className={tab === 'trash' ? 'on' : ''} onClick={() => setTab('trash')}><Trash2 size={15} /> Trash</button>
-      </div>
-      {tab === 'assets' ? <AssetsTab q={q} /> : <ProjectsTab key={tab} trash={tab === 'trash'} q={q} />}
+      <Tabs
+        id="library"
+        label="Library"
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { id: 'projects', label: 'Projects', icon: <FolderOpen size={15} /> },
+          { id: 'assets', label: 'Assets', icon: <Video size={15} /> },
+          { id: 'trash', label: 'Trash', icon: <Trash2 size={15} /> },
+        ]}
+      />
+      <TabPanel tabs="library" value={tab}>
+        {tab === 'assets' ? <AssetsTab q={q} /> : <ProjectsTab key={tab} trash={tab === 'trash'} q={q} />}
+      </TabPanel>
     </div>
   )
 }

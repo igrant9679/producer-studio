@@ -212,6 +212,14 @@ function Devices() {
 // ---------------- AI ----------------
 function AiInfo() {
   const info = useSystem((s) => s.info)
+  const error = useSystem((s) => (s.loaded && !s.info ? s.error : undefined))
+  if (error)
+    return (
+      <div className="ps-alert" role="alert">
+        <span style={{ flex: 1 }}>Couldn’t check AI status: {error}</span>
+        <button className="btn sm" onClick={() => void useSystem.getState().load()}>Retry</button>
+      </div>
+    )
   if (!info) return <div className="skeleton" style={{ height: 80 }} />
   const ok = info.ai.available && info.ai.provider !== 'none'
   return (

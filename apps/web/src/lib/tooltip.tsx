@@ -19,15 +19,15 @@ interface Tip {
 const SHOW_DELAY = 350
 const WARM_MS = 600
 
-/** The element already shows its label (the sidebar when it isn't collapsed): a tip would only repeat it. */
-function labelShowing(el: Element): boolean {
+/** The element already shows this text as its label (the sidebar when it isn't collapsed): a tip would only repeat it. */
+function labelShowing(el: Element, title: string): boolean {
   const label = el.querySelector('.ps-nav-text')
-  return label instanceof HTMLElement && getComputedStyle(label).display !== 'none'
+  return label instanceof HTMLElement && getComputedStyle(label).display !== 'none' && label.textContent?.trim() === title.trim()
 }
 
 function tipFrom(el: Element): Tip | null {
   const title = el.getAttribute('data-tip')
-  if (!title || labelShowing(el)) return null
+  if (!title || labelShowing(el, title)) return null
   return {
     title,
     desc: el.getAttribute('data-tip-desc') || undefined,

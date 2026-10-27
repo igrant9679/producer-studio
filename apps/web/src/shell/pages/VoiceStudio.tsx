@@ -6,12 +6,12 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { create } from 'zustand'
 import { api, mediaUrl, waitForJob } from '../../lib/api'
-import { useSession } from '../../lib/session'
+import { onUserReset, useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { InlineRename } from '../components/ProjectCard'
 import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } from '../components/VoiceCard'
 import { liveBus, useJobs } from '../stores'
-import { EmptyState, MenuList, Popover, Progress, Spinner, useAsync, useAudioPreview, usePageTitle } from '../ui'
+import { EmptyState, MenuList, Popover, Progress, RadioCards, Spinner, TabPanel, Tabs, useAsync, useAudioPreview, useEditGate, usePageTitle } from '../ui'
 import { useIsDesktop } from '../system'
 import { MyVoices } from '../voicestudio/MyVoices'
 
@@ -50,6 +50,7 @@ interface TtsDraft {
 }
 
 export const useTtsDraft = create<TtsDraft>((set) => ({ text: '', name: '', speed: 1, shown: 0, set: (p) => set(p) }))
+onUserReset(() => useTtsDraft.setState({ text: '', name: '', speed: 1, gen: undefined, made: undefined }))
 
 /** Generate a voiceover from the draft. */
 async function generateVoiceover(workspaceId: string, voice: string, voiceName: string) {
@@ -230,6 +231,7 @@ function HistoryRow({ a, onChange, onRemove }: { a: AssetRecord; onChange: (a: A
 function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: string; setVoice: (v: string) => void; onOpenVoices: () => void; onOpenTab: (t: Tab) => void }) {
   const workspaceId = useSession((s) => s.workspaceId)
   const voices = useVoices()
+  const gate = useEditGate()
   const { text, name, speed, gen, made, set } = useTtsDraft()
   const setText = (t: string | ((t: string) => string)) => set((d) => ({ text: typeof t === 'function' ? t(d.text) : t }))
   const [filter, setFilter] = useState<VoiceFilter>('All')
@@ -421,12 +423,12 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
                 <button key={f} className={clsx('chip', filter === f && 'active')} onClick={() => setFilter(f)}>{f}</button>
               ))}
             </div>
-            <div className="ps-vs-voices" role="radiogroup" aria-label="Voices">
+            <RadioCards className="ps-vs-voices" label="Voices">
               {shown.map((v) => (
                 <VoiceCard key={v.id} v={v} selected={voice === v.id} onSelect={() => setVoice(v.id)} />
               ))}
               {!shown.length && <div className="muted" style={{ padding: 16, textAlign: 'center' }}>No voices match.</div>}
-            </div>
+            </RadioCards>
             <div className="ps-vs-speed">
               <div className="row">
                 <label className="label" htmlFor="vs-speed" style={{ margin: 0 }}>Speed</label>
@@ -442,7 +444,7 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
                 <Progress value={gen.progress} />
               </div>
             ) : (
-              <button className="btn primary ps-vs-go" disabled={!text.trim() || writing || unavailable} onClick={generate}>
+              <button className="btn primary ps-vs-go" disabled={!text.trim() || writing || unavailable || !gate.canEdit} data-tip={gate.tip} onClick={generate}>
                 <AudioLines size={16} /> Generate{selected ? ` with ${selected.name}` : ''}
               </button>
             )}
@@ -522,32 +524,36 @@ export default function VoiceStudio() {
           <p>{head.body}</p>
         </div>
       </div>
-      <div className="vs-tabs" role="tablist" aria-label="Voice Studio">
-        {TABS.filter((t) => desktop || !t.desktopOnly).map((t) => (
-          <button key={t.id} role="tab" aria-selected={tab === t.id} className={clsx('vs-tab', tab === t.id && 'on')} onClick={() => setTab(t.id)}>
-            {t.icon} {t.label}
-          </button>
-        ))}
-      </div>
-      <Suspense fallback={<div className="muted" style={{ padding: 24 }}><Spinner /> Loading…</div>}>
-        {tab === 'tts' && <TextToSpeech voice={voice} setVoice={setVoice} onOpenVoices={() => setTab('voices')} onOpenTab={setTab} />}
-        {tab === 'voices' && (
-          <MyVoices
-            onUse={(id) => {
-              setVoice(id)
-              setTab('tts')
-            }}
-            onOpenEngine={() => setTab('engine')}
-          />
-        )}
-        {tab === 'dub' && <Dubbing onOpenEngine={() => setTab('engine')} />}
-        {tab === 'gallery' && <Gallery onOpenEngine={() => setTab('engine')} />}
-        {tab === 'stories' && <Stories onOpenEngine={() => setTab('engine')} />}
-        {tab === 'batch' && <Batch onOpenEngine={() => setTab('engine')} />}
-        {tab === 'audiobook' && <Audiobooks onOpenEngine={() => setTab('engine')} />}
-        {tab === 'tools' && <AudioTools onOpenEngine={() => setTab('engine')} />}
-        {tab === 'engine' && <EnginePanel />}
-      </Suspense>
+      <Tabs
+        id="vs"
+        label="Voice Studio"
+        className="vs-tabs"
+        tabClassName="vs-tab"
+        value={tab}
+        onChange={setTab}
+        tabs={TABS.filter((t) => desktop || !t.desktopOnly).map((t) => ({ id: t.id, label: t.label, icon: t.icon }))}
+      />
+      <TabPanel tabs="vs" value={tab}>
+        <Suspense fallback={<div className="muted" style={{ padding: 24 }}><Spinner /> Loading…</div>}>
+          {tab === 'tts' && <TextToSpeech voice={voice} setVoice={setVoice} onOpenVoices={() => setTab('voices')} onOpenTab={setTab} />}
+          {tab === 'voices' && (
+            <MyVoices
+              onUse={(id) => {
+                setVoice(id)
+                setTab('tts')
+              }}
+              onOpenEngine={() => setTab('engine')}
+            />
+          )}
+          {tab === 'dub' && <Dubbing onOpenEngine={() => setTab('engine')} />}
+          {tab === 'gallery' && <Gallery onOpenEngine={() => setTab('engine')} />}
+          {tab === 'stories' && <Stories onOpenEngine={() => setTab('engine')} />}
+          {tab === 'batch' && <Batch onOpenEngine={() => setTab('engine')} />}
+          {tab === 'audiobook' && <Audiobooks onOpenEngine={() => setTab('engine')} />}
+          {tab === 'tools' && <AudioTools onOpenEngine={() => setTab('engine')} />}
+          {tab === 'engine' && <EnginePanel />}
+        </Suspense>
+      </TabPanel>
     </div>
   )
 }

@@ -6,6 +6,8 @@ import {
   Check,
   ChevronsUpDown,
   CircleHelp,
+  Eye,
+  Menu,
   MonitorDown,
   Clapperboard,
   Film,
@@ -35,17 +37,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api, subscribeEvents } from '../lib/api'
 import { useSession } from '../lib/session'
-import { toast } from '../lib/toast'
+import { toast, toastError } from '../lib/toast'
 import { useCreateAndOpen } from './actions'
 import { MOCK_ACTIVE } from './dev/installMock'
-import { AspectPickerModal, CreateSpaceModal, DeleteSpaceModal, HelpModal, InviteModal, RenameSpaceModal, ownSpaceDeletes } from './modals'
+import { AspectPickerModal, CreateSpaceModal, DeleteSpaceModal, HelpModal, InviteModal, ONLY_OWNERS_INVITE, RenameSpaceModal, canInvite, ownSpaceDeletes } from './modals'
 import { AiChip, DesktopBadge, SyncIndicator } from './SystemChrome'
 import { DictationController } from './voicestudio/Dictation'
 import { ThemeSwitcher } from './pages/AppearanceSettings'
 import { DESKTOP_DOWNLOAD_URL, useSyncPolling, useSystem } from './system'
-import { isActive, liveBus, uploadFiles, useJobs, useUploads } from './stores'
+import { isActive, liveBus, uploadFiles, uploadsIn, useJobs, useUploads } from './stores'
 import { StorageBanner } from './StorageBanner'
-import { Avatar, Logo, MenuList, Popover, Progress, Spinner, spaceColor, useClickOutside, useFilePicker } from './ui'
+import { Avatar, Logo, MenuList, Popover, Progress, Spinner, focusables, spaceColor, useClickOutside, useEditGate, useEscapeLayer, useFilePicker } from './ui'
 import { JOB_LABELS, formatDuration, relativeTime } from './util'
 
 type ModalKind = 'aspect' | 'space' | 'invite' | 'help' | 'rename-space' | 'delete-space' | undefined
@@ -71,7 +73,7 @@ function SpaceSwitcher({ openModal }: { openModal: (m: ModalKind) => void }) {
       className="ps-space-pop"
       style={{ width: 272, top: 'auto', bottom: 'calc(100% + 6px)' }}
       trigger={({ toggle, open }) => (
-        <button className="ps-space-btn" onClick={toggle} aria-expanded={open} aria-label="Switch space" data-tip={current?.name ?? 'Space'}>
+        <button className="ps-space-btn" onClick={toggle} aria-expanded={open} aria-haspopup="menu" aria-label={`Switch space (now ${current?.name ?? 'none'})`} data-tip={current?.name ?? 'Space'}>
           <span className="ps-space-avatar" style={{ background: spaceColor(current?.id ?? '') }}>{(current?.name ?? '?').slice(0, 1).toUpperCase()}</span>
           <span className="ps-space-meta">
             <strong>{current?.name ?? 'No space'}</strong>
@@ -83,11 +85,15 @@ function SpaceSwitcher({ openModal }: { openModal: (m: ModalKind) => void }) {
     >
       {(close) => (
         <>
-          <div className="ps-menu-label">Your spaces</div>
+          <div className="ps-menu-label" id="ps-spaces-label">Your spaces</div>
+          <div role="menu" aria-labelledby="ps-spaces-label">
           {workspaces.map((w) => (
             <button
               key={w.id}
               className="ps-menu-item"
+              role="menuitemradio"
+              aria-checked={w.id === workspaceId}
+              autoFocus={w.id === workspaceId}
               onClick={() => {
                 setWorkspace(w.id)
                 close()
@@ -101,11 +107,13 @@ function SpaceSwitcher({ openModal }: { openModal: (m: ModalKind) => void }) {
               {w.id === workspaceId && <Check size={15} style={{ color: 'var(--cyan)' }} />}
             </button>
           ))}
+          </div>
           <div className="ps-menu-sep" />
           <MenuList
             close={close}
+            label="Space"
             items={[
-              { label: 'Invite members', icon: <UserPlus size={15} />, onClick: () => openModal('invite') },
+              ...(current && !current.personal ? [{ label: 'Invite members', icon: <UserPlus size={15} />, disabled: !canInvite(current), tip: ONLY_OWNERS_INVITE, onClick: () => openModal('invite') }] : []),
               { label: 'Manage members', icon: <Users size={15} />, onClick: () => navigate('/space') },
               ...(current?.role === 'owner' ? [{ label: 'Rename space', icon: <Pencil size={15} />, onClick: () => openModal('rename-space') }] : []),
               { label: 'Create space', icon: <Plus size={15} />, onClick: () => openModal('space') },
@@ -121,6 +129,7 @@ function SpaceSwitcher({ openModal }: { openModal: (m: ModalKind) => void }) {
 function CreateMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
   const navigate = useNavigate()
   const workspaceId = useSession((s) => s.workspaceId)
+  const gate = useEditGate()
   const pick = useFilePicker('video/*,audio/*,image/*', true, (files) => {
     if (!workspaceId) return
     void uploadFiles(workspaceId, files)
@@ -130,7 +139,7 @@ function CreateMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
     <Popover
       style={{ width: 290 }}
       trigger={({ toggle, open }) => (
-        <button className="btn primary ps-create-btn" onClick={toggle} aria-expanded={open} aria-haspopup="menu" data-tip="Create new" data-tip-side="right" aria-label="Create new">
+        <button className="btn primary ps-create-btn" onClick={toggle} aria-expanded={open} aria-haspopup="menu" disabled={!gate.canEdit} data-tip={gate.tip ?? 'Create new'} data-tip-side="right" aria-label="Create new">
           <Plus size={18} />
           <span className="ps-nav-text" style={{ flex: 'none' }}>Create new</span>
         </button>
@@ -139,6 +148,7 @@ function CreateMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
       {(close) => (
         <MenuList
           close={close}
+          label="Create new"
           items={[
             { label: 'New video', sub: 'Blank project — pick an aspect ratio', icon: <Clapperboard size={16} />, onClick: () => openModal('aspect') },
             { label: 'New from recording', sub: 'Producer AI writes, narrates & cuts it', icon: <Sparkles size={16} />, onClick: () => navigate('/producer/new') },
@@ -163,14 +173,26 @@ function GlobalSearch() {
   const [loading, setLoading] = useState(false)
   // -1 = the "search the Library" row (default for Enter)
   const [hi, setHi] = useState(-1)
+  // at phone width the box is an icon that opens a search field over the top bar
+  const [expanded, setExpanded] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
-  useClickOutside(boxRef, () => setOpen(false), open)
+  const toggleRef = useRef<HTMLButtonElement>(null)
+  const collapse = useCallback(() => {
+    setOpen(false)
+    setExpanded(false)
+  }, [])
+  useClickOutside(boxRef, collapse, open || expanded)
+
+  useEffect(() => {
+    if (expanded) inputRef.current?.focus()
+  }, [expanded])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
+        setExpanded(true)
         inputRef.current?.focus()
         inputRef.current?.select()
       }
@@ -214,6 +236,7 @@ function GlobalSearch() {
 
   function submit(idx = hi) {
     setOpen(false)
+    setExpanded(false)
     inputRef.current?.blur()
     if (!term) return navigate('/library')
     if (idx < 0 || idx >= flat.length) return navigate(`/library?q=${encodeURIComponent(q.trim())}`)
@@ -221,7 +244,11 @@ function GlobalSearch() {
   }
 
   return (
-    <div className="ps-search" ref={boxRef}>
+    <>
+    <button ref={toggleRef} className="btn ghost icon ps-search-toggle" onClick={() => setExpanded(true)} aria-label="Search projects and media" aria-expanded={expanded}>
+      <Search size={17} />
+    </button>
+    <div className={clsx('ps-search', expanded && 'expanded')} ref={boxRef}>
       <Search size={16} />
       <input
         ref={inputRef}
@@ -248,8 +275,13 @@ function GlobalSearch() {
             e.preventDefault()
             setHi((h) => (h < 0 ? flat.length - 1 : h - 1))
           } else if (e.key === 'Escape') {
+            // handled here, not by the layer stack: the field stays put on a wide screen, the overlay closes on a phone
+            e.stopPropagation()
             setOpen(false)
-            inputRef.current?.blur()
+            if (expanded) {
+              setExpanded(false)
+              toggleRef.current?.focus()
+            } else inputRef.current?.blur()
           }
         }}
       />
@@ -296,6 +328,7 @@ function GlobalSearch() {
         </div>
       )}
     </div>
+    </>
   )
 }
 
@@ -348,7 +381,9 @@ function useWorkspaceEvents(workspaceId: string | undefined) {
 function JobsIndicator() {
   const jobs = useJobs((s) => s.jobs)
   const dismiss = useJobs((s) => s.dismiss)
-  const uploads = useUploads((s) => s.items)
+  const workspaceId = useSession((s) => s.workspaceId)
+  const allUploads = useUploads((s) => s.items)
+  const uploads = useMemo(() => uploadsIn(allUploads, workspaceId), [allUploads, workspaceId])
   const clearUploads = useUploads((s) => s.clearFinished)
   const list = Object.values(jobs).sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.updatedAt - a.updatedAt)
   const active = list.filter(isActive)
@@ -390,7 +425,7 @@ function JobsIndicator() {
               <Spinner size={14} />
               <span style={{ flex: 1 }}>{JOB_LABELS[j.kind] ?? j.kind}</span>
               <span className="muted" style={{ fontSize: '0.7188rem' }}>{j.progress >= 0 ? `${Math.round(j.progress * 100)}%` : j.status}</span>
-              <button className="btn ghost sm" onClick={() => api.cancelJob(j.id).then((r) => useJobs.getState().upsert(r)).catch(() => undefined)}>Cancel</button>
+              <button className="btn ghost sm" onClick={() => api.cancelJob(j.id).then((r) => useJobs.getState().upsert(r)).catch((e) => toastError(e, `Couldn’t cancel ${(JOB_LABELS[j.kind] ?? j.kind).toLowerCase()}`))} aria-label={`Cancel ${JOB_LABELS[j.kind] ?? j.kind}`}>Cancel</button>
             </div>
             <div className="ps-job-msg">{j.message || (j.status === 'queued' ? 'Waiting in queue' : 'Working…')}</div>
             <Progress value={j.status === 'queued' ? -1 : j.progress} />
@@ -428,12 +463,13 @@ function AvatarMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
   const logout = useSession((s) => s.logout)
   const navigate = useNavigate()
   const desktop = useSystem((s) => s.info?.mode === 'desktop')
+  const gate = useEditGate()
   return (
     <Popover
       align="right"
       style={{ width: 260, top: 46 }}
       trigger={({ toggle, open }) => (
-        <button className="btn ghost" style={{ padding: 4, height: 40, borderRadius: 999 }} onClick={toggle} aria-expanded={open} aria-label="Account menu">
+        <button className="btn ghost" style={{ padding: 4, height: 40, borderRadius: 999 }} onClick={toggle} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu">
           <Avatar name={user?.name} color={user?.avatarColor} />
         </button>
       )}
@@ -456,7 +492,10 @@ function AvatarMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
           <div className="ps-menu-sep" />
           <MenuList
             close={close}
+            label="Account"
             items={[
+              // on a phone these live here instead of the top bar
+              { label: 'New video', icon: <Wand2 size={15} />, className: 'ps-narrow-only', disabled: !gate.canEdit, tip: gate.tip, onClick: () => openModal('aspect') },
               { label: 'Brand kit', icon: <Palette size={15} />, onClick: () => navigate('/brand') },
               { label: 'Space members', icon: <Users size={15} />, onClick: () => navigate('/space') },
               { label: 'Settings', icon: <Settings size={15} />, onClick: () => navigate('/settings') },
@@ -494,24 +533,44 @@ export function Layout({ children }: { children: ReactNode }) {
     void loadSystem()
   }, [loadSystem, workspaceId])
 
+  const gate = useEditGate()
+  // below 1000 px the sidebar is a drawer behind the menu button
+  const [navOpen, setNavOpen] = useState(false)
+  const navRef = useRef<HTMLElement>(null)
+  const menuBtnRef = useRef<HTMLButtonElement>(null)
+  const closeNav = useCallback(() => {
+    setNavOpen(false)
+    menuBtnRef.current?.focus()
+  }, [])
+  useEscapeLayer(closeNav, navOpen, navRef)
   useEffect(() => {
-    contentRef.current?.scrollTo({ top: 0 })
+    if (navOpen) focusables(navRef.current)[0]?.focus()
+  }, [navOpen])
+
+  useEffect(() => {
+    contentRef.current?.scrollTo?.({ top: 0 })
+    setNavOpen(false)
   }, [loc.pathname])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement
-      if (e.key === '?' && !/INPUT|TEXTAREA|SELECT/.test(t.tagName) && !t.isContentEditable) setModal('help')
+      // not over another dialog, and not while typing
+      if (e.key !== '?' || e.ctrlKey || e.metaKey || e.altKey || /INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable) return
+      if (document.querySelector('[aria-modal="true"]')) return
+      setModal('help')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   const close = useCallback(() => setModal(undefined), [])
+  const inviteTip = currentWs && !canInvite(currentWs) ? ONLY_OWNERS_INVITE : 'Invite members'
 
   return (
     <div className="ps-app">
-      <nav className="ps-nav" aria-label="Main">
+      {navOpen && <div className="ps-nav-scrim" onClick={closeNav} aria-hidden />}
+      <nav className={clsx('ps-nav', navOpen && 'open')} id="ps-nav" aria-label="Main" ref={navRef}>
         <div className="ps-nav-head">
           <NavLink to="/" aria-label="Producer Studio home">
             <Logo />
@@ -541,10 +600,12 @@ export function Layout({ children }: { children: ReactNode }) {
             <SpaceSwitcher openModal={setModal} />
             <div style={{ marginTop: 6 }}>
               <NavItem to="/space" icon={<Users size={18} />} label="Members" />
-              <button className="ps-nav-link" onClick={() => setModal('invite')} data-tip="Invite members" data-tip-side="right" aria-label="Invite members">
-                <UserPlus size={18} />
-                <span className="ps-nav-text">Invite members</span>
-              </button>
+              {!currentWs?.personal && (
+                <button className="ps-nav-link" onClick={() => setModal('invite')} disabled={!canInvite(currentWs)} data-tip={inviteTip} data-tip-side="right" aria-label="Invite members">
+                  <UserPlus size={18} />
+                  <span className="ps-nav-text">Invite members</span>
+                </button>
+              )}
               <NavItem to="/brand" icon={<Palette size={18} />} label="Brand kit" />
             </div>
           </div>
@@ -560,22 +621,31 @@ export function Layout({ children }: { children: ReactNode }) {
 
       <div className="ps-main">
         <header className="ps-topbar">
+          <button ref={menuBtnRef} className="btn ghost icon ps-menu-btn" onClick={() => (navOpen ? closeNav() : setNavOpen(true))} aria-expanded={navOpen} aria-controls="ps-nav" aria-label="Menu">
+            <Menu size={18} />
+          </button>
           <GlobalSearch />
           <span className="spacer" />
           {MOCK_ACTIVE && <span className="ps-mock-badge" title="Dev mock API active (localStorage.psMock)">MOCK API</span>}
           <AiChip />
           <SyncIndicator />
-          <button className="btn sm" onClick={() => setModal('aspect')} disabled={creating}>
+          <button className="btn sm ps-topbar-extra" onClick={() => setModal('aspect')} disabled={creating || !gate.canEdit} data-tip={gate.tip}>
             <Wand2 size={14} /> New video
           </button>
           <JobsIndicator />
-          <button className="btn ghost icon" onClick={() => setModal('help')} aria-label="Help" title="Help & shortcuts (?)">
+          <button className="btn ghost icon ps-topbar-extra" onClick={() => setModal('help')} aria-label="Help" data-tip="Help & shortcuts" data-tip-kbd="?">
             <CircleHelp size={17} />
           </button>
           <AvatarMenu openModal={setModal} />
         </header>
         <main className="ps-content" ref={contentRef}>
           <StorageBanner />
+          {!gate.canEdit && (
+            <div className="ps-viewer-note" role="note">
+              <Eye size={15} style={{ flex: 'none' }} />
+              <span>You’re a viewer in “{currentWs?.name}”: you can open, play and download, but only its owners and editors can create or change things.</span>
+            </div>
+          )}
           {children}
         </main>
       </div>
