@@ -213,6 +213,11 @@ interface VisualProps {
   animations: ItemAnimations
   effects: Effect[]
   transitionOut?: Transition
+  /**
+   * Where this piece sits in the clip it was split from (seconds): `offset` from that clip's start, `length` its whole
+   * duration. Ken Burns, loops, flashes and zoom pulses carry on across a cut instead of restarting. Absent: whole.
+   */
+  phase?: { offset: number; length: number }
 }
 
 export interface VideoItem extends ItemBase, VisualProps {

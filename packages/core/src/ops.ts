@@ -337,8 +337,9 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
     const shift = start - it.start
     it.start = round(start, 4)
     it.duration = round(end - start, 4)
-    // keep keyframes anchored to the same absolute times
+    // keep keyframes and a split piece's effect phase anchored to the same absolute times
     if ('keyframes' in it && it.keyframes) shiftKeyframes(it.keyframes, -shift, it.duration)
+    if ('phase' in it && it.phase) it.phase = { ...it.phase, offset: round(it.phase.offset + shift, 4) }
     if (it.type === 'caption' && it.words) it.words = it.words.map((w) => ({ ...w, start: w.start - shift, end: w.end - shift })).filter((w) => w.end > 0)
   }
   if (f.track.main) packMain(p)
@@ -416,6 +417,13 @@ function cutAt(p: Project, track: Track, index: number, t: number): Item | null 
     shiftKeyframes(it.keyframes, 0, it.duration)
     ;(right as typeof it).keyframes = full
     shiftKeyframes((right as typeof it).keyframes, -local, right.duration)
+  }
+  if ('transform' in it) {
+    // both pieces remember where they sit in the whole clip, so looping and progressive effects run on through the cut
+    const offset = it.phase?.offset ?? 0
+    const length = it.phase?.length ?? local + rest
+    it.phase = { offset, length }
+    ;(right as typeof it).phase = { offset: round(offset + local, 4), length }
   }
   if ('animations' in it && it.animations) {
     const r = right as typeof it
@@ -578,7 +586,7 @@ export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2)
   const before = !rightId && t - v.start < v.duration / 2
   const at = rightId ? t : before ? v.start : itemEnd(v)
   // the held picture has no sound, so it is linked to nothing
-  const freeze: VideoItem = { ...clone(v), id: uid('v'), start: at, duration: holdSec, freezeAt: round(srcTime, 4), fadeIn: 0, fadeOut: 0, animations: {}, transitionOut: undefined, keyframes: {}, linkId: undefined }
+  const freeze: VideoItem = { ...clone(v), id: uid('v'), start: at, duration: holdSec, freezeAt: round(srcTime, 4), fadeIn: 0, fadeOut: 0, animations: {}, transitionOut: undefined, keyframes: {}, linkId: undefined, phase: undefined }
   const track = findTrack(p, f.track.id)!
   const at0 = track.items.findIndex((i) => i.id === (rightId ?? itemId))
   const insertAt = rightId || before ? at0 : at0 + 1

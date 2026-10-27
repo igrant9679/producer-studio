@@ -4,12 +4,14 @@ import {
   addAsset,
   addItem,
   clone,
+  createImageItem,
   createProject,
   createTextItem,
   createVideoItem,
   cutSourceRanges,
   deleteItems,
   duplicateItems,
+  evaluate,
   findItem,
   freezeFrame,
   insertTrack,
@@ -180,6 +182,45 @@ describe('separate audio (EDT-21)', () => {
     const right = mainTrack(p)!.items[1]
     expect(separateAudioRefusal(p, right.id)).toBe('separated')
     expect(separateAudioRefusal(p, 'vb')).toBeNull()
+  })
+})
+
+describe('effects run on through a split (EDT-34)', () => {
+  const still: Asset = { id: 'img', kind: 'image', name: 'still.png', src: 'still.png', width: 1920, height: 1080 }
+  function moving(): Project {
+    const p = addAsset(createProject(), still)
+    const img = createImageItem(still, 0, {
+      id: 'm1',
+      duration: 6,
+      effects: [{ id: 'fx1', type: 'kenBurns', intensity: 80 }, { id: 'fx2', type: 'zoomPulse', intensity: 60 }, { id: 'fx3', type: 'flash', intensity: 50 }],
+      animations: { combo: { preset: 'float', period: 1.7 } },
+    })
+    return addItem(p, img)
+  }
+  const look = (p: Project, t: number) => {
+    const l = evaluate(p, t).layers[0]
+    return { transform: l.transform, cx: l.box.cx, cy: l.box.cy, filter: l.filter }
+  }
+
+  it('Ken Burns, loops, flashes and zoom pulses look the same after a cut as before it', () => {
+    const p = moving()
+    const q = splitItem(p, 'm1', 2.3).project
+    for (const t of [0.4, 2.0, 2.31, 3.1, 4.75, 5.9]) expect(look(q, t)).toEqual(look(p, t))
+  })
+
+  it('and still after the right piece is trimmed or split again', () => {
+    const p = moving()
+    const { project: q, rightId } = splitItem(p, 'm1', 2.3)
+    const r = splitItem(q, rightId!, 4).project
+    for (const t of [3.1, 4.2, 5.5]) expect(look(r, t)).toEqual(look(p, t))
+    // on an overlay track a start trim leaves the piece where it is in time
+    const ov = clone(p)
+    const track = insertTrack(ov, 'overlay')
+    const lifted = moveItem(ov, 'm1', { start: 0, trackId: track.id })
+    const cut = splitItem(lifted, 'm1', 2.3)
+    const trimmed = trimItem(cut.project, cut.rightId!, 'start', 3)
+    expect(item(trimmed, cut.rightId!).start).toBe(3)
+    for (const t of [3.2, 4.4]) expect(look(trimmed, t)).toEqual(look(lifted, t))
   })
 })
 
