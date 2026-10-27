@@ -46,6 +46,7 @@ const INTERVAL_MS = 60_000
 const AFTER_SAVE_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
 const RELAY_POLL_MS = 5_000
+const RELAY_BEAT_MS = 15_000
 
 type ProjectRow = typeof projects.$inferSelect
 
@@ -103,6 +104,8 @@ export class SyncEngine {
   private relayBusy = false
   private relayCheckAt = 0
   private relayHasVoices = false
+  /** How often a relayed voice in progress tells the cloud it's still alive (well inside the cloud's 2-minute lease). */
+  private relayBeatMs = RELAY_BEAT_MS
   /** Items that failed before (loaded at the start of each cycle). */
   private failures = new Map<string, SyncFailure>()
   private pageBytes = PAGE_BYTES
@@ -1215,14 +1218,22 @@ export class SyncEngine {
   private async runRelay(c: CloudClient, job: RelayClaim) {
     const ac = new AbortController()
     let lastBeat = 0
-    const progress = (f: number, m?: string) => {
-      if (Date.now() - lastBeat < 2000 && f < 1) return
+    let last: { f: number; m?: string } = { f: -1 }
+    const send = (f: number, m?: string) => {
       lastBeat = Date.now()
       void c
         .json<{ cancelled: boolean }>('POST', `/api/voice/relay/${job.id}/progress`, { progress: f, message: m })
         .then((x) => x.cancelled && ac.abort())
         .catch(() => undefined)
     }
+    const progress = (f: number, m?: string) => {
+      last = { f, m: m ?? last.m }
+      if (Date.now() - lastBeat < 2000 && f < 1) return
+      send(f, m)
+    }
+    // the cloud holds this job on a lease (RELAY_LEASE_MS): beat on a timer, also while a long generation reports nothing
+    const beat = setInterval(() => Date.now() - lastBeat >= this.relayBeatMs && send(last.f, last.m), Math.min(this.relayBeatMs, 5_000))
+    beat.unref()
     try {
       const { synthesizeProfileToAsset } = await import('../services/voice')
       // the project may not be on this desktop; the asset still lands in the space's library
@@ -1237,6 +1248,8 @@ export class SyncEngine {
       await c.json('POST', `/api/voice/relay/${job.id}/done`, { assetId: r.row.id })
     } catch (err) {
       await c.json('POST', `/api/voice/relay/${job.id}/fail`, { error: err instanceof Error ? err.message : String(err) }).catch(() => undefined)
+    } finally {
+      clearInterval(beat)
     }
   }
 

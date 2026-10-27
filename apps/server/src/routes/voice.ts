@@ -1,7 +1,7 @@
 // VoiceStudio voice profiles (synced metadata, both editions) and the cloud → desktop relay for generating speech with
 // them. The engine itself only runs on the desktop edition (desktop/voicestudio/*); see docs/voicestudio.md.
 import { Hono } from 'hono'
-import { and, asc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import { profileVoiceId, type Voice, type VoiceProfile } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
@@ -207,7 +207,8 @@ voiceRoutes.post('/relay/:id/progress', async (c) => {
   const { deviceId } = requireDevice(c)
   const j = await relayJob(c.req.param('id'), deviceId)
   const b = await body(c, z.object({ progress: z.number().min(-1).max(1), message: z.string().max(200).optional() }))
-  const row = await updateProgress(j.id, b.progress, b.message)
+  // also the desktop's heartbeat (its lease, see RELAY_LEASE_MS); a relay that ended here tells it to stop
+  const row = await updateProgress(j.id, b.progress, b.message, `device:${deviceId}`)
   return c.json({ ok: true, cancelled: !row || row.cancelRequested })
 })
 
@@ -228,3 +229,49 @@ voiceRoutes.post('/relay/:id/fail', async (c) => {
   const row = await failJob(j.id, b.error)
   return c.json(row ? jobDto(row) : { ok: true })
 })
+
+/**
+ * Relayed voices have their own lease, not the cloud worker's 90 s: the desktop heartbeats every 15 s while it
+ * generates (desktop/sync.ts), so one quiet for this long has gone away. It ends with a reason rather than being
+ * requeued, which would have the desktop generate the same voice again.
+ */
+export const RELAY_LEASE_MS = 2 * 60_000
+/** A queued relay nobody picks up ends: after this long in all, or sooner once its desktop has been offline a while. */
+export const RELAY_QUEUED_MS = 15 * 60_000
+
+const RELAY_LOST = "The desktop making this voice stopped responding. Check it's online with Producer Studio open, then try again."
+
+/** Relays whose desktop went away mid-voice, or that nobody picked up. Returns how many ended. */
+export async function recoverRelays(now = Date.now()): Promise<number> {
+  const db = ctx().db
+  const ended: Array<typeof jobs.$inferSelect> = []
+  const lost = await db
+    .update(jobs)
+    .set({ status: 'error', error: RELAY_LOST, message: 'Failed', lockedBy: null, updatedAt: now })
+    .where(and(eq(jobs.kind, 'voice.relay'), eq(jobs.status, 'running'), lt(jobs.lockedAt, now - RELAY_LEASE_MS)))
+    .returning()
+  ended.push(...lost)
+  const waiting = await db
+    .select({ id: jobs.id, createdAt: jobs.createdAt, deviceId: sql<string>`${jobs.input}->>'deviceId'` })
+    .from(jobs)
+    .where(and(eq(jobs.kind, 'voice.relay'), eq(jobs.status, 'queued'), lt(jobs.createdAt, now - DEVICE_ONLINE_MS)))
+  if (waiting.length) {
+    const devs = new Map((await db.select().from(devices).where(inArray(devices.id, [...new Set(waiting.map((w) => w.deviceId))]))).map((d) => [d.id, d]))
+    for (const w of waiting) {
+      const d = devs.get(w.deviceId)
+      const offline = !d?.lastSeenAt || now - d.lastSeenAt > DEVICE_ONLINE_MS
+      if (!offline && w.createdAt > now - RELAY_QUEUED_MS) continue
+      const error = offline
+        ? `${d ? `“${d.name}”` : 'The desktop that holds this voice'} is offline, so it couldn't make this voice. Open Producer Studio on it, then try again.`
+        : "The desktop that holds this voice didn't get to this request in time. Try again."
+      const [row] = await db
+        .update(jobs)
+        .set({ status: 'error', error, message: 'Failed', updatedAt: now })
+        .where(and(eq(jobs.id, w.id), eq(jobs.status, 'queued')))
+        .returning()
+      if (row) ended.push(row)
+    }
+  }
+  ended.forEach(emitJob)
+  return ended.length
+}

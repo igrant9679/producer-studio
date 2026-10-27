@@ -1,6 +1,11 @@
 // Cloud side of VoiceStudio voices: synced profile metadata pushed by a desktop, the voices list, and the
 // cloud → desktop relay (TTS with a profile voice becomes a `voice.relay` job only the owning device can claim).
+import { eq, inArray } from 'drizzle-orm'
 import { beforeAll, describe, expect, it } from 'vitest'
+import { ctx } from '../context'
+import { devices, jobs } from '../db/schema'
+import { recoverStale } from '../jobs/queue'
+import { RELAY_LEASE_MS, RELAY_QUEUED_MS, recoverRelays } from '../routes/voice'
 import { Client, setup, signup, type TestEnv } from './helpers'
 
 let t: TestEnv
@@ -108,6 +113,50 @@ describe('voice relay', () => {
     await A.dev.json('GET', '/api/voice/relay/claim')
     await A.client.json('POST', `/api/jobs/${job.body.id}/cancel`)
     expect((await A.dev.json('POST', `/api/voice/relay/${job.body.id}/progress`, { progress: 0.2 })).body.cancelled).toBe(true)
+  })
+
+  it('a relay the desktop is still generating is not requeued by stale recovery (SEC-9)', async () => {
+    const A = await withDevice()
+    const v = await pushVoice(A.dev, A.workspaceId)
+    const job = await A.client.json('POST', '/api/ai/tts', { workspaceId: A.workspaceId, text: 'Long take', voice: `vs:${v.id}` })
+    await A.dev.json('GET', '/api/voice/relay/claim')
+    // 100 s since the desktop's last word: past the cloud worker's 90 s, inside the relay's own lease
+    await ctx().db.update(jobs).set({ lockedAt: Date.now() - 100_000 }).where(eq(jobs.id, job.body.id))
+    await recoverStale(90_000)
+    await recoverRelays()
+    expect((await A.client.json('GET', `/api/jobs/${job.body.id}`)).body).toMatchObject({ status: 'running', message: 'Generating on your desktop' })
+    // its heartbeat renews the lease
+    expect((await A.dev.json('POST', `/api/voice/relay/${job.body.id}/progress`, { progress: 0.3 })).body.cancelled).toBe(false)
+    // past the lease the desktop has gone: the job ends with a reason, and is not handed out again
+    await ctx().db.update(jobs).set({ lockedAt: Date.now() - RELAY_LEASE_MS - 1000 }).where(eq(jobs.id, job.body.id))
+    expect(await recoverRelays()).toBeGreaterThanOrEqual(1)
+    const ended = (await A.client.json('GET', `/api/jobs/${job.body.id}`)).body
+    expect(ended).toMatchObject({ status: 'error', error: expect.stringMatching(/stopped responding/) })
+    expect((await A.dev.json('GET', '/api/voice/relay/claim')).body).toEqual({ job: null })
+    // and a late heartbeat tells the desktop to stop
+    expect((await A.dev.json('POST', `/api/voice/relay/${job.body.id}/progress`, { progress: 0.5 })).body.cancelled).toBe(true)
+  })
+
+  it('queued relays expire: soon when the desktop is offline, in 15 minutes regardless (SEC-9)', async () => {
+    const A = await withDevice()
+    const v = await pushVoice(A.dev, A.workspaceId)
+    const offline = await A.client.json('POST', '/api/ai/tts', { workspaceId: A.workspaceId, text: 'Nobody home', voice: `vs:${v.id}` })
+    const online = await A.client.json('POST', '/api/ai/tts', { workspaceId: A.workspaceId, text: 'Busy desktop', voice: `vs:${v.id}` })
+    // waiting 3 minutes, desktop online: still queued
+    await ctx().db.update(jobs).set({ createdAt: Date.now() - 3 * 60_000 }).where(inArray(jobs.id, [offline.body.id, online.body.id]))
+    await ctx().db.update(devices).set({ lastSeenAt: Date.now() }).where(eq(devices.id, A.deviceId))
+    await recoverRelays()
+    expect((await A.client.json('GET', `/api/jobs/${offline.body.id}`)).body.status).toBe('queued')
+    // the desktop goes quiet: the request ends, naming it
+    await ctx().db.update(devices).set({ lastSeenAt: Date.now() - 10 * 60_000 }).where(eq(devices.id, A.deviceId))
+    await recoverRelays()
+    expect((await A.client.json('GET', `/api/jobs/${offline.body.id}`)).body).toMatchObject({ status: 'error', error: expect.stringMatching(/Studio PC.*is offline/) })
+    // online but never picked up for 15 minutes: ends too
+    const late = await A.client.json('POST', '/api/ai/tts', { workspaceId: A.workspaceId, text: 'Too late', voice: `vs:${v.id}` })
+    await ctx().db.update(jobs).set({ createdAt: Date.now() - RELAY_QUEUED_MS - 1000 }).where(eq(jobs.id, late.body.id))
+    await ctx().db.update(devices).set({ lastSeenAt: Date.now() }).where(eq(devices.id, A.deviceId))
+    await recoverRelays()
+    expect((await A.client.json('GET', `/api/jobs/${late.body.id}`)).body).toMatchObject({ status: 'error', error: expect.stringMatching(/didn't get to this request/) })
   })
 
   it('refuses voices from another space or from a device that was revoked', async () => {

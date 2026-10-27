@@ -8,6 +8,7 @@ import { ctx } from '../context'
 import { assets, jobs, workspaces } from '../db/schema'
 import { log } from '../log'
 import { failAssetOfJob, reconcileAssets } from '../services/asset-recovery'
+import { recoverRelays } from '../routes/voice'
 import { assetPrefix } from '../services/assets'
 import { pruneOldRows } from '../services/retention'
 import { publicJobError } from './errors'
@@ -334,7 +335,11 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
 
   // heartbeat, the no-progress watchdog and cross-process cancellation
   const hb = setInterval(() => void heartbeat(workerId).catch((err) => log.warn('heartbeat failed', { err })), opts.heartbeatMs ?? 5000)
-  const rec = setInterval(() => void recoverStale(90_000, workerId).catch(() => 0), 30_000)
+  const rec = setInterval(() => {
+    void recoverStale(90_000, workerId).catch(() => 0)
+    // relayed voices: a desktop gone mid-voice, or one that never picked the request up
+    void recoverRelays().catch((err) => log.warn('relay recovery failed', { err }))
+  }, 30_000)
   // clips that can no longer finish (abandoned uploads, dead or cancelled processing) are marked failed
   const sweep = () => void reconcileAssets().catch((err) => log.warn('asset reconcile failed', { err }))
   const first = setTimeout(sweep, 30_000)

@@ -52,6 +52,8 @@ export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
   const upgrades: Array<{ path: string; origin?: string; cookie?: string }> = []
   const batch = new Map<string, { id: string; status: string; filename: string; langs: string[]; outputs: Record<string, string> }>()
   const profiles = new Map<string, { id: string; name: string; kind: string }>()
+  /** Tests change these while it runs. */
+  const settings = { generateDelayMs: 0 }
   let n = 0
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
@@ -84,8 +86,12 @@ export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
         const pid = field('profile_id')
         if (pid && !profiles.has(pid)) return json(404, { detail: 'Profile not found' })
         const wav = makeWav(1.5)
-        res.writeHead(200, { 'content-type': 'audio/wav', 'x-omnivoice-backend': '0.5.6', 'x-audio-id': `h${++n}`, 'x-seed': '42', 'x-audio-duration': '1.5', 'content-length': String(wav.length) })
-        return res.end(wav)
+        const send = () => {
+          res.writeHead(200, { 'content-type': 'audio/wav', 'x-omnivoice-backend': '0.5.6', 'x-audio-id': `h${++n}`, 'x-seed': '42', 'x-audio-duration': '1.5', 'content-length': String(wav.length) })
+          res.end(wav)
+        }
+        if (settings.generateDelayMs) return void setTimeout(send, settings.generateDelayMs)
+        return send()
       }
       if (url.pathname === '/gallery/upload' && req.method === 'POST') {
         if (!/name="audio"; filename="/.test(body)) return json(422, { detail: 'audio is required' })
@@ -126,5 +132,5 @@ export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
   })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-  return { url, requests, profiles, upgrades, batch, close: () => new Promise<void>((r) => server.close(() => r())) }
+  return { url, requests, profiles, upgrades, batch, settings, close: () => new Promise<void>((r) => server.close(() => r())) }
 }

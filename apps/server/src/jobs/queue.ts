@@ -1,5 +1,5 @@
 // Postgres-backed job queue: enqueue, claim (FOR UPDATE SKIP LOCKED), progress, finish, cancel, stale recovery.
-import { and, eq, inArray, lt, sql } from 'drizzle-orm'
+import { and, eq, inArray, lt, ne, sql } from 'drizzle-orm'
 import type { Job, JobKind } from '@producer/core'
 import { ctx } from '../context'
 import { jobs } from '../db/schema'
@@ -168,13 +168,16 @@ export async function requeueForShutdown(ids: string[], workerId: string): Promi
   return rows.length
 }
 
-/** Requeue running jobs whose worker stopped heartbeating (or error them after 3 attempts). */
+/**
+ * Requeue running jobs whose worker stopped heartbeating (or error them after 3 attempts). Not relayed voices: a
+ * desktop holds those on its own lease (recoverRelays in routes/voice.ts).
+ */
 export async function recoverStale(staleMs: number, exceptWorker?: string): Promise<number> {
   const cutoff = Date.now() - staleMs
   const stale = await ctx()
     .db.select()
     .from(jobs)
-    .where(and(eq(jobs.status, 'running'), lt(jobs.lockedAt, cutoff)))
+    .where(and(eq(jobs.status, 'running'), ne(jobs.kind, 'voice.relay'), lt(jobs.lockedAt, cutoff)))
   let n = 0
   for (const j of stale) {
     if (exceptWorker && j.lockedBy === exceptWorker) continue

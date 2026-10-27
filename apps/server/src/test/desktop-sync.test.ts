@@ -386,6 +386,30 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
     expect((await cloudHttp.json('GET', `/api/assets/${assetId}`)).body).toMatchObject({ origin: 'tts', asset: { kind: 'audio' } })
   })
 
+  it('keeps a relayed voice alive with heartbeats while VoiceStudio is still generating (SEC-9)', async () => {
+    const e = engine as unknown as { relayBeatMs: number; relayTick: () => Promise<void> }
+    fake.settings.generateDelayMs = 2500
+    e.relayBeatMs = 250
+    try {
+      const job = await cloudHttp.json('POST', '/api/ai/tts', { workspaceId: cloudWs, text: 'A long one.', voice: `vs:${voiceId}` })
+      const tick = e.relayTick()
+      // while the desktop waits on VoiceStudio, the cloud keeps hearing from it
+      const beats = new Set<number>()
+      const end = Date.now() + 2000
+      while (Date.now() < end) {
+        const j = (await cloudHttp.json('GET', `/api/jobs/${job.body.id}`)).body
+        if (j.status === 'running') beats.add(j.updatedAt)
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      await tick
+      expect(beats.size).toBeGreaterThanOrEqual(4)
+      expect((await waitJob(cloudHttp, job.body.id)).status).toBe('done')
+    } finally {
+      fake.settings.generateDelayMs = 0
+      e.relayBeatMs = 15_000
+    }
+  })
+
   it('imports a VoiceStudio output into the library', async () => {
     const job = await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source: '/audio/h2.wav', name: 'Best take', kind: 'audio' })
     expect(job.status).toBe(200)
