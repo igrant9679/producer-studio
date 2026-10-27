@@ -268,6 +268,34 @@ describe('change feed', () => {
     expect(resumed.safe).toBe(resumed.cursor)
   })
 
+  it('ends a page at about maxBytes of JSON, so big documents come a few at a time (DSK-12)', async () => {
+    const A = await signup(t.app)
+    const c0 = (await A.client.json('GET', '/api/sync/changes?since=0&limit=500')).body.cursor
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const { body } = await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: `Big ${i}` })
+      const doc = { ...body.project, tracks: [{ id: `t${i}`, kind: 'text', name: 'Text', items: [{ id: `x${i}`, type: 'text', start: 0, duration: 1, text: 'z'.repeat(600_000) }] }] }
+      expect((await A.client.json('PUT', `/api/projects/${body.project.id}`, { project: doc, baseVersion: 1 })).status).toBe(200)
+      ids.push(body.project.id)
+    }
+    const seen: string[] = []
+    let since = c0
+    let pages = 0
+    for (;;) {
+      const res = await A.client.req('GET', `/api/sync/changes?since=${since}&limit=200&maxBytes=1000000`)
+      const text = await res.text()
+      const page = JSON.parse(text)
+      pages++
+      // at most one document past the budget
+      expect(text.length).toBeLessThan(1_000_000 + 700_000)
+      seen.push(...page.projects.map((p: { project: { id: string } }) => p.project.id))
+      if (!page.more) break
+      since = page.cursor
+    }
+    expect(pages).toBeGreaterThanOrEqual(2)
+    expect(seen).toEqual(ids)
+  })
+
   it('assets appear with sha256; joining a workspace republishes its content', async () => {
     const A = await signup(t.app)
     const V = await signup(t.app)

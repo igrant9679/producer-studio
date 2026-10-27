@@ -143,8 +143,11 @@ async function changeHorizon(): Promise<number> {
   return l?.low != null ? Math.min(reached, Number(l.low)) : reached
 }
 
-/** Changes after `since` across the user's workspaces, merged by change_seq and paged. */
-export async function changesSince(userId: string, since: number, limit: number): Promise<SyncChanges> {
+/** A page of changes ends at about this much JSON unless the reader asks for another size. */
+export const PAGE_BYTES = 4 * 1024 * 1024
+
+/** Changes after `since` across the user's workspaces, merged by change_seq and paged (by count and by size). */
+export async function changesSince(userId: string, since: number, limit: number, maxBytes = PAGE_BYTES): Promise<SyncChanges> {
   const db = ctx().db
   const horizon = await changeHorizon()
   const safeFrom = (cursor: number) => Math.max(since, Math.min(cursor, horizon))
@@ -193,27 +196,40 @@ export async function changesSince(userId: string, since: number, limit: number)
     ...left.map((l) => ({ seq: l.seq, kind: 'left' as const, id: l.ws })),
     ...v.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'voice' as const, row })),
   ].sort((x, y) => x.seq - y.seq)
-  const page = all.slice(0, limit)
-  const more = all.length > limit
-  const cursor = page.length ? page[page.length - 1].seq : since
-  const out: SyncChanges = { cursor, safe: safeFrom(cursor), workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [] }, more }
+  const out: SyncChanges = { cursor: since, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [] }, more: false }
   const wsChanged = new Set<string>()
-  for (const ch of page) {
+  // a page ends at `limit` changes or about `maxBytes` of JSON (at least one change), so big documents come a few at
+  // a time on a slow link instead of one page that never finishes
+  let bytes = 0
+  let taken = 0
+  const size = (x: unknown) => (bytes += JSON.stringify(x).length)
+  for (const ch of all.slice(0, limit)) {
+    if (taken && bytes >= maxBytes) break
+    taken++
     if (ch.kind === 'project') {
-      out.projects.push({ summary: projectSummary(ch.row), project: await hydrateAssets(ch.row.doc, ch.row.workspaceId), version: ch.row.version, changeSeq: ch.seq })
+      const item = { summary: projectSummary(ch.row), project: await hydrateAssets(ch.row.doc, ch.row.workspaceId), version: ch.row.version, changeSeq: ch.seq }
+      out.projects.push(item)
+      size(item)
     } else if (ch.kind === 'asset') {
       out.assets.push({ ...assetRecord(ch.row), sha256: ch.row.sha256 ?? undefined, changeSeq: ch.seq })
+      size(out.assets[out.assets.length - 1])
     } else if (ch.kind === 'brand') {
       out.brandKits.push({ workspaceId: ch.row.workspaceId, doc: ch.row.doc, changeSeq: ch.seq })
+      size(ch.row.doc)
     } else if (ch.kind === 'tombstone') {
       if (back.has(`${ch.row.kind}:${ch.row.id}`)) continue
       if (ch.row.kind === 'project') out.deleted.projects.push(ch.row.id)
       else if (ch.row.kind === 'asset') out.deleted.assets.push(ch.row.id)
       else if (ch.row.kind === 'voice_profile') out.deleted.voiceProfiles!.push(ch.row.id)
-    } else if (ch.kind === 'voice') out.voiceProfiles!.push({ ...voiceProfileDto(ch.row), vsProfileId: undefined, changeSeq: ch.seq })
-    else if (ch.kind === 'left') out.deleted.workspaces!.push(ch.id)
+    } else if (ch.kind === 'voice') {
+      out.voiceProfiles!.push({ ...voiceProfileDto(ch.row), vsProfileId: undefined, changeSeq: ch.seq })
+      size(out.voiceProfiles![out.voiceProfiles!.length - 1])
+    } else if (ch.kind === 'left') out.deleted.workspaces!.push(ch.id)
     else wsChanged.add(ch.id)
   }
+  out.cursor = taken ? all[taken - 1].seq : since
+  out.more = all.length > taken
+  out.safe = safeFrom(out.cursor)
   if (wsChanged.size || since === 0) {
     const list = await listWorkspaces(userId)
     out.workspaces = since === 0 ? list : list.filter((x) => wsChanged.has(x.id))
@@ -225,8 +241,9 @@ syncRoutes.get('/changes', async (c) => {
   const u = requireUser(c)
   const since = Math.max(0, Number(c.req.query('since') ?? 0) || 0)
   const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? 100) || 100))
+  const maxBytes = Math.min(64 * 1024 * 1024, Math.max(64 * 1024, Number(c.req.query('maxBytes') ?? PAGE_BYTES) || PAGE_BYTES))
   if (!Number.isFinite(since)) throw new HttpError(400, 'invalid', 'since must be a number')
-  return c.json(await changesSince(u.id, since, limit))
+  return c.json(await changesSince(u.id, since, limit, maxBytes))
 })
 
 /**

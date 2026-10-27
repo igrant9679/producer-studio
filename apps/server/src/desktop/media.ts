@@ -28,7 +28,8 @@ export function variantForKey(row: AssetRow, key: string): Variant | null {
 async function download(row: AssetRow, key: string, variant: Variant): Promise<void> {
   const c = cloud()
   if (!c) throw new CloudError(0, { error: 'This computer is not linked to the cloud' }, true)
-  const res = await c.request('GET', `/api/media/${encodeURIComponent(row.id)}/${variant}`)
+  // a slow link keeps going; a download that stops moving fails (and is tried again on the next request)
+  const res = await c.request('GET', `/api/media/${encodeURIComponent(row.id)}/${variant}`, { idleTimeoutMs: 60_000 })
   if (!res.ok || !res.body) {
     await res.body?.cancel().catch(() => undefined)
     throw new CloudError(res.status, { error: `The cloud has no ${variant} for this asset (HTTP ${res.status})` }, res.status >= 502)
@@ -40,8 +41,10 @@ async function download(row: AssetRow, key: string, variant: Variant): Promise<v
       cb(null, chunk)
     },
   })
-  const src = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream).pipe(tap)
-  await ctx().storage.put(key, src, { contentType: res.headers.get('content-type') ?? undefined })
+  const body = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream)
+  // .pipe() doesn't pass a failed download on: without this the save would wait for good
+  body.on('error', (err) => tap.destroy(err))
+  await ctx().storage.put(key, body.pipe(tap), { contentType: res.headers.get('content-type') ?? undefined })
   if (variant === 'source' && row.sha256) {
     const got = hash.digest('hex')
     if (got !== row.sha256) {

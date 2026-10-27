@@ -484,7 +484,8 @@ export interface TemplateSummary {
 // POST /api/devices {name}                 -> {deviceId, token}   (token shown once; stored hashed)
 // GET  /api/devices                        -> Device[]
 // DELETE /api/devices/:id                  -> {ok}
-// GET  /api/sync/changes?since=<cursor>    -> SyncChanges  (all workspaces the user belongs to)
+// GET  /api/sync/changes?since=<cursor>&limit=&maxBytes= -> SyncChanges  (all workspaces the user belongs to; a page
+//      ends at `limit` changes or about `maxBytes` of JSON, default 4 MB, whichever comes first)
 // POST /api/sync/projects/:id/delete {baseVersion, trashed?} -> {ok}  (a replica's delete: only while the cloud copy is
 //      still the version it last saw, and still trashed if it saw it trashed; else 409 details {reason, version, trashed})
 // POST /api/projects accepts optional `id` (client-generated) so desktop-created projects keep their id;

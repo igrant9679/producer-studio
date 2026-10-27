@@ -139,6 +139,10 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
   their renders when the files are here, and voices made here move to a new local-only space "Recovered from …"
   first (never synced, never merged into an account at link time), with a notice. The rest goes as before. Deleting a
   space yourself recovers nothing.
+- **Slow links.** Cloud calls give up only when nothing has moved for 60 s (request body, reply or download), not
+  after a fixed total time, so a 64 MB project save or a big page finishes however long it takes; a stalled transfer is
+  "offline", never an empty answer. Change-feed pages end at about `maxBytes` of JSON (4 MB by default; at least one
+  change), and the desktop halves that after a page that didn't arrive, growing back as pages do.
 - **An item that keeps failing never blocks the rest.** Any push error other than "offline" or "signed out" (too
   large, a role change, an id taken elsewhere, a server error) is recorded for that one item in
   `desktop_sync_failures` and the cycle carries on. The item is retried on its own backoff (1, 2, 4 … min, at most

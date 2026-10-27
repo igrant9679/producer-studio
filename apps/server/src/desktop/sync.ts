@@ -35,6 +35,11 @@ import { getSettings, onSettingsChange } from './settings'
 
 const LOOKBACK = 25
 const PAGE = 200
+/** A page of changes ends at about this much JSON (the cloud sizes it); halved after a page that didn't arrive. */
+const PAGE_BYTES = 4 * 1024 * 1024
+const MIN_PAGE_BYTES = 256 * 1024
+/** A transfer that moves nothing for this long counts as offline (however long the whole transfer takes). */
+const IDLE_MS = 60_000
 const INTERVAL_MS = 60_000
 const AFTER_SAVE_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
@@ -98,6 +103,7 @@ export class SyncEngine {
   private relayHasVoices = false
   /** Items that failed before (loaded at the start of each cycle). */
   private failures = new Map<string, SyncFailure>()
+  private pageBytes = PAGE_BYTES
 
   async start() {
     const link = await loadLink()
@@ -637,7 +643,15 @@ export class SyncEngine {
     // where the next pull starts: below the first change the cloud said may still be committing
     let hold: number | undefined
     for (let page = 0; page < 1000; page++) {
-      const ch = await c.json<SyncChanges>('GET', `/api/sync/changes?since=${since}&limit=${PAGE}`)
+      let ch: SyncChanges
+      try {
+        ch = await c.json<SyncChanges>('GET', `/api/sync/changes?since=${since}&limit=${PAGE}&maxBytes=${this.pageBytes}`, undefined, IDLE_MS)
+      } catch (err) {
+        // it didn't arrive: ask for smaller pages (a slow link), growing back as pages arrive
+        if (err instanceof CloudError && err.offline) this.pageBytes = Math.max(MIN_PAGE_BYTES, this.pageBytes / 2)
+        throw err
+      }
+      this.pageBytes = Math.min(PAGE_BYTES, this.pageBytes * 2)
       if (ch.workspaces.length) await this.mirrorWorkspaces(ch.workspaces)
       const known = new Set((await ctx().db.select({ id: workspaces.id }).from(workspaces)).map((w) => w.id))
       const missingWs = [...ch.projects.map((p) => p.summary.workspaceId), ...ch.assets.map((a) => a.workspaceId)].filter((w) => !known.has(w))
@@ -956,7 +970,7 @@ export class SyncEngine {
       throw err
     }
     const body = Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream
-    const put = await c.request('PUT', ticket.url, { body, headers: { ...ticket.headers, 'content-length': String(bytes) } })
+    const put = await c.request('PUT', ticket.url, { body, headers: { ...ticket.headers, 'content-length': String(bytes) }, idleTimeoutMs: IDLE_MS })
     if (!put.ok) {
       const text = await put.text().catch(() => '')
       let parsed: { error?: string } | undefined
