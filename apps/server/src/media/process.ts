@@ -173,7 +173,9 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
     }
     const info = await probe(src, jc.signal)
     jc.check()
-    const meta: AssetMeta = { ...(row.meta ?? {}), duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasAudio: info.hasAudio, codec: info.codec }
+    // only what processing finds: updateAsset merges it into the clip's metadata (a transcript or voice text saved
+    // while this runs stays)
+    const meta: AssetMeta = { duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasAudio: info.hasAudio, codec: info.codec }
     const keys: Partial<AssetRow> = {}
     const put = async (file: string, name: string, mime: string) => {
       const key = `${prefix}/${name}`
