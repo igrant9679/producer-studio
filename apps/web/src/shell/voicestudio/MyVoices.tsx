@@ -21,6 +21,7 @@ export function MyVoices({ onUse, onOpenEngine }: { onUse: (voiceId: string) => 
   const [modal, setModal] = useState<'clone' | 'design' | 'presets'>()
   const [editing, setEditing] = useState<VoiceProfile>()
   const [deleting, setDeleting] = useState<VoiceProfile>()
+  const [deleteBusy, setDeleteBusy] = useState(false)
 
   const bump = useVoicesVersion((s) => s.bump)
   const added = (v: VoiceProfile) => {
@@ -91,10 +92,13 @@ export function MyVoices({ onUse, onOpenEngine }: { onUse: (voiceId: string) => 
           width={480}
           footer={
             <>
-              <button className="btn ghost" onClick={() => setDeleting(undefined)}>Cancel</button>
+              <button className="btn ghost" autoFocus onClick={() => setDeleting(undefined)}>Cancel</button>
               <button
                 className="btn danger"
+                // one delete at a time: a second click while it's on its way does nothing
+                disabled={deleteBusy}
                 onClick={async () => {
+                  setDeleteBusy(true)
                   try {
                     await vsApi.deleteProfile(deleting.id)
                     list.setData((cur) => (cur ?? []).filter((x) => x.id !== deleting.id))
@@ -102,11 +106,13 @@ export function MyVoices({ onUse, onOpenEngine }: { onUse: (voiceId: string) => 
                     toast(`Deleted “${deleting.name}”`)
                   } catch (e) {
                     toastError(e)
+                  } finally {
+                    setDeleteBusy(false)
                   }
                   setDeleting(undefined)
                 }}
               >
-                <Trash2 size={14} /> Delete voice
+                {deleteBusy ? <Spinner size={14} /> : <Trash2 size={14} />} Delete voice
               </button>
             </>
           }
