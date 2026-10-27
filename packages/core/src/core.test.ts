@@ -494,7 +494,8 @@ describe('keyframed animation survives splits and trims (EDT-7)', () => {
     for (const t of times) expect(opacityAt(q, t)).toBeCloseTo(opacityAt(p, t), 6)
   })
 })
-describe('reversed clips (EDT-14)', () => {
+
+describe('reversed clips (EDT-14)', () => {
   const frameAt = (p: Project, t: number, trackId = mainTrack(p)!.id) => evaluate(p, t).layers.find((l) => l.trackId === trackId)!.mediaTime!
   const times = [0, 0.5, 1, 2, 3.9, 4, 4.1, 5, 7, 7.9, 8.5, 9.5]
   function reversed() {
@@ -578,7 +579,8 @@ describe('freeze frames and reversed clips in the transcript (EDT-17)', () => {
     for (const [t, m] of [[0.5, 9.5], [4, 6], [8.4, 1.6], [8.6, 1.0], [9.5, 0.1]]) expect(frame(t)).toBeCloseTo(m, 3)
   })
 })
-describe('export pre-roll into a transition (EDT-3)', () => {
+
+describe('export pre-roll into a transition (EDT-3)', () => {
   const opts = { assetPath: (id: string) => `assets/${id}.mp4`, reversedPath: (id: string) => `reversed/${id}.mp4`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '' }
   function media(html: string, id: string, tag: 'video' | 'audio') {
     const el = html.match(new RegExp(`<${tag} id="${tag[0]}-${id}"[^>]*>`))![0]
@@ -625,7 +627,8 @@ describe('freeze frames and reversed clips in the transcript (EDT-17)', () => {
     expect(v.start).toBe(10)
   })
 })
-describe('caption line length (EDT-4)', () => {
+
+describe('caption line length (EDT-4)', () => {
   const SRT = '1\n00:00:01,000 --> 00:00:02,500\nHello there\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond line\n'
   const captionTrack = (p: Project) => p.tracks.find((t) => t.kind === 'caption')!
 
