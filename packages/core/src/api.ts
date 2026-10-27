@@ -447,6 +447,8 @@ export interface ShareLink {
 export interface SharedVideo {
   project: { name: string; width: number; height: number; duration: number; updatedAt: number }
   videoUrl?: string
+  /** GET /api/share/:token/poster (public): the export's thumbnail, when it has one. */
+  posterUrl?: string
 }
 export interface ExportRequest {
   resolution: '720p' | '1080p' | '1440p' | '4k'
