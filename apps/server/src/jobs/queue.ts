@@ -6,6 +6,7 @@ import { jobs } from '../db/schema'
 import { jobDto } from '../dto'
 import { newId } from '../ids'
 import { ASSET_ERRORS, failAssetOfJob } from '../services/asset-recovery'
+import { scrubPaths } from './errors'
 
 export type JobRow = typeof jobs.$inferSelect
 
@@ -86,10 +87,11 @@ export async function finishJob(id: string, result: unknown, lockedBy?: string):
   return rows[0] ?? null
 }
 
+/** End a running job. The error is shown to people, so any file path in it is dropped (callers log the raw text). */
 export async function failJob(id: string, error: string, status: 'error' | 'cancelled' = 'error', lockedBy?: string): Promise<JobRow | null> {
   const rows = await ctx()
     .db.update(jobs)
-    .set({ status, error: error.slice(0, 4000), message: status === 'cancelled' ? 'Cancelled' : 'Failed', updatedAt: Date.now(), lockedBy: null })
+    .set({ status, error: scrubPaths(error).slice(0, 4000), message: status === 'cancelled' ? 'Cancelled' : 'Failed', updatedAt: Date.now(), lockedBy: null })
     .where(runningBy(id, lockedBy))
     .returning()
   if (rows[0]) emitJob(rows[0])
@@ -120,7 +122,7 @@ export function onCancel(fn: (id: string) => void) {
   return () => cancelHooks.delete(fn)
 }
 
-export const WORKER_GAVE_UP = 'Worker stopped responding'
+export const WORKER_GAVE_UP = 'The server running this job stopped responding three times, so it was stopped. Try again.'
 
 /**
  * Requeue one stale running job (or error it after 3 attempts), only if it's still exactly as it was seen: a

@@ -9,6 +9,7 @@ import { jobs } from '../db/schema'
 import { log } from '../log'
 import { failAssetOfJob, reconcileAssets } from '../services/asset-recovery'
 import { pruneOldRows } from '../services/retention'
+import { publicJobError } from './errors'
 import { type JobRow, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, requeueForShutdown, updateProgress } from './queue'
 
 export class CancelledError extends Error {
@@ -201,9 +202,9 @@ async function runJob(job: JobRow, workerId: string) {
       await failAssetOfJob(job, why.message)
     } else if (why?.kind === 'cancelled') await failJob(job.id, 'Cancelled', 'cancelled', workerId).catch(() => undefined)
     else {
-      const message = err instanceof Error ? err.message : String(err)
+      // the raw error (paths, ffprobe output) stays in the log; people get a sentence without them
       log.error('job failed', { jobId: job.id, kind: job.kind, err })
-      await failJob(job.id, message, 'error', workerId).catch(() => undefined)
+      await failJob(job.id, publicJobError(job.kind, err), 'error', workerId).catch(() => undefined)
     }
   } finally {
     clearTimeout(limitTimer)

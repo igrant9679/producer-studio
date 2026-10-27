@@ -136,7 +136,7 @@ describe('stuck clips', () => {
       await recoverStale(90_000)
     }
     const job = (await ctx().db.select().from(jobs).where(eq(jobs.id, j.id)))[0]!
-    expect(job).toMatchObject({ status: 'error', error: 'Worker stopped responding' })
+    expect(job).toMatchObject({ status: 'error', error: expect.stringMatching(/stopped responding three times/) })
     expect(await statusOf(id)).toMatchObject({ status: 'error', error: ASSET_ERRORS.workerGaveUp })
   })
 

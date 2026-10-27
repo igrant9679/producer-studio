@@ -7,10 +7,11 @@ import { type AssetMeta, assets, jobs } from '../db/schema'
 import { enqueue, getJob, type JobRow, recoverJob } from '../jobs/queue'
 import { CancelledError, type Handler, registerHandler, runningJobIds, startWorker, stopWorker } from '../jobs/worker'
 import { setMissingMediaFetcher } from '../services/assets'
-import { setup, signup } from './helpers'
+import { type Client, setup, signup } from './helpers'
 
 let WS = ''
 let USER = ''
+let client: Client
 let n = 0
 const defaults = { ...(await import('../config')).loadConfig().jobLimits }
 const meta = () => ({ workspaceId: WS, userId: USER })
@@ -52,6 +53,7 @@ beforeAll(async () => {
   const { app } = await setup()
   await ctx().db.delete(jobs)
   const s = await signup(app, 'Runtime Tester')
+  client = s.client
   WS = s.workspaceId
   USER = (await s.client.json('GET', '/api/auth/me')).body.user.id
   startWorker({ concurrency: 2, heartbeatMs: 100, graceMs: 300 })
@@ -142,6 +144,29 @@ describe('quick jobs have their own lane (PIP-18)', () => {
     await waitFor(async () => !runningJobIds().length)
     stopWorker()
     startWorker({ concurrency: 2, heartbeatMs: 100, graceMs: 300 })
+  })
+})
+
+describe('job errors people see (PIP-33 / QA-13)', () => {
+  it('carry no server file paths', async () => {
+    const raw = [
+      'ffprobe failed (exit 1): /data/tmp/stt-as_1-mk2/as_1.mov: Invalid data found when processing input',
+      'whisper failed: C:\\Users\\Admin\\AppData\\Local\\Temp\\ps\\audio.wav: could not open | [aac @ 0x55d0c1a2b3c4] error',
+    ]
+    for (const message of raw) {
+      registerHandler('ai.transcribe', async () => {
+        throw new Error(message)
+      })
+      const j = await enqueue('ai.transcribe', { assetId: 'as_x' }, meta())
+      await ended(j.id)
+      const shown = (await client.json('GET', `/api/jobs/${j.id}`)).body
+      expect(shown.status).toBe('error')
+      expect(shown.error).not.toMatch(/\/data\/|C:\\|Users|AppData|0x55/)
+      expect(shown.error).toMatch(/Invalid data found|could not open/)
+    }
+    // processing errors read like the clip's
+    const { publicJobError } = await import('../jobs/errors')
+    expect(publicJobError('asset.process', new Error(raw[0]))).toMatch(/isn't a video, audio or image format/)
   })
 })
 
