@@ -106,6 +106,8 @@ export class SyncEngine {
   /** Items that failed before (loaded at the start of each cycle). */
   private failures = new Map<string, SyncFailure>()
   private pageBytes = PAGE_BYTES
+  /** The pending cycle is a retry after going offline (not one asked for by a save or a person). */
+  private retrying = false
 
   async start() {
     const link = await loadLink()
@@ -143,6 +145,7 @@ export class SyncEngine {
   /** Run a cycle after `ms` (debounced). */
   schedule(ms: number) {
     if (this.stopped || !linkInfo()) return
+    this.retrying = false
     if (this.debounce) clearTimeout(this.debounce)
     this.debounce = setTimeout(() => void this.syncNow().catch(() => undefined), ms)
     this.debounce.unref?.()
@@ -429,6 +432,9 @@ export class SyncEngine {
       await kvSet('lastSyncAt', this.lastSyncAt)
       this.backoffMs = 0
       this.backoffUntil = 0
+      // a retry scheduled while offline has nothing left to do: it would otherwise run later, unasked (sync is off)
+      if (this.retrying && this.debounce) clearTimeout(this.debounce)
+      this.retrying = false
       this.setState('idle')
       if (getSettings().mediaSync === 'all') void prefetchAllMedia()
     } catch (err) {
@@ -438,6 +444,7 @@ export class SyncEngine {
         this.setState('offline', undefined)
         log.info('desktop: cloud offline, backing off', { ms: this.backoffMs })
         this.schedule(this.backoffMs)
+        this.retrying = true
       } else if (err instanceof CloudError && err.status === 401) {
         this.setState('error', 'The cloud no longer accepts this computer’s device token (it may have been revoked). Unlink and link again.')
       } else {
