@@ -1,28 +1,34 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { and, eq } from 'drizzle-orm'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { addAsset, addItem, createAudioItem, createProject, createTextItem, createVideoItem, exportVideoTiming, generateCaptions, mainTrack, type Project } from '@producer/core'
 import { buildProducerTimeline, syntheticTranscript } from '../ai/produce'
+import { ctx } from '../context'
+import { assets, exportsTable, jobs } from '../db/schema'
 import { assetDoc } from '../dto'
+import { cancelJob, claimNext, enqueue, getJob, onCancel } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
 import { probe, processAsset } from '../media/process'
-import { lintComposition, parseRenderProgress, prepareRenderDir, renderArgs, renderWorkers, targetSize } from '../render/export'
+import { type RenderSteps, exportRender, lintComposition, parseRenderProgress, prepareRenderDir, renderArgs, renderWorkers, targetSize } from '../render/export'
+import { createAssetFromFile } from '../services/assets'
+import { type Client, setup, signup } from './helpers'
 
 // every ffmpeg call still runs; the spy shows how the reversed copies are made
 vi.mock('../media/proc', async (importOriginal) => {
   const m = await importOriginal<typeof import('../media/proc')>()
   return { ...m, ffmpeg: vi.fn(m.ffmpeg) }
 })
-import { createAssetFromFile } from '../services/assets'
-import { setup, signup } from './helpers'
 
 let workspaceId: string
 let userId: string
 let project: Project
 let videoId: string
 let freezeItemId: string
+let clipFile: string
+let client: Client
 
 /** One frame of `file` at `t`, as 64×36 grey bytes. */
 async function gray(file: string, t: number, dir: string): Promise<Buffer> {
@@ -34,10 +40,11 @@ async function gray(file: string, t: number, dir: string): Promise<Buffer> {
 beforeAll(async () => {
   const t = await setup()
   const u = await signup(t.app)
+  client = u.client
   workspaceId = u.workspaceId
   userId = (await u.client.json('GET', '/api/auth/me')).body.user.id
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-exp-'))
-  const file = path.join(tmp, 'clip.mp4')
+  const file = (clipFile = path.join(tmp, 'clip.mp4'))
   await ffmpeg(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '3', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', file])
   const created = await createAssetFromFile({ workspaceId, userId, filePath: file, name: 'clip.mp4', mime: 'video/mp4', kind: 'video', origin: 'upload' })
   const row = await processAsset(created.id, inlineContext({ id: 't', kind: 'asset.process', workspaceId, userId, projectId: null, input: {} }))
@@ -186,5 +193,68 @@ describe('export compile', () => {
     expect(voiceTrack.items[1].start).toBeCloseTo(3 + 3.9 + 0.5, 3)
     expect(p.tracks.some((t) => t.kind === 'caption' && t.items.length > 0)).toBe(true)
     expect(p.background).toBe('#0b1830')
+  })
+})
+
+describe('saving an export (PIP-28, PIP-2)', () => {
+  let projectId: string
+  beforeAll(async () => {
+    const r = await client.json('POST', '/api/projects', { workspaceId, name: 'Save test', width: 1280, height: 720 })
+    projectId = r.body.project.id
+    let p = r.body.project as Project
+    p = addAsset(p, project.assets[videoId])
+    p = addItem(p, createVideoItem(project.assets[videoId], 0, { duration: 2 }))
+    expect((await client.json('PUT', `/api/projects/${projectId}`, { project: p, baseVersion: r.body.version })).status).toBe(200)
+  })
+
+  /** A claimed export job, cancelled the way the worker cancels its running jobs; `saving` runs as it starts saving. */
+  async function start(saving?: (id: string) => void) {
+    const job = await enqueue('export.render', { projectId, resolution: '720p', fps: 30, quality: 'draft', format: 'mp4' }, { workspaceId, userId, projectId })
+    const claimed = (await claimNext('test-worker'))!
+    expect(claimed.id).toBe(job.id)
+    const ac = new AbortController()
+    const off = onCancel((id) => id === job.id && ac.abort())
+    const jc = { ...inlineContext(claimed, ac.signal), progress: (_p: number, m?: string) => void (m === 'Saving export' && saving?.(job.id)) }
+    return { id: job.id, jc, off }
+  }
+  /** A copy of the clip stands in for Chrome's render; `after` runs once it is "done". */
+  const steps = (after?: () => Promise<unknown>): RenderSteps => ({
+    lint: async () => ({ errors: [], warnings: 0 }),
+    render: async (_dir, out) => {
+      fs.copyFileSync(clipFile, out)
+      await after?.()
+    },
+  })
+  const renders = async () => (await ctx().db.select().from(assets).where(and(eq(assets.workspaceId, workspaceId), eq(assets.origin, 'render')))).length
+  const exportsOf = (jobId: string) => ctx().db.select().from(exportsTable).where(eq(exportsTable.jobId, jobId))
+
+  it('records the job on the exported video and finishes the job with the export', async () => {
+    const { id, jc, off } = await start()
+    const r = await exportRender(jc, steps())
+    off()
+    const [video] = await ctx().db.select().from(assets).where(eq(assets.id, (await exportsOf(id))[0].assetId))
+    expect(video.meta).toMatchObject({ jobId: id })
+    expect(await getJob(id)).toMatchObject({ status: 'done', result: r })
+  })
+
+  it('a cancel after the render finishes leaves no export and no video', async () => {
+    const before = await renders()
+    const { id, jc, off } = await start((jobId) => void cancelJob(jobId))
+    await expect(exportRender(jc, steps())).rejects.toThrow(/Cancelled/)
+    off()
+    expect(await exportsOf(id)).toEqual([])
+    expect(await renders()).toBe(before)
+    expect((await getJob(id))!.status).toBe('cancelled')
+  })
+
+  it('a cancel this process has not heard about yet still leaves no export', async () => {
+    const before = await renders()
+    const { id, jc, off } = await start()
+    // another server process cancelled it: the row says so, the local signal doesn't (yet)
+    const cancelElsewhere = () => ctx().db.update(jobs).set({ status: 'cancelled', cancelRequested: true }).where(eq(jobs.id, id))
+    await expect(exportRender(jc, steps(cancelElsewhere))).rejects.toThrow(/Cancelled/)
+    off()
+    expect(await exportsOf(id)).toEqual([])
+    expect(await renders()).toBe(before)
   })
 })

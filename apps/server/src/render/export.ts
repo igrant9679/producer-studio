@@ -8,10 +8,11 @@ import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, projectDur
 import { childEnv } from '../child-env'
 import { REPO_ROOT } from '../config'
 import { ctx } from '../context'
-import { assets, exportsTable } from '../db/schema'
+import { assets, exportsTable, jobs } from '../db/schema'
 import { HttpError } from '../http'
 import { newId } from '../ids'
-import type { JobContext } from '../jobs/worker'
+import { emitJob } from '../jobs/queue'
+import { CancelledError, type JobContext } from '../jobs/worker'
 import { log } from '../log'
 import { probe } from '../media/process'
 import { ffmpeg, run } from '../media/proc'
@@ -320,7 +321,31 @@ export function targetSize(w: number, h: number, resolution: ExportRequest['reso
 
 const MIME: Record<ExportRequest['format'], string> = { mp4: 'video/mp4', webm: 'video/webm', gif: 'image/gif' }
 
-export async function exportRender(jc: JobContext): Promise<ExportResult> {
+/**
+ * Record the export and finish its job in one transaction, unless the job was cancelled meanwhile: a cancel that
+ * arrives after this finds the job done, one before it leaves no export.
+ */
+async function saveExport(jobId: string, values: typeof exportsTable.$inferInsert, result: ExportResult) {
+  const job = await ctx().db.transaction(async (tx) => {
+    const [done] = await tx
+      .update(jobs)
+      .set({ status: 'done', progress: 1, message: 'Done', result: result as never, updatedAt: Date.now(), lockedBy: null })
+      .where(and(eq(jobs.id, jobId), eq(jobs.status, 'running'), eq(jobs.cancelRequested, false)))
+      .returning()
+    if (!done) throw new CancelledError()
+    await tx.insert(exportsTable).values(values)
+    return done
+  })
+  emitJob(job)
+}
+
+/** The render steps (tests stand in for Chrome). */
+export interface RenderSteps {
+  lint: typeof lintComposition
+  render: typeof renderComposition
+}
+
+export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: lintComposition, render: renderComposition }): Promise<ExportResult> {
   const input = jc.job.input as unknown as ExportRequest & { projectId: string }
   const row = await loadProjectRow(input.projectId)
   const project = await hydrateAssets(row.doc, row.workspaceId)
@@ -335,14 +360,14 @@ export async function exportRender(jc: JobContext): Promise<ExportResult> {
     const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: input.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt, fps: input.fps })
     jc.check()
     jc.progress(0.09, 'Checking composition')
-    const lint = await lintComposition(dir, jc.signal)
+    const lint = await steps.lint(dir, jc.signal)
     if (lint.errors.length) throw new Error(`Composition lint failed: ${lint.errors.slice(0, 5).join('; ')}`)
     jc.check()
     const ext = input.format
     const raw = path.join(dir, `render.${ext}`)
     jc.progress(0.1, 'Rendering')
     const workers = renderWorkers({ memoryMb: systemMemoryMb(), cpus: os.cpus().length, concurrency: ctx().config.workerConcurrency, frames: Math.ceil(prep.duration * input.fps) })
-    await renderComposition(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
+    await steps.render(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
     jc.check()
     const final = raw
     jc.progress(0.97, 'Saving export')
@@ -358,26 +383,41 @@ export async function exportRender(jc: JobContext): Promise<ExportResult> {
       kind: input.format === 'gif' ? 'image' : 'video',
       origin: 'render',
       status: 'ready',
-      meta: { duration: info?.duration ?? prep.duration, width: info?.width ?? tgt.w, height: info?.height ?? tgt.h, fps: info?.fps ?? input.fps, hasAudio: info?.hasAudio },
+      // the job that made it, like voiceovers and Producer AI clips record theirs
+      meta: { duration: info?.duration ?? prep.duration, width: info?.width ?? tgt.w, height: info?.height ?? tgt.h, fps: info?.fps ?? input.fps, hasAudio: info?.hasAudio, jobId: jc.job.id },
     })
-    // cheap thumbnail for the library
     try {
-      const thumb = path.join(dir, 'thumb.jpg')
-      await ffmpeg(['-ss', String(Math.min(1, (info?.duration ?? 1) / 2)), '-i', final, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
-      const key = `${assetPrefix(row.workspaceId, assetRow.id)}/thumb.jpg`
-      await ctx().storage.putFile(key, thumb, 'image/jpeg')
-      await updateAsset(assetRow.id, { thumbKey: key })
+      // cheap thumbnail for the library
+      try {
+        const thumb = path.join(dir, 'thumb.jpg')
+        await ffmpeg(['-ss', String(Math.min(1, (info?.duration ?? 1) / 2)), '-i', final, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
+        const key = `${assetPrefix(row.workspaceId, assetRow.id)}/thumb.jpg`
+        await ctx().storage.putFile(key, thumb, 'image/jpeg')
+        await updateAsset(assetRow.id, { thumbKey: key })
+      } catch (err) {
+        log.warn('export thumbnail failed', { err })
+      }
+      jc.check()
+      const exportId = newId('ex')
+      const sizeBytes = assetRow.size
+      const duration = info?.duration ?? prep.duration
+      const result: ExportResult = { exportId, url: `/api/media/${assetRow.id}/source`, sizeBytes, duration }
+      await saveExport(
+        jc.job.id,
+        { id: exportId, projectId: row.id, workspaceId: row.workspaceId, assetId: assetRow.id, jobId: jc.job.id, name, resolution: input.resolution, fps: input.fps, format: input.format, sizeBytes, duration, createdBy: jc.job.userId, createdAt: Date.now() },
+        result,
+      )
+      jc.progress(1, 'Export ready')
+      return result
     } catch (err) {
-      log.warn('export thumbnail failed', { err })
+      // cancelled (or failed) after the file was stored: no export, and no video left in the library without one
+      await ctx()
+        .db.delete(assets)
+        .where(eq(assets.id, assetRow.id))
+        .catch((e) => log.warn('could not remove an unsaved export', { assetId: assetRow.id, err: e }))
+      await ctx().storage.deletePrefix(assetPrefix(row.workspaceId, assetRow.id) + '/').catch(() => undefined)
+      throw err
     }
-    const exportId = newId('ex')
-    const sizeBytes = assetRow.size
-    const duration = info?.duration ?? prep.duration
-    await ctx()
-      .db.insert(exportsTable)
-      .values({ id: exportId, projectId: row.id, workspaceId: row.workspaceId, assetId: assetRow.id, jobId: jc.job.id, name, resolution: input.resolution, fps: input.fps, format: input.format, sizeBytes, duration, createdBy: jc.job.userId, createdAt: Date.now() })
-    jc.progress(1, 'Export ready')
-    return { exportId, url: `/api/media/${assetRow.id}/source`, sizeBytes, duration }
   } finally {
     if (process.env.KEEP_RENDERS !== '1') fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => undefined)
   }
