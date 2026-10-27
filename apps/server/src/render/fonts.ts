@@ -1,4 +1,6 @@
-// @font-face CSS for the fonts a project uses, from the bundled @fontsource packages (latin + latin-ext).
+// @font-face CSS for the fonts a project uses, from the bundled @fontsource packages: the same faces the editor
+// preview loads, in every script subset they ship (Latin, Cyrillic, Greek, Vietnamese...). Emoji and CJK come from
+// the system's Noto fonts (Dockerfile), as the preview's come from the viewer's system.
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -10,6 +12,26 @@ export interface FontUse {
   family: string
   weight: number
   italic: boolean
+}
+
+/**
+ * The faces the web app loads for each bundled font (apps/web/src/lib/fonts.ts; a test keeps the two in step). The
+ * export declares exactly these at their own weights, so for any weight a text asks for the browser picks the same
+ * face, or synthesises the same bold or italic, in the preview and the export.
+ */
+export const PREVIEW_FACES: Record<string, { normal: number[]; italic?: number[] }> = {
+  Inter: { normal: [400, 500, 600, 700, 800, 900] },
+  'Space Grotesk': { normal: [500, 700] },
+  'JetBrains Mono': { normal: [400, 500] },
+  Montserrat: { normal: [500, 700, 900] },
+  Poppins: { normal: [500, 700] },
+  'Playfair Display': { normal: [600, 700], italic: [600, 700] },
+  'Bebas Neue': { normal: [400] },
+  Oswald: { normal: [500, 700] },
+  'Roboto Slab': { normal: [500, 700] },
+  'DM Serif Display': { normal: [400] },
+  Caveat: { normal: [600] },
+  'IBM Plex Mono': { normal: [500] },
 }
 
 export function fontSlug(family: string): string {
@@ -41,58 +63,43 @@ function packageDir(family: string): string | null {
   }
 }
 
-function availableWeights(dir: string, italic: boolean): number[] {
-  const out = new Set<number>()
-  for (const f of fs.readdirSync(dir)) {
-    const m = f.match(italic ? /^(\d{3})-italic\.css$/ : /^(\d{3})\.css$/)
-    if (m) out.add(Number(m[1]))
-  }
-  return [...out].sort((a, b) => a - b)
-}
-
 /**
- * Copy the woff2 files for every used font into `outDir/fontsDirName` and return @font-face CSS pointing at them.
- * Unknown families are skipped (the renderer falls back to Inter).
+ * Copy the woff2 files of every preview face of each used family (and Inter, every text's fallback) into
+ * `outDir/fontsDirName` and return @font-face CSS pointing at them. Families the preview doesn't load are skipped
+ * (both fall back to Inter).
  */
 export function buildFontFaces(uses: FontUse[], outDir: string, fontsDirName = 'fonts'): { css: string; files: string[] } {
   const css: string[] = []
   const files: string[] = []
-  const done = new Set<string>()
   fs.mkdirSync(path.join(outDir, fontsDirName), { recursive: true })
-  for (const u of uses) {
-    const dir = packageDir(u.family)
-    if (!dir) continue
-    let italic = u.italic
-    let weights = availableWeights(dir, italic)
-    if (!weights.length && italic) {
-      italic = false
-      weights = availableWeights(dir, false)
-    }
-    if (!weights.length) continue
-    const weight = weights.reduce((best, w) => (Math.abs(w - u.weight) < Math.abs(best - u.weight) ? w : best), weights[0])
-    const key = `${u.family}|${weight}|${italic}`
-    if (done.has(key)) continue
-    done.add(key)
-    const src = fs.readFileSync(path.join(dir, `${weight}${italic ? '-italic' : ''}.css`), 'utf8')
-    const blocks = src.match(/\/\*\s*[\w-]+\s*\*\/\s*@font-face\s*\{[^}]*\}/g) ?? []
-    for (const b of blocks) {
-      const name = b.match(/\/\*\s*([\w-]+)\s*\*\//)?.[1] ?? ''
-      if (!/-latin-(ext-)?\d{3}-(normal|italic)$/.test(name)) continue
-      const woff2 = b.match(/url\(\.\/files\/([^)]+\.woff2)\)/)?.[1]
-      if (!woff2) continue
-      const from = path.join(dir, 'files', woff2)
-      if (!fs.existsSync(from)) continue
-      const to = path.join(outDir, fontsDirName, woff2)
-      if (!fs.existsSync(to)) {
-        fs.copyFileSync(from, to)
-        files.push(`${fontsDirName}/${woff2}`)
+  for (const family of new Set(['Inter', ...uses.map((u) => u.family)])) {
+    const faces = PREVIEW_FACES[family]
+    const dir = faces && packageDir(family)
+    if (!faces || !dir) continue
+    const styles: Array<[boolean, number[]]> = [
+      [false, faces.normal],
+      [true, faces.italic ?? []],
+    ]
+    for (const [italic, weights] of styles)
+      for (const weight of weights) {
+        const file = path.join(dir, `${weight}${italic ? '-italic' : ''}.css`)
+        if (!fs.existsSync(file)) continue
+        for (const b of fs.readFileSync(file, 'utf8').match(/@font-face\s*\{[^}]*\}/g) ?? []) {
+          const woff2 = b.match(/url\(\.\/files\/([^)]+\.woff2)\)/)?.[1]
+          if (!woff2) continue
+          const from = path.join(dir, 'files', woff2)
+          if (!fs.existsSync(from)) continue
+          const to = path.join(outDir, fontsDirName, woff2)
+          if (!fs.existsSync(to)) {
+            fs.copyFileSync(from, to)
+            files.push(`${fontsDirName}/${woff2}`)
+          }
+          const range = b.match(/unicode-range:\s*([^;]+);/)?.[1]
+          css.push(
+            `@font-face{font-family:'${family}';font-style:${italic ? 'italic' : 'normal'};font-display:block;font-weight:${weight};src:url('${fontsDirName}/${woff2}') format('woff2');${range ? `unicode-range:${range};` : ''}}`,
+          )
+        }
       }
-      const range = b.match(/unicode-range:\s*([^;]+);/)?.[1]
-      // declare the requested weight too so the browser doesn't synthesise bold for e.g. Bebas Neue 900
-      css.push(
-        `@font-face{font-family:'${u.family}';font-style:${italic ? 'italic' : 'normal'};font-display:block;font-weight:${weight === u.weight ? weight : `${Math.min(weight, u.weight)} ${Math.max(weight, u.weight)}`};src:url('${fontsDirName}/${woff2}') format('woff2');${range ? `unicode-range:${range};` : ''}}`,
-      )
-    }
   }
   return { css: css.join('\n'), files }
 }
