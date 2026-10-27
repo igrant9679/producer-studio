@@ -1,5 +1,6 @@
 // Editor state. Every edit goes through `commit(next, label)` which pushes the previous document onto the undo
 // stack. Rapid edits that share a `coalesce` key (slider drags, trims, canvas drags) collapse into one entry.
+// What an edit didn't change stays the same object (shareUnchanged), so undo steps share it.
 // Media records from the server go through `updateMedia` and are never undone.
 import type { Asset, Item, Project } from '@producer/core'
 import { create } from 'zustand'
@@ -113,6 +114,50 @@ function existingIds(p: Project): Set<string> {
   return s
 }
 
+/** Equal plain data (documents are JSON). */
+function same(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || !a || !b || Array.isArray(a) !== Array.isArray(b)) return false
+  if (Array.isArray(a)) {
+    const bb = b as unknown[]
+    return a.length === bb.length && a.every((x, i) => same(x, bb[i]))
+  }
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && same((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+}
+
+/**
+ * `next` with every track, item and media record an edit left alone replaced by the object `prev` already had. Ops
+ * copy the whole document; this keeps one copy of what didn't change, so undo steps share it and the timeline
+ * re-renders only the clips that did.
+ */
+export function shareUnchanged(prev: Project, next: Project): Project {
+  if (prev === next) return next
+  const oldTracks = new Map(prev.tracks.map((t) => [t.id, t]))
+  const oldItems = new Map<string, Item>()
+  for (const t of prev.tracks) for (const i of t.items) oldItems.set(i.id, i)
+  const tracks = next.tracks.map((t) => {
+    const items = t.items.map((i) => {
+      const o = oldItems.get(i.id)
+      return o && o !== i && same(o, i) ? o : i
+    })
+    const old = oldTracks.get(t.id)
+    if (old && old.items.length === items.length && old.items.every((x, k) => x === items[k])) {
+      const { items: _a, ...rest } = t
+      const { items: _b, ...oldRest } = old
+      if (same(rest, oldRest)) return old
+    }
+    return items.some((x, k) => x !== t.items[k]) ? { ...t, items } : t
+  })
+  let assets = next.assets
+  for (const [id, a] of Object.entries(next.assets)) {
+    const o = prev.assets[id]
+    if (o && o !== a && same(o, a)) (assets === next.assets ? (assets = { ...next.assets }) : assets)[id] = o
+  }
+  return { ...next, tracks: tracks.every((t, k) => t === next.tracks[k]) ? next.tracks : tracks, assets }
+}
+
 function findInHistory(s: EditorState, assetId: string): Asset | undefined {
   // newest step first
   for (const e of [...s.history.past, ...s.history.future].reverse()) if (e.project.assets[assetId]) return e.project.assets[assetId]
@@ -180,12 +225,13 @@ export const useEditor = create<EditorState>((set, get) => ({
       conflictProject: undefined,
     }),
 
-  commit: (next, label, opts = {}) => {
+  commit: (next0, label, opts = {}) => {
     const s = get()
-    if (next === s.project) {
+    if (next0 === s.project) {
       if (opts.selection) set({ selection: opts.selection })
       return
     }
+    const next = shareUnchanged(s.project, next0)
     const now = Date.now()
     const merge = !!opts.coalesce && s.lastCommit?.key === opts.coalesce && now - s.lastCommit.at < COALESCE_MS
     let past = s.history.past
@@ -212,7 +258,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (lc?.key) set({ lastCommit: { ...lc, key: undefined } })
   },
 
-  replaceSilently: (next) => set({ project: next, saveState: get().saveState === 'conflict' ? 'conflict' : 'dirty' }),
+  replaceSilently: (next) => set({ project: shareUnchanged(get().project, next), saveState: get().saveState === 'conflict' ? 'conflict' : 'dirty' }),
 
   updateMedia: (asset) => {
     const s = get()

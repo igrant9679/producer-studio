@@ -25,6 +25,23 @@ export async function loadInto(projectId: string, demo: boolean) {
   useEditor.getState().load({ project: res.project, version: res.version, projectId, demo: false, workspaceId: res.summary.workspaceId })
 }
 
+/**
+ * What a save sends: the document without the heavy parts of the server's own media records (waveform peaks, a
+ * transcript made by transcription), which the server keeps with the clip and puts back on every load. A transcript
+ * that exists only in the document (estimated word timings for a generated voice) is kept.
+ */
+export function savePayload(p: Project): Project {
+  let assets: Project['assets'] | undefined
+  for (const [id, a] of Object.entries(p.assets)) {
+    if (!a.src?.startsWith('/api/media/')) continue
+    const dropTranscript = !!a.transcript && a.transcript.engine !== 'estimate'
+    if (!a.waveform && !dropTranscript) continue
+    const { waveform: _w, transcript, ...rest } = a
+    ;(assets ??= { ...p.assets })[id] = dropTranscript || !transcript ? rest : { ...rest, transcript }
+  }
+  return assets ? { ...p, assets } : p
+}
+
 let timer: ReturnType<typeof setTimeout> | undefined
 let inflight: Promise<void> | null = null
 /** Highest server version announced over SSE while a save of ours was in flight, and the visit it was for. */
@@ -45,7 +62,7 @@ async function saveNow(force = false): Promise<void> {
   const base = force && s.conflictVersion !== undefined ? s.conflictVersion : s.version
   useEditor.setState({ saveState: 'saving' })
   try {
-    const r = await api.saveProject(s.projectId, project, base)
+    const r = await api.saveProject(s.projectId, savePayload(project), base)
     const now = useEditor.getState()
     // another project, or this one again, was opened meanwhile: its own load and live updates are what count
     if (now.session !== session) return
@@ -167,7 +184,7 @@ export async function keepBoth(): Promise<string> {
   const name = `${s.project.name || 'Untitled'} (conflicted copy)`
   const created = await api.createProject({ workspaceId: s.workspaceId, name, width: s.project.width, height: s.project.height, fps: s.project.fps })
   const doc: Project = { ...s.project, id: created.project.id, name }
-  await api.saveProject(created.project.id, doc, created.version)
+  await api.saveProject(created.project.id, savePayload(doc), created.version)
   // leave the original untouched: don't let the unmount flush retry our conflicting save
   if (useEditor.getState().session === s.session) useEditor.setState({ saveState: 'saved', conflictVersion: undefined, conflictProject: undefined })
   return created.project.id

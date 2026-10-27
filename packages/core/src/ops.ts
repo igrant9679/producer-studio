@@ -19,6 +19,11 @@ import type {
 import { EPS, round, uid } from './util'
 
 export function clone<T>(v: T): T {
+  // a project's media records (waveforms, transcripts) are never changed by an op: the copy shares them
+  if (v && typeof v === 'object' && 'tracks' in v && 'assets' in v) {
+    const { assets, ...rest } = v as unknown as Project
+    return { ...structuredClone(rest), assets: { ...assets } } as unknown as T
+  }
   return structuredClone(v)
 }
 

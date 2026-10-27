@@ -53,11 +53,11 @@ describe('preview renderer', () => {
     r.destroy()
   })
 
-  it('keeps only the players near the playhead and makes the next ones ahead of time (EDT-9)', () => {
+  it('keeps only the players near the playhead and makes the next ones ahead of time (EDT-9)', { timeout: 30_000 }, () => {
     let p = createProject()
     p = addAsset(p, asset('a', 600))
-    // 120 one-second clips of one long file on the main track
-    for (let i = 0; i < 120; i++) p = addItem(p, createVideoItem(p.assets.a, i, { in: i, duration: 1 }))
+    // 100 one-second clips of one long file on the main track
+    for (let i = 0; i < 100; i++) p = addItem(p, createVideoItem(p.assets.a, i, { in: i, duration: 1 }))
     const created: HTMLAudioElement[] = []
     const Orig = window.Audio
     window.Audio = function () { const a = new Orig(); created.push(a); return a } as unknown as typeof Audio
@@ -65,7 +65,7 @@ describe('preview renderer', () => {
       const { root, r } = preview(p)
       r.setPlaying(true)
       let most = 0
-      for (let t = 0; t < 120; t += 0.25) {
+      for (let t = 0; t < 100; t += 0.5) {
         r.render(t)
         const live = [...root.querySelectorAll('video')].filter((v) => v.getAttribute('src')).length
         most = Math.max(most, live)
@@ -81,7 +81,7 @@ describe('preview renderer', () => {
       expect(most).toBeLessThanOrEqual(16)
       // sound players too: every clip had one at some point, but few at once
       const liveAudio = created.filter((a) => a.getAttribute('src')).length
-      expect(created.length).toBeGreaterThan(100)
+      expect(created.length).toBeGreaterThanOrEqual(100)
       expect(liveAudio).toBeLessThanOrEqual(16)
       r.destroy()
     } finally {

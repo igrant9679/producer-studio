@@ -1,4 +1,4 @@
-import { addAsset, addItem, createProject, createVideoItem, updateProject, type Asset } from '@producer/core'
+import { addAsset, addItem, createProject, createVideoItem, updateItem, updateProject, type Asset } from '@producer/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { COALESCE_MS, HISTORY_CAP, useEditor } from './store'
 
@@ -130,6 +130,26 @@ describe('media records and undo', () => {
     expect(S().project.assets.as1).toBeUndefined()
     S().redo()
     expect(S().project.assets.as1).toMatchObject(processed)
+  })
+
+  it('edits and undo steps share what they did not change (EDT-26)', () => {
+    const heavy: Asset = { ...uploading, ...processed, waveform: Array.from({ length: 4000 }, (_, i) => (i % 50) / 50) } as Asset
+    S().load({ project: addAsset(createProject({ id: 'p1', name: 'start' }), heavy), version: 1, projectId: 'p1', demo: false, workspaceId: 'w1' })
+    S().commit(addItem(S().project, createVideoItem(heavy, 0, { duration: 5 })), 'Add clip')
+    S().commit(addItem(S().project, createVideoItem(heavy, 5, { duration: 5 })), 'Add clip')
+    const [first, second] = S().project.tracks.find((t) => t.main)!.items
+    for (let i = 0; i < 50; i++) S().commit(updateItem(S().project, second.id, { opacity: i / 50 }), 'Opacity')
+    const now = S().project
+    // the first clip, untouched, is the very same object in the document and every undo step
+    expect(now.tracks.find((t) => t.main)!.items[0]).toBe(first)
+    for (const step of S().history.past.slice(2)) expect(step.project.tracks.find((t) => t.main)!.items[0]).toBe(first)
+    // the clip's record (waveform, transcript) is one copy, not one per step
+    for (const step of S().history.past) {
+      expect(step.project.assets.as1.waveform).toBe(now.assets.as1.waveform)
+      expect(step.project.assets.as1.transcript).toBe(now.assets.as1.transcript)
+    }
+    S().undo()
+    expect(S().project.tracks.find((t) => t.main)!.items[0]).toBe(first)
   })
 
   it('ignores records for clips this project never had', () => {
