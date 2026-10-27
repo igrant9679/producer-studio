@@ -8,6 +8,7 @@ import {
   Copy,
   Download,
   Eye,
+  Film,
   FolderOpen,
   Image as ImageIcon,
   LayoutGrid,
@@ -16,6 +17,7 @@ import {
   List,
   MoreHorizontal,
   Pencil,
+  RotateCcw,
   Search,
   Sparkles,
   Trash2,
@@ -25,7 +27,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { api, mediaUrl } from '../../lib/api'
+import { api, HttpError, mediaUrl } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { InlineRename, KindPill, ProjectCard, ProjectThumb } from '../components/ProjectCard'
@@ -77,6 +79,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [renaming, setRenaming] = useState<string>()
   const [confirm, setConfirm] = useState<{ ids: string[] }>()
+  const [exportFirst, setExportFirst] = useState<ProjectSummary>()
   const [busy, setBusy] = useState(false)
   const desktop = useIsDesktop()
   const sync = useSystem((s) => s.sync)
@@ -127,6 +130,18 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
       setSel(new Set())
       await Promise.all(ids.map((id) => api.patchProject(id, { trashed: false })))
     }, ids.length > 1 ? `${ids.length} projects restored` : 'Restored')
+  // a share link shows a finished export: with none yet, offer to export instead of a link to "No finished video yet"
+  async function copyShareLink(p: ProjectSummary) {
+    try {
+      const r = await api.share(p.id)
+      const ok = await copyText(absoluteUrl(r.url))
+      toast(ok ? 'Share link copied' : absoluteUrl(r.url))
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 409) setExportFirst(p)
+      else toastError(e)
+    }
+  }
+
   async function deleteForever(ids: string[]) {
     setBusy(true)
     try {
@@ -166,12 +181,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
       {
         label: 'Copy share link',
         icon: <Link2 size={15} />,
-        onClick: () =>
-          void act(async () => {
-            const r = await api.share(p.id)
-            const ok = await copyText(absoluteUrl(r.url))
-            toast(ok ? 'Share link copied' : absoluteUrl(r.url))
-          }),
+        onClick: () => void copyShareLink(p),
       },
       {
         label: p.isTemplate ? 'Remove from templates' : 'Save as template',
@@ -310,6 +320,23 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
         </div>
       )}
 
+      {exportFirst && (
+        <Modal
+          title="Export this project first"
+          subtitle={`A share link shows a finished video, and “${exportFirst.name}” hasn’t been exported yet. Export it, then copy the link here or on the Exports page.`}
+          onClose={() => setExportFirst(undefined)}
+          width={460}
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => setExportFirst(undefined)}>Cancel</button>
+              <button className="btn primary" autoFocus onClick={() => navigate(`/edit/${exportFirst.id}?export=1`)}><Film size={15} /> Open and export</button>
+            </>
+          }
+        >
+          <span />
+        </Modal>
+      )}
+
       {confirm && (
         <ConfirmModal
           title={confirm.ids.length > 1 ? `Delete ${confirm.ids.length} projects forever?` : 'Delete this project forever?'}
@@ -372,6 +399,18 @@ function AssetsTab({ q }: { q: string }) {
   const pick = useFilePicker('video/*,audio/*,image/*', true, upload)
   const list = useMemo(() => filterAssets(data ?? [], { filter, q, sort }), [data, filter, q, sort])
   const pending = uploads.filter((u) => u.status === 'uploading')
+
+  // like the editor's media tiles: process a failed clip again (works when its file reached storage)
+  async function retry(a: AssetRecord) {
+    try {
+      upsert(await api.retryAsset(a.asset.id))
+      toast('Processing again…')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (/not arrived/i.test(msg)) toast('This file never reached storage. Delete it and upload it again.')
+      else toastError(e)
+    }
+  }
 
   async function remove(a: AssetRecord) {
     setBusy(true)
@@ -459,11 +498,27 @@ function AssetsTab({ q }: { q: string }) {
             </div>
           ))}
           {list.map((a) => (
-            <div key={a.asset.id} className="ps-pcard" onClick={() => a.status === 'ready' && setPreview(a)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && a.status === 'ready' && setPreview(a)} aria-label={`Preview ${a.asset.name}`}>
+            <div
+              key={a.asset.id}
+              className="ps-pcard"
+              onClick={() => a.status === 'ready' && setPreview(a)}
+              role="button"
+              tabIndex={0}
+              // only Enter on the card itself: not on its rename field or menu (those would open the preview too)
+              onKeyDown={(e) => e.target === e.currentTarget && e.key === 'Enter' && a.status === 'ready' && setPreview(a)}
+              aria-label={`Preview ${a.asset.name}`}
+            >
               <Thumb src={a.asset.kind !== 'audio' && a.status === 'ready' ? mediaUrl(a.asset.id, 'thumb') : undefined} seed={a.asset.id} icon={a.asset.kind === 'audio' ? <AudioLines size={28} /> : a.asset.kind === 'image' ? <ImageIcon size={24} /> : <Video size={24} />}>
                 {a.status !== 'ready' && (
-                  <div className="ps-asset-status">
-                    {a.status === 'error' ? <span style={{ color: 'var(--danger)' }}>Processing failed</span> : <><Spinner size={14} /> Processing…</>}
+                  <div className={clsx('ps-asset-status', a.status === 'error' && 'failed')}>
+                    {a.status === 'error' ? (
+                      <>
+                        <span className="why" title={a.error}>{a.error || 'Processing failed'}</span>
+                        <button className="btn sm" onClick={(e) => (e.stopPropagation(), void retry(a))} aria-label={`Retry processing ${a.asset.name}`}><RotateCcw size={13} /> Retry</button>
+                      </>
+                    ) : (
+                      <><Spinner size={14} /> Processing…</>
+                    )}
                   </div>
                 )}
                 {a.asset.duration ? <span className="ps-thumb-badge">{formatDuration(a.asset.duration)}</span> : null}

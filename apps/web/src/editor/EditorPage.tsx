@@ -39,6 +39,11 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   // Deep links from the shell (All tools, Home cards): /edit/:id?tab=captions opens that panel.
   const [search] = useSearchParams()
   const tabParam = search.get('tab')
+  // ?export=1 (the Library's "Export this project first" before a share link) opens the export dialog
+  const exportParam = search.get('export') === '1'
+  useEffect(() => {
+    if (loaded && exportParam) useEditor.setState({ exportOpen: true, playing: false })
+  }, [loaded, exportParam])
   useEffect(() => {
     if (!loaded || !tabParam) return
     const tabs: LeftTab[] = ['media', 'audio', 'text', 'captions', 'transcript', 'effects', 'transitions', 'filters', 'brand', 'ai']
