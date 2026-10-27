@@ -26,8 +26,7 @@ export function CaptionsPanel() {
   const missing = [...new Set(items.filter((i) => 'assetId' in i && !project.assets[i.assetId]?.transcript && project.assets[i.assetId]?.hasAudio !== false).map((i) => (i as { assetId: string }).assetId))]
 
   const auto = async () => {
-    const s = useEditor.getState()
-    let p = s.project
+    const session = useEditor.getState().session
     try {
       if (missing.length && !demo) {
         for (let i = 0; i < missing.length; i++) {
@@ -36,17 +35,19 @@ export function CaptionsPanel() {
           const job = await api.transcribe(id)
           const done = await waitForJob<{ assetId: string; transcript: Transcript }>(job.id, (j) => setBusy(`Transcribing ${i + 1} of ${missing.length}… ${j.progress > 0 ? Math.round(j.progress * 100) + '%' : ''}`))
           const tr = done.result?.transcript
-          if (tr) {
-            p = clone(p)
-            p.assets[id] = { ...p.assets[id], transcript: tr }
-          }
+          // a media record: it joins the project as it is now, outside undo
+          if (tr) useEditor.getState().updateMedia({ id, transcript: tr })
         }
       } else if (missing.length && demo && !withTranscript.length) {
         toast('Sign in to transcribe your own media — the demo clips already have transcripts.')
         return
       }
+      // you may have opened another project while it transcribed
+      if (useEditor.getState().session !== session) return
       setBusy('Building captions…')
-      const style = track?.captionStyle ?? captionStyleFromPreset('clean')
+      // from the project as it is after the wait, so edits made meanwhile are kept
+      const p = useEditor.getState().project
+      const style = p.tracks.find((t) => t.kind === 'caption')?.captionStyle ?? captionStyleFromPreset('clean')
       const next = captionsAtLeastOneFrame(generateCaptions(p, { style }))
       const n = next.tracks.find((t) => t.kind === 'caption')?.items.length ?? 0
       if (!n) {

@@ -311,6 +311,9 @@
 .ai-tools b { color: var(--text-2); font-family: var(--font-mono); font-weight: 500; }
 .ai-typing { display: flex; gap: 6px; align-items: center; color: var(--text-3); }
 .ai-changes { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.ai-stale { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; font-size: 0.75rem; color: var(--text-2); }
+.ai-stale > svg { color: var(--danger); flex: none; margin-top: 2px; }
+.ai-stale > span { flex: 1; min-width: 0; }
 .ai-changes ul { margin: 4px 0 8px; padding-left: 16px; font-size: 0.75rem; color: var(--text-2); }
 .ai-foot { border-top: 1px solid var(--border); padding: 10px 12px 12px; display: grid; gap: 8px; flex: none; }
 .ai-input { display: flex; gap: 6px; align-items: flex-end; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 6px 6px 6px 10px; }

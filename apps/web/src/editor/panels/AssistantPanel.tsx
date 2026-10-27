@@ -1,14 +1,15 @@
-// AI assistant: chat that edits the timeline. Streams text + tool events; on `done` with a project the new
-// document is committed through the store (one undo step) and the change list is shown.
-import type { AssistantMessage } from '@producer/core'
+// AI assistant: chat that edits the timeline. Streams text + tool events; on `done` with a project its changes are
+// applied to the project as it is by then (one undo step) and the change list is shown.
+import type { AssistantMessage, Project } from '@producer/core'
 import clsx from 'clsx'
-import { ArrowUp, Bot, Loader2, Sparkles, Undo2, Wrench } from 'lucide-react'
+import { ArrowUp, Bot, Loader2, Sparkles, TriangleAlert, Undo2, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { scrollBehavior } from '../../lib/appearance'
 import { api } from '../../lib/api'
 import { aiLabel, aiProviderLabel, systemApi, useSystem } from '../../shell/system'
 import { toastError } from '../../lib/toast'
 import * as A from '../actions'
+import { rebase } from '../rebase'
 import { useEditor } from '../store'
 
 interface ChatMsg {
@@ -16,6 +17,8 @@ interface ChatMsg {
   text: string
   tools?: Array<{ name: string; summary: string }>
   changes?: string[]
+  /** The project changed in the same places while the assistant worked, so its edit was not applied. */
+  notApplied?: boolean
   pending?: boolean
   error?: boolean
 }
@@ -23,6 +26,21 @@ interface ChatMsg {
 const SUGGESTIONS = ['Add captions', 'Cut the pauses', 'Add a title at the start', 'Make it vertical 9:16']
 
 const history = new Map<string, ChatMsg[]>()
+
+/**
+ * The assistant edited the project as it was when you asked (`base`). Apply its changes to the project as it is
+ * now, keeping what you did meanwhile; false when both touched the same thing (nothing is overwritten).
+ */
+function applyResult(base: Project, theirs: Project, session: number): boolean {
+  const now = useEditor.getState()
+  // another project is open now: the answer was for the one you left
+  if (now.session !== session) return false
+  const result = A.captionsAtLeastOneFrame(theirs)
+  const next = now.project === base ? result : rebase(base, result, now.project)
+  if (!next) return false
+  now.commit(next, 'AI edit')
+  return true
+}
 
 /** "Answered by Gemini · gemini-3-pro": the provider the editor assistant resolves to for this workspace. */
 function useAssistantProvider(): string | undefined {
@@ -60,12 +78,13 @@ export function AssistantPanel() {
   }, [msgs, projectId])
   useEffect(() => () => abort.current?.abort(), [])
 
-  const send = async (text: string) => {
+  /** `again`: the same request on the edit as it is now, in place of the reply that couldn't be applied. */
+  const send = async (text: string, again = false) => {
     const t = text.trim()
     if (!t || busy) return
     if (A.demoBlocked('the AI assistant')) return
     const s = useEditor.getState()
-    const next: ChatMsg[] = [...msgs, { role: 'user', text: t }, { role: 'assistant', text: '', tools: [], pending: true }]
+    const next: ChatMsg[] = [...(again ? msgs.slice(0, -2) : msgs), { role: 'user', text: t }, { role: 'assistant', text: '', tools: [], pending: true }]
     setMsgs(next)
     setInput('')
     setBusy(true)
@@ -81,8 +100,8 @@ export function AssistantPanel() {
         },
         abort.current.signal,
       )
-      if (res.project) useEditor.getState().commit(res.project, 'AI edit')
-      patchLast((m) => ({ ...m, text: res.text || m.text, changes: res.changes, pending: false }))
+      const applied = res.project ? applyResult(s.project, res.project, s.session) : true
+      patchLast((m) => ({ ...m, text: res.text || m.text, changes: res.changes, pending: false, notApplied: !applied }))
     } catch (e) {
       patchLast((m) => ({ ...m, text: m.text || (e instanceof Error ? e.message : 'Something went wrong'), pending: false, error: true }))
       if (!(e instanceof DOMException && e.name === 'AbortError')) toastError(e)
@@ -117,10 +136,19 @@ export function AssistantPanel() {
               {m.pending && !m.text && <div className="ai-typing"><Loader2 size={13} className="spin" /> Thinking…</div>}
               {m.changes && m.changes.length > 0 && (
                 <div className="ai-changes">
-                  <div className="eyebrow">Changes</div>
+                  <div className="eyebrow">{m.notApplied ? 'Changes (not applied)' : 'Changes'}</div>
                   <ul>{m.changes.map((c, j) => <li key={j}>{c}</li>)}</ul>
-                  {i === msgs.length - 1 && (
+                  {i === msgs.length - 1 && !m.notApplied && (
                     <button className="btn sm" onClick={() => useEditor.getState().undo()}><Undo2 size={13} /> Undo</button>
+                  )}
+                </div>
+              )}
+              {m.notApplied && (
+                <div className="ai-stale" role="status">
+                  <TriangleAlert size={13} />
+                  <span>You changed the same part of the edit while I was working, so I didn’t apply this: it would have undone your changes.</span>
+                  {i === msgs.length - 1 && i > 0 && msgs[i - 1].role === 'user' && (
+                    <button className="btn sm" disabled={busy} onClick={() => void send(msgs[i - 1].text, true)}>Run again on the current edit</button>
                   )}
                 </div>
               )}
