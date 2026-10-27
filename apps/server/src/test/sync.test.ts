@@ -116,6 +116,40 @@ describe('global ids', () => {
   })
 })
 
+describe('an upload that never arrived', () => {
+  it('gets a fresh ticket for the same id instead of "exists"', async () => {
+    const A = await signup(t.app)
+    const bytes = crypto.randomBytes(2048)
+    const hash = crypto.createHash('sha256').update(bytes).digest('hex')
+    const up = (assetId: string, sha256 = hash) => A.client.json('POST', '/api/uploads', { workspaceId: A.workspaceId, filename: 'a.png', mime: 'image/png', size: bytes.length, assetId, sha256 })
+
+    // ticket issued, bytes never sent (the replica's connection dropped)
+    const id = crypto.randomUUID()
+    expect((await up(id)).status).toBe(200)
+    const again = await up(id)
+    expect(again.status).toBe(200)
+    expect(again.body.assetId).toBe(id)
+    await A.client.req('PUT', again.body.url, new Uint8Array(bytes), again.body.headers)
+    expect((await A.client.json('POST', `/api/assets/${id}/complete`)).status).toBe(200)
+    // now it's really there
+    expect((await up(id)).body).toMatchObject({ code: 'conflict', details: { exists: true, sha256: hash } })
+
+    // an upload that was given up on (status error, no file) can be sent again too
+    const gone = crypto.randomUUID()
+    expect((await up(gone)).status).toBe(200)
+    expect((await A.client.json('POST', `/api/assets/${gone}/abort`, { reason: 'network' })).body.status).toBe('error')
+    const retry = await up(gone)
+    expect(retry.status).toBe(200)
+    expect((await A.client.json('GET', `/api/assets/${gone}`)).body).toMatchObject({ status: 'uploading' })
+    await A.client.req('PUT', retry.body.url, new Uint8Array(bytes), retry.body.headers)
+    expect((await A.client.json('POST', `/api/assets/${gone}/complete`)).status).toBe(200)
+
+    // another workspace's id is still just taken
+    const B = await signup(t.app)
+    expect((await B.client.json('POST', '/api/uploads', { workspaceId: B.workspaceId, filename: 'a.png', mime: 'image/png', size: 10, assetId: id })).body.details).toBeUndefined()
+  })
+})
+
 describe('change feed', () => {
   it('writes bump change_seq, deletes leave tombstones, and results page with `more`', async () => {
     const A = await signup(t.app)

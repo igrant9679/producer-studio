@@ -58,7 +58,7 @@ beforeAll(async () => {
   desk = d.desk
   engine = d.engine
   stopDesktop = d.stop
-}, 120_000)
+}, 240_000)
 
 afterAll(async () => {
   stopDesktop?.()

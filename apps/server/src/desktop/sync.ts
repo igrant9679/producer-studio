@@ -43,6 +43,12 @@ type ProjectRow = typeof projects.$inferSelect
 
 const mediaId = (url?: string) => url?.match(/^\/api\/media\/([^/]+)\//)?.[1] ?? null
 
+/** The cloud copy of a clip holds its file (and the same file, when both sides know the hash). */
+function cloudHasFile(rec: { status: AssetRecord['status']; sha256?: string }, localSha: string | null): boolean {
+  if (rec.status !== 'ready' && rec.status !== 'processing') return false
+  return !rec.sha256 || !localSha || rec.sha256 === localSha
+}
+
 /** What a failed delete is called in the sync menu (the item itself is gone from this computer). */
 const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted here', voice: 'A voice deleted here' } as const
 
@@ -477,8 +483,9 @@ export class SyncEngine {
     const row = (await db.select().from(assets).where(eq(assets.id, a.id)).limit(1))[0]
     const s = await syncRow('asset', a.id)
     if (row && !s?.remote) {
-      // our own upload echoed back (or an id we already hold locally): local bytes and derived files win
-      if (!s?.uploaded) await putSync('asset', a.id, { uploaded: true, remote: false })
+      // our own upload echoed back (or an id we already hold locally): local bytes and derived files win. It only
+      // counts as uploaded once the cloud has the same file; an upload cut short is sent again by the push.
+      if (!s?.uploaded && cloudHasFile(rec, row.sha256)) await putSync('asset', a.id, { uploaded: true, remote: false })
       return
     }
     const prefix = assetPrefix(rec.workspaceId, a.id)
@@ -694,7 +701,11 @@ export class SyncEngine {
     try {
       ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: bytes, assetId: a.id, sha256: sha, origin: a.origin, ...(a.meta?.tts ? { tts: a.meta.tts } : {}), ...(a.projectId ? { projectId: a.projectId } : {}) })
     } catch (err) {
-      if (err instanceof CloudError && err.status === 409 && (err.body?.details as { exists?: boolean } | undefined)?.exists) {
+      const exists = err instanceof CloudError && err.status === 409 ? (err.body?.details as { exists?: boolean; asset?: AssetRecord; sha256?: string } | undefined) : undefined
+      if (exists?.exists) {
+        // a different file under this id, or (older clouds) an upload that never arrived: never count that as done
+        if (exists.sha256 && exists.sha256 !== sha) throw new Error('The cloud already has a different file under this clip’s id')
+        if (exists.asset?.status === 'uploading') throw new Error('The cloud has an unfinished upload of this clip and won’t take it again (the cloud server needs updating)')
         await putSync('asset', a.id, { uploaded: true, remote: false })
         return
       }

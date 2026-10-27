@@ -74,7 +74,8 @@ export async function startCloud(env: Record<string, string> = {}): Promise<Clou
     } catch {
       /* booting */
     }
-    if (i > 200) throw new Error(`cloud did not start: ${err}`)
+    // a loaded machine (several suites at once) can take a minute to compile and boot the cloud
+    if (i > 600 || proc.exitCode != null) throw new Error(`cloud did not start: ${err}`)
     await new Promise((r) => setTimeout(r, 150))
   }
   const http = () => new Http((u, init) => fetch(`${url}${u}`, init))

@@ -487,7 +487,8 @@ export interface TemplateSummary {
 // POST /api/projects accepts optional `id` (client-generated) so desktop-created projects keep their id;
 // PUT  /api/projects/:id with baseVersion is the push path (409 on conflict, details.version = cloud version).
 // POST /api/uploads accepts optional `assetId` and `sha256`; returns 409 {code:'conflict'} with details
-//      {exists: true} when that asset already exists in the cloud (nothing to upload).
+//      {exists: true} when that asset already exists in the cloud (nothing to upload). An earlier upload of the same
+//      id that never arrived (still uploading, or failed without its file) gets a fresh ticket instead.
 // Every project/asset/workspace write bumps a server-wide monotonic `change_seq`; `cursor` is that number.
 export interface SystemInfo {
   mode: 'cloud' | 'desktop'

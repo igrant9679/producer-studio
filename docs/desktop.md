@@ -108,7 +108,8 @@ See `apps/server/src/desktop/sync.ts`. Link adopts the cloud identity, mirrors w
 local-only workspaces (personal → cloud personal; others are created in the cloud). Pull never overwrites a dirty local
 project; cloud-advanced + local-dirty ⇒ conflict, as does a 409 on push. Resolve: keep-local (force-push over the latest
 cloud version), keep-cloud, keep-both (local copy becomes "… (conflicted copy)"). Assets: local uploads are pushed with
-the same id + sha256; cloud assets download on demand (202 while downloading, source sha256-verified) or eagerly with
+the same id + sha256 and count as uploaded only once the cloud holds the file with that hash (an upload cut short gets a
+fresh ticket for the same id and is sent again); cloud assets download on demand (202 while downloading, source sha256-verified) or eagerly with
 "Download all". Exports (`origin: render`) stay local. Runs at start, every 60 s, 3 s after local saves; backs off
 (5 s → 5 min) while offline.
 

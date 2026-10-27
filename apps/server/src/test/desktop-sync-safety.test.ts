@@ -53,11 +53,61 @@ beforeAll(async () => {
   d = await startDesktop()
   desk = d.desk
   await deskSession(desk)
-}, 120_000)
+}, 240_000)
 
 afterAll(async () => {
   d?.stop()
   cloud?.proc.kill()
+})
+
+/** While `fn` runs, the desktop's requests matching `hit` fail like a dropped connection. */
+async function withDroppedRequests<T>(hit: (method: string, url: string) => boolean, fn: () => Promise<T>): Promise<T> {
+  const real = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input)
+    if (url.startsWith(cloud.url) && hit(init?.method ?? 'GET', url)) {
+      await (init?.body as ReadableStream | undefined)?.cancel?.().catch(() => undefined)
+      throw new TypeError('fetch failed')
+    }
+    return real(input, init)
+  }) as typeof fetch
+  try {
+    return await fn()
+  } finally {
+    globalThis.fetch = real
+  }
+}
+
+describe('an interrupted upload is sent again (DSK-1)', () => {
+  beforeAll(linkA)
+
+  it('re-uploads a clip whose bytes never reached the cloud', async () => {
+    const bytes = png()
+    const id = await deskUpload(A.workspaceId, bytes)
+    // the ticket is issued, then the connection drops while the file is on its way
+    const st0 = await withDroppedRequests((m, u) => m === 'PUT' && u.includes(`/api/uploads/${id}/data`), sync)
+    expect(st0.state).toBe('offline')
+    expect((await A.http.json('GET', `/api/assets/${id}`)).body.status).toBe('uploading')
+
+    const st = await sync()
+    expect(st.state).toBe('idle')
+    const rec = await A.http.json('GET', `/api/assets/${id}`)
+    expect(rec.body.status).not.toBe('uploading')
+    const res = await A.http.req('GET', `/api/media/${id}/source`)
+    expect(res.status).toBe(200)
+    expect(sha(Buffer.from(await res.arrayBuffer()))).toBe(sha(bytes))
+    expect(st.pending).toBe(0)
+  })
+
+  it('re-uploads a clip whose upload reached the cloud but was never completed', async () => {
+    const bytes = png()
+    const id = await deskUpload(A.workspaceId, bytes)
+    expect((await withDroppedRequests((m, u) => m === 'POST' && u.endsWith(`/api/assets/${id}/complete`), sync)).state).toBe('offline')
+    expect((await A.http.json('GET', `/api/assets/${id}`)).body.status).toBe('uploading')
+    await sync()
+    expect((await A.http.json('GET', `/api/assets/${id}`)).body.status).not.toBe('uploading')
+    expect(sha(Buffer.from(await (await A.http.req('GET', `/api/media/${id}/source`)).arrayBuffer()))).toBe(sha(bytes))
+  })
 })
 
 describe('one item that keeps failing never blocks the rest (DSK-5)', () => {
