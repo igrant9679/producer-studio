@@ -15,6 +15,11 @@ function speechItems(p: Project): Item[] {
   return p.tracks.flatMap((t) => (t.muted ? [] : t.items)).filter((i) => (i.type === 'video' || i.type === 'audio') && !i.muted)
 }
 
+/** Caption lines that didn't come from a transcript (imported, typed or edited: they carry no word timings). */
+export function handMadeCaptions(p: Project): number {
+  return p.tracks.filter((t) => t.kind === 'caption').flatMap((t) => t.items).filter((i) => i.type === 'caption' && !i.words?.length).length
+}
+
 export function CaptionsPanel() {
   const project = useEditor((s) => s.project)
   const demo = useEditor((s) => s.demo)
@@ -27,6 +32,9 @@ export function CaptionsPanel() {
 
   const auto = async () => {
     const session = useEditor.getState().session
+    // regenerating replaces every caption track; imported, typed and edited lines (no word timings) can't be remade
+    const kept = handMadeCaptions(useEditor.getState().project)
+    if (kept && !window.confirm(`Regenerating replaces all captions, including ${kept} imported or edited line${kept === 1 ? '' : 's'} that can't be made again from the transcript. Continue?`)) return
     try {
       if (missing.length && !demo) {
         for (let i = 0; i < missing.length; i++) {

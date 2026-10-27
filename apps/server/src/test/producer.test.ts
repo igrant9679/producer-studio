@@ -110,17 +110,26 @@ describe('Producer AI assembly', () => {
     expect(p.project.tracks.find((t) => t.name === 'Voiceover')?.items).toHaveLength(2)
   })
 
-  it('never replaces a timeline edited while it ran, and says so', async () => {
+  it('never replaces a timeline edited while it ran: the new assembly goes into a copy, and it says so', async () => {
     const id = await newProject()
     const a = await assemble(id)
     expect(a.status).toBe(200)
     during = async (text) => {
       if (text === scenes[1].narration) await editTimeline(id)
     }
-    await expect(a.run()).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/edited .*while it was being assembled.*nothing was replaced/) })
+    const result = await a.run()
+    expect(result.message).toMatch(/edited .*while it was being assembled.*kept.*copy/)
     const p = (await load(id)).project
     expect(hasMyCard(p)).toBe(true)
     expect(p.ai?.status).not.toBe('assembled')
+    // the copy has the new assembly, with the voices this run made (not voiced twice)
+    const copy = await load(result.copyProjectId!)
+    expect(copy.summary.name).toBe('Spring tour (new assembly)')
+    expect(copy.project.ai?.status).toBe('assembled')
+    expect(hasMyCard(copy.project)).toBe(false)
+    expect(copy.project.tracks.find((t) => t.name === 'Voiceover')?.items).toHaveLength(2)
+    expect(spoken).toHaveLength(2)
+    expect(editedSinceAssembly(copy.project)).toBe(false)
   })
 
   it('a retry reuses the voices the failed run made; each voice records its job', async () => {

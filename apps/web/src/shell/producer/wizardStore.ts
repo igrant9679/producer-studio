@@ -301,6 +301,14 @@ export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean;
       resumeJob,
     )
     if (signal.aborted) return
+    // the timeline was edited while it ran: those edits were kept and the assembly went into a copy, which we follow
+    const copyId = (job.result as { copyProjectId?: string } | undefined)?.copyProjectId
+    if (copyId) {
+      ssSet(storageKey(projectId), undefined)
+      projectId = copyId
+      patch({ projectId })
+      opts.onProject?.(projectId)
+    }
     // the server saved scene voices and visuals with what it made (so re-assembling reuses them): keep the wizard in step
     const fresh = await api.project(projectId).catch(() => undefined)
     const done = { ...get(), ...(fresh?.project.ai?.script?.scenes ? { scenes: fresh.project.ai.script.scenes } : {}) }
@@ -310,7 +318,7 @@ export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean;
       assembleNotes: job.result?.notes,
       scenes: done.scenes,
       assembledFrom: draftKey(done),
-      run: { status: 'done', phase: 'assemble', message: 'Your video is ready' },
+      run: { status: 'done', phase: 'assemble', message: copyId ? 'Your video is ready, as a copy: someone edited the original’s timeline while it was being assembled, and those edits were kept' : 'Your video is ready' },
     })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') {

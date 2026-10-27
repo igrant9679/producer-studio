@@ -752,6 +752,8 @@ export function generateCaptions(p0: Project, opts: { itemIds?: string[]; style?
   const sources = p.tracks.flatMap((t) => (t.muted ? [] : t.items)).filter((i) => (i.type === 'video' || i.type === 'audio') && (!opts.itemIds || opts.itemIds.includes(i.id)))
   for (const it of sources) {
     if ((it.type === 'video' && it.muted) || (it.type === 'audio' && it.muted)) continue
+    // a reversed clip's speech plays backwards (and not at all in the export), so it gets no captions
+    if (isReversed(it)) continue
     for (const w of itemWords(p, it.id)) {
       if (w.start < it.start - EPS || w.end > itemEnd(it) + 0.25) continue
       words.push({ w: w.w, start: w.start, end: Math.min(w.end, itemEnd(it)) })

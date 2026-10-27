@@ -1,6 +1,6 @@
 // Captions from the Captions panel: built on the project as it is after transcribing, never shorter than a frame.
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { addAsset, addItem, captionStyleFromPreset, createAudioItem, createProject, generateCaptions, updateProject, type Asset, type Job, type Project } from '@producer/core'
+import { addAsset, addItem, captionStyleFromPreset, createAudioItem, createProject, generateCaptions, importSrt, updateProject, type Asset, type Job, type Project } from '@producer/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
 import { captionsAtLeastOneFrame } from '../actions'
@@ -50,6 +50,23 @@ describe('caption length', () => {
   it('leaves a project with no short captions untouched', () => {
     const p = generateCaptions(twoVoices(), { style: captionStyleFromPreset('clean') })
     expect(captionsAtLeastOneFrame(p)).toBe(p)
+  })
+})
+
+describe('regenerating over imported captions', { timeout: 20_000 }, () => {
+  it('asks first, and keeps them when you say no', async () => {
+    const srt = '1\n00:00:00,000 --> 00:00:01,000\nMy own words\n'
+    const p = importSrt(twoVoices(), srt)
+    S().load({ project: p, version: 1, projectId: 'p1', demo: false, workspaceId: 'w1' })
+    const ask = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<CaptionsPanel />)
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /Regenerate captions/ })))
+    expect(ask).toHaveBeenCalledOnce()
+    expect(ask.mock.calls[0][0]).toMatch(/1 imported or edited line/)
+    expect(captions(S().project).map((c) => (c as { text: string }).text)).toEqual(['My own words'])
+    ask.mockReturnValue(true)
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /Regenerate captions/ })))
+    expect(captions(S().project).map((c) => (c as { text: string }).text).join(' ')).toContain('Hello')
   })
 })
 

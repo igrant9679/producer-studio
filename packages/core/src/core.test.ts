@@ -568,6 +568,15 @@ describe('freeze frames and reversed clips in the transcript (EDT-17)', () => {
     expect(shown).toBeLessThan(0.6)
   })
 
+  it('a reversed clip gets no captions, the clip after it still does', () => {
+    const p0 = twoClips()
+    const [a, b] = mainTrack(p0)!.items
+    const p = updateItem<VideoItem>(p0, a.id, { reverse: true })
+    const caps = generateCaptions(p).tracks.find((t) => t.kind === 'caption')!.items
+    expect(caps.some((c) => c.start < itemEnd(a))).toBe(false)
+    expect(caps.some((c) => c.start >= b.start)).toBe(true)
+  })
+
   it('cutting a word from a reversed clip removes the footage of that word', () => {
     const p0 = twoClips()
     const id = mainTrack(p0)!.items[0].id

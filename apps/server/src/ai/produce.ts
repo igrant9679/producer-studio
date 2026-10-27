@@ -37,7 +37,7 @@ import { type AssetRow, createAssetFromFile, localSource, tmpDir } from '../serv
 import { processAsset } from '../media/process'
 import { log } from '../log'
 import { getLook, headlineStyle, labelStyle, lookPalette, sizeForAspect } from '../services/looks'
-import { loadProjectRow, saveProjectDoc } from '../services/projects'
+import { insertProject, loadProjectRow, saveProjectDoc, withFreshIds } from '../services/projects'
 import { getBrand } from '../routes/workspaces'
 import { requireProvider } from './provider'
 import { houseRules } from './rules'
@@ -88,7 +88,7 @@ export function editedSinceAssembly(p: Project): boolean {
 }
 
 export const EDITED_WHILE_ASSEMBLING =
-  'Someone edited this project’s timeline while it was being assembled, so nothing was replaced. Assemble again to replace those edits, or assemble into a copy.'
+  'Someone edited this project’s timeline while it was being assembled, so their edits were kept and the new assembly was saved as a copy.'
 
 export const ScriptSchema = z.object({
   message: z.string().describe('The one-sentence message of the video'),
@@ -572,7 +572,7 @@ async function reuseVoice(jc: JobContext, o: { workspaceId: string; projectId: s
   return undefined
 }
 
-export async function produceAssemble(jc: JobContext): Promise<{ version: number }> {
+export async function produceAssemble(jc: JobContext): Promise<{ version: number; copyProjectId?: string; message?: string; notes?: string[] }> {
   const input = jc.job.input as unknown as AssembleJobInput
   const row = await loadProjectRow(input.projectId)
   const doc = row.doc
@@ -620,15 +620,35 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   jc.progress(0.92, 'Assembling timeline')
   jc.check()
   const scenes = made.scenes.map((s) => ({ ...s, voice: voices.has(s.id) ? { assetId: voices.get(s.id)!.asset.id, duration: voices.get(s.id)!.duration } : undefined }))
-  const saved = await saveOnLatest(row.id, (cur) => {
-    if (timelineFingerprint(cur) !== base) throw new HttpError(409, 'conflict', EDITED_WHILE_ASSEMBLING)
+  const build = (cur: Project) => {
     const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, brand })
     built.ai = { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes }, status: 'assembled', assembled: { fingerprint: timelineFingerprint(built), at: Date.now() } }
     return built
-  })
-  jc.progress(1, made.notes.length ? `Assembled · ${made.notes.length} scene${made.notes.length === 1 ? '' : 's'} used animated text instead` : 'Assembled')
-  return { version: saved.version, ...(made.notes.length ? { notes: made.notes } : {}) }
+  }
+  const notes = made.notes.length ? { notes: made.notes } : {}
+  const done = made.notes.length ? `Assembled · ${made.notes.length} scene${made.notes.length === 1 ? '' : 's'} used animated text instead` : 'Assembled'
+  try {
+    const saved = await saveOnLatest(row.id, (cur) => {
+      if (timelineFingerprint(cur) !== base) throw new EditedMeanwhile()
+      return build(cur)
+    })
+    jc.progress(1, done)
+    return { version: saved.version, ...notes }
+  } catch (err) {
+    if (!(err instanceof EditedMeanwhile)) throw err
+  }
+  // the timeline was edited while this ran: those edits stay where they are, and the new assembly (with the voices
+  // and visuals already paid for) goes into a copy next to it
+  const cur = await loadProjectRow(row.id)
+  const fresh = withFreshIds(cur.doc, uid('p'))
+  fresh.name = `${cur.name} (new assembly)`.slice(0, 200)
+  const copy = await insertProject({ workspaceId: cur.workspaceId, userId: jc.job.userId, doc: build(fresh), kind: cur.kind })
+  ctx().bus.publish(copy.workspaceId, 'project', { id: copy.id, version: copy.version }, { id: copy.id, inline: { id: copy.id, version: copy.version } })
+  jc.progress(1, `${done} into a copy, because the timeline was edited meanwhile`)
+  return { version: copy.version, copyProjectId: copy.id, message: EDITED_WHILE_ASSEMBLING, ...notes }
 }
+
+class EditedMeanwhile extends Error {}
 
 /** At most this many AI clips per video: each costs real money on the workspace's key and minutes to make. */
 export const MAX_AI_CLIPS = 3

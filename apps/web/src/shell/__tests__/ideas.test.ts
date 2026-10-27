@@ -1,7 +1,18 @@
 import type { SceneDiagram } from '@producer/core'
 import { describe, expect, it } from 'vitest'
 import { defaultVisual, diagramFromText, diagramToText, withPrompt } from '../producer/sceneVisuals'
-import { canAdvance, initialState, newScene, stateFromProject } from '../producer/wizardLogic'
+import { canAdvance, initialState, newScene, stateFromProject, unsavedDraft } from '../producer/wizardLogic'
+
+describe('a draft only this tab holds', () => {
+  it('is unsaved once it has an idea, a title, recordings or scenes, and never once a project holds it', () => {
+    const s = initialState()
+    expect(unsavedDraft(s)).toBe(false)
+    expect(unsavedDraft({ ...s, brief: { ...s.brief, idea: 'A tour of the studio' } })).toBe(true)
+    expect(unsavedDraft({ ...s, brief: { ...s.brief, title: 'Spring tour' } })).toBe(true)
+    expect(unsavedDraft({ ...s, scenes: [newScene()] })).toBe(true)
+    expect(unsavedDraft({ ...s, projectId: 'p1', scenes: [newScene()] })).toBe(false)
+  })
+})
 
 describe('diagrams as editable lines', () => {
   const samples: SceneDiagram[] = [

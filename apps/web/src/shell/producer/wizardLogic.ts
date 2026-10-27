@@ -82,6 +82,13 @@ export function initialState(opts: Parameters<typeof defaultBrief>[0] = {}): Wiz
   return { step: 'upload', assets: [], brief: defaultBrief(opts), scenes: [], transcribed: [], run: { status: 'idle' } }
 }
 
+/** Work that lives only in this tab: no project holds it yet, so starting over loses it. */
+export function unsavedDraft(s: Pick<WizardState, 'projectId' | 'assets' | 'scenes' | 'brief'>): boolean {
+  if (s.projectId) return false
+  const title = s.brief.title?.trim()
+  return s.assets.length > 0 || s.scenes.length > 0 || !!s.brief.idea?.trim() || (!!title && title !== initialState().brief.title)
+}
+
 export function readyAssetIds(s: Pick<WizardState, 'assets'>): string[] {
   return s.assets.filter((a) => a.status === 'ready' && a.assetId).map((a) => a.assetId!)
 }

@@ -57,6 +57,7 @@ import {
   STEPS,
   storageKey,
   TONES,
+  unsavedDraft,
   updateScene,
   validateBrief,
   wizardWorkspace,
@@ -926,6 +927,9 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
                   ? `Producer will narrate ${s.scenes.length} scenes, make their visuals and apply your look and captions.`
                   : `Producer will narrate ${s.scenes.length} scenes, cut the footage and apply your template look and captions.`}
       </p>
+      {done && !!r.message && r.message !== 'Your video is ready' && (
+        <div className="ps-alert info" role="status" style={{ marginBottom: 14 }}><Copy size={15} style={{ flex: 'none' }} /> {r.message}</div>
+      )}
       {done && !!s.assembleNotes?.length && (
         <div className="ps-alert info" style={{ textAlign: 'left', maxWidth: 560, margin: '0 auto 8px' }}>
           <div>
@@ -1006,6 +1010,8 @@ function SpaceMismatch({ s }: { s: WizardState }) {
         <button
           className="btn sm ghost"
           onClick={() => {
+            // a draft with no project yet exists only in this tab
+            if (unsavedDraft(s) && !window.confirm('This video isn’t saved to a project yet, so starting a new one discards it. Start a new video?')) return
             useWizard.getState().replace(initialState())
             navigate('/producer/new')
           }}
