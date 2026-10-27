@@ -1,4 +1,4 @@
-import type { AssetRecord, ScriptScene, TemplateSummary } from '@producer/core'
+import type { AssetRecord, DiagramType, ProduceCapabilities, SceneVisual, ScriptScene, TemplateSummary, VisualKind } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -14,6 +14,7 @@ import {
   FolderOpen,
   GripVertical,
   Library,
+  Lightbulb,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -32,11 +33,15 @@ import { toastError } from '../../lib/toast'
 import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } from '../components/VoiceCard'
 import { Modal, Popover, Progress, Spinner, Thumb, useAsync, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes, formatDuration, formatTime, ssGet } from '../util'
+import { DIAGRAM_INFO, VISUAL_KIND_INFO, defaultVisual, diagramFromText, diagramToText, withPrompt } from './sceneVisuals'
 import { takeProducerHandoff } from './handoff'
 import {
+  briefTitleFromPrompt,
   canAdvance,
+  IDEA_LENGTHS,
   initialState,
   insertScene,
+  isIdea,
   maxReachableStep,
   moveScene,
   narrationSeconds,
@@ -147,7 +152,7 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
   const pick = useFilePicker('video/*', true, (files) => void uploadToWizard(workspaceId, files))
   const locked = !!s.projectId && s.transcribed.length > 0
   return (
-    <div className="ps-wz-body">
+    <>
       <div className="ps-wz-intro">
         <h2>Add your recordings</h2>
         <p>Screen captures, demos, talking heads — Producer transcribes every file and picks the strongest moments for the script. Add one or several.</p>
@@ -209,6 +214,103 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
           }}
         />
       )}
+    </>
+  )
+}
+
+const ALL_KINDS: Array<Exclude<VisualKind, 'footage'>> = ['motion', 'diagram', 'image', 'stock', 'aiVideo']
+const DEFAULT_KINDS: VisualKind[] = ['motion', 'diagram', 'image', 'stock']
+
+/** What this space can make, and why not when it can't. */
+function kindStatus(k: Exclude<VisualKind, 'footage'>, caps: ProduceCapabilities | undefined): { available: boolean; note: string } {
+  if (k === 'motion' || k === 'diagram') return { available: true, note: VISUAL_KIND_INFO[k].hint }
+  const who = (p: 'openai' | 'gemini') => (p === 'openai' ? 'your OpenAI account' : 'your Google account')
+  if (k === 'image') return caps?.image ? { available: true, note: `${VISUAL_KIND_INFO.image.hint}. Billed to ${who(caps.image.provider)}.` } : { available: false, note: 'Needs an OpenAI or Gemini key in Settings → AI' }
+  if (k === 'aiVideo')
+    return caps?.video
+      ? { available: true, note: `${VISUAL_KIND_INFO.aiVideo.hint}. Billed to ${who(caps.video.provider)}, at most ${caps.maxAiClips} clips per video.` }
+      : { available: false, note: 'Needs a Gemini key in Settings → AI (OpenAI no longer offers video)' }
+  return caps?.stock ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint} (from Pexels).` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }
+}
+
+function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) {
+  const patch = useWizard((st) => st.patch)
+  const b = s.brief
+  const set = (p: Partial<Brief>) => patch((st) => ({ brief: { ...st.brief, ...p } }))
+  const caps = useAsync(() => api.produceCapabilities(workspaceId), [workspaceId])
+  const kinds = b.visualKinds ?? DEFAULT_KINDS
+  const len = b.lengthSec ?? 60
+  return (
+    <>
+      <div className="ps-wz-intro">
+        <h2>Describe your video</h2>
+        <p>A topic, an outline or a finished script. Producer plans the scenes, writes the narration and makes every visual — no recording needed.</p>
+      </div>
+      <label className="label" htmlFor="ps-idea">The idea</label>
+      <textarea
+        id="ps-idea"
+        className="input"
+        rows={7}
+        maxLength={20000}
+        value={b.idea ?? ''}
+        onChange={(e) => set({ idea: e.target.value })}
+        placeholder="e.g. Show new customers how onboarding works in three steps, and why it saves them a week. Friendly, for small-business owners."
+      />
+      <div className="muted" style={{ fontSize: '0.7187rem', marginTop: 4, textAlign: 'right' }}>{(b.idea ?? '').length.toLocaleString()} / 20,000 characters</div>
+      <span className="label" style={{ marginTop: 10 }}>Length</span>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 6 }} role="radiogroup" aria-label="Length">
+        {IDEA_LENGTHS.map((sec) => (
+          <button key={sec} role="radio" aria-checked={len === sec} className={clsx('chip', len === sec && 'active')} onClick={() => set({ lengthSec: sec })}>
+            {sec < 60 ? `${sec} seconds` : sec === 60 ? '1 minute' : `${sec / 60} minutes`}
+          </button>
+        ))}
+      </div>
+      <span className="label" style={{ marginTop: 18 }}>Visuals Producer may use</span>
+      <div className="ps-kinds">
+        {ALL_KINDS.map((k) => {
+          const st = kindStatus(k, caps.data)
+          const on = st.available && (k === 'motion' || kinds.includes(k))
+          return (
+            <label key={k} className={clsx('ps-kind', !st.available && 'off', on && 'on')}>
+              <input
+                type="checkbox"
+                checked={on}
+                disabled={!st.available || k === 'motion' || caps.loading}
+                onChange={() => set({ visualKinds: kinds.includes(k) ? kinds.filter((x) => x !== k) : [...kinds, k] })}
+              />
+              <span>
+                <strong>{VISUAL_KIND_INFO[k].label}</strong>
+                <span>{caps.loading && k !== 'motion' && k !== 'diagram' ? 'Checking…' : st.note}</span>
+              </span>
+            </label>
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
+function StartStep({ s, workspaceId }: { s: WizardState; workspaceId: string }) {
+  const patch = useWizard((st) => st.patch)
+  const idea = isIdea(s)
+  // once a script exists, its scenes belong to one source
+  const locked = s.scenes.length > 0
+  const choose = (source: 'recordings' | 'idea') => patch((st) => ({ brief: { ...st.brief, source } }))
+  return (
+    <div className="ps-wz-body">
+      <div className="ps-source" role="radiogroup" aria-label="Make the video from">
+        <button role="radio" aria-checked={!idea} className={clsx('ps-source-opt', !idea && 'on')} disabled={locked && idea} onClick={() => choose('recordings')}>
+          <FileVideo size={22} />
+          <strong>From recordings</strong>
+          <span>Upload screen captures, demos or footage. Producer writes the script around your best moments.</span>
+        </button>
+        <button role="radio" aria-checked={idea} className={clsx('ps-source-opt', idea && 'on')} disabled={locked && !idea} onClick={() => choose('idea')}>
+          <Lightbulb size={22} />
+          <strong>From an idea</strong>
+          <span>Describe it or paste a script. Producer makes the visuals: animated text, diagrams, images and footage.</span>
+        </button>
+      </div>
+      {idea ? <IdeaPanel s={s} workspaceId={workspaceId} /> : <UploadStep s={s} workspaceId={workspaceId} />}
     </div>
   )
 }
@@ -343,7 +445,9 @@ function GenerateStep({ s, onRun }: { s: WizardState; onRun: () => void }) {
         <Sparkles size={34} />
       </div>
       <h2>{r.status === 'error' ? 'Something went wrong' : r.status === 'running' ? 'Producing your script' : r.interrupted ? 'Pick up where you left off' : 'Ready to write'}</h2>
-      <p className="ps-gen-line" aria-live="polite">{r.status === 'error' ? r.error : r.message ?? `Producer will transcribe ${ids.length} recording${ids.length === 1 ? '' : 's'} and write a script for “${s.brief.title}”.`}</p>
+      <p className="ps-gen-line" aria-live="polite">
+        {r.status === 'error' ? r.error : r.message ?? (isIdea(s) ? `Producer will plan the scenes, choose their visuals and write a script for “${s.brief.title}”.` : `Producer will transcribe ${ids.length} recording${ids.length === 1 ? '' : 's'} and write a script for “${s.brief.title}”.`)}
+      </p>
       {r.status === 'running' && (
         <div style={{ width: '100%', maxWidth: 440, margin: '4px auto 20px' }}>
           <Progress value={r.progress ?? -1} />
@@ -351,8 +455,8 @@ function GenerateStep({ s, onRun }: { s: WizardState; onRun: () => void }) {
       )}
       <div className="ps-pipe">
         <PipelineRow label="Create project" state={stateOf(0)} detail={s.projectId ? 'Saved to your library' : undefined} />
-        <PipelineRow label="Transcribe recordings" state={stateOf(1)} detail={`${s.transcribed.filter((id) => ids.includes(id)).length} of ${ids.length} done`} />
-        <PipelineRow label="Write script with Claude" state={stateOf(2)} detail="Scenes, headlines and narration from your brief" />
+        {!isIdea(s) && <PipelineRow label="Transcribe recordings" state={stateOf(1)} detail={`${s.transcribed.filter((id) => ids.includes(id)).length} of ${ids.length} done`} />}
+        <PipelineRow label={isIdea(s) ? 'Plan scenes and write the script' : 'Write the script'} state={stateOf(2)} detail={isIdea(s) ? 'Scenes, visuals, headlines and narration from your idea' : 'Scenes, headlines and narration from your brief'} />
       </div>
       <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
         {r.status === 'running' ? (
@@ -437,11 +541,122 @@ function RewriteButton({ scene, brief, onText, onBusy }: { scene: ScriptScene; b
   )
 }
 
-function SceneCard({ scene, index, total, s, onChange, onMove, onDelete, onAddAfter, dragProps }: {
+/** What fills the screen in a scene made from an idea: the kind, and what it shows (points, diagram, prompt, search). */
+function VisualEditor({ scene, kinds, caps, onChange }: { scene: ScriptScene; kinds: Array<Exclude<VisualKind, 'footage'>>; caps?: ProduceCapabilities; onChange: (v: SceneVisual) => void }) {
+  const v = scene.visual as Exclude<SceneVisual, { kind: 'footage' }>
+  // raw text while typing (blank lines, half-written bars); the scene keeps what parses
+  const [text, setText] = useState(() => (v.kind === 'motion' ? (v.points ?? []).join('\n') : v.kind === 'diagram' ? diagramToText(v.diagram) : ''))
+  const [diagType, setDiagType] = useState<DiagramType>(v.kind === 'diagram' ? v.diagram.type : 'steps')
+  const [err, setErr] = useState<string>()
+  const options = kinds.includes(v.kind) ? kinds : [...kinds, v.kind]
+  const setKind = (k: Exclude<VisualKind, 'footage'>) => {
+    const nv = defaultVisual(k, scene)
+    setErr(undefined)
+    if (nv.kind === 'diagram') {
+      setDiagType(nv.diagram.type)
+      setText(diagramToText(nv.diagram))
+    } else setText('')
+    onChange(nv)
+  }
+  const parseDiagram = (type: DiagramType, t: string) => {
+    const r = diagramFromText(type, t)
+    setErr(r.error)
+    if (r.diagram) onChange({ kind: 'diagram', diagram: r.diagram })
+  }
+  const made = 'assetId' in v && v.assetId
+  return (
+    <div className="ps-visual">
+      <div className="ps-visual-head">
+        <label className="label" htmlFor={`vk-${scene.id}`}>On screen</label>
+        <select id={`vk-${scene.id}`} className="input" value={v.kind} onChange={(e) => setKind(e.target.value as Exclude<VisualKind, 'footage'>)}>
+          {options.map((k) => (
+            <option key={k} value={k}>{VISUAL_KIND_INFO[k].label}</option>
+          ))}
+        </select>
+        {v.kind === 'diagram' && (
+          <select
+            className="input"
+            aria-label="Diagram type"
+            value={diagType}
+            onChange={(e) => {
+              const t = e.target.value as DiagramType
+              setDiagType(t)
+              parseDiagram(t, text)
+            }}
+          >
+            {(Object.keys(DIAGRAM_INFO) as DiagramType[]).map((t) => (
+              <option key={t} value={t}>{DIAGRAM_INFO[t].label}</option>
+            ))}
+          </select>
+        )}
+        <span className="muted ps-visual-hint">{VISUAL_KIND_INFO[v.kind].hint}</span>
+      </div>
+      {v.kind === 'motion' && (
+        <textarea
+          className="input"
+          rows={3}
+          aria-label="On-screen points"
+          placeholder="Up to 4 short points, one per line (optional)"
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value)
+            onChange({ kind: 'motion', points: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 4) })
+          }}
+        />
+      )}
+      {v.kind === 'diagram' && (
+        <>
+          <textarea
+            className="input"
+            rows={4}
+            aria-label="Diagram contents"
+            placeholder={DIAGRAM_INFO[diagType].placeholder}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value)
+              parseDiagram(diagType, e.target.value)
+            }}
+          />
+          {err && <div className="ps-field-err">{err}</div>}
+        </>
+      )}
+      {(v.kind === 'image' || v.kind === 'aiVideo') && (
+        <textarea
+          className="input"
+          rows={3}
+          aria-label={v.kind === 'image' ? 'Image description' : 'Video clip description'}
+          placeholder={v.kind === 'image' ? 'What the picture shows: subject, setting, light, style. No words or logos.' : 'One continuous shot: subject, action, camera move, setting, light.'}
+          value={v.prompt}
+          onChange={(e) => onChange(withPrompt(v, e.target.value))}
+        />
+      )}
+      {v.kind === 'stock' && <input className="input" aria-label="Stock footage search" placeholder="A short, concrete search, e.g. team meeting whiteboard" value={v.query} onChange={(e) => onChange(withPrompt(v, e.target.value))} />}
+      {made && (
+        <div className="ps-visual-made">
+          <Thumb src={mediaUrl(made, 'thumb')} seed={made} className="ps-win-thumb" />
+          <span>
+            Made at the last assembly; it’s reused while this description stays the same.
+            {v.kind === 'stock' && v.credit && /^https:\/\//.test(v.credit.url) && (
+              <>
+                {' '}Video by{' '}
+                <a href={v.credit.url} target="_blank" rel="noreferrer noopener">{v.credit.author}</a> on Pexels.
+              </>
+            )}
+          </span>
+        </div>
+      )}
+      {v.kind === 'aiVideo' && caps?.video && !made && <div className="muted ps-visual-hint">Made at assembly: a few minutes, billed per second to your {caps.video.provider === 'openai' ? 'OpenAI' : 'Google'} account.</div>}
+    </div>
+  )
+}
+
+function SceneCard({ scene, index, total, s, kinds, caps, onChange, onMove, onDelete, onAddAfter, dragProps }: {
   scene: ScriptScene
   index: number
   total: number
   s: WizardState
+  kinds: Array<Exclude<VisualKind, 'footage'>>
+  caps?: ProduceCapabilities
   onChange: (p: Partial<ScriptScene>) => void
   onMove: (to: number) => void
   onDelete: () => void
@@ -455,6 +670,7 @@ function SceneCard({ scene, index, total, s, onChange, onMove, onDelete, onAddAf
   const secs = narrationSeconds(scene.narration)
   const footSecs = scene.footage.reduce((t, f) => t + Math.max(0, f.end - f.start), 0)
   const setWin = (i: number, p: Partial<ScriptScene['footage'][number]>) => onChange({ footage: scene.footage.map((f, j) => (j === i ? { ...f, ...p } : f)) })
+  const visualScene = !!scene.visual && scene.visual.kind !== 'footage'
   return (
     <div className="ps-scene" {...dragProps}>
       <div className="ps-scene-rail">
@@ -484,8 +700,11 @@ function SceneCard({ scene, index, total, s, onChange, onMove, onDelete, onAddAf
         <div className="ps-scene-stats">
           <span>{sceneWords(scene.narration)} words</span>
           <span>≈ {formatDuration(secs)} spoken</span>
-          <span className={footSecs && secs > footSecs + 1 ? 'warn' : ''}>{formatDuration(footSecs)} of footage{footSecs && secs > footSecs + 1 ? ' — narration runs longer; footage will be held/extended' : ''}</span>
+          {!visualScene && <span className={footSecs && secs > footSecs + 1 ? 'warn' : ''}>{formatDuration(footSecs)} of footage{footSecs && secs > footSecs + 1 ? ' — narration runs longer; footage will be held/extended' : ''}</span>}
         </div>
+        {visualScene ? (
+          <VisualEditor key={`${scene.id}-${scene.visual!.kind}`} scene={scene} kinds={kinds} caps={caps} onChange={(visual) => onChange({ visual })} />
+        ) : (
         <div className="ps-footage">
           {scene.footage.map((f, i) => (
             <div key={i} className="ps-win">
@@ -521,6 +740,7 @@ function SceneCard({ scene, index, total, s, onChange, onMove, onDelete, onAddAf
             </button>
           )}
         </div>
+        )}
       </div>
       <button className="ps-scene-insert" onClick={onAddAfter} aria-label={`Add scene after scene ${index + 1}`} title="Add a scene here"><Plus size={13} /></button>
     </div>
@@ -533,6 +753,10 @@ function ReviewStep({ s }: { s: WizardState }) {
   const [over, setOver] = useState<number>()
   const set = (scenes: ScriptScene[]) => patch({ scenes })
   const firstAsset = readyAssetIds(s)[0]
+  const idea = isIdea(s)
+  const workspaceId = useSession((st) => st.workspaceId)
+  const caps = useAsync(() => (idea && workspaceId ? api.produceCapabilities(workspaceId) : Promise.resolve(undefined)), [idea, workspaceId])
+  const kinds = ALL_KINDS.filter((k) => kindStatus(k, caps.data).available)
   const totalWords = s.scenes.reduce((t, sc) => t + sceneWords(sc.narration), 0)
   const totalSecs = s.scenes.reduce((t, sc) => t + Math.max(narrationSeconds(sc.narration), sc.footage.reduce((a, f) => a + Math.max(0, f.end - f.start), 0)), 0)
   return (
@@ -540,7 +764,7 @@ function ReviewStep({ s }: { s: WizardState }) {
       <div className="ps-wz-intro row" style={{ alignItems: 'flex-end' }}>
         <div style={{ flex: 1 }}>
           <h2>Review the script</h2>
-          <p>Edit anything — titles, on-screen headlines, narration and the footage each scene uses. Drag to reorder.</p>
+          <p>{idea ? 'Edit anything — titles, on-screen headlines, narration and what each scene shows. Drag to reorder.' : 'Edit anything — titles, on-screen headlines, narration and the footage each scene uses. Drag to reorder.'}</p>
         </div>
         <div className="ps-script-stats">
           <div><strong>{s.scenes.length}</strong><span>scenes</span></div>
@@ -559,10 +783,12 @@ function ReviewStep({ s }: { s: WizardState }) {
               index={i}
               total={s.scenes.length}
               s={s}
+              kinds={kinds}
+              caps={caps.data}
               onChange={(p) => patch((st) => ({ scenes: updateScene(st.scenes, sc.id, p) }))}
               onMove={(to) => set(moveScene(s.scenes, i, to))}
               onDelete={() => set(removeScene(s.scenes, sc.id))}
-              onAddAfter={() => set(insertScene(s.scenes, i + 1, newScene(sc.footage[sc.footage.length - 1]?.assetId ?? firstAsset, sc)))}
+              onAddAfter={() => set(insertScene(s.scenes, i + 1, newScene(sc.footage[sc.footage.length - 1]?.assetId ?? firstAsset, sc, idea)))}
               dragProps={{
                 draggable: true,
                 onDragStart: (e) => {
@@ -591,7 +817,7 @@ function ReviewStep({ s }: { s: WizardState }) {
           </div>
         ))}
       </div>
-      <button className="ps-add-scene" onClick={() => set(insertScene(s.scenes, s.scenes.length, newScene(firstAsset, s.scenes[s.scenes.length - 1])))}>
+      <button className="ps-add-scene" onClick={() => set(insertScene(s.scenes, s.scenes.length, newScene(firstAsset, s.scenes[s.scenes.length - 1], idea)))}>
         <Plus size={16} /> Add scene
       </button>
     </div>
@@ -611,15 +837,31 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: () => void }) {
       <h2>{done ? 'Your video is ready' : r.status === 'error' ? 'Assembly failed' : r.status === 'running' ? 'Assembling your video' : 'Assemble the video'}</h2>
       <p className="ps-gen-line" aria-live="polite">
         {done
-          ? `${s.scenes.length} scenes narrated, cut to your footage and styled with the ${s.brief.template ? 'selected' : 'default'} look. Fine-tune anything in the editor.`
+          ? isIdea(s)
+            ? `${s.scenes.length} scenes narrated, their visuals built and styled with the ${s.brief.template ? 'selected' : 'default'} look. Fine-tune anything in the editor.`
+            : `${s.scenes.length} scenes narrated, cut to your footage and styled with the ${s.brief.template ? 'selected' : 'default'} look. Fine-tune anything in the editor.`
           : r.status === 'error'
             ? r.error
             : r.status === 'running'
               ? r.message
               : r.interrupted
                 ? 'Assembly was interrupted — resume to finish.'
-                : `Producer will narrate ${s.scenes.length} scenes, cut the footage and apply your template look and captions.`}
+                : isIdea(s)
+                  ? `Producer will narrate ${s.scenes.length} scenes, make their visuals and apply your look and captions.`
+                  : `Producer will narrate ${s.scenes.length} scenes, cut the footage and apply your template look and captions.`}
       </p>
+      {done && !!s.assembleNotes?.length && (
+        <div className="ps-alert info" style={{ textAlign: 'left', maxWidth: 560, margin: '0 auto 8px' }}>
+          <div>
+            <strong>Some scenes use animated text instead:</strong>
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              {s.assembleNotes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
       {r.status === 'running' && (
         <div style={{ width: '100%', maxWidth: 440, margin: '4px auto 20px' }}>
           <Progress value={r.progress ?? -1} />
@@ -728,10 +970,10 @@ export default function ProducerWizard() {
 
   function next() {
     if (!adv.ok) return
-    if (s.step === 'upload') patch({ step: 'brief' })
+    if (s.step === 'upload') patch((st) => ({ step: 'brief', brief: isIdea(st) && !st.brief.title.trim() ? { ...st.brief, title: briefTitleFromPrompt(st.brief.idea ?? '') } : st.brief }))
     else if (s.step === 'brief') {
       // Script already exists and nothing new to transcribe → go straight to review.
-      if (s.scenes.length && readyAssetIds(s).every((id) => s.transcribed.includes(id))) patch({ step: 'review' })
+      if (s.scenes.length && (isIdea(s) || readyAssetIds(s).every((id) => s.transcribed.includes(id)))) patch({ step: 'review' })
       else {
         patch({ step: 'generate' })
         generate()
@@ -767,14 +1009,15 @@ export default function ProducerWizard() {
   }
   if (!workspaceId) return null
 
-  const primaryLabel = s.step === 'upload' ? 'Continue to brief' : s.step === 'brief' ? (s.scenes.length && readyAssetIds(s).every((id) => s.transcribed.includes(id)) ? 'Back to script' : 'Write the script') : s.step === 'review' ? 'Assemble video' : null
+  const scripted = s.scenes.length > 0 && (isIdea(s) || readyAssetIds(s).every((id) => s.transcribed.includes(id)))
+  const primaryLabel = s.step === 'upload' ? 'Continue to brief' : s.step === 'brief' ? (scripted ? 'Back to script' : 'Write the script') : s.step === 'review' ? 'Assemble video' : null
 
   return (
     <div className="ps-page narrow ps-wizard">
       <div className="ps-wz-head">
         <div>
           <span className="eyebrow" style={{ color: 'var(--accent)' }}><Sparkles size={11} style={{ verticalAlign: -1 }} /> Producer AI</span>
-          <h1>{s.brief.title || 'New video from a recording'}</h1>
+          <h1>{s.brief.title || (isIdea(s) ? 'New video from an idea' : 'New video')}</h1>
         </div>
         <span className="spacer" />
         {s.projectId && (
@@ -796,7 +1039,7 @@ export default function ProducerWizard() {
             <button className="btn ghost sm" onClick={() => setConfirmReset(false)}>Cancel</button>
           </span>
         ) : (
-          (s.assets.length > 0 || s.projectId) && s.run.status !== 'running' && (
+          (s.assets.length > 0 || s.projectId || !!s.brief.idea) && s.run.status !== 'running' && (
             <button className="btn ghost sm" onClick={() => setConfirmReset(true)}><RotateCcw size={14} /> Start over</button>
           )
         )}
@@ -804,7 +1047,7 @@ export default function ProducerWizard() {
       <Stepper s={s} onJump={(id) => patch({ step: id })} />
 
       <div className="ps-wz-card">
-        {s.step === 'upload' && <UploadStep s={s} workspaceId={workspaceId} />}
+        {s.step === 'upload' && <StartStep s={s} workspaceId={workspaceId} />}
         {s.step === 'brief' && <BriefStep s={s} templates={templates.data ?? []} tplLoading={templates.loading} />}
         {s.step === 'generate' && <GenerateStep s={s} onRun={generate} />}
         {s.step === 'review' && <ReviewStep s={s} />}

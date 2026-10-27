@@ -5,7 +5,7 @@ import { create } from 'zustand'
 import { api, HttpError, waitForJob } from '../../lib/api'
 import { useJobs, waitForAssetReady } from '../stores'
 import { aspectFor, ssSet } from '../util'
-import { readyAssetIds, storageKey, type WizardAsset, type WizardState, initialState } from './wizardLogic'
+import { isIdea, readyAssetIds, storageKey, type WizardAsset, type WizardState, initialState } from './wizardLogic'
 
 interface WizardStore {
   s: WizardState
@@ -137,7 +137,8 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
       onProjectCreated?.(res.summary.id)
     }
     s = get()
-    const ids = readyAssetIds(s)
+    // from an idea there's nothing to transcribe: straight to the script
+    const ids = isIdea(s) ? [] : readyAssetIds(s)
     const todo = ids.filter((id) => !s.transcribed.includes(id))
     for (let i = 0; i < todo.length; i++) {
       if (signal.aborted) throw new DOMException('Cancelled', 'AbortError')
@@ -155,11 +156,12 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
     }
     if (signal.aborted) throw new DOMException('Cancelled', 'AbortError')
     s = get()
-    patch({ run: { status: 'running', phase: 'script', message: 'Claude is writing your script…', progress: -1 } })
+    const writing = isIdea(s) ? 'Planning the scenes and writing your script…' : 'Writing your script…'
+    patch({ run: { status: 'running', phase: 'script', message: writing, progress: -1 } })
     const job = await runJob(
       patch,
       () => api.produceScript({ projectId: s.projectId!, assetIds: ids, brief: s.brief }),
-      (j) => patch((st) => ({ run: { ...st.run, message: j.message || 'Claude is writing your script…', progress: j.progress } })),
+      (j) => patch((st) => ({ run: { ...st.run, message: j.message || writing, progress: j.progress } })),
       resumePhase === 'script' ? resumeJob : undefined,
     )
     const scenes = job.result?.script?.scenes ?? []
@@ -190,7 +192,14 @@ export async function runAssemble() {
       resumeJob,
     )
     if (signal.aborted) return
-    patch({ assembledVersion: job.result?.version, run: { status: 'done', phase: 'assemble', message: 'Your video is ready' } })
+    // the server saved scene visuals with what it made (so re-assembling reuses them): keep the wizard in step
+    const fresh = await api.project(s.projectId).catch(() => undefined)
+    patch({
+      assembledVersion: job.result?.version,
+      assembleNotes: job.result?.notes,
+      ...(fresh?.project.ai?.script?.scenes ? { scenes: fresh.project.ai.script.scenes } : {}),
+      run: { status: 'done', phase: 'assemble', message: 'Your video is ready' },
+    })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') {
       // Only the run that was cancelled reports it; a run superseded by a newer one stays silent.

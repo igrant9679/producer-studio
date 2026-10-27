@@ -90,6 +90,8 @@ export interface AssetMeta {
   silences?: Array<{ start: number; end: number }>
   tts?: { text: string; voice: string; speed: number }
   codec?: string
+  /** Made for a scene of a video made from an idea: what was asked for (re-assembling reuses it while that's unchanged). */
+  generated?: { kind: 'image' | 'stock' | 'aiVideo'; prompt: string; provider?: string; model?: string; credit?: { author: string; url: string } }
 }
 
 export const assets = pgTable('assets', {
