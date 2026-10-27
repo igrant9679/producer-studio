@@ -11,13 +11,13 @@ Architecture overview: [architecture.md](architecture.md) ("Two products, one co
 | Dev | `npm run dev -w @producer/desktop` builds `apps/web`, builds main/preload, starts Electron, which spawns `apps/server/src/index.ts` through tsx with Electron's Node. `--no-web` skips the web build. `PS_USER_DATA=<dir>` uses a throwaway profile. |
 | Installer | `npm run dist -w @producer/desktop` → `apps/desktop/release/Producer-Studio-Setup-<version>.exe` (+ `release/win-unpacked/`). `--no-web` reuses `apps/web/dist`; `--dir` builds only `win-unpacked`; `--download` fetches the bundled tools from upstream (CI). |
 | Silent install | `Producer-Studio-Setup-0.1.0.exe /S /D=C:\path\to\dir` (per-user, assisted NSIS; `/D=` must be last and unquoted). Uninstall: `"Uninstall Producer Studio.exe" /S`. |
-| Data | `%APPDATA%\Producer Studio\` — `data\` (PGlite, media, renders), `logs\main.log`, `logs\server.log`, `settings.json`, `keystore.bin`. |
+| Data | `%APPDATA%\Producer Studio\` — `logs\main.log`, `logs\server.log` (rotated at 10 MB while running), `settings.json`, `keystore.bin`. The data folder (PGlite, media, renders) is `%LOCALAPPDATA%\Producer Studio\data\` for new installs; an install from before keeps `%APPDATA%\Producer Studio\data\`. Its path is in `settings.json` (`dataDir`); Settings → Storage or File → Move data folder… moves it (copy, check, switch, remove the old one). A folder that can't be opened at launch (a drive that isn't connected) is reported, with the default folder offered instead. |
 
 ## Process model
 
 ```
 Producer Studio.exe (main)  ── spawns ──▶  Producer Studio.exe  (ELECTRON_RUN_AS_NODE=1)  resources/server/server.mjs
-  splash → wait /api/health                  MODE=desktop  HOST=127.0.0.1  PORT=<free>  DATA_DIR=<userData>/data
+  splash → wait /api/health                  MODE=desktop  HOST=127.0.0.1  PORT=<free>  DATA_DIR=<settings dataDir>
   POST /api/desktop/session (secret)         DESKTOP_SECRET=<random per launch>  DESKTOP_SECRET_KEY=<safeStorage key>
   set ps_session cookie → load UI            stdin held by main: server exits when main goes away
 ```
@@ -152,7 +152,8 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
 ## Known gaps
 
 - Builds are unsigned; Windows only (macOS/Linux targets not configured).
-- Changing the data folder in Settings takes effect at the next launch and does not move existing data.
+- Moving the data folder on macOS/Linux also moves VoiceStudio (it lives inside the data folder there), whose Python
+  environment may need reinstalling afterwards. On Windows VoiceStudio has its own folder in Local AppData.
 - Brand-kit conflicts are last-writer-wins (local edits since the last sync win until pushed).
 - Assets are uploaded in one request per file (no resumable/multipart upload for very large sources yet).
 - The Kokoro model is the quantized ONNX only; whisper is `small.en` (English).
