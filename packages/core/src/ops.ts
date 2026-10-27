@@ -4,6 +4,7 @@ import { createAudioItem, createCaptionItem, createTrack } from './factory'
 import type {
   AnimProp,
   AudioItem,
+  CaptionItem,
   CaptionStyle,
   Item,
   Keyframe,
@@ -763,14 +764,47 @@ export function generateCaptions(p0: Project, opts: { itemIds?: string[]; style?
   if (!words.length) return touch(p)
   const track = insertTrack(p, 'caption')
   if (style) track.captionStyle = clone(style)
-  const lines = chunkWords(words, track.captionStyle!.maxWordsPerLine)
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
+  track.items.push(...captionLines(words, track.captionStyle!.maxWordsPerLine))
+  return touch(p)
+}
+
+/** Caption items for timed words (timeline seconds), at most `maxWords` a line; no line runs past `until`. */
+function captionLines(words: TranscriptWord[], maxWords: number, until = Infinity): CaptionItem[] {
+  const lines = chunkWords(words, maxWords)
+  return lines.map((line, i) => {
     const start = line[0].start
-    const nextStart = lines[i + 1]?.[0].start ?? Infinity
+    const nextStart = lines[i + 1]?.[0].start ?? until
     const end = Math.min(Math.max(line[line.length - 1].end + 0.15, start + 0.6), nextStart)
-    track.items.push(createCaptionItem(round(start, 4), round(end - start, 4), line.map((w) => w.w).join(' '), line.map((w) => ({ w: w.w, start: round(w.start - start, 4), end: round(w.end - start, 4) }))))
+    return createCaptionItem(round(start, 4), round(end - start, 4), line.map((w) => w.w).join(' '), line.map((w) => ({ w: w.w, start: round(w.start - start, 4), end: round(w.end - start, 4) })))
+  })
+}
+
+/**
+ * Break a caption track's lines again at `maxWords` words. Only lines made from a transcript (they carry word
+ * timings) are re-broken; imported, typed and edited captions stay exactly as they are and nothing runs into them.
+ */
+export function rechunkCaptions(p0: Project, trackId: string, maxWords: number): Project {
+  const p = clone(p0)
+  const track = findTrack(p, trackId)
+  if (!track || track.kind !== 'caption') return p0
+  sortItems(track)
+  const items: Item[] = []
+  let run: CaptionItem[] = []
+  const flush = (until: number) => {
+    // words a trim cut off the end stay off
+    const words = run.flatMap((c) => c.words!.filter((w) => w.start < c.duration).map((w) => ({ w: w.w, start: round(c.start + w.start, 4), end: round(c.start + w.end, 4) })))
+    if (words.length) items.push(...captionLines(words, maxWords, until))
+    run = []
   }
+  for (const it of track.items) {
+    if (it.type === 'caption' && it.words?.length) run.push(it)
+    else {
+      flush(it.start)
+      items.push(it)
+    }
+  }
+  flush(Infinity)
+  track.items = items
   return touch(p)
 }
 

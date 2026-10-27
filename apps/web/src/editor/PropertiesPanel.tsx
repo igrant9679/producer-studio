@@ -15,9 +15,9 @@ import {
   adjustToFilter,
   captionStyleFromPreset,
   findItem,
-  generateCaptions,
   projectDuration,
   presetCanvasSize,
+  rechunkCaptions,
   setAspect,
   setCanvasSize,
   updateItem,
@@ -753,8 +753,8 @@ export function CaptionStyleEditor({ track }: { track: Track }) {
     const t = s.project.tracks.find((x) => x.id === track.id)
     const cur = t?.captionStyle ?? cs
     let p = updateTrack(s.project, track.id, { captionStyle: { ...cur, ...patch } })
-    // words-per-line changes re-chunk the lines
-    if (patch.maxWordsPerLine !== undefined) p = generateCaptions(p, { style: { ...cur, ...patch } })
+    // a new line length re-breaks the lines made from transcripts; imported, typed and edited captions stay as they are
+    if (patch.maxWordsPerLine !== undefined && patch.maxWordsPerLine !== cur.maxWordsPerLine) p = rechunkCaptions(p, track.id, patch.maxWordsPerLine)
     s.commit(p, label, key ? { coalesce: `${key}:${track.id}` } : undefined)
   }
   const setStyle = (patch: Partial<TextStyle>, label: string, key?: string) => {

@@ -25,6 +25,7 @@ import {
   mainTrack,
   moveItem,
   projectDuration,
+  rechunkCaptions,
   removeSilences,
   round,
   separateAudio,
@@ -624,4 +625,36 @@ describe('freeze frames and reversed clips in the transcript (EDT-17)', () => {
     expect(v.start).toBe(10)
   })
 })
-
+describe('caption line length (EDT-4)', () => {
+  const SRT = '1\n00:00:01,000 --> 00:00:02,500\nHello there\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond line\n'
+  const captionTrack = (p: Project) => p.tracks.find((t) => t.kind === 'caption')!
+
+  it('leaves imported captions exactly as they are', () => {
+    const p = importSrt(createProject(), SRT)
+    const before = captionTrack(p).items
+    for (const n of [1, 3, 14]) expect(captionTrack(rechunkCaptions(p, captionTrack(p).id, n)).items).toEqual(before)
+  })
+
+  it('re-breaks lines made from a transcript and keeps typed and edited captions', () => {
+    const p = clone(generateCaptions(twoClips()))
+    const track = captionTrack(p)
+    const lines = track.items as CaptionItem[]
+    const words = lines.flatMap((c) => c.words!.map((w) => w.w))
+    // an edited line (the caption editor drops its word timings) and a caption typed into a gap
+    const edited = lines[1]
+    edited.text = 'this is a TEST'
+    edited.words = undefined
+    track.items.push(createCaptionItem(6, 2, 'typed by hand'))
+    track.items.sort((a, b) => a.start - b.start)
+    const q = rechunkCaptions(p, track.id, 2)
+    const after = captionTrack(q).items as CaptionItem[]
+    expect(after.find((c) => c.text === 'this is a TEST')).toMatchObject({ start: edited.start, duration: edited.duration })
+    expect(after.find((c) => c.text === 'typed by hand')).toMatchObject({ start: 6, duration: 2 })
+    const remade = after.filter((c) => c.words)
+    expect(remade.every((c) => c.words!.length <= 2)).toBe(true)
+    expect(remade.flatMap((c) => c.words!.map((w) => w.w))).toEqual(words.filter((_, i) => i < 3 || i >= 7))
+    for (let i = 1; i < after.length; i++) expect(after[i].start).toBeGreaterThanOrEqual(itemEnd(after[i - 1]) - 1e-6)
+    const back = captionTrack(rechunkCaptions(q, track.id, 7)).items.filter((c) => (c as CaptionItem).words)
+    expect(back.length).toBeLessThan(remade.length)
+  })
+})
