@@ -175,11 +175,14 @@ export class SyncEngine {
     const pr = rows ?? (await syncRows('project'))
     // skipped items stay on this computer: not pending
     const skipped = new Set([...(failures ?? new Map<string, SyncFailure>()).values()].filter((f) => f.skipped).map((f) => failureKey(f.kind, f.id)))
-    const local = await ctx().db.select({ id: projects.id, version: projects.version, trashedAt: projects.trashedAt, isTemplate: projects.isTemplate }).from(projects)
-    let n = local.filter((p) => pr.get(p.id)?.conflictVersion == null && isDirty(p, pr.get(p.id)) && !skipped.has(failureKey('project', p.id))).length
+    // while linked, only spaces that sync count (not a Recovered space, nor another account's set aside here)
+    const cloudWs = linkInfo() ? new Set((await kvGet<string[]>('cloudWorkspaces')) ?? []) : undefined
+    const syncs = (ws: string) => !cloudWs || cloudWs.has(ws)
+    const local = await ctx().db.select({ id: projects.id, workspaceId: projects.workspaceId, version: projects.version, trashedAt: projects.trashedAt, isTemplate: projects.isTemplate }).from(projects)
+    let n = local.filter((p) => syncs(p.workspaceId) && pr.get(p.id)?.conflictVersion == null && isDirty(p, pr.get(p.id)) && !skipped.has(failureKey('project', p.id))).length
     const ar = await syncRows('asset')
-    const la = await ctx().db.select({ id: assets.id, origin: assets.origin, status: assets.status }).from(assets)
-    n += la.filter((a) => a.origin !== 'render' && a.status !== 'uploading' && !ar.get(a.id)?.uploaded && !ar.get(a.id)?.remote && !skipped.has(failureKey('asset', a.id))).length
+    const la = await ctx().db.select({ id: assets.id, workspaceId: assets.workspaceId, origin: assets.origin, status: assets.status }).from(assets)
+    n += la.filter((a) => syncs(a.workspaceId) && a.origin !== 'render' && a.status !== 'uploading' && !ar.get(a.id)?.uploaded && !ar.get(a.id)?.remote && !skipped.has(failureKey('asset', a.id))).length
     return n
   }
 
@@ -421,7 +424,8 @@ export class SyncEngine {
 
   private async mergeLocalWorkspaces(c: CloudClient, cloudList: Workspace[]) {
     const me = await localUserId()
-    const skip = new Set(cloudList.map((w) => w.id))
+    // the account's own spaces, and spaces that stay on this computer (never merged into a cloud account)
+    const skip = new Set([...cloudList.map((w) => w.id), ...((await kvGet<string[]>('localOnlySpaces')) ?? [])])
     const personal = cloudList.find((w) => w.personal) ?? cloudList[0]
     const local = await ctx()
       .db.select({ id: workspaces.id, name: workspaces.name, personal: workspaces.personal })
@@ -470,16 +474,24 @@ export class SyncEngine {
     await c.json('DELETE', `/api/workspaces/${encodeURIComponent(id)}`).catch((e) => {
       if (!(e instanceof CloudError && e.status === 404)) throw e
     })
-    await this.applyWorkspaceDelete(id)
+    // the person deleted it on purpose: nothing to recover
+    await this.applyWorkspaceDelete(id, false)
     return true
   }
 
-  /** The cloud says this user no longer belongs to a space: drop it and everything in it from this replica. */
-  private async applyWorkspaceDelete(id: string) {
+  /**
+   * The cloud says this user no longer belongs to a space (removed, or the space was deleted): drop it from this
+   * replica. Work that exists only here is moved to a "Recovered from …" space first (see recoverWork).
+   */
+  private async applyWorkspaceDelete(id: string, recover = true) {
     const db = ctx().db
-    if (!(await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, id)).limit(1)).length) return
+    const ws = (await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]
+    if (!ws) return
+    const kept = recover ? await this.recoverWork(ws) : new Set<string>()
+    const dropped = await db.select({ id: assets.id }).from(assets).where(eq(assets.workspaceId, id))
     for (const p of await db.select({ id: projects.id }).from(projects).where(eq(projects.workspaceId, id))) await deleteSync('project', p.id)
-    for (const a of await db.select({ id: assets.id }).from(assets).where(eq(assets.workspaceId, id))) await deleteSync('asset', a.id)
+    for (const a of dropped) await deleteSync('asset', a.id)
+    for (const v of await db.select({ id: voiceProfiles.id }).from(voiceProfiles).where(eq(voiceProfiles.workspaceId, id))) await deleteSync('voice', v.id)
     await deleteSync('brand', id)
     this.suppress++
     try {
@@ -488,13 +500,71 @@ export class SyncEngine {
         await tx.delete(jobs).where(eq(jobs.workspaceId, id))
         await tx.delete(workspaces).where(eq(workspaces.id, id)) // projects, assets, memberships, brand kit cascade
       })
-      await ctx().storage.deletePrefix(`ws/${id}/`).catch(() => undefined)
+      // recovered clips keep their files where they are (storage keys don't move)
+      if (!kept.size) await ctx().storage.deletePrefix(`ws/${id}/`).catch(() => undefined)
+      else for (const a of dropped) await ctx().storage.deletePrefix(assetPrefix(id, a.id) + '/').catch(() => undefined)
     } finally {
       this.suppress--
     }
     await kvSet('cloudWorkspaces', ((await kvGet<string[]>('cloudWorkspaces')) ?? []).filter((w) => w !== id))
     ctx().bus.publish(id, 'workspace', { id, deleted: true })
     log.info('desktop: removed workspace deleted in the cloud', { id })
+  }
+
+  /**
+   * Before a lost space goes: what exists only on this computer — projects with changes that never synced (or in
+   * conflict), clips never uploaded, the clips those projects use when their files are here, renders of them, and
+   * voices made here — moves to a new local-only "Recovered from …" space (never synced, never merged), with a notice.
+   * Returns the ids of the clips kept.
+   */
+  private async recoverWork(ws: typeof workspaces.$inferSelect): Promise<Set<string>> {
+    const db = ctx().db
+    const storage = ctx().storage
+    const [prows, arows, vrows] = await Promise.all([syncRows('project'), syncRows('asset'), syncRows('voice')])
+    const projs = (await db.select().from(projects).where(eq(projects.workspaceId, ws.id))).filter((p) => prows.get(p.id)?.conflictVersion != null || isDirty(p, prows.get(p.id)))
+    const keptProjects = new Set(projs.map((p) => p.id))
+    const clips = await db.select().from(assets).where(eq(assets.workspaceId, ws.id))
+    const used = new Set(projs.flatMap((p) => Object.keys(p.doc.assets ?? {})))
+    const keptClips = new Set<string>()
+    for (const a of clips) {
+      const s = arows.get(a.id)
+      const onlyHere = !s?.uploaded && !s?.remote
+      const mine = onlyHere || used.has(a.id) || (a.origin === 'render' && !!a.projectId && keptProjects.has(a.projectId))
+      if (mine && (await storage.stat(a.sourceKey))) keptClips.add(a.id)
+    }
+    const voices = (await db.select().from(voiceProfiles).where(eq(voiceProfiles.workspaceId, ws.id))).filter((v) => {
+      const s = vrows.get(v.id)
+      return !!v.vsProfileId || s?.cloudVersion == null || s.localVersion !== v.updatedAt
+    })
+    if (!projs.length && !keptClips.size && !voices.length) return keptClips
+
+    const name = `Recovered from ${ws.name}`.slice(0, 80)
+    const { createWorkspace } = await import('../routes/workspaces')
+    const rec = await createWorkspace(await localUserId(), name)
+    this.suppress++
+    try {
+      await db.transaction(async (tx) => {
+        if (projs.length) await tx.update(projects).set({ workspaceId: rec.id }).where(inArray(projects.id, [...keptProjects]))
+        if (keptClips.size) await tx.update(assets).set({ workspaceId: rec.id }).where(inArray(assets.id, [...keptClips]))
+        if (voices.length) await tx.update(voiceProfiles).set({ workspaceId: rec.id }).where(inArray(voiceProfiles.id, voices.map((v) => v.id)))
+        if (projs.length) await tx.update(exportsTable).set({ workspaceId: rec.id }).where(inArray(exportsTable.projectId, [...keptProjects]))
+      })
+    } finally {
+      this.suppress--
+    }
+    // no longer tied to anything in the cloud
+    for (const id of keptProjects) await deleteSync('project', id)
+    for (const id of keptClips) await deleteSync('asset', id)
+    for (const v of voices) await deleteSync('voice', v.id)
+    await kvSet('localOnlySpaces', [...((await kvGet<string[]>('localOnlySpaces')) ?? []), rec.id])
+    const parts = [
+      projs.length && `${projs.length} project${projs.length === 1 ? '' : 's'} with changes that hadn’t synced`,
+      keptClips.size && `${keptClips.size} clip${keptClips.size === 1 ? '' : 's'}`,
+      voices.length && `${voices.length} voice${voices.length === 1 ? '' : 's'} made here`,
+    ].filter(Boolean)
+    await addNotice(`You no longer have access to “${ws.name}” in the cloud. What existed only on this computer (${parts.join(', ')}) was moved to “${name}”, which stays on this computer and isn’t synced.`)
+    log.info('desktop: recovered local work from a lost space', { from: ws.id, to: rec.id, projects: projs.length, clips: keptClips.size, voices: voices.length })
+    return keptClips
   }
 
   // ---------------- pull ----------------

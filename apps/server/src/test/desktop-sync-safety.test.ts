@@ -295,3 +295,42 @@ describe('one item that keeps failing never blocks the rest (DSK-5)', () => {
     expect((await sync()).failures).toEqual([])
   })
 })
+
+describe('losing a space keeps the work that exists only here (DSK-11)', () => {
+  beforeAll(linkA)
+
+  it('moves unsynced edits and never-uploaded clips to a Recovered space, and says so', async () => {
+    const C = await cloud.signup('Cy Owner')
+    const crew = (await C.http.json('POST', '/api/workspaces', { name: 'Crew' })).body.id
+    const pid = (await C.http.json('POST', '/api/projects', { workspaceId: crew, name: 'Crew cut' })).body.summary.id
+    const theirs = (await C.http.json('POST', '/api/projects', { workspaceId: crew, name: 'Not mine' })).body.summary.id
+    const inv = await C.http.json('POST', `/api/workspaces/${crew}/invites`, { email: A.email, role: 'editor' })
+    expect((await A.http.json('POST', `/api/invites/${inv.body.inviteUrl.split('/invite/')[1]}/accept`)).status).toBe(200)
+    await sync()
+    expect((await desk.json('GET', `/api/projects/${pid}`)).status).toBe(200)
+    // work that exists only on this computer
+    await editDoc(desk, pid, (p) => (p.name = 'Crew cut, my unsynced edit'))
+    const bytes = png()
+    const clip = await deskUpload(crew, bytes)
+    // the owner removes this person from the space
+    expect((await C.http.json('DELETE', `/api/workspaces/${crew}/members/${A.userId}`)).status).toBe(200)
+
+    const st = await sync()
+    expect(st.state).toBe('idle')
+    const spaces = (await desk.json('GET', '/api/workspaces')).body as Array<{ id: string; name: string }>
+    expect(spaces.some((w) => w.id === crew)).toBe(false)
+    const recovered = spaces.find((w) => w.name === 'Recovered from Crew')!
+    expect(recovered).toBeTruthy()
+    expect((await desk.json('GET', `/api/projects/${pid}`)).body.summary).toMatchObject({ name: 'Crew cut, my unsynced edit', workspaceId: recovered.id })
+    const res = await desk.req('GET', `/api/media/${clip}/source`)
+    expect(res.status).toBe(200)
+    expect(sha(Buffer.from(await res.arrayBuffer()))).toBe(sha(bytes))
+    // what was only theirs goes, as before
+    expect((await desk.json('GET', `/api/projects/${theirs}`)).status).toBe(404)
+    expect(st.notices?.find((n) => n.message.includes('“Crew”'))?.message).toMatch(/Recovered from Crew/)
+    // the recovered space stays on this computer: not pending, never pushed
+    expect(st.pending).toBe(0)
+    expect((await sync()).failures).toEqual([])
+    expect((await C.http.json('GET', `/api/projects/${pid}`)).body.summary.name).toBe('Crew cut')
+  })
+})

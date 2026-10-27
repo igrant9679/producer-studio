@@ -121,6 +121,11 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
   {baseVersion, trashed}`, which succeeds only while the cloud copy is still the version this computer last saw (and
   still in the trash, if it saw it there). Edited in the cloud since, taken out of the trash, or no longer yours to
   delete: the cloud copy is kept, comes back here, and the sync menu says so under "Kept safe" (Got it dismisses).
+- **Losing a space keeps what only exists here.** When the cloud says you left a space (removed, or it was deleted),
+  projects with changes that never synced (or in conflict), clips never uploaded, the clips those projects use and
+  their renders when the files are here, and voices made here move to a new local-only space "Recovered from …"
+  first (never synced, never merged into an account at link time), with a notice. The rest goes as before. Deleting a
+  space yourself recovers nothing.
 - **An item that keeps failing never blocks the rest.** Any push error other than "offline" or "signed out" (too
   large, a role change, an id taken elsewhere, a server error) is recorded for that one item in
   `desktop_sync_failures` and the cycle carries on. The item is retried on its own backoff (1, 2, 4 … min, at most
