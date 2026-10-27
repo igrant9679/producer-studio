@@ -17,18 +17,51 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import type { Config } from '../config'
 import { type Storage, UploadTooLargeError } from './index'
 
+/**
+ * A bucket that stops answering must fail the call, not hold a job "running" for good: connecting gets 10 s, and a
+ * socket that carries nothing for 2 minutes is closed. There is no limit on the whole request (a 4 GB upload is
+ * legitimately long while it keeps moving).
+ */
+export const S3_TIMEOUTS = { connectMs: 10_000, idleMs: 120_000 }
+
+/** Errors a stream that delivers nothing for `ms` (the SDK's idle timeout stops once response headers arrive). */
+function idleGuard(ms: number) {
+  let timer: NodeJS.Timeout | undefined
+  const t: Transform = new Transform({
+    transform(chunk, _e, cb) {
+      arm()
+      cb(null, chunk)
+    },
+    flush(cb) {
+      clearTimeout(timer)
+      cb()
+    },
+  })
+  const arm = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => t.destroy(Object.assign(new Error(`The storage download stalled: nothing arrived for ${Math.round(ms / 1000)} s`), { code: 'ETIMEDOUT' })), ms)
+    timer.unref()
+  }
+  t.on('close', () => clearTimeout(timer))
+  arm()
+  return t
+}
+
 export class S3Storage implements Storage {
   kind = 's3' as const
   private client: S3Client
   private bucket: string
+  private idleMs: number
 
-  constructor(cfg: NonNullable<Config['s3']>) {
+  constructor(cfg: NonNullable<Config['s3']>, timeouts = S3_TIMEOUTS) {
     this.bucket = cfg.bucket
+    this.idleMs = timeouts.idleMs
     this.client = new S3Client({
       region: cfg.region,
       endpoint: cfg.endpoint,
       forcePathStyle: cfg.forcePathStyle,
       credentials: cfg.accessKeyId && cfg.secretAccessKey ? { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey } : undefined,
+      requestHandler: { connectionTimeout: timeouts.connectMs, socketTimeout: timeouts.idleMs },
       // The SDK's default adds CRC32 checksums: a presigned upload URL then carries the checksum of an empty body
       // (which a validating bucket rejects against the real bytes) and streamed puts use aws-chunked trailers that
       // S3-compatible stores don't all accept. Only send checksums where an operation requires one.
@@ -81,7 +114,7 @@ export class S3Storage implements Storage {
   async download(key: string, destPath: string) {
     await fsp.mkdir(path.dirname(destPath), { recursive: true })
     const body = await this.getStream(key)
-    await pipeline(body, fs.createWriteStream(destPath))
+    await pipeline(body, idleGuard(this.idleMs), fs.createWriteStream(destPath))
   }
 
   async stat(key: string) {
