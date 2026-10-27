@@ -173,6 +173,42 @@ async function sha256File(file: string): Promise<string> {
 
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
 
+/**
+ * How long a file plays when its header doesn't say: browser and Loom recordings (MediaRecorder WebM) carry no
+ * duration. A copy pass reads every packet without decoding any; the last timestamp (plus one frame) is the length.
+ */
+export async function measureDuration(file: string, info: Pick<ProbeResult, 'kind' | 'fps' | 'videoStream' | 'audioStream'>, signal?: AbortSignal): Promise<number | undefined> {
+  const stream = info.kind === 'audio' ? info.audioStream : info.videoStream
+  let last = 0
+  let buf = ''
+  await ffmpeg(['-progress', 'pipe:1', '-nostats', '-i', file, '-map', `0:${stream ?? (info.kind === 'audio' ? 'a:0' : 'v:0')}`, '-c', 'copy', '-f', 'null', '-'], {
+    signal,
+    onStdout: (s) => {
+      buf += s
+      for (const m of buf.matchAll(/out_time_us=(\d+)/g)) last = Math.max(last, Number(m[1]) / 1e6)
+      buf = buf.slice(buf.lastIndexOf('\n') + 1)
+    },
+  })
+  const d = last + (info.fps ? 1 / info.fps : 0)
+  return d > 0 ? Math.round(d * 1000) / 1000 : undefined
+}
+
+/**
+ * A filmstrip of `frames` tiles from as many quick seeks (each decodes from the keyframe before its time), instead of
+ * decoding the whole file once more. `vf` is the per-frame filter chain (scaling, tone mapping).
+ */
+async function quickFilmstrip(src: string, out: string, opts: { frames: number; duration: number; stream?: number; vf: string; signal: AbortSignal }) {
+  const { frames, duration } = opts
+  const inputs: string[] = []
+  const chains: string[] = []
+  for (let i = 0; i < frames; i++) {
+    inputs.push('-ss', String(Math.round(((i + 0.5) / frames) * duration * 1000) / 1000), '-i', src)
+    chains.push(`[${i}:${opts.stream ?? 'v:0'}]${opts.vf},setsar=1[f${i}]`)
+  }
+  const graph = `${chains.join(';')};${Array.from({ length: frames }, (_, i) => `[f${i}]`).join('')}hstack=inputs=${frames}[strip]`
+  await ffmpeg([...inputs, '-filter_complex', graph, '-map', '[strip]', '-frames:v', '1', '-q:v', '5', out], { signal: opts.signal })
+}
+
 /** Target proxy size: short side ≤ 720, even dimensions. */
 export function proxySize(w: number, h: number): { w: number; h: number } {
   const short = Math.min(w, h)
@@ -180,16 +216,22 @@ export function proxySize(w: number, h: number): { w: number; h: number } {
   return { w: even(w * s), h: even(h * s) }
 }
 
-/** Decode audio to mono 8 kHz s16le; returns ~50 peaks/s (0..1) and silence ranges. */
-export async function analyseAudio(file: string, signal?: AbortSignal): Promise<{ waveform: number[]; silences: Array<{ start: number; end: number }> }> {
+/** Decode audio to mono 8 kHz s16le; returns ~50 peaks/s (0..1) and silence ranges. `onProgress` gets the seconds
+ * decoded so far (a long recording takes a while). */
+export async function analyseAudio(file: string, signal?: AbortSignal, onProgress?: (seconds: number) => void): Promise<{ waveform: number[]; silences: Array<{ start: number; end: number }> }> {
   const peaks: number[] = []
   const perPeak = 160 // 8000 Hz / 50
   let cur = 0
   let n = 0
   let carry: Buffer | null = null
+  let reported = 0
   const r = await ffmpeg(['-i', file, '-vn', '-af', 'silencedetect=noise=-35dB:d=0.4', '-ac', '1', '-ar', '8000', '-f', 's16le', 'pipe:1'], {
     signal,
     onStdoutData: (b) => {
+      if (onProgress && peaks.length - reported >= 250) {
+        reported = peaks.length
+        onProgress(peaks.length / 50)
+      }
       let buf = carry ? Buffer.concat([carry, b]) : b
       const usable = buf.length - (buf.length % 2)
       carry = usable < buf.length ? buf.subarray(usable) : null
@@ -272,35 +314,47 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       return key
     }
     if (info.kind === 'video') {
-      const dur = info.duration ?? 0
+      // a recording whose header has no length (browser / Loom WebM): measure it, or nothing can size the clip
+      if (!meta.duration) meta.duration = await measureDuration(src, info, jc.signal)
+      const dur = meta.duration ?? 0
       const W = info.width ?? 1280
       const H = info.height ?? 720
       // the picture probe chose, never cover art (ffmpeg's own pick is the largest picture, often the cover)
       const vmap = ['-map', `0:${info.videoStream ?? 'v:0'}`]
       const amap = ['-map', `0:${info.audioStream ?? 'a:0'}`]
-      // thumbnail + filmstrip first so the library shows something quickly
+      // the thumbnail first, saved on the clip at once, so the library shows something while the rest runs
       jc.progress(0.05, 'Thumbnail')
       const thumb = path.join(work, 'thumb.jpg')
       await ffmpeg(['-ss', String(Math.min(1, dur * 0.1)), '-i', src, ...vmap, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
       keys.thumbKey = await put(thumb, 'thumb.jpg', 'image/jpeg')
+      row = await updateAsset(row.id, { thumbKey: keys.thumbKey, meta, kind: 'video' })
       jc.check()
-      jc.progress(0.1, 'Filmstrip')
+      jc.progress(0.08, 'Filmstrip')
       const frames = 10
       const fh = 160
       const fw = even((W / H) * fh)
       const strip = path.join(work, 'filmstrip.jpg')
-      const fpsExpr = dur > 0 ? `${frames}/${Math.max(0.5, dur).toFixed(3)}` : '1'
-      await ffmpeg(['-i', src, ...vmap, '-vf', `fps=${fpsExpr},scale=${fw}:${fh},tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', strip], { signal: jc.signal })
+      await quickFilmstrip(src, strip, { frames, duration: dur, stream: info.videoStream, vf: `scale=${fw}:${fh}`, signal: jc.signal }).catch((err) => {
+        if (jc.signal.aborted) throw err
+        log.warn('quick filmstrip failed; decoding the whole clip', { assetId, err })
+      })
+      if (!fs.existsSync(strip)) {
+        const fpsExpr = dur > 0 ? `${frames}/${Math.max(0.5, dur).toFixed(3)}` : '1'
+        await ffmpeg(['-i', src, ...vmap, '-vf', `fps=${fpsExpr},scale=${fw}:${fh},tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', strip], { signal: jc.signal })
+      }
       keys.filmstripKey = await put(strip, 'filmstrip.jpg', 'image/jpeg')
       meta.filmstrip = { frames, frameWidth: fw, frameHeight: fh }
+      row = await updateAsset(row.id, { filmstripKey: keys.filmstripKey, meta: { filmstrip: meta.filmstrip } })
       jc.check()
       if (info.hasAudio) {
-        jc.progress(0.15, 'Waveform')
-        const a = await analyseAudio(src, jc.signal)
+        // two passes over the sound: report how far each has got (an hour-long recording takes minutes)
+        jc.progress(0.1, 'Waveform')
+        const a = await analyseAudio(src, jc.signal, (s) => dur > 0 && jc.progress(0.1 + Math.min(1, s / dur) * 0.08, 'Waveform'))
         meta.waveform = a.waveform
         meta.silences = a.silences
+        jc.progress(0.18, 'Extracting audio')
         const m4a = path.join(work, 'audio.m4a')
-        await ffmpeg(['-i', src, ...amap, '-vn', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', m4a], { signal: jc.signal })
+        await ffmpegProgress(['-i', src, ...amap, '-vn', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', m4a], dur, (f) => jc.progress(0.18 + f * 0.06, 'Extracting audio'), { signal: jc.signal })
         keys.audioKey = await put(m4a, 'audio.m4a', 'audio/mp4')
         jc.check()
       }
@@ -327,9 +381,11 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
         { signal: jc.signal },
       )
       keys.proxyKey = await put(proxy, 'proxy.mp4', 'video/mp4')
+      // the proxy's own header always has a length
+      if (!meta.duration) meta.duration = (await probe(proxy, jc.signal).catch(() => undefined))?.duration
     } else if (info.kind === 'audio') {
       jc.progress(0.2, 'Waveform')
-      const a = await analyseAudio(src, jc.signal)
+      const a = await analyseAudio(src, jc.signal, (s) => meta.duration && jc.progress(0.2 + Math.min(1, s / meta.duration) * 0.75, 'Waveform'))
       meta.waveform = a.waveform
       meta.silences = a.silences
       if (!meta.duration) meta.duration = Math.round((a.waveform.length / 50) * 1000) / 1000

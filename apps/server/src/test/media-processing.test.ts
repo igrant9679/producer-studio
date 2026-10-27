@@ -1,16 +1,18 @@
 // Upload processing makes media the editor and the export can use, from real files made here with ffmpeg: slow-motion
-// and cover-art clips (PIP-25), phone photos with a rotation tag (PIP-9).
+// and cover-art clips (PIP-25), phone photos with a rotation tag (PIP-9), long uploads that show their thumbnail and
+// progress early (PIP-16), browser WebM recordings with no length in their header (PIP-17).
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ctx } from '../context'
 import { inlineContext } from '../jobs/worker'
-import { ffmpeg, runOk } from '../media/proc'
+import * as proc from '../media/proc'
 import { exifOrientation, processAsset } from '../media/process'
-import { type AssetRow, createAssetFromFile } from '../services/assets'
+import { type AssetRow, createAssetFromFile, loadAsset } from '../services/assets'
 import { setup, signup } from './helpers'
 
+const { ffmpeg, runOk } = proc
 let workspaceId = ''
 let userId = ''
 let dir = ''
@@ -24,9 +26,12 @@ async function make(name: string, args: string[]): Promise<string> {
   return file
 }
 
-async function processFile(file: string, mime: string, kind: 'video' | 'audio' | 'image' = 'video'): Promise<AssetRow> {
-  const a = await createAssetFromFile({ workspaceId, userId, filePath: file, name: path.basename(file), mime, kind, origin: 'upload' })
-  return processAsset(a.id, jc())
+const upload = (file: string, mime: string, kind: 'video' | 'audio' | 'image' = 'video') =>
+  createAssetFromFile({ workspaceId, userId, filePath: file, name: path.basename(file), mime, kind, origin: 'upload' })
+
+async function processFile(file: string, mime: string, kind: 'video' | 'audio' | 'image' = 'video', progress?: (p: number, m?: string) => void): Promise<AssetRow> {
+  const a = await upload(file, mime, kind)
+  return processAsset(a.id, { ...jc(), ...(progress ? { progress } : {}) })
 }
 
 const stored = (key: string | null | undefined) => ctx().storage.localPath!(key!)
@@ -79,6 +84,7 @@ beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-proc-'))
 })
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+afterEach(() => vi.restoreAllMocks())
 
 describe('proxies (PIP-25)', () => {
   it('slow-motion footage gets a proxy of at most 60 fps', async () => {
@@ -125,5 +131,56 @@ describe('phone photos with a rotation tag (PIP-9)', () => {
     expect(exifOrientation(landscape)).toBeUndefined()
     const turned = await processFile(withOrientation(landscape, path.join(dir, 'turned.jpg'), 3), 'image/jpeg', 'image')
     expect(turned.meta).toMatchObject({ width: 400, height: 200 })
+  })
+})
+
+describe('long uploads (PIP-16)', () => {
+  it('save the thumbnail before any full decode, build the filmstrip from 10 seeks, and report progress while decoding', async () => {
+    const clip = await make('long.mp4', ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '20', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest'])
+    const a = await upload(clip, 'video/mp4')
+    // what the clip row holds when each ffmpeg step starts
+    const real = proc.ffmpeg
+    const steps: Array<{ args: string[]; thumbKey: string | null; filmstripKey: string | null }> = []
+    vi.spyOn(proc, 'ffmpeg').mockImplementation(async (args, opts) => {
+      const row = await loadAsset(a.id)
+      steps.push({ args, thumbKey: row.thumbKey, filmstripKey: row.filmstripKey })
+      return real(args, opts)
+    })
+    const progress: Array<[number, string | undefined]> = []
+    const row = await processAsset(a.id, { ...jc(), progress: (p, m) => void progress.push([p, m]) })
+    expect(row.status).toBe('ready')
+    const strip = steps.find((s) => s.args.some((x) => /hstack|tile=/.test(x)))!
+    const waveform = steps.find((s) => s.args.some((x) => /silencedetect/.test(x)))!
+    // the library has a thumbnail while the filmstrip and the sound are still being worked on
+    expect(strip.thumbKey).toBeTruthy()
+    expect(waveform.thumbKey).toBeTruthy()
+    expect(waveform.filmstripKey).toBeTruthy()
+    // the filmstrip seeks to its 10 frames instead of decoding the whole clip again
+    expect(strip.args.filter((x) => x === '-ss')).toHaveLength(10)
+    expect((await streamsOf(stored(row.filmstripKey)))[0]).toMatchObject({ width: 10 * 284, height: 160 })
+    // the waveform pass moves the bar, not just its start
+    expect(new Set(progress.filter(([, m]) => m === 'Waveform').map(([p]) => p)).size).toBeGreaterThan(2)
+    expect(progress.map(([p]) => p)).toEqual([...progress.map(([p]) => p)].sort((x, y) => x - y))
+  })
+})
+
+describe('browser recordings (PIP-17)', () => {
+  it('a WebM with no length in its header gets its duration, and the proxy reports real progress', async () => {
+    // MediaRecorder / Loom style: written live, so no duration and no cues
+    const clip = await make('recording.webm', ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '3', '-c:v', 'libvpx', '-b:v', '300k', '-c:a', 'libopus', '-live', '1', '-f', 'webm'])
+    const header = await runOk(ctx().config.ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', clip])
+    expect(header.stdout.trim()).toBe('N/A')
+    const progress: Array<[number, string | undefined]> = []
+    const row = await processFile(clip, 'video/webm', 'video', (p, m) => void progress.push([p, m]))
+    expect(row.meta.duration).toBeGreaterThan(2.9)
+    expect(row.meta.duration).toBeLessThan(3.1)
+    expect(Math.max(...progress.filter(([, m]) => m === 'Building edit proxy').map(([p]) => p))).toBeGreaterThan(0.5)
+  })
+
+  it('an audio-only WebM gets its duration too', async () => {
+    const clip = await make('voice-note.webm', ['-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000', '-t', '2', '-c:a', 'libopus', '-live', '1', '-f', 'webm'])
+    const row = await processFile(clip, 'audio/webm', 'audio')
+    expect(row.meta.duration).toBeGreaterThan(1.9)
+    expect(row.meta.duration).toBeLessThan(2.1)
   })
 })
