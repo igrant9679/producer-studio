@@ -223,6 +223,51 @@ describe('change feed', () => {
     expect(again.body.projects.map((p: { project: { id: string } }) => p.project.id)).toEqual([id])
   })
 
+  it('never moves the safe cursor past a change still being written (a slow transaction)', async () => {
+    const { ctx } = await import('../context')
+    const { sql } = await import('drizzle-orm')
+    const norm = <T,>(r: unknown) => (Array.isArray(r) ? r : (r as { rows: T[] }).rows) as T[]
+    const rows = async <T,>(q: ReturnType<typeof sql>) => norm<T>(await ctx().db.execute(q))
+    const LOCKS = sql`SELECT ((classid::bigint & 65535) << 32 | objid::bigint)::text AS low FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1 AND (classid::bigint >> 16) = 20563`
+    const A = await signup(t.app)
+    const slow = (await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Slow' })).body.summary.id
+    const c0 = (await A.client.json('GET', '/api/sync/changes?since=0&limit=500')).body.cursor
+
+    // every change-writing transaction registers where its changes start, until it ends
+    let seen: Array<{ low: string }> = []
+    let seqInTx = 0
+    await ctx().db.transaction(async (tx) => {
+      seqInTx = Number(norm<{ s: string }>(await tx.execute(sql`UPDATE projects SET name = 'Slow (tx)' WHERE id = ${slow} RETURNING change_seq::text AS s`))[0].s)
+      await tx.execute(sql`UPDATE projects SET name = 'Slow (tx 2)' WHERE id = ${slow}`)
+      seen = norm<{ low: string }>(await tx.execute(LOCKS))
+    })
+    expect(seen).toHaveLength(1)
+    expect(Number(seen[0].low)).toBeLessThan(seqInTx)
+    expect(await rows(LOCKS)).toEqual([])
+
+    // a slow transaction: registered, holds a change number, not committed while 30 newer changes land
+    const [{ v: low }] = await rows<{ v: string }>(sql`SELECT last_value::text AS v FROM change_seq`)
+    const key = sql`((20563::bigint << 48) | ${Number(low)}::bigint)`
+    await rows(sql`SELECT pg_advisory_lock_shared(${key})`)
+    const [{ s: slowSeq }] = await rows<{ s: string }>(sql`SELECT nextval('change_seq')::text AS s`)
+    for (let i = 0; i < 30; i++) await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: `Newer ${i}` })
+    const page = (await A.client.json('GET', `/api/sync/changes?since=${c0}&limit=500`)).body
+    expect(page.projects.length).toBeGreaterThanOrEqual(30)
+    expect(page.cursor).toBeGreaterThan(Number(slowSeq))
+    expect(page.safe).toBeLessThan(Number(slowSeq))
+    // it commits now, with its old change number
+    await rows(sql`ALTER TABLE projects DISABLE TRIGGER projects_change_seq`)
+    await rows(sql`UPDATE projects SET name = 'Slow, committed late', change_seq = ${Number(slowSeq)} WHERE id = ${slow}`)
+    await rows(sql`ALTER TABLE projects ENABLE TRIGGER projects_change_seq`)
+    await rows(sql`SELECT pg_advisory_unlock_shared(${key})`)
+    // resuming from `safe` delivers it; resuming from the old count-based lookback would not
+    const resumed = (await A.client.json('GET', `/api/sync/changes?since=${page.safe}&limit=500`)).body
+    expect(resumed.projects.find((p: { project: { id: string } }) => p.project.id === slow)?.summary.name).toBe('Slow, committed late')
+    const lookback = (await A.client.json('GET', `/api/sync/changes?since=${page.cursor - 25}&limit=500`)).body
+    expect(lookback.projects.some((p: { project: { id: string } }) => p.project.id === slow)).toBe(false)
+    expect(resumed.safe).toBe(resumed.cursor)
+  })
+
   it('assets appear with sha256; joining a workspace republishes its content', async () => {
     const A = await signup(t.app)
     const V = await signup(t.app)

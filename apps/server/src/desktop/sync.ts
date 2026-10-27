@@ -2,7 +2,8 @@
 //   link   — credentials → cloud device token (encrypted at rest); the local user adopts the cloud identity; cloud
 //            workspaces are mirrored with the same ids; local-only workspaces are merged (personal → cloud personal,
 //            others created in the cloud) so every local project has a cloud home.
-//   pull   — GET /api/sync/changes?since=<cursor − lookback>, paged: workspaces, asset records (bytes on demand),
+//   pull   — GET /api/sync/changes?since=<cursor>, paged; the stored cursor is the cloud's `safe` point (never past a
+//            change still being written; older clouds: cursor − lookback): workspaces, asset records (bytes on demand),
 //            projects (never overwriting a dirty local copy; cloud advanced + local dirty ⇒ conflict), brand kits,
 //            tombstones, and spaces the user left (deleted in the cloud) are removed locally.
 //   push   — local hard deletes; local-only assets (upload with the same id + sha256, 409 exists ⇒ done); dirty
@@ -631,7 +632,10 @@ export class SyncEngine {
 
   private async pull(c: CloudClient) {
     let cursor = (await kvGet<number>('cursor')) ?? 0
-    let since = Math.max(0, cursor - LOOKBACK)
+    // a cloud that reports `safe` never lets the cursor pass a change still being written; older ones get a lookback
+    let since = Math.max(0, cursor - ((await kvGet<boolean>('safeCursor')) ? 0 : LOOKBACK))
+    // where the next pull starts: below the first change the cloud said may still be committing
+    let hold: number | undefined
     for (let page = 0; page < 1000; page++) {
       const ch = await c.json<SyncChanges>('GET', `/api/sync/changes?since=${since}&limit=${PAGE}`)
       if (ch.workspaces.length) await this.mirrorWorkspaces(ch.workspaces)
@@ -647,7 +651,12 @@ export class SyncEngine {
       for (const id of ch.deleted.voiceProfiles ?? []) await this.applyVoiceProfileDelete(id)
       for (const id of ch.deleted.workspaces ?? []) await this.applyWorkspaceDelete(id)
       cursor = Math.max(cursor, ch.cursor)
-      await kvSet('cursor', cursor)
+      if (ch.safe != null) {
+        if (ch.safe < ch.cursor) hold ??= ch.safe
+        if (!(await kvGet<boolean>('safeCursor'))) await kvSet('safeCursor', true)
+      }
+      // what was applied above `hold` is delivered again next time (applying twice is harmless)
+      await kvSet('cursor', hold ?? cursor)
       if (!ch.more) break
       since = ch.cursor
     }

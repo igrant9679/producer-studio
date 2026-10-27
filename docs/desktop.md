@@ -115,6 +115,11 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
 "Download all". Exports (`origin: render`) stay local. Runs at start, every 60 s, 3 s after local saves; backs off
 (5 s → 5 min) while offline.
 
+- **A change that commits late is still delivered.** `change_seq` is taken at write time, so a slow transaction can
+  commit after newer changes were read. Since schema v8 every change-writing transaction registers where its changes
+  start (a shared advisory lock, see `DDL_V8`), and the feed returns `safe`: the point below every transaction still
+  in flight. The desktop pages with `cursor` and resumes from `safe` (what lies between is delivered again, harmlessly),
+  so nothing is skipped. Against an older cloud it keeps the old 25-change lookback.
 - **A delete never comes back to bite.** The change feed leaves out a tombstone whose id exists again in your spaces
   (a project kept here after a cloud delete and created anew), so a re-delivered page can't delete it a second time.
 - **Trash, restore and template flags** changed in the cloud are applied here even though they don't bump the version

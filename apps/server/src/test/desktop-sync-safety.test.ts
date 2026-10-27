@@ -296,6 +296,38 @@ describe('one item that keeps failing never blocks the rest (DSK-5)', () => {
   })
 })
 
+describe('a change that commits late is still delivered (DSK-9)', () => {
+  beforeAll(linkA)
+
+  it('resumes where the cloud says it is safe, not past a change still being written', async () => {
+    const late = (await A.http.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Late' })).body.summary.id
+    // more newer changes than the old 25-change lookback
+    for (let i = 0; i < 30; i++) await A.http.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: `Filler ${i}` })
+    // the first pull happens while "Late" is still uncommitted: the cloud can't return it yet and says to resume below it
+    const real = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const res = await real(input, init)
+      if (!String(input instanceof Request ? input.url : input).includes('/api/sync/changes')) return res
+      const body = await res.json()
+      const hit = body.projects.find((p: { project: { id: string } }) => p.project.id === late)
+      if (hit) {
+        body.projects = body.projects.filter((p: unknown) => p !== hit)
+        body.safe = Math.min(body.safe ?? body.cursor, hit.changeSeq - 1)
+      }
+      return new Response(JSON.stringify(body), { status: res.status, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      await sync()
+    } finally {
+      globalThis.fetch = real
+    }
+    expect((await desk.json('GET', `/api/projects/${late}`)).status).toBe(404)
+    // committed now: the next pull delivers it
+    await sync()
+    expect((await desk.json('GET', `/api/projects/${late}`)).body.summary?.name).toBe('Late')
+  })
+})
+
 describe('a delete that arrives again never removes a project that came back (DSK-10)', () => {
   beforeAll(linkA)
 

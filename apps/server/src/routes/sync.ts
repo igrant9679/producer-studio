@@ -2,11 +2,12 @@
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { Hono } from 'hono'
-import { and, asc, desc, eq, gt, inArray, isNotNull } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNotNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { Device, SyncChanges, SystemInfo } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
+import { CHANGE_LOCK_NS } from '../db/migrate'
 import { assets, brandKits, devices, memberships, projects, tombstones, voiceProfiles, workspaces } from '../db/schema'
 import { assetRecord, projectSummary } from '../dto'
 import { HttpError, body, memberRole, notFound, requireRole, unauthorized } from '../http'
@@ -123,9 +124,30 @@ type Change =
   | { seq: number; kind: 'left'; id: string }
   | { seq: number; kind: 'voice'; row: typeof voiceProfiles.$inferSelect }
 
+async function rows<T>(q: ReturnType<typeof sql>): Promise<T[]> {
+  const r = (await ctx().db.execute(q)) as unknown
+  return (Array.isArray(r) ? r : ((r as { rows?: T[] }).rows ?? [])) as T[]
+}
+
+/**
+ * The highest change number a reader may resume after without skipping a change that is still being written: no
+ * further than the sequence had reached, and below where every transaction still in flight registered its changes
+ * start (migration v8). Read before the rows, in this order, so a transaction either shows here or is already visible.
+ */
+async function changeHorizon(): Promise<number> {
+  const [s] = await rows<{ v: string; called: boolean }>(sql`SELECT last_value::text AS v, is_called AS called FROM change_seq`)
+  const reached = s ? Number(s.v) - (s.called ? 0 : 1) : 0
+  const [l] = await rows<{ low: string | null }>(
+    sql`SELECT min(((classid::bigint & 65535) << 32) | objid::bigint)::text AS low FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1 AND (classid::bigint >> 16) = ${CHANGE_LOCK_NS}`,
+  )
+  return l?.low != null ? Math.min(reached, Number(l.low)) : reached
+}
+
 /** Changes after `since` across the user's workspaces, merged by change_seq and paged. */
 export async function changesSince(userId: string, since: number, limit: number): Promise<SyncChanges> {
   const db = ctx().db
+  const horizon = await changeHorizon()
+  const safeFrom = (cursor: number) => Math.max(since, Math.min(cursor, horizon))
   const mine = await db.select({ ws: memberships.workspaceId, seq: memberships.changeSeq }).from(memberships).where(eq(memberships.userId, userId))
   const wsIds = mine.map((m) => m.ws)
   const n = limit + 1
@@ -140,7 +162,8 @@ export async function changesSince(userId: string, since: number, limit: number)
   ).filter((l) => !wsIds.includes(l.ws))
   if (!wsIds.length) {
     const page = left.slice(0, limit)
-    return { cursor: page.length ? page[page.length - 1].seq : since, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws), voiceProfiles: [] }, more: left.length > limit }
+    const cursor = page.length ? page[page.length - 1].seq : since
+    return { cursor, safe: safeFrom(cursor), workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws), voiceProfiles: [] }, more: left.length > limit }
   }
   const [p, a, b, t, w, v] = await Promise.all([
     db.select().from(projects).where(and(inArray(projects.workspaceId, wsIds), gt(projects.changeSeq, since))).orderBy(asc(projects.changeSeq)).limit(n),
@@ -173,7 +196,7 @@ export async function changesSince(userId: string, since: number, limit: number)
   const page = all.slice(0, limit)
   const more = all.length > limit
   const cursor = page.length ? page[page.length - 1].seq : since
-  const out: SyncChanges = { cursor, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [] }, more }
+  const out: SyncChanges = { cursor, safe: safeFrom(cursor), workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [] }, more }
   const wsChanged = new Set<string>()
   for (const ch of page) {
     if (ch.kind === 'project') {

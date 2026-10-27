@@ -603,6 +603,12 @@ export interface SyncChanges {
   deleted: { projects: string[]; assets: string[]; workspaces?: string[]; voiceProfiles?: string[] }
   /** True when more changes remain after `cursor` (page again). */
   more: boolean
+  /**
+   * Where the next pull must start (≤ cursor): below every change that may still be uncommitted, so a slow transaction
+   * that commits after newer changes is still delivered. Page with `cursor`, resume with `safe`. Optional: older clouds
+   * omit it.
+   */
+  safe?: number
 }
 
 // ---- AI providers (bring your own key) ----
