@@ -43,6 +43,17 @@ export async function failAsset(id: string, from: Array<'uploading' | 'processin
   return Boolean(row)
 }
 
+/** A clip whose processing was interrupted by a restart (its job is queued again) is processing, not failed. */
+export async function reopenAsset(id: string): Promise<boolean> {
+  const [row] = await ctx()
+    .db.update(assets)
+    .set({ status: 'processing', error: null, updatedAt: Date.now() })
+    .where(and(eq(assets.id, id), eq(assets.status, 'error')))
+    .returning()
+  if (row) emitAsset(row)
+  return Boolean(row)
+}
+
 const parentJobOf = sql<string | null>`${assets.meta}->>'jobId'`
 
 /** A job that will never run again: if it was processing a clip (or still making some, as a parent job), they failed too. */

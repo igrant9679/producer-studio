@@ -1,5 +1,5 @@
 // Postgres-backed job queue: enqueue, claim (FOR UPDATE SKIP LOCKED), progress, finish, cancel, stale recovery.
-import { and, eq, lt, sql } from 'drizzle-orm'
+import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import type { Job, JobKind } from '@producer/core'
 import { ctx } from '../context'
 import { jobs } from '../db/schema'
@@ -138,6 +138,18 @@ export async function recoverJob(j: JobRow): Promise<boolean> {
   // giving up on the job must not leave its clip "processing" forever
   if (giveUp) await failAssetOfJob(rows[0], ASSET_ERRORS.workerGaveUp)
   return true
+}
+
+/** This worker is shutting down (a deploy): its running jobs go back in the queue, and the run doesn't count as an attempt. */
+export async function requeueForShutdown(ids: string[], workerId: string): Promise<number> {
+  if (!ids.length) return 0
+  const rows = await ctx()
+    .db.update(jobs)
+    .set({ status: 'queued', lockedBy: null, lockedAt: null, progress: 0, attempts: sql`greatest(${jobs.attempts} - 1, 0)`, message: 'Requeued: the server is restarting', updatedAt: Date.now() })
+    .where(and(inArray(jobs.id, ids), eq(jobs.status, 'running'), eq(jobs.lockedBy, workerId)))
+    .returning()
+  rows.forEach(emitJob)
+  return rows.length
 }
 
 /** Requeue running jobs whose worker stopped heartbeating (or error them after 3 attempts). */

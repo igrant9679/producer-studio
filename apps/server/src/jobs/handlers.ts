@@ -4,8 +4,8 @@ import { synthesizeToAsset, transcribeAsset } from '../ai/speech'
 import { processAsset } from '../media/process'
 import { assetRecord } from '../dto'
 import { exportRender } from '../render/export'
-import { failAsset } from '../services/asset-recovery'
-import { limitMessage, registerHandler } from './worker'
+import { failAsset, reopenAsset } from '../services/asset-recovery'
+import { limitMessage, registerHandler, stopReason } from './worker'
 
 let done = false
 
@@ -21,6 +21,8 @@ export function registerHandlers() {
       // stopped for running too long: the clip says so, not "cancelled"
       const why = limitMessage(jc.signal)
       if (why) await failAsset(assetId, ['processing', 'error'], why).catch(() => undefined)
+      // stopped for a restart: the job is queued again, so the clip is still on its way
+      if (stopReason(jc.signal)?.kind === 'shutdown') await reopenAsset(assetId).catch(() => undefined)
       throw err
     }
   })

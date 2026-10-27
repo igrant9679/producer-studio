@@ -145,6 +145,34 @@ describe('quick jobs have their own lane (PIP-18)', () => {
   })
 })
 
+describe('restarts (PIP-30)', () => {
+  it('a deploy puts running jobs back in the queue without counting an attempt, and their clips stay processing', async () => {
+    const seen: { aborted?: boolean } = {}
+    registerHandler('export.render', untilStopped(seen))
+    const exp = await enqueue('export.render', {}, meta())
+    expect((await runningHere(exp.id)).attempts).toBe(1)
+    // an upload mid-processing: its source fetch fails once the job is stopped (processing's own error path runs)
+    const upload = await clip('processing')
+    let procJob = ''
+    setMissingMediaFetcher(async () => {
+      await waitFor(async () => (await getJob(procJob))?.status === 'queued')
+      await new Promise((r) => setTimeout(r, 50))
+      throw new Error('fetch aborted')
+    })
+    procJob = (await enqueue('asset.process', { assetId: upload }, meta())).id
+    await runningHere(procJob)
+    await stopWorker()
+    expect(seen.aborted).toBe(true)
+    expect(await getJob(exp.id)).toMatchObject({ status: 'queued', attempts: 0, lockedBy: null, error: null })
+    expect(await getJob(procJob)).toMatchObject({ status: 'queued', attempts: 0 })
+    expect(await assetRow(upload)).toMatchObject({ status: 'processing', error: null })
+    const { cancelJob } = await import('../jobs/queue')
+    await cancelJob(exp.id)
+    await cancelJob(procJob)
+    startWorker({ concurrency: 2, heartbeatMs: 100, graceMs: 300 })
+  })
+})
+
 describe('stale recovery and lost locks (PIP-8)', () => {
   it('recovery leaves a job alone if its worker heartbeat after it was seen as stale', async () => {
     // running on another worker (this one never claims it)

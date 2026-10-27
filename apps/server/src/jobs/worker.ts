@@ -9,7 +9,7 @@ import { jobs } from '../db/schema'
 import { log } from '../log'
 import { failAssetOfJob, reconcileAssets } from '../services/asset-recovery'
 import { pruneOldRows } from '../services/retention'
-import { type JobRow, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, updateProgress } from './queue'
+import { type JobRow, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, requeueForShutdown, updateProgress } from './queue'
 
 export class CancelledError extends Error {
   constructor() {
@@ -63,6 +63,8 @@ export type StopReason =
   | { kind: 'lost' }
   /** Its job row is gone (the workspace was deleted): nothing left to report to. */
   | { kind: 'gone' }
+  /** This server is shutting down (a deploy): the job is back in the queue and runs again after the restart. */
+  | { kind: 'shutdown' }
 
 export function stopReason(signal: AbortSignal): StopReason | undefined {
   const r = signal.aborted ? (signal.reason as StopReason | undefined) : undefined
@@ -110,6 +112,7 @@ interface Running {
 }
 
 const running = new Map<string, Running>()
+const inflight = new Set<Promise<void>>()
 let started = false
 let wakeNow: () => void = () => undefined
 let graceMs = STOP_GRACE_MS
@@ -188,7 +191,8 @@ async function runJob(job: JobRow, workerId: string) {
     log.info('job done', { jobId: job.id, kind: job.kind, ms: Date.now() - entry.startedAt })
   } catch (err) {
     const why = ac.signal.aborted ? stopReason(ac.signal) : err instanceof CancelledError ? ({ kind: 'cancelled' } as const) : undefined
-    if (why?.kind === 'lost') log.warn('job taken over by another worker; dropped here', { jobId: job.id, kind: job.kind })
+    if (why?.kind === 'shutdown') log.info('job requeued for after the restart', { jobId: job.id, kind: job.kind })
+    else if (why?.kind === 'lost') log.warn('job taken over by another worker; dropped here', { jobId: job.id, kind: job.kind })
     else if (why?.kind === 'gone') log.info('job dropped: its rows were deleted', { jobId: job.id, kind: job.kind })
     else if (why?.kind === 'limit') {
       log.warn('job stopped', { jobId: job.id, kind: job.kind, reason: why.message })
@@ -265,7 +269,9 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
           if (room === 'none') break
           const job = await claimNext(workerId, room === 'quick' ? QUICK_KINDS : undefined)
           if (!job) break
-          void runJob(job, workerId)
+          const p = runJob(job, workerId)
+          inflight.add(p)
+          void p.finally(() => inflight.delete(p))
         }
       } catch (err) {
         log.error('claim failed', { err })
@@ -299,7 +305,7 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
   recon.unref()
   firstPrune.unref()
   pruning.unref()
-  stopWorkerFn = () => {
+  stopWorkerFn = async () => {
     life.stopped = true
     wakeResolve?.()
     offCancel()
@@ -309,13 +315,21 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
     clearInterval(recon)
     clearTimeout(firstPrune)
     clearInterval(pruning)
-    for (const r of running.values()) r.ac.abort()
+    // a deploy is not a failed attempt: the jobs go back in the queue first, then their processes are stopped
+    const ids = runningJobIds()
+    await requeueForShutdown(ids, workerId).catch((err) => log.warn('requeue on shutdown failed', { err }))
+    for (const id of ids) stop(id, { kind: 'shutdown' })
+    // a moment for handlers to wind down (a clip put back to processing) before the database closes
+    await Promise.race([Promise.allSettled([...inflight]), new Promise((r) => setTimeout(r, 2000).unref())])
   }
   log.info('worker started', { workerId, concurrency: opts.concurrency, quick })
 }
 
-let stopWorkerFn: (() => void) | undefined
-export function stopWorker() {
-  stopWorkerFn?.()
+let stopWorkerFn: (() => Promise<void>) | undefined
+/** Stop claiming, requeue this worker's running jobs without counting an attempt, and stop them. */
+export async function stopWorker() {
+  const fn = stopWorkerFn
+  stopWorkerFn = undefined
   started = false
+  await fn?.()
 }

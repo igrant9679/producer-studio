@@ -51,12 +51,13 @@ async function shutdown(sig: string) {
   if (closing) return
   closing = true
   log.info('shutting down', { sig })
-  stopWorker()
+  setTimeout(() => process.exit(0), 6000).unref()
   stopStorageMonitor()
   desktop?.stopDesktopServices()
-  tts.stop()
   server?.close()
-  setTimeout(() => process.exit(0), 3000).unref()
+  // running jobs go back in the queue (not a failed attempt), then their processes are stopped
+  await stopWorker().catch((err) => log.warn('stopping the worker failed', { err }))
+  tts.stop()
   await c.database.close().catch(() => undefined)
   process.exit(0)
 }
