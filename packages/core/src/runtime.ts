@@ -6,7 +6,8 @@ import { itemEnd, projectDuration } from './ops'
 import type { FrameLayer, Project, VideoItem } from './types'
 import { cssNumber, escapeHtml, safeColor } from './util'
 
-export type UrlResolver = (assetId: string, kind: 'media' | 'proxy') => string
+/** `audio`: what the preview plays a clip's sound from (for a video, its small sound-only copy when there is one). */
+export type UrlResolver = (assetId: string, kind: 'media' | 'proxy' | 'audio') => string
 
 export interface RendererOptions {
   mode: 'preview' | 'export'
@@ -287,7 +288,7 @@ export class StageRenderer {
       active.add(a.itemId)
       let el = this.audioEls.get(a.itemId)
       if (!el) {
-        el = new Audio(this.opts.resolveUrl(a.assetId, 'media'))
+        el = new Audio(this.opts.resolveUrl(a.assetId, 'audio'))
         el.preload = 'auto'
         this.audioEls.set(a.itemId, el)
       }

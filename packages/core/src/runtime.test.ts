@@ -15,6 +15,43 @@ function crossfadeIntoSourceStart(): { p: Project; b: string } {
   return { p, b: mainTrack(p)!.items[1].id }
 }
 
+/** jsdom has no media playback: elements keep the time and rate they are given, and play() just un-pauses. */
+function fakeMedia() {
+  const P = HTMLMediaElement.prototype as unknown as Record<string, unknown>
+  const state = new WeakMap<HTMLMediaElement, { paused: boolean; t: number }>()
+  const get = (el: HTMLMediaElement) => state.get(el) ?? (state.set(el, { paused: true, t: 0 }), state.get(el)!)
+  Object.defineProperty(P, 'paused', { configurable: true, get(this: HTMLMediaElement) { return get(this).paused } })
+  Object.defineProperty(P, 'currentTime', { configurable: true, get(this: HTMLMediaElement) { return get(this).t }, set(this: HTMLMediaElement, v: number) { get(this).t = v } })
+  P.play = function (this: HTMLMediaElement) { get(this).paused = false; return Promise.resolve() }
+  P.pause = function (this: HTMLMediaElement) { get(this).paused = true }
+  P.load = function () {}
+}
+
+function preview(p: Project, kinds: string[] = []) {
+  const root = document.createElement('div')
+  document.body.appendChild(root)
+  const r = new StageRenderer(root, p, { mode: 'preview', resolveUrl: (id, kind) => (kinds.push(kind), `/api/media/${id}/${kind}`) })
+  return { root, r }
+}
+
+describe('preview renderer', () => {
+  fakeMedia()
+
+  it("plays a video clip's sound from its audio copy, the picture from the proxy (EDT-25)", () => {
+    let p = createProject()
+    p = addAsset(p, asset('a'))
+    p = addItem(p, createVideoItem(p.assets.a, 0))
+    const kinds: string[] = []
+    const { root, r } = preview(p, kinds)
+    r.setPlaying(true)
+    r.render(1)
+    expect(root.querySelector('video')!.getAttribute('src')).toBe('/api/media/a/proxy')
+    expect(kinds).toContain('audio')
+    expect(kinds).not.toContain('media')
+    r.destroy()
+  })
+})
+
 describe('export renderer', () => {
   it("shows the held first frame until the incoming clip's file starts (PIP-5 / EDT-3)", () => {
     const { p, b } = crossfadeIntoSourceStart()
