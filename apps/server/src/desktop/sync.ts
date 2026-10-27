@@ -6,8 +6,10 @@
 //            change still being written; older clouds: cursor − lookback): workspaces, asset records (bytes on demand),
 //            projects (never overwriting a dirty local copy; cloud advanced + local dirty ⇒ conflict), brand kits,
 //            tombstones, and spaces the user left (deleted in the cloud) are removed locally.
-//   push   — local hard deletes; local-only assets (upload with the same id + sha256, 409 exists ⇒ done); dirty
-//            projects (PUT with baseVersion = cloud_version; 409 ⇒ conflict) and new ones (POST with id); brand kits.
+//   push   — local hard deletes (projects only while the cloud copy is the version we saw); local-only assets (upload
+//            with the same id + sha256; done once the cloud holds that file); dirty projects (PUT with baseVersion =
+//            cloud_version; 409 ⇒ conflict) and new ones (POST with id); brand kits.
+//   safety — a different account's spaces are set aside, never merged; a lost space's local-only work is recovered.
 //   voices — VoiceStudio voice profiles sync as metadata (the reference audio and VoiceStudio-side profile stay on the
 //            desktop that made them); the relay poller generates speech for the web app with this desktop's voices.
 //   resolve— keep-local (force-push over the latest cloud version), keep-cloud, keep-both (local → "(conflicted copy)").
