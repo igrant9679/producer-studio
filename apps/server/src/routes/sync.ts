@@ -2,20 +2,21 @@
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { Hono } from 'hono'
-import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNotNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { Device, SyncChanges, SystemInfo } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
+import { CHANGE_LOCK_NS } from '../db/migrate'
 import { assets, brandKits, devices, memberships, projects, tombstones, voiceProfiles, workspaces } from '../db/schema'
 import { assetRecord, projectSummary } from '../dto'
-import { HttpError, body, memberRole, notFound, unauthorized } from '../http'
+import { HttpError, body, memberRole, notFound, requireRole, unauthorized } from '../http'
 import { newId, randomToken, sha256 } from '../ids'
 import { limitDevices } from '../limits'
 import { getProvider } from '../ai/provider'
 import { builtinProvider, invalidateBuiltin } from '../ai/resolve'
 import { whisperAvailable } from '../ai/whisper'
-import { hydrateAssets } from '../services/projects'
+import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { checkCredentials } from './auth'
 import { listWorkspaces } from './workspaces'
 import { voiceProfileDto } from './voice'
@@ -123,9 +124,33 @@ type Change =
   | { seq: number; kind: 'left'; id: string }
   | { seq: number; kind: 'voice'; row: typeof voiceProfiles.$inferSelect }
 
-/** Changes after `since` across the user's workspaces, merged by change_seq and paged. */
-export async function changesSince(userId: string, since: number, limit: number): Promise<SyncChanges> {
+async function rows<T>(q: ReturnType<typeof sql>): Promise<T[]> {
+  const r = (await ctx().db.execute(q)) as unknown
+  return (Array.isArray(r) ? r : ((r as { rows?: T[] }).rows ?? [])) as T[]
+}
+
+/**
+ * The highest change number a reader may resume after without skipping a change that is still being written: no
+ * further than the sequence had reached, and below where every transaction still in flight registered its changes
+ * start (migration v8). Read before the rows, in this order, so a transaction either shows here or is already visible.
+ */
+async function changeHorizon(): Promise<number> {
+  const [s] = await rows<{ v: string; called: boolean }>(sql`SELECT last_value::text AS v, is_called AS called FROM change_seq`)
+  const reached = s ? Number(s.v) - (s.called ? 0 : 1) : 0
+  const [l] = await rows<{ low: string | null }>(
+    sql`SELECT min(((classid::bigint & 65535) << 32) | objid::bigint)::text AS low FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1 AND (classid::bigint >> 16) = ${CHANGE_LOCK_NS}`,
+  )
+  return l?.low != null ? Math.min(reached, Number(l.low)) : reached
+}
+
+/** A page of changes ends at about this much JSON unless the reader asks for another size. */
+export const PAGE_BYTES = 4 * 1024 * 1024
+
+/** Changes after `since` across the user's workspaces, merged by change_seq and paged (by count and by size). */
+export async function changesSince(userId: string, since: number, limit: number, maxBytes = PAGE_BYTES): Promise<SyncChanges> {
   const db = ctx().db
+  const horizon = await changeHorizon()
+  const safeFrom = (cursor: number) => Math.max(since, Math.min(cursor, horizon))
   const mine = await db.select({ ws: memberships.workspaceId, seq: memberships.changeSeq }).from(memberships).where(eq(memberships.userId, userId))
   const wsIds = mine.map((m) => m.ws)
   const n = limit + 1
@@ -140,7 +165,8 @@ export async function changesSince(userId: string, since: number, limit: number)
   ).filter((l) => !wsIds.includes(l.ws))
   if (!wsIds.length) {
     const page = left.slice(0, limit)
-    return { cursor: page.length ? page[page.length - 1].seq : since, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws), voiceProfiles: [] }, more: left.length > limit }
+    const cursor = page.length ? page[page.length - 1].seq : since
+    return { cursor, safe: safeFrom(cursor), workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws), voiceProfiles: [] }, more: left.length > limit }
   }
   const [p, a, b, t, w, v] = await Promise.all([
     db.select().from(projects).where(and(inArray(projects.workspaceId, wsIds), gt(projects.changeSeq, since))).orderBy(asc(projects.changeSeq)).limit(n),
@@ -150,6 +176,16 @@ export async function changesSince(userId: string, since: number, limit: number)
     db.select({ id: workspaces.id, seq: workspaces.changeSeq }).from(workspaces).where(and(inArray(workspaces.id, wsIds), gt(workspaces.changeSeq, since))),
     db.select().from(voiceProfiles).where(and(inArray(voiceProfiles.workspaceId, wsIds), gt(voiceProfiles.changeSeq, since))).orderBy(asc(voiceProfiles.changeSeq)).limit(n),
   ])
+  // a deleted id that exists again (a replica kept its edited copy and created it anew): its old tombstone is void,
+  // or delivering it again would delete the copy that came back
+  const back = new Set<string>()
+  const ofKind = (k: string) => [...new Set(t.filter((r) => r.kind === k).map((r) => r.id))]
+  const [bp, ba, bv] = await Promise.all([
+    ofKind('project').length ? db.select({ id: projects.id }).from(projects).where(and(inArray(projects.id, ofKind('project')), inArray(projects.workspaceId, wsIds))) : [],
+    ofKind('asset').length ? db.select({ id: assets.id }).from(assets).where(and(inArray(assets.id, ofKind('asset')), inArray(assets.workspaceId, wsIds))) : [],
+    ofKind('voice_profile').length ? db.select({ id: voiceProfiles.id }).from(voiceProfiles).where(and(inArray(voiceProfiles.id, ofKind('voice_profile')), inArray(voiceProfiles.workspaceId, wsIds))) : [],
+  ])
+  for (const [kind, rows] of [['project', bp], ['asset', ba], ['voice_profile', bv]] as const) for (const r of rows) back.add(`${kind}:${r.id}`)
   const all: Change[] = [
     ...p.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'project' as const, row })),
     ...a.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'asset' as const, row })),
@@ -160,26 +196,40 @@ export async function changesSince(userId: string, since: number, limit: number)
     ...left.map((l) => ({ seq: l.seq, kind: 'left' as const, id: l.ws })),
     ...v.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'voice' as const, row })),
   ].sort((x, y) => x.seq - y.seq)
-  const page = all.slice(0, limit)
-  const more = all.length > limit
-  const cursor = page.length ? page[page.length - 1].seq : since
-  const out: SyncChanges = { cursor, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [] }, more }
+  const out: SyncChanges = { cursor: since, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [] }, more: false }
   const wsChanged = new Set<string>()
-  for (const ch of page) {
+  // a page ends at `limit` changes or about `maxBytes` of JSON (at least one change), so big documents come a few at
+  // a time on a slow link instead of one page that never finishes
+  let bytes = 0
+  let taken = 0
+  const size = (x: unknown) => (bytes += JSON.stringify(x).length)
+  for (const ch of all.slice(0, limit)) {
+    if (taken && bytes >= maxBytes) break
+    taken++
     if (ch.kind === 'project') {
-      out.projects.push({ summary: projectSummary(ch.row), project: await hydrateAssets(ch.row.doc, ch.row.workspaceId), version: ch.row.version, changeSeq: ch.seq })
+      const item = { summary: projectSummary(ch.row), project: await hydrateAssets(ch.row.doc, ch.row.workspaceId), version: ch.row.version, changeSeq: ch.seq }
+      out.projects.push(item)
+      size(item)
     } else if (ch.kind === 'asset') {
       out.assets.push({ ...assetRecord(ch.row), sha256: ch.row.sha256 ?? undefined, changeSeq: ch.seq })
+      size(out.assets[out.assets.length - 1])
     } else if (ch.kind === 'brand') {
       out.brandKits.push({ workspaceId: ch.row.workspaceId, doc: ch.row.doc, changeSeq: ch.seq })
+      size(ch.row.doc)
     } else if (ch.kind === 'tombstone') {
+      if (back.has(`${ch.row.kind}:${ch.row.id}`)) continue
       if (ch.row.kind === 'project') out.deleted.projects.push(ch.row.id)
       else if (ch.row.kind === 'asset') out.deleted.assets.push(ch.row.id)
       else if (ch.row.kind === 'voice_profile') out.deleted.voiceProfiles!.push(ch.row.id)
-    } else if (ch.kind === 'voice') out.voiceProfiles!.push({ ...voiceProfileDto(ch.row), vsProfileId: undefined, changeSeq: ch.seq })
-    else if (ch.kind === 'left') out.deleted.workspaces!.push(ch.id)
+    } else if (ch.kind === 'voice') {
+      out.voiceProfiles!.push({ ...voiceProfileDto(ch.row), vsProfileId: undefined, changeSeq: ch.seq })
+      size(out.voiceProfiles![out.voiceProfiles!.length - 1])
+    } else if (ch.kind === 'left') out.deleted.workspaces!.push(ch.id)
     else wsChanged.add(ch.id)
   }
+  out.cursor = taken ? all[taken - 1].seq : since
+  out.more = all.length > taken
+  out.safe = safeFrom(out.cursor)
   if (wsChanged.size || since === 0) {
     const list = await listWorkspaces(userId)
     out.workspaces = since === 0 ? list : list.filter((x) => wsChanged.has(x.id))
@@ -191,6 +241,31 @@ syncRoutes.get('/changes', async (c) => {
   const u = requireUser(c)
   const since = Math.max(0, Number(c.req.query('since') ?? 0) || 0)
   const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? 100) || 100))
+  const maxBytes = Math.min(64 * 1024 * 1024, Math.max(64 * 1024, Number(c.req.query('maxBytes') ?? PAGE_BYTES) || PAGE_BYTES))
   if (!Number.isFinite(since)) throw new HttpError(400, 'invalid', 'since must be a number')
-  return c.json(await changesSince(u.id, since, limit))
+  return c.json(await changesSince(u.id, since, limit, maxBytes))
+})
+
+/**
+ * A replica pushes a delete made on it. It goes through only while the cloud copy is still the version that replica
+ * last saw (and still in the trash, if it saw it there), in one statement, so an edit or a restore made since is never
+ * destroyed: 409 with details {reason: 'edited' | 'restored', version, trashed}. 404 when it's already gone.
+ */
+syncRoutes.post('/projects/:id/delete', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  const b = await body(c, z.object({ baseVersion: z.number().int(), trashed: z.boolean().optional() }))
+  const row = await loadProjectRow(id)
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const conds = [eq(projects.id, id), eq(projects.version, b.baseVersion)]
+  if (b.trashed) conds.push(isNotNull(projects.trashedAt))
+  const gone = await ctx().db.delete(projects).where(and(...conds)).returning({ id: projects.id })
+  if (gone.length) return c.json({ ok: true })
+  const cur = await loadProjectRow(id)
+  const edited = cur.version !== b.baseVersion
+  throw new HttpError(409, 'conflict', edited ? 'The project was edited in the cloud since this computer last saw it' : 'The project was taken out of the trash in the cloud', {
+    reason: edited ? 'edited' : 'restored',
+    version: cur.version,
+    trashed: cur.trashedAt != null,
+  })
 })

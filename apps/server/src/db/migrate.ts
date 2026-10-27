@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -330,6 +330,51 @@ ALTER TABLE invites ADD COLUMN IF NOT EXISTS revoked_at double precision;
 CREATE INDEX IF NOT EXISTS invites_ws_idx ON invites(workspace_id);
 `
 
+/**
+ * v8 — a safe resume point for the change feed. change_seq is taken when a row is written, not when its transaction
+ * commits, so a slow transaction can commit after newer changes were already read, behind a desktop's cursor. Every
+ * change-writing transaction now registers where its changes start before taking its first number: a shared
+ * transaction-level advisory lock keyed (CHANGE_LOCK_NS << 48) | <the sequence's value just before>, held until it ends.
+ * The feed (routes/sync.ts) reads the sequence, then these locks, then the rows, and never lets `safe` pass the
+ * lowest registered value. Shared locks never wait on each other, so writers don't block. Same on PGlite and Postgres.
+ */
+export const DDL_V8 = `
+CREATE OR REPLACE FUNCTION ps_next_change_seq() RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE
+  low bigint;
+BEGIN
+  IF current_setting('ps.change_tx', true) IS DISTINCT FROM txid_current()::text THEN
+    SELECT last_value INTO low FROM change_seq;
+    PERFORM pg_advisory_xact_lock_shared((20563::bigint << 48) | low);
+    PERFORM set_config('ps.change_tx', txid_current()::text, true);
+  END IF;
+  RETURN nextval('change_seq');
+END $$;
+
+CREATE OR REPLACE FUNCTION ps_bump_change_seq() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.change_seq := ps_next_change_seq();
+  RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION ps_tombstone() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO tombstones (kind, id, workspace_id, change_seq, deleted_at)
+  VALUES (TG_ARGV[0], OLD.id, OLD.workspace_id, ps_next_change_seq(), extract(epoch from clock_timestamp()) * 1000);
+  RETURN OLD;
+END $$;
+
+CREATE OR REPLACE FUNCTION ps_membership_left() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO tombstones (kind, id, workspace_id, change_seq, deleted_at)
+  VALUES ('membership', OLD.user_id, OLD.workspace_id, ps_next_change_seq(), extract(epoch from clock_timestamp()) * 1000);
+  RETURN OLD;
+END $$;
+`
+
+/** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
+export const CHANGE_LOCK_NS = 20563
+
 /** Ordered migrations after v1: [version, sql]. Append here; never edit a shipped entry. */
 export const MIGRATIONS: Array<[number, string]> = [
   [2, DDL_V2],
@@ -338,4 +383,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [5, DDL_V5],
   [6, DDL_V6],
   [7, DDL_V7],
+  [8, DDL_V8],
 ]

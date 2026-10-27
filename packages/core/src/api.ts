@@ -503,15 +503,21 @@ export interface TemplateSummary {
 // POST /api/sync/now                       -> SyncStatus
 // GET  /api/sync/status                    -> SyncStatus
 // POST /api/projects/:id/sync {mode:'keep-local'|'keep-cloud'|'keep-both'} -> SyncStatus  (resolve a conflict)
+// POST /api/sync/failures/:kind/:id {action:'retry'|'skip'} -> SyncStatus  (an item that keeps failing)
+// POST /api/sync/notices/:id {action:'dismiss'|'apply'}    -> SyncStatus
 // Cloud sync surface (used by desktop replicas; Bearer device token or cookie):
 // POST /api/devices {name}                 -> {deviceId, token}   (token shown once; stored hashed)
 // GET  /api/devices                        -> Device[]
 // DELETE /api/devices/:id                  -> {ok}
-// GET  /api/sync/changes?since=<cursor>    -> SyncChanges  (all workspaces the user belongs to)
+// GET  /api/sync/changes?since=<cursor>&limit=&maxBytes= -> SyncChanges  (all workspaces the user belongs to; a page
+//      ends at `limit` changes or about `maxBytes` of JSON, default 4 MB, whichever comes first)
+// POST /api/sync/projects/:id/delete {baseVersion, trashed?} -> {ok}  (a replica's delete: only while the cloud copy is
+//      still the version it last saw, and still trashed if it saw it trashed; else 409 details {reason, version, trashed})
 // POST /api/projects accepts optional `id` (client-generated) so desktop-created projects keep their id;
 // PUT  /api/projects/:id with baseVersion is the push path (409 on conflict, details.version = cloud version).
 // POST /api/uploads accepts optional `assetId` and `sha256`; returns 409 {code:'conflict'} with details
-//      {exists: true} when that asset already exists in the cloud (nothing to upload).
+//      {exists: true} when that asset already exists in the cloud (nothing to upload). An earlier upload of the same
+//      id that never arrived (still uploading, or failed without its file) gets a fresh ticket instead.
 // Every project/asset/workspace write bumps a server-wide monotonic `change_seq`; `cursor` is that number.
 export interface SystemInfo {
   mode: 'cloud' | 'desktop'
@@ -543,7 +549,34 @@ export interface SyncStatus {
   pending: number
   /** Projects edited on both sides since the last sync. */
   conflicts: Array<{ projectId: string; name: string; localVersion: number; cloudVersion: number }>
+  /** Items that keep failing to sync while everything else carries on (Retry or Skip each). Optional: older desktops omit it. */
+  failures?: SyncFailure[]
+  /** What sync did to keep someone's work safe (a delete undone, spaces set aside, work recovered). Optional. */
+  notices?: SyncNotice[]
   error?: string
+}
+
+/** One item the desktop couldn't push. It is retried on its own schedule; Skip keeps it on this computer only. */
+export interface SyncFailure {
+  kind: 'project' | 'asset' | 'brand' | 'voice' | 'project-delete' | 'asset-delete' | 'voice-delete'
+  id: string
+  name: string
+  /** The cloud's (or this computer's) reason, for a person. */
+  error: string
+  attempts: number
+  skipped: boolean
+  at: number
+  /** Next automatic retry (absent when skipped). */
+  nextAt?: number
+}
+
+/** Something sync did to keep work safe, shown until dismissed. */
+export interface SyncNotice {
+  id: string
+  message: string
+  at: number
+  /** Label of the one thing the notice offers (POST /api/sync/notices/:id {action:'apply'}). */
+  action?: string
 }
 
 export interface DesktopSettings {
@@ -596,6 +629,12 @@ export interface SyncChanges {
   deleted: { projects: string[]; assets: string[]; workspaces?: string[]; voiceProfiles?: string[] }
   /** True when more changes remain after `cursor` (page again). */
   more: boolean
+  /**
+   * Where the next pull must start (≤ cursor): below every change that may still be uncommitted, so a slow transaction
+   * that commits after newer changes is still delivered. Page with `cursor`, resume with `safe`. Optional: older clouds
+   * omit it.
+   */
+  safe?: number
 }
 
 // ---- AI providers (bring your own key) ----

@@ -116,6 +116,40 @@ describe('global ids', () => {
   })
 })
 
+describe('an upload that never arrived', () => {
+  it('gets a fresh ticket for the same id instead of "exists"', async () => {
+    const A = await signup(t.app)
+    const bytes = crypto.randomBytes(2048)
+    const hash = crypto.createHash('sha256').update(bytes).digest('hex')
+    const up = (assetId: string, sha256 = hash) => A.client.json('POST', '/api/uploads', { workspaceId: A.workspaceId, filename: 'a.png', mime: 'image/png', size: bytes.length, assetId, sha256 })
+
+    // ticket issued, bytes never sent (the replica's connection dropped)
+    const id = crypto.randomUUID()
+    expect((await up(id)).status).toBe(200)
+    const again = await up(id)
+    expect(again.status).toBe(200)
+    expect(again.body.assetId).toBe(id)
+    await A.client.req('PUT', again.body.url, new Uint8Array(bytes), again.body.headers)
+    expect((await A.client.json('POST', `/api/assets/${id}/complete`)).status).toBe(200)
+    // now it's really there
+    expect((await up(id)).body).toMatchObject({ code: 'conflict', details: { exists: true, sha256: hash } })
+
+    // an upload that was given up on (status error, no file) can be sent again too
+    const gone = crypto.randomUUID()
+    expect((await up(gone)).status).toBe(200)
+    expect((await A.client.json('POST', `/api/assets/${gone}/abort`, { reason: 'network' })).body.status).toBe('error')
+    const retry = await up(gone)
+    expect(retry.status).toBe(200)
+    expect((await A.client.json('GET', `/api/assets/${gone}`)).body).toMatchObject({ status: 'uploading' })
+    await A.client.req('PUT', retry.body.url, new Uint8Array(bytes), retry.body.headers)
+    expect((await A.client.json('POST', `/api/assets/${gone}/complete`)).status).toBe(200)
+
+    // another workspace's id is still just taken
+    const B = await signup(t.app)
+    expect((await B.client.json('POST', '/api/uploads', { workspaceId: B.workspaceId, filename: 'a.png', mime: 'image/png', size: 10, assetId: id })).body.details).toBeUndefined()
+  })
+})
+
 describe('change feed', () => {
   it('writes bump change_seq, deletes leave tombstones, and results page with `more`', async () => {
     const A = await signup(t.app)
@@ -172,6 +206,94 @@ describe('change feed', () => {
     const B = await signup(t.app)
     const bc = await B.client.json('GET', '/api/sync/changes?since=0')
     expect(bc.body.projects.some((p: { project: { id: string } }) => p.project.id === p1.project.id)).toBe(false)
+  })
+
+  it('a deleted project that comes back drops its old tombstone from the feed', async () => {
+    const A = await signup(t.app)
+    const id = crypto.randomUUID()
+    const created = (await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, id, name: 'Back again' })).body
+    const c0 = (await A.client.json('GET', '/api/sync/changes?since=0&limit=500')).body.cursor
+    await A.client.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    await A.client.json('DELETE', `/api/projects/${id}`)
+    expect((await A.client.json('GET', `/api/sync/changes?since=${c0}`)).body.deleted.projects).toEqual([id])
+    // a replica that kept its edited copy creates it again with the same id
+    expect((await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, id, project: created.project })).status).toBe(200)
+    const again = await A.client.json('GET', `/api/sync/changes?since=${c0}`)
+    expect(again.body.deleted.projects).toEqual([])
+    expect(again.body.projects.map((p: { project: { id: string } }) => p.project.id)).toEqual([id])
+  })
+
+  it('never moves the safe cursor past a change still being written (a slow transaction)', async () => {
+    const { ctx } = await import('../context')
+    const { sql } = await import('drizzle-orm')
+    const norm = <T,>(r: unknown) => (Array.isArray(r) ? r : (r as { rows: T[] }).rows) as T[]
+    const rows = async <T,>(q: ReturnType<typeof sql>) => norm<T>(await ctx().db.execute(q))
+    const LOCKS = sql`SELECT ((classid::bigint & 65535) << 32 | objid::bigint)::text AS low FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1 AND (classid::bigint >> 16) = 20563`
+    const A = await signup(t.app)
+    const slow = (await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Slow' })).body.summary.id
+    const c0 = (await A.client.json('GET', '/api/sync/changes?since=0&limit=500')).body.cursor
+
+    // every change-writing transaction registers where its changes start, until it ends
+    let seen: Array<{ low: string }> = []
+    let seqInTx = 0
+    await ctx().db.transaction(async (tx) => {
+      seqInTx = Number(norm<{ s: string }>(await tx.execute(sql`UPDATE projects SET name = 'Slow (tx)' WHERE id = ${slow} RETURNING change_seq::text AS s`))[0].s)
+      await tx.execute(sql`UPDATE projects SET name = 'Slow (tx 2)' WHERE id = ${slow}`)
+      seen = norm<{ low: string }>(await tx.execute(LOCKS))
+    })
+    expect(seen).toHaveLength(1)
+    expect(Number(seen[0].low)).toBeLessThan(seqInTx)
+    expect(await rows(LOCKS)).toEqual([])
+
+    // a slow transaction: registered, holds a change number, not committed while 30 newer changes land
+    const [{ v: low }] = await rows<{ v: string }>(sql`SELECT last_value::text AS v FROM change_seq`)
+    const key = sql`((20563::bigint << 48) | ${Number(low)}::bigint)`
+    await rows(sql`SELECT pg_advisory_lock_shared(${key})`)
+    const [{ s: slowSeq }] = await rows<{ s: string }>(sql`SELECT nextval('change_seq')::text AS s`)
+    for (let i = 0; i < 30; i++) await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: `Newer ${i}` })
+    const page = (await A.client.json('GET', `/api/sync/changes?since=${c0}&limit=500`)).body
+    expect(page.projects.length).toBeGreaterThanOrEqual(30)
+    expect(page.cursor).toBeGreaterThan(Number(slowSeq))
+    expect(page.safe).toBeLessThan(Number(slowSeq))
+    // it commits now, with its old change number
+    await rows(sql`ALTER TABLE projects DISABLE TRIGGER projects_change_seq`)
+    await rows(sql`UPDATE projects SET name = 'Slow, committed late', change_seq = ${Number(slowSeq)} WHERE id = ${slow}`)
+    await rows(sql`ALTER TABLE projects ENABLE TRIGGER projects_change_seq`)
+    await rows(sql`SELECT pg_advisory_unlock_shared(${key})`)
+    // resuming from `safe` delivers it; resuming from the old count-based lookback would not
+    const resumed = (await A.client.json('GET', `/api/sync/changes?since=${page.safe}&limit=500`)).body
+    expect(resumed.projects.find((p: { project: { id: string } }) => p.project.id === slow)?.summary.name).toBe('Slow, committed late')
+    const lookback = (await A.client.json('GET', `/api/sync/changes?since=${page.cursor - 25}&limit=500`)).body
+    expect(lookback.projects.some((p: { project: { id: string } }) => p.project.id === slow)).toBe(false)
+    expect(resumed.safe).toBe(resumed.cursor)
+  })
+
+  it('ends a page at about maxBytes of JSON, so big documents come a few at a time (DSK-12)', async () => {
+    const A = await signup(t.app)
+    const c0 = (await A.client.json('GET', '/api/sync/changes?since=0&limit=500')).body.cursor
+    const ids: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const { body } = await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: `Big ${i}` })
+      const doc = { ...body.project, tracks: [{ id: `t${i}`, kind: 'text', name: 'Text', items: [{ id: `x${i}`, type: 'text', start: 0, duration: 1, text: 'z'.repeat(600_000) }] }] }
+      expect((await A.client.json('PUT', `/api/projects/${body.project.id}`, { project: doc, baseVersion: 1 })).status).toBe(200)
+      ids.push(body.project.id)
+    }
+    const seen: string[] = []
+    let since = c0
+    let pages = 0
+    for (;;) {
+      const res = await A.client.req('GET', `/api/sync/changes?since=${since}&limit=200&maxBytes=1000000`)
+      const text = await res.text()
+      const page = JSON.parse(text)
+      pages++
+      // at most one document past the budget
+      expect(text.length).toBeLessThan(1_000_000 + 700_000)
+      seen.push(...page.projects.map((p: { project: { id: string } }) => p.project.id))
+      if (!page.more) break
+      since = page.cursor
+    }
+    expect(pages).toBeGreaterThanOrEqual(2)
+    expect(seen).toEqual(ids)
   })
 
   it('assets appear with sha256; joining a workspace republishes its content', async () => {

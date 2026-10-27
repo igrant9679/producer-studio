@@ -105,12 +105,49 @@ installed from Voice Studio → Engine into `%LOCALAPPDATA%\Producer Studio\Voic
 ## Sync behaviour (summary)
 
 See `apps/server/src/desktop/sync.ts`. Link adopts the cloud identity, mirrors workspaces with the same ids and merges
-local-only workspaces (personal → cloud personal; others are created in the cloud). Pull never overwrites a dirty local
+local-only workspaces (personal → cloud personal; others are created in the cloud). Merging moves voice profiles (with
+their consent records) and the brand kit with the space; when the cloud space already has a brand kit, the cloud's stays
+and this computer's is kept aside in a notice with "Use this computer's kit". Pull never overwrites a dirty local
 project; cloud-advanced + local-dirty ⇒ conflict, as does a 409 on push. Resolve: keep-local (force-push over the latest
 cloud version), keep-cloud, keep-both (local copy becomes "… (conflicted copy)"). Assets: local uploads are pushed with
-the same id + sha256; cloud assets download on demand (202 while downloading, source sha256-verified) or eagerly with
+the same id + sha256 and count as uploaded only once the cloud holds the file with that hash (an upload cut short gets a
+fresh ticket for the same id and is sent again); cloud assets download on demand (202 while downloading, source sha256-verified) or eagerly with
 "Download all". Exports (`origin: render`) stay local. Runs at start, every 60 s, 3 s after local saves; backs off
 (5 s → 5 min) while offline.
+
+- **A change that commits late is still delivered.** `change_seq` is taken at write time, so a slow transaction can
+  commit after newer changes were read. Since schema v8 every change-writing transaction registers where its changes
+  start (a shared advisory lock, see `DDL_V8`), and the feed returns `safe`: the point below every transaction still
+  in flight. The desktop pages with `cursor` and resumes from `safe` (what lies between is delivered again, harmlessly),
+  so nothing is skipped. Against an older cloud it keeps the old 25-change lookback.
+- **A delete never comes back to bite.** The change feed leaves out a tombstone whose id exists again in your spaces
+  (a project kept here after a cloud delete and created anew), so a re-delivered page can't delete it a second time.
+- **Trash, restore and template flags** changed in the cloud are applied here even though they don't bump the version
+  (a flag toggled here since the last sync stays ours and is pushed).
+- **Deletes are guarded.** A project deleted here is deleted in the cloud with `POST /api/sync/projects/:id/delete
+  {baseVersion, trashed}`, which succeeds only while the cloud copy is still the version this computer last saw (and
+  still in the trash, if it saw it there). Edited in the cloud since, taken out of the trash, or no longer yours to
+  delete: the cloud copy is kept, comes back here, and the sync menu says so under "Kept safe" (Got it dismisses).
+- **Linking a different account never merges the previous one's spaces.** They stay on this computer, untouched
+  (their sync state and pull cursor are kept under `parkedAccounts`), but don't sync with the new account and are
+  never merged into it, so colleagues' projects and footage can't end up in someone else's account; a notice names
+  them. Linking the earlier account again syncs them from where they stopped (and sets the other account's aside).
+  We chose this over deleting them (unsynced work would be lost) or asking at link time (a decision most people
+  can't make well mid-link).
+- **Losing a space keeps what only exists here.** When the cloud says you left a space (removed, or it was deleted),
+  projects with changes that never synced (or in conflict), clips never uploaded, the clips those projects use and
+  their renders when the files are here, and voices made here move to a new local-only space "Recovered from …"
+  first (never synced, never merged into an account at link time), with a notice. The rest goes as before. Deleting a
+  space yourself recovers nothing.
+- **Slow links.** Cloud calls give up only when nothing has moved for 60 s (request body, reply or download), not
+  after a fixed total time, so a 64 MB project save or a big page finishes however long it takes; a stalled transfer is
+  "offline", never an empty answer. Change-feed pages end at about `maxBytes` of JSON (4 MB by default; at least one
+  change), and the desktop halves that after a page that didn't arrive, growing back as pages do.
+- **An item that keeps failing never blocks the rest.** Any push error other than "offline" or "signed out" (too
+  large, a role change, an id taken elsewhere, a server error) is recorded for that one item in
+  `desktop_sync_failures` and the cycle carries on. The item is retried on its own backoff (1, 2, 4 … min, at most
+  hourly). The sync menu lists it under "Couldn’t sync" with the reason, **Retry** (now) and **Skip** (stop trying;
+  it stays on this computer and no longer counts as pending, until Retry).
 
 ## Known gaps
 

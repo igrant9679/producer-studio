@@ -111,6 +111,7 @@ export async function adoptCloudIdentity(cloud: User): Promise<void> {
       ['invites', 'created_by'],
       ['exports', 'created_by'],
       ['share_links', 'created_by'],
+      ['voice_profiles', 'created_by'],
     ] as const) {
       await tx.execute(sql.raw(`UPDATE ${table} SET ${col} = '${cloud.id.replace(/'/g, "''")}' WHERE ${col} = '${oldId.replace(/'/g, "''")}'`))
     }

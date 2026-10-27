@@ -1,56 +1,20 @@
 // Desktop ⇄ cloud sync, end to end: a real cloud server (MODE=cloud, child process on a free port, its own data dir)
 // and this process running MODE=desktop (in-memory PGlite, its own data dir) with the real sync engine over HTTP.
-import { type ChildProcess, spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import net from 'node:net'
+import type net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { Hono } from 'hono'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Project, SyncStatus } from '@producer/core'
 import type { AppEnv } from '../auth'
+import { type Http, startCloud, startDesktop } from './desktop-harness'
 
-const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 // 1×1 PNG
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
 const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex')
-
-async function freePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const s = net.createServer()
-    s.listen(0, '127.0.0.1', () => {
-      const port = (s.address() as net.AddressInfo).port
-      s.close(() => resolve(port))
-    })
-  })
-}
-
-/** Minimal cookie-jar HTTP client for the cloud (real network) and the desktop (in-process app.request). */
-class Http {
-  cookie = ''
-  constructor(private send: (url: string, init: RequestInit) => Promise<Response>) {}
-  async req(method: string, url: string, body?: unknown, headers: Record<string, string> = {}) {
-    const h: Record<string, string> = { ...headers }
-    if (this.cookie) h.cookie = this.cookie
-    let payload: BodyInit | undefined
-    if (Buffer.isBuffer(body)) payload = body as unknown as BodyInit
-    else if (body !== undefined) {
-      payload = JSON.stringify(body)
-      h['content-type'] = 'application/json'
-    }
-    const res = await this.send(url, { method, headers: h, body: payload })
-    const m = res.headers.get('set-cookie')?.match(/ps_session=([^;]+)/)
-    if (m) this.cookie = `ps_session=${m[1]}`
-    return res
-  }
-  async json<T = any>(method: string, url: string, body?: unknown, headers?: Record<string, string>): Promise<{ status: number; body: T }> {
-    const res = await this.req(method, url, body, headers)
-    const text = await res.text()
-    return { status: res.status, body: text ? JSON.parse(text) : undefined }
-  }
-}
 
 let cloudProc: ChildProcess
 let cloudUrl: string
@@ -62,7 +26,7 @@ const password = 'correct-horse-1'
 let cloudUserId: string
 let cloudWs: string
 let engine: typeof import('../desktop/sync').syncEngine
-let stopWorker: () => void
+let stopDesktop: () => void
 
 async function sync(): Promise<SyncStatus> {
   const r = await desk.json<SyncStatus>('POST', '/api/sync/now')
@@ -81,67 +45,23 @@ async function editDoc(h: Http, id: string, mutate: (p: Project) => void) {
 }
 
 beforeAll(async () => {
-  // ---- cloud: separate process, separate data dir ----
-  const port = await freePort()
-  cloudUrl = `http://127.0.0.1:${port}`
-  const cloudData = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-cloud-'))
-  cloudProc = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
-    cwd: SERVER_DIR,
-    env: { ...process.env, MODE: 'cloud', PORT: String(port), HOST: '127.0.0.1', DATA_DIR: cloudData, PGLITE_DIR: 'memory://', LOG_SILENT: '1', AI_PROVIDER: 'none', DESKTOP_SECRET: '' },
-    stdio: ['ignore', 'ignore', 'pipe'],
-  })
-  let err = ''
-  cloudProc.stderr!.on('data', (b) => (err += String(b)))
-  for (let i = 0; ; i++) {
-    try {
-      if ((await fetch(`${cloudUrl}/api/health`)).ok) break
-    } catch {
-      /* booting */
-    }
-    if (i > 200) throw new Error(`cloud did not start: ${err}`)
-    await new Promise((r) => setTimeout(r, 150))
-  }
-  cloudHttp = new Http((u, init) => fetch(`${cloudUrl}${u}`, init))
+  const cloud = await startCloud()
+  cloudProc = cloud.proc
+  cloudUrl = cloud.url
   email = `desk${Date.now()}@example.com`
-  const su = await cloudHttp.json('POST', '/api/auth/signup', { email, password, name: 'Dana Desk' })
-  expect(su.status).toBe(200)
-  cloudUserId = su.body.user.id
-  cloudWs = su.body.workspaces[0].id
-
-  // ---- desktop: this process ----
-  const deskData = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-desk-'))
-  Object.assign(process.env, {
-    MODE: 'desktop',
-    DATA_DIR: deskData,
-    PGLITE_DIR: 'memory://',
-    LOG_SILENT: '1',
-    DESKTOP_SECRET: 'test-secret-0123456789',
-    DESKTOP_SETTINGS_FILE: path.join(deskData, 'settings.json'),
-  })
-  delete process.env.DATABASE_URL
-  delete process.env.S3_BUCKET
-  const { loadConfig } = await import('../config')
-  const { initCtx } = await import('../context')
-  const { createApp } = await import('../app')
-  const { registerHandlers } = await import('../jobs/handlers')
-  const worker = await import('../jobs/worker')
-  const { initDesktop } = await import('../desktop')
-  const { saveSettings } = await import('../desktop/settings')
-  await initCtx(loadConfig())
-  registerHandlers()
-  await initDesktop()
-  saveSettings({ autoSync: false })
-  app = createApp()
-  worker.startWorker({ concurrency: 1 })
-  stopWorker = worker.stopWorker
-  engine = (await import('../desktop/sync')).syncEngine
-  await engine.start()
-  desk = new Http(async (u, init) => app.request(u, init))
-}, 120_000)
+  const a = await cloud.signup('Dana Desk', email)
+  cloudHttp = a.http
+  cloudUserId = a.userId
+  cloudWs = a.workspaceId
+  const d = await startDesktop()
+  app = d.app
+  desk = d.desk
+  engine = d.engine
+  stopDesktop = d.stop
+}, 240_000)
 
 afterAll(async () => {
-  engine?.stop()
-  stopWorker?.()
+  stopDesktop?.()
   cloudProc?.kill()
 })
 

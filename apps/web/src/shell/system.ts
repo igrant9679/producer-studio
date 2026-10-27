@@ -1,6 +1,6 @@
 // Server mode (cloud | desktop), AI provider and desktop sync state.
 // lib/api.ts doesn't cover these endpoints yet, so the shell calls them with a small fetch helper.
-import type { AiKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, SyncStatus, SystemInfo } from '@producer/core'
+import type { AiKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, SyncFailure, SyncStatus, SystemInfo } from '@producer/core'
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { HttpError } from '../lib/api'
@@ -34,6 +34,10 @@ export const systemApi = {
   link: (cloudUrl: string, email: string, password: string) => sysFetch<SyncStatus>('POST', '/sync/link', { cloudUrl, email, password }),
   unlink: () => sysFetch<SyncStatus>('POST', '/sync/unlink'),
   resolve: (projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both') => sysFetch<SyncStatus>('POST', `/projects/${encodeURIComponent(projectId)}/sync`, { mode }),
+  /** An item that keeps failing to sync: try again now, or skip it (it stays on this computer). */
+  syncFailure: (f: Pick<SyncFailure, 'kind' | 'id'>, action: 'retry' | 'skip') => sysFetch<SyncStatus>('POST', `/sync/failures/${f.kind}/${encodeURIComponent(f.id)}`, { action }),
+  /** What sync did to keep work safe: dismiss it, or take the one thing it offers. */
+  syncNotice: (id: string, action: 'dismiss' | 'apply') => sysFetch<SyncStatus>('POST', `/sync/notices/${encodeURIComponent(id)}`, { action }),
   devices: () => sysFetch<Device[]>('GET', '/devices'),
   revokeDevice: (id: string) => sysFetch<{ ok: true }>('DELETE', `/devices/${encodeURIComponent(id)}`),
   // bring-your-own-key AI providers (desktop ignores workspaceId)

@@ -39,18 +39,32 @@ uploadRoutes.post('/', async (c) => {
   )
   await requireRole(u.id, b.workspaceId, 'editor')
   await assertProjectInWorkspace(b.projectId, b.workspaceId)
+  let retry: AssetRow | undefined
   if (b.assetId) {
     const existing = (await ctx().db.select().from(assets).where(eq(assets.id, b.assetId)).limit(1))[0]
     if (existing) {
       // a replica re-pushing its own asset learns it's there; another workspace's id gets a plain conflict
       if (existing.workspaceId !== b.workspaceId) throw new HttpError(409, 'conflict', 'This asset id is taken')
-      throw new HttpError(409, 'conflict', 'This asset already exists', { exists: true, asset: assetRecord(existing), sha256: existing.sha256 ?? undefined })
+      // ...unless its earlier upload never arrived (connection dropped, or given up on without the file): send it again
+      const arrived = existing.status !== 'uploading' && (existing.status !== 'error' || (await ctx().storage.stat(existing.sourceKey)))
+      if (arrived) throw new HttpError(409, 'conflict', 'This asset already exists', { exists: true, asset: assetRecord(existing), sha256: existing.sha256 ?? undefined })
+      retry = existing
     }
   }
   const max = ctx().config.maxUploadBytes
   if (b.size > max) throw new HttpError(413, 'quota', `File is larger than the ${Math.round(max / 1024 / 1024)} MB upload limit`)
   const mime = uploadMime(b.mime, b.filename)
   if (!mime) throw new HttpError(415, 'invalid', 'Only video, audio and image files can be uploaded')
+  if (retry) {
+    // same row and storage key; a fresh ticket (and a fresh clock for the abandoned-upload sweep)
+    const [row] = await ctx()
+      .db.update(assets)
+      .set({ status: 'uploading', error: null, size: b.size, sha256: b.sha256?.toLowerCase() ?? retry.sha256, updatedAt: Date.now() })
+      .where(eq(assets.id, retry.id))
+      .returning()
+    emitAsset(row)
+    return c.json(await uploadTicket(row.id, row.sourceKey, row.mime, b.size))
+  }
   const ext = extFor(b.filename, mime)
   const id = b.assetId ?? newId('as')
   const key = `${assetPrefix(b.workspaceId, id)}/source${ext}`
@@ -76,12 +90,15 @@ uploadRoutes.post('/', async (c) => {
     })
     .returning()
   emitAsset(row)
-  const storage = ctx().storage
-  const ticket: UploadTicket = storage.presignPut
-    ? { assetId: id, url: await storage.presignPut(key, mime, { size: b.size }), method: 'PUT', headers: { 'content-type': mime } }
-    : { assetId: id, url: `/api/uploads/${id}/data`, method: 'PUT', headers: { 'content-type': mime } }
-  return c.json(ticket)
+  return c.json(await uploadTicket(id, key, mime, b.size))
 })
+
+async function uploadTicket(id: string, key: string, mime: string, size: number): Promise<UploadTicket> {
+  const storage = ctx().storage
+  return storage.presignPut
+    ? { assetId: id, url: await storage.presignPut(key, mime, { size }), method: 'PUT', headers: { 'content-type': mime } }
+    : { assetId: id, url: `/api/uploads/${id}/data`, method: 'PUT', headers: { 'content-type': mime } }
+}
 
 // Local-storage upload target: stream the request body to disk with a size cap.
 uploadRoutes.put('/:assetId/data', async (c) => {
