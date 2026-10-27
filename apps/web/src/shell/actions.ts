@@ -5,6 +5,12 @@ import { api } from '../lib/api'
 import { useSession } from '../lib/session'
 import { toastError } from '../lib/toast'
 
+/**
+ * Where opening a project goes: a Producer AI project that hasn't been assembled yet (nothing on its timeline) resumes
+ * in the wizard instead of opening an empty editor.
+ */
+export const projectPath = (p: { id: string; kind?: string; duration?: number }) => (p.kind === 'producer' && !((p.duration ?? 0) > 0) ? `/producer/${p.id}` : `/edit/${p.id}`)
+
 export type EditorTab = 'media' | 'text' | 'captions' | 'transcript' | 'audio' | 'effects' | 'transitions' | 'filters' | 'brand' | 'ai'
 
 /** Returns [create, busy]. create() makes a new edit project and opens it in the editor. */

@@ -30,6 +30,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, HttpError, mediaUrl } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
+import { projectPath } from '../actions'
 import { InlineRename, KindPill, ProjectCard, ProjectThumb } from '../components/ProjectCard'
 import { liveBus, uploadFiles, useUploads } from '../stores'
 import { SyncBadge } from '../SystemChrome'
@@ -203,7 +204,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
     patchLocal(p.id, { name })
     void act(() => api.patchProject(p.id, { name }))
   }
-  const open = (p: ProjectSummary) => (trash ? undefined : navigate(`/edit/${p.id}`))
+  const open = (p: ProjectSummary) => (trash ? undefined : navigate(projectPath(p)))
   const allSelected = list.length > 0 && list.every((p) => sel.has(p.id))
 
   return (

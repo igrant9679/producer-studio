@@ -36,7 +36,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api, subscribeEvents } from '../lib/api'
 import { useSession } from '../lib/session'
 import { toast } from '../lib/toast'
-import { useCreateAndOpen } from './actions'
+import { projectPath, useCreateAndOpen } from './actions'
 import { MOCK_ACTIVE } from './dev/installMock'
 import { AspectPickerModal, CreateSpaceModal, DeleteSpaceModal, HelpModal, InviteModal, RenameSpaceModal, ownSpaceDeletes } from './modals'
 import { AiChip, DesktopBadge, SyncIndicator } from './SystemChrome'
@@ -207,7 +207,7 @@ function GlobalSearch() {
     }
   }, [data, term])
   const flat: Array<{ go: () => void }> = [
-    ...results.projects.map((p) => ({ go: () => navigate(`/edit/${p.id}`) })),
+    ...results.projects.map((p) => ({ go: () => navigate(projectPath(p)) })),
     ...results.assets.map((a) => ({ go: () => navigate(`/library?tab=assets&q=${encodeURIComponent(a.asset.name)}`) })),
   ]
   useEffect(() => setHi(-1), [term])

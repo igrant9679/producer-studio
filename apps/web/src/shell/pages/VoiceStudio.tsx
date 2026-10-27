@@ -495,12 +495,13 @@ export default function VoiceStudio() {
   const desktop = useIsDesktop()
   const [params, setParams] = useSearchParams()
   const tab = (TABS.find((t) => t.id === params.get('tab') && (desktop || !t.desktopOnly))?.id ?? 'tts') as Tab
+  // each tab is a history entry, like the Library's: Back returns to the previous tab
   const setTab = (t: Tab) => setParams((p) => {
     const n = new URLSearchParams(p)
     if (t === 'tts') n.delete('tab')
     else n.set('tab', t)
     return n
-  }, { replace: true })
+  })
   const [voice, setVoice] = useState('af_heart')
   // a voiceover that finishes later plays only while Voice Studio is on screen
   useEffect(() => {

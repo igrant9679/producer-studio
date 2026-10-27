@@ -40,7 +40,7 @@ function ScheduleCalendar() {
       </div>
       <div className="ps-cal-veil">
         <strong>Plan and auto-publish to YouTube, TikTok, Instagram and LinkedIn</strong>
-        <span>Connect your accounts, drop an export on a date, and Producer Studio posts it for you. Arriving in phase 2.</span>
+        <span>Connect your accounts, drop an export on a date, and Producer Studio posts it for you.</span>
       </div>
     </div>
   )

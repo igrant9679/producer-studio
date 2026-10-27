@@ -25,6 +25,8 @@ export function AspectPickerModal({ onClose, onPick, busy, title = 'New video', 
   const [sel, setSel] = useState<string>('16:9')
   const [name, setName] = useState('')
   const a = ASPECT_RATIOS.find((x) => x.id === sel)!
+  // double-click and Enter create too, with the name typed so far
+  const pick = (r: (typeof ASPECT_RATIOS)[number]) => !busy && onPick({ id: r.id, width: r.width, height: r.height, ...(name.trim() ? { name: name.trim() } : {}) })
   return (
     <Modal
       title={title}
@@ -34,7 +36,7 @@ export function AspectPickerModal({ onClose, onPick, busy, title = 'New video', 
       footer={
         <>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy} onClick={() => onPick({ id: a.id, width: a.width, height: a.height, ...(name.trim() ? { name: name.trim() } : {}) })}>
+          <button className="btn primary" disabled={busy} onClick={() => pick(a)}>
             {busy && <Spinner />} Create {a.name} project
           </button>
         </>
@@ -42,7 +44,7 @@ export function AspectPickerModal({ onClose, onPick, busy, title = 'New video', 
     >
       <div className="ps-aspects" role="radiogroup" aria-label="Aspect ratio">
         {ASPECT_RATIOS.map((r) => (
-          <button key={r.id} role="radio" aria-checked={sel === r.id} className={`ps-aspect ${sel === r.id ? 'on' : ''}`} onClick={() => setSel(r.id)} onDoubleClick={() => onPick({ id: r.id, width: r.width, height: r.height })}>
+          <button key={r.id} role="radio" aria-checked={sel === r.id} className={`ps-aspect ${sel === r.id ? 'on' : ''}`} onClick={() => setSel(r.id)} onDoubleClick={() => pick(r)}>
             <div className="ps-aspect-box"><AspectBox w={r.width} h={r.height} /></div>
             <strong>{r.name}</strong>
             <span>{r.hint}</span>
@@ -51,7 +53,7 @@ export function AspectPickerModal({ onClose, onPick, busy, title = 'New video', 
       </div>
       <div style={{ marginTop: 18 }}>
         <label className="label" htmlFor="np-name">Project name (optional)</label>
-        <input id="np-name" className="input" placeholder="Untitled project" value={name} onChange={(e) => setName(e.target.value)} />
+        <input id="np-name" className="input" placeholder="Untitled project" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pick(a)} />
       </div>
     </Modal>
   )
@@ -82,7 +84,7 @@ export function CreateSpaceModal({ onClose }: { onClose: () => void }) {
     <Modal title="Create a space" subtitle="Spaces keep a team's projects, media and brand kit together. You can invite people next." onClose={onClose} width={480}>
       <form onSubmit={submit}>
         <label className="label" htmlFor="space-name">Space name</label>
-        <input id="space-name" className="input" autoFocus placeholder="e.g. Marketing team" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
+        <input id="space-name" className="input" autoFocus placeholder="e.g. Marketing team" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
         <div className="row" style={{ justifyContent: 'flex-end', marginTop: 20 }}>
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy || !name.trim()}>{busy && <Spinner />} Create space</button>
@@ -293,7 +295,7 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
         <div>
           <Logo />
           <p style={{ color: 'var(--text-2)', marginTop: 16 }}>
-            Producer Studio turns screen recordings into finished, on-brand videos. <b>Producer AI</b> transcribes your footage, writes a script with Claude, narrates it and assembles
+            Producer Studio turns screen recordings into finished, on-brand videos. <b>Producer AI</b> transcribes your footage, writes a script with AI, narrates it and assembles
             the cut; the <b>Video Editor</b> gives you a full multi-track timeline to finish it; <b>Voice Studio</b> generates voiceovers from text.
           </p>
           <ul style={{ color: 'var(--text-2)', paddingLeft: 18, lineHeight: 1.8 }}>
