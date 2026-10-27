@@ -163,10 +163,11 @@ export function TranscriptPanel() {
   }, [])
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.key === 'Delete' || e.key === 'Backspace') && sel.size) {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      // the transcript's own key, words selected or not: never the timeline's "delete clip"
       e.preventDefault()
       e.stopPropagation()
-      cutKeys(sel, 'Delete words')
+      if (sel.size) cutKeys(sel, 'Delete words')
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault()
       e.stopPropagation()
