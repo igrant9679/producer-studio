@@ -1,6 +1,7 @@
 // The local Producer Studio server as a child process: Electron's own Node (ELECTRON_RUN_AS_NODE=1), MODE=desktop,
-// 127.0.0.1 on a free port, a random per-launch DESKTOP_SECRET, logs to <userData>/logs/server.log. It watches its
-// stdin and exits when this process goes away; on quit we close stdin (graceful), then kill the tree.
+// 127.0.0.1 on a free port, a random per-launch DESKTOP_SECRET, logs to <userData>/logs/server.log (rotated by size).
+// It watches its stdin and exits when this process goes away; on quit we close stdin (graceful: the server gives
+// VoiceStudio its time, then closes the database), and kill the tree only if it's still running after that.
 import { type ChildProcess, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -8,8 +9,14 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { app } from 'electron'
+import { resolveDataDir } from './datadir'
 import { deviceKey } from './keystore'
+import { RotatingLog } from './logs'
 import { layout } from './paths'
+import { stopGracefully } from './proc'
+
+/** How long the server may take to shut down before its tree is killed (it exits on its own within 10 s). */
+const STOP_GRACE_MS = 12_000
 
 export function freePort(preferred?: number): Promise<number> {
   const tryPort = (p: number) =>
@@ -24,17 +31,6 @@ export function freePort(preferred?: number): Promise<number> {
   return preferred ? tryPort(preferred).catch(() => tryPort(0)) : tryPort(0)
 }
 
-function killTree(pid: number | undefined) {
-  if (!pid) return
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => undefined)
-  else
-    try {
-      process.kill(-pid, 'SIGKILL')
-    } catch {
-      /* gone */
-    }
-}
-
 export interface DesktopPaths {
   userData: string
   dataDir: string
@@ -42,28 +38,14 @@ export interface DesktopPaths {
   settingsFile: string
 }
 
+export const dataDirEnv = () => ({ platform: process.platform, userData: app.getPath('userData'), localAppData: process.env.LOCALAPPDATA })
+
 export function desktopPaths(): DesktopPaths {
   const userData = app.getPath('userData')
   const settingsFile = path.join(userData, 'settings.json')
-  let dataDir = path.join(userData, 'data')
-  try {
-    const s = JSON.parse(fs.readFileSync(settingsFile, 'utf8')) as { dataDir?: string }
-    if (s.dataDir && path.isAbsolute(s.dataDir)) dataDir = s.dataDir
-  } catch {
-    /* first run */
-  }
+  const dataDir = resolveDataDir(settingsFile, dataDirEnv())
   const logsDir = path.join(userData, 'logs')
   return { userData, dataDir, logsDir, settingsFile }
-}
-
-function openLog(file: string): fs.WriteStream {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  try {
-    if (fs.statSync(file).size > 10 * 1024 * 1024) fs.renameSync(file, `${file}.1`)
-  } catch {
-    /* no log yet */
-  }
-  return fs.createWriteStream(file, { flags: 'a' })
 }
 
 export class ServerProcess extends EventEmitter {
@@ -71,8 +53,13 @@ export class ServerProcess extends EventEmitter {
   private secret = ''
   private child?: ChildProcess
   private stopping = false
-  readonly paths = desktopPaths()
-  private log = openLog(path.join(this.paths.logsDir, 'server.log'))
+  paths = desktopPaths()
+  private log = new RotatingLog(path.join(this.paths.logsDir, 'server.log'))
+
+  /** Read where the data folder is again (after it was moved or switched to the default); the server is stopped. */
+  refreshPaths() {
+    this.paths = desktopPaths()
+  }
 
   get origin() {
     return `http://127.0.0.1:${this.port}`
@@ -113,8 +100,8 @@ export class ServerProcess extends EventEmitter {
     this.log.write(`\n=== ${new Date().toISOString()} starting server on ${this.origin} (${app.isPackaged ? 'packaged' : 'dev'}) ===\n`)
     const child = spawn(process.execPath, l.serverArgs, { cwd: l.serverCwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' })
     this.child = child
-    child.stdout!.pipe(this.log, { end: false })
-    child.stderr!.pipe(this.log, { end: false })
+    child.stdout!.on('data', (b: Buffer) => this.log.write(b))
+    child.stderr!.on('data', (b: Buffer) => this.log.write(b))
     child.stdin!.on('error', () => undefined)
     child.on('exit', (code, signal) => {
       this.log.write(`=== server exited code=${code} signal=${signal} ===\n`)
@@ -149,17 +136,9 @@ export class ServerProcess extends EventEmitter {
   async stop(): Promise<void> {
     this.stopping = true
     const child = this.child
-    if (!child || child.exitCode !== null) return
-    // graceful: the server shuts down when its stdin closes (closes PGlite cleanly)
-    child.stdin?.end()
-    const exited = await new Promise<boolean>((resolve) => {
-      const t = setTimeout(() => resolve(false), 5000)
-      child.once('exit', () => {
-        clearTimeout(t)
-        resolve(true)
-      })
-    })
-    if (!exited) killTree(child.pid)
-    else killTree(child.pid) // sweep leftover grandchildren (tts worker, renders) — no-op if gone
+    if (!child) return
+    // graceful: the server shuts down when its stdin closes (stops VoiceStudio and its workers, closes PGlite cleanly);
+    // only a server still running after that has its tree killed (a process that has exited may have handed its id on)
+    await stopGracefully(child, STOP_GRACE_MS)
   }
 }
