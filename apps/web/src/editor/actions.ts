@@ -124,19 +124,31 @@ export function separate() {
   S().commit(p, 'Separate audio')
 }
 
-export function freeze() {
+/**
+ * Hold a frame for 2 s: the frame under the playhead on the selected (else the main-track) clip. From a clip's context
+ * menu, `on` names the clip right-clicked: its frame under the playhead, or at the point clicked when the playhead is
+ * elsewhere.
+ */
+export function freeze(on?: { itemId: string; at: number }) {
   const { playhead, project } = S()
-  const v = selectedItems().find((i) => i.type === 'video' && i.start <= playhead && itemEnd(i) > playhead)
-    ?? (mainTrack(project)?.items ?? []).find((i) => i.type === 'video' && i.start <= playhead && itemEnd(i) > playhead)
+  const under = (i: Item, t: number) => i.type === 'video' && i.start <= t && itemEnd(i) > t
+  let v: Item | undefined
+  let t = playhead
+  if (on) {
+    v = findItem(project, on.itemId)?.item
+    if (v?.type !== 'video') v = undefined
+    else if (!under(v, t)) t = Math.max(v.start, Math.min(on.at, itemEnd(v) - 1 / project.fps))
+  } else v = selectedItems().find((i) => under(i, t)) ?? (mainTrack(project)?.items ?? []).find((i) => under(i, t))
   if (!v) return toast('Put the playhead over a video clip to freeze a frame')
   if (!editableIds([v.id]).length) return
-  S().commit(freezeFrame(project, v.id, playhead, 2), 'Freeze frame')
+  S().commit(freezeFrame(project, v.id, t, 2), 'Freeze frame')
 }
 
 export function setTransition(itemId: string, type: TransitionType | null, duration = 0.6) {
   const { project } = S()
   const f = findItem(project, itemId)
-  if (!f || !('transitionOut' in f.item || f.item.type === 'video' || f.item.type === 'image')) return
+  // any visual clip takes one: text and shapes have no `transitionOut` until they get their first
+  if (!f || !('transform' in f.item)) return
   const next = f.track.items[f.index + 1]
   if (type && (!next || Math.abs(next.start - itemEnd(f.item)) > 0.05)) {
     toast('Transitions go between two touching clips on the same track')
