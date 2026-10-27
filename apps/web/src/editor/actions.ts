@@ -3,6 +3,7 @@ import type { AnimProp, Asset, Item, Project, TrackKind, TransitionType, VisualI
 import {
   addAsset,
   addItem,
+  assetIdsOf,
   clone,
   createAudioItem,
   createImageItem,
@@ -81,24 +82,40 @@ export function remove(ripple = false) {
   S().commit(p, ripple ? 'Ripple delete' : 'Delete', { selection: [] })
 }
 
+/** The clipboard keeps the clips' media records too, so they paste into another project whole. */
+function toClipboard(items: Item[]) {
+  const s = S()
+  const assets: Record<string, Asset> = {}
+  for (const id of items.flatMap(assetIdsOf)) {
+    const a = s.project.assets[id] ?? s.media[id]
+    if (a) assets[id] = a
+  }
+  s.set({ clipboard: clone(items), clipboardMedia: { workspaceId: s.workspaceId, assets: clone(assets) } })
+}
+
 export function copy() {
   const items = selectedItems()
   if (!items.length) return
-  S().set({ clipboard: clone(items) })
+  toClipboard(items)
   toast(`Copied ${items.length} item${items.length > 1 ? 's' : ''}`)
 }
 
 export function cut() {
   const items = selectedItems()
   if (!items.length || !editableIds(items.map((i) => i.id)).length) return
-  S().set({ clipboard: clone(items) })
+  toClipboard(items)
   remove(false)
 }
 
 export function paste() {
-  const { clipboard, project, playhead } = S()
+  const { clipboard, clipboardMedia, project, playhead, workspaceId } = S()
   if (!clipboard.length) return
-  const { project: p, newIds } = pasteItems(project, clipboard, playhead)
+  // media lives in its space: a clip copied in another space can't be loaded or exported from this one
+  const foreign = clipboardMedia.workspaceId !== workspaceId
+  const items = foreign ? clipboard.filter((i) => assetIdsOf(i).every((id) => project.assets[id])) : clipboard
+  if (items.length < clipboard.length) toast("Clips copied in another space can't be pasted here: add their media to this space first")
+  if (!items.length) return
+  const { project: p, newIds } = pasteItems(project, items, playhead, foreign ? {} : clipboardMedia.assets)
   S().commit(p, 'Paste', { selection: newIds })
 }
 

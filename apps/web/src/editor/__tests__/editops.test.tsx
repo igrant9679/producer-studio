@@ -27,6 +27,31 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
+describe('copy and paste between projects (EDT-18)', () => {
+  it('a clip pasted into another project brings its media record', () => {
+    S().select(['v2'])
+    A.copy()
+    load(createProject({ id: 'p2', name: 'Other' }))
+    A.paste()
+    const p = S().project
+    expect(p.assets.as_b).toEqual(project().assets.as_b)
+    expect(mainTrack(p)!.items).toHaveLength(1)
+  })
+
+  it("clips copied in another space aren't pasted; the rest is", () => {
+    const p = addItem(project(), createTextItem(0, 'heading', { id: 't1', duration: 2 }))
+    load(p)
+    S().select(['v2', 't1'])
+    A.copy()
+    load(createProject({ id: 'p3', name: 'Elsewhere' }), 'w2')
+    A.paste()
+    const items = S().project.tracks.flatMap((t) => t.items)
+    expect(items.map((i) => i.type)).toEqual(['text'])
+    expect(S().project.assets.as_b).toBeUndefined()
+    expect(useToasts.getState().toasts.map((t) => t.text).join(' ')).toMatch(/another space/)
+  })
+})
+
 describe('separate audio (EDT-21)', () => {
   it('a second Separate says the audio is already separated and adds nothing', () => {
     S().select(['v1'])

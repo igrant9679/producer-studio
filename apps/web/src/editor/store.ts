@@ -49,6 +49,8 @@ export interface EditorState {
   zoom: number
   snapping: boolean
   clipboard: Item[]
+  /** Media records the clipboard's clips need, and the space they were copied in (another space can't load them). */
+  clipboardMedia: { workspaceId?: string; assets: Record<string, Asset> }
   activeLeftTab: LeftTab
   activeRightTab: string
   leftCollapsed: boolean
@@ -145,6 +147,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   zoom: 80,
   snapping: true,
   clipboard: [],
+  clipboardMedia: { assets: {} },
   activeLeftTab: 'media',
   activeRightTab: '',
   leftCollapsed: false,

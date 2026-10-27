@@ -3,6 +3,7 @@
 import { createAudioItem, createCaptionItem, createTrack } from './factory'
 import type {
   AnimProp,
+  Asset,
   AudioItem,
   CaptionItem,
   CaptionStyle,
@@ -528,11 +529,23 @@ export function duplicateItems(p0: Project, ids: string[]): { project: Project; 
   return { project: p, newIds }
 }
 
-/** Paste clipboard items at time t, keeping their relative offsets. */
-export function pasteItems(p0: Project, items: Item[], t: number): { project: Project; newIds: string[] } {
+/** Media records an item needs: its clip, and an image letterbox fill. */
+export function assetIdsOf(it: Item): string[] {
+  const ids: string[] = []
+  if ('assetId' in it) ids.push(it.assetId)
+  if ((it.type === 'video' || it.type === 'image') && it.background?.type === 'image') ids.push(it.background.assetId)
+  return ids
+}
+
+/**
+ * Paste clipboard items at time t, keeping their relative offsets. `assets` are the media records copied with them:
+ * the ones this project doesn't have yet are added, so a clip copied from another project previews, trims and exports.
+ */
+export function pasteItems(p0: Project, items: Item[], t: number, assets: Record<string, Asset> = {}): { project: Project; newIds: string[] } {
   if (!items.length) return { project: p0, newIds: [] }
   const base = Math.min(...items.map((i) => i.start))
   let p = p0
+  for (const id of new Set(items.flatMap(assetIdsOf))) if (!p.assets[id] && assets[id]) p = addAsset(p, assets[id])
   const newIds: string[] = []
   for (const src of items) {
     const it = clone(src)

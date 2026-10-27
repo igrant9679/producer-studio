@@ -19,6 +19,7 @@ import {
   itemEnd,
   mainTrack,
   moveItem,
+  pasteItems,
   separateAudio,
   separateAudioRefusal,
   setItemSpeed,
@@ -183,6 +184,25 @@ describe('separate audio (EDT-21)', () => {
     const right = mainTrack(p)!.items[1]
     expect(separateAudioRefusal(p, right.id)).toBe('separated')
     expect(separateAudioRefusal(p, 'vb')).toBeNull()
+  })
+})
+
+describe('paste into another project (EDT-18)', () => {
+  it('adds the media records the pasted clips need', () => {
+    const from = twoClips()
+    const to = createProject()
+    const { project, newIds } = pasteItems(to, [item(from, 'vb')], 0, from.assets)
+    expect(project.assets.b).toEqual(from.assets.b)
+    // only what the clips use
+    expect(project.assets.a).toBeUndefined()
+    // trims know the source again: the clip can't be stretched past its 6 s
+    expect(itemEnd(item(trimItem(project, newIds[0], 'end', 30), newIds[0]))).toBe(6)
+  })
+
+  it("keeps a record the project already has", () => {
+    const from = twoClips()
+    const to = addAsset(createProject(), { ...video('b', 6), name: 'mine.mp4' })
+    expect(pasteItems(to, [item(from, 'vb')], 0, from.assets).project.assets.b.name).toBe('mine.mp4')
   })
 })
 
