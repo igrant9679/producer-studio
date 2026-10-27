@@ -28,8 +28,8 @@ export async function loadLink(): Promise<StoredLink | undefined> {
 export async function saveLink(l: Omit<StoredLink, 'token'>, token: string) {
   const link: StoredLink = { ...l, token: seal(token) }
   await kvSet('link', link)
-  // remembered after unlink so relinking the same account keeps sync state
-  await kvSet('lastLink', { cloudUrl: l.cloudUrl, cloudUserId: l.cloudUserId })
+  // remembered after unlink so relinking the same account keeps sync state (and linking another sets this one aside)
+  await kvSet('lastLink', { cloudUrl: l.cloudUrl, cloudUserId: l.cloudUserId, account: l.account })
   current = { link, token }
 }
 

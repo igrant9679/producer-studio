@@ -334,3 +334,37 @@ describe('losing a space keeps the work that exists only here (DSK-11)', () => {
     expect((await C.http.json('GET', `/api/projects/${pid}`)).body.summary.name).toBe('Crew cut')
   })
 })
+
+// must run last: it switches the linked account
+describe('linking a different account never uploads the previous account’s spaces (DSK-6)', () => {
+  beforeAll(linkA)
+
+  it('sets them aside on this computer, and they sync again when that account is linked back', async () => {
+    const team = (await A.http.json('POST', '/api/workspaces', { name: 'Team A' })).body.id
+    const pid = (await A.http.json('POST', '/api/projects', { workspaceId: team, name: 'Colleague cut' })).body.summary.id
+    await sync()
+    await editDoc(desk, pid, (p) => (p.name = 'Colleague cut, my edit'))
+    expect((await desk.json('POST', '/api/sync/unlink')).status).toBe(200)
+
+    const B = await cloud.signup('Bo Second')
+    expect((await desk.json('POST', '/api/sync/link', { cloudUrl: cloud.url, email: B.email, password: PASSWORD })).status).toBe(200)
+    const st = await sync()
+    expect(st.state).toBe('idle')
+    // nothing of the first account reached the second
+    expect((await B.http.json('GET', '/api/workspaces')).body.map((w: { id: string }) => w.id)).toEqual([B.workspaceId])
+    expect((await B.http.json('GET', `/api/projects?workspaceId=${B.workspaceId}`)).body).toEqual([])
+    // still here, untouched, and the person is told
+    expect((await desk.json('GET', `/api/projects/${pid}`)).body.summary.name).toBe('Colleague cut, my edit')
+    expect(st.notices?.find((n) => n.message.includes('Team A'))?.message).toContain(A.email)
+    expect(st.pending).toBe(0)
+
+    // the first account again: its spaces sync again (the edit made here goes up), the second's are set aside
+    expect((await desk.json('POST', '/api/sync/unlink')).status).toBe(200)
+    await linkA()
+    const back = await sync()
+    expect(back.conflicts).toEqual([])
+    expect((await A.http.json('GET', `/api/projects/${pid}`)).body.summary.name).toBe('Colleague cut, my edit')
+    const bName = (await B.http.json('GET', '/api/workspaces')).body[0].name
+    expect((await A.http.json('GET', '/api/workspaces')).body.some((w: { name: string }) => w.name === bName)).toBe(false)
+  })
+})

@@ -121,6 +121,12 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
   {baseVersion, trashed}`, which succeeds only while the cloud copy is still the version this computer last saw (and
   still in the trash, if it saw it there). Edited in the cloud since, taken out of the trash, or no longer yours to
   delete: the cloud copy is kept, comes back here, and the sync menu says so under "Kept safe" (Got it dismisses).
+- **Linking a different account never merges the previous one's spaces.** They stay on this computer, untouched
+  (their sync state and pull cursor are kept under `parkedAccounts`), but don't sync with the new account and are
+  never merged into it, so colleagues' projects and footage can't end up in someone else's account; a notice names
+  them. Linking the earlier account again syncs them from where they stopped (and sets the other account's aside).
+  We chose this over deleting them (unsynced work would be lost) or asking at link time (a decision most people
+  can't make well mid-link).
 - **Losing a space keeps what only exists here.** When the cloud says you left a space (removed, or it was deleted),
   projects with changes that never synced (or in conflict), clips never uploaded, the clips those projects use and
   their renders when the files are here, and voices made here move to a new local-only space "Recovered from …"

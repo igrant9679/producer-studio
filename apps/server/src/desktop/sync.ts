@@ -41,6 +41,22 @@ const RELAY_POLL_MS = 5_000
 
 type ProjectRow = typeof projects.$inferSelect
 
+/** The account linked last (kept after unlink, so relinking it keeps sync state). */
+interface LastLink {
+  cloudUrl: string
+  cloudUserId: string
+  account?: string
+}
+
+/** Another account's spaces set aside on this computer, and where its pull stopped. */
+interface ParkedAccount {
+  account?: string
+  workspaces: string[]
+  cursor: number
+}
+
+const accountKey = (cloudUrl: string, cloudUserId: string) => `${cloudUrl}|${cloudUserId}`
+
 const mediaId = (url?: string) => url?.match(/^\/api\/media\/([^/]+)\//)?.[1] ?? null
 
 /** The cloud copy of a clip holds its file (and the same file, when both sides know the hash). */
@@ -282,12 +298,16 @@ export class SyncEngine {
     }
     const c = new CloudClient(cloudUrl, dev.token)
     const me = await c.json<MeResponse>('GET', '/api/auth/me')
-    const last = await kvGet<{ cloudUrl: string; cloudUserId: string }>('lastLink')
-    if (!last || last.cloudUrl !== cloudUrl || last.cloudUserId !== me.user.id) {
-      // a different account/cloud: nothing we know about sync state applies
+    const last = await kvGet<LastLink>('lastLink')
+    if (!last) {
+      // the first link: nothing we know about sync state applies
       await clearSync()
       await kvSet('cursor', 0)
+    } else if (last.cloudUrl !== cloudUrl || last.cloudUserId !== me.user.id) {
+      // another account (or cloud): the previous account's spaces are set aside here, never merged into this one
+      await this.setAsideAccount(last, me.user.email)
     }
+    await this.resumeAccount(cloudUrl, me.user.id)
     await adoptCloudIdentity(me.user)
     await this.mirrorWorkspaces(me.workspaces)
     await this.mergeLocalWorkspaces(c, me.workspaces)
@@ -301,6 +321,46 @@ export class SyncEngine {
     log.info('desktop: linked', { cloudUrl, account: me.user.email })
     this.schedule(0)
     return { ...(await this.status()), state: 'syncing' }
+  }
+
+  /**
+   * Linking another account: the spaces mirrored from the previous one stay on this computer, untouched, but don't
+   * sync with the new account and are never merged into it (they may hold colleagues' work). Their sync state is kept,
+   * so linking that account again carries on where it left off (resumeAccount).
+   */
+  private async setAsideAccount(last: LastLink, next: string) {
+    const db = ctx().db
+    const ids = (await kvGet<string[]>('cloudWorkspaces')) ?? []
+    const here = ids.length ? await db.select({ id: workspaces.id, name: workspaces.name }).from(workspaces).where(inArray(workspaces.id, ids)) : []
+    const parked = (await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}
+    parked[accountKey(last.cloudUrl, last.cloudUserId)] = { account: last.account, workspaces: here.map((w) => w.id), cursor: (await kvGet<number>('cursor')) ?? 0 }
+    await kvSet('parkedAccounts', parked)
+    await kvSet('cloudWorkspaces', [])
+    await kvSet('cursor', 0)
+    if (!here.length) return
+    // the new account brings its own personal space
+    await db.update(workspaces).set({ personal: false }).where(inArray(workspaces.id, here.map((w) => w.id)))
+    const before = last.account ?? 'the account linked before'
+    await addNotice(`Linked to ${next}. The spaces from ${before} (${here.map((w) => `“${w.name}”`).join(', ')}) stay on this computer but don’t sync with ${next}. Link ${last.account ?? 'that account'} again to sync them.`)
+    log.info('desktop: set aside the previous account’s spaces', { spaces: here.length })
+  }
+
+  /** Spaces set aside for this account by an earlier switch sync again, from where they stopped. */
+  private async resumeAccount(cloudUrl: string, cloudUserId: string) {
+    const parked = (await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}
+    const key = accountKey(cloudUrl, cloudUserId)
+    const mine = parked[key]
+    if (!mine) return
+    delete parked[key]
+    await kvSet('parkedAccounts', parked)
+    const here = mine.workspaces.length ? await ctx().db.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.id, mine.workspaces)) : []
+    await kvSet('cloudWorkspaces', here.map((w) => w.id))
+    await kvSet('cursor', mine.cursor)
+  }
+
+  /** Spaces that belong to another account, set aside here. */
+  private async parkedSpaces(): Promise<string[]> {
+    return Object.values((await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}).flatMap((p) => p.workspaces)
   }
 
   async unlink(): Promise<SyncStatus> {
@@ -424,8 +484,8 @@ export class SyncEngine {
 
   private async mergeLocalWorkspaces(c: CloudClient, cloudList: Workspace[]) {
     const me = await localUserId()
-    // the account's own spaces, and spaces that stay on this computer (never merged into a cloud account)
-    const skip = new Set([...cloudList.map((w) => w.id), ...((await kvGet<string[]>('localOnlySpaces')) ?? [])])
+    // the account's own spaces, and spaces that stay on this computer: recovered ones and another account's
+    const skip = new Set([...cloudList.map((w) => w.id), ...((await kvGet<string[]>('localOnlySpaces')) ?? []), ...(await this.parkedSpaces())])
     const personal = cloudList.find((w) => w.personal) ?? cloudList[0]
     const local = await ctx()
       .db.select({ id: workspaces.id, name: workspaces.name, personal: workspaces.personal })
@@ -781,11 +841,13 @@ export class SyncEngine {
 
   private async pushDeletes(c: CloudClient) {
     let cursor = (await kvGet<number>('tombCursor')) ?? 0
-    const rows = await rawQuery<{ kind: string; id: string; seq: string }>(sql`SELECT kind, id, change_seq::text AS seq FROM tombstones WHERE change_seq > ${cursor} ORDER BY change_seq`)
+    const cloudWs = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
+    const rows = await rawQuery<{ kind: string; id: string; ws: string; seq: string }>(sql`SELECT kind, id, workspace_id AS ws, change_seq::text AS seq FROM tombstones WHERE change_seq > ${cursor} ORDER BY change_seq`)
     for (const t of rows) {
-      // membership tombstones (local workspace merges/deletes) aren't pushed
+      // membership tombstones (local workspace merges/deletes) aren't pushed, nor deletes in spaces this account
+      // doesn't sync (another account's, set aside here: the cloud copy simply stays)
       const kind = t.kind === 'voice_profile' ? 'voice' : t.kind
-      if (kind === 'project' || kind === 'asset' || kind === 'voice') await this.item(`${kind}-delete`, t.id, DELETED_NAME[kind], () => this.pushDelete(c, kind, t.id))
+      if ((kind === 'project' || kind === 'asset' || kind === 'voice') && cloudWs.has(t.ws)) await this.item(`${kind}-delete`, t.id, DELETED_NAME[kind], () => this.pushDelete(c, kind, t.id))
       cursor = Number(t.seq)
       await kvSet('tombCursor', cursor)
     }
