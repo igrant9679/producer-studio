@@ -33,7 +33,7 @@ import { liveBus, uploadFiles, useUploads } from '../stores'
 import { SyncBadge } from '../SystemChrome'
 import { projectSyncBadge, useIsDesktop, useSystem } from '../system'
 import { CardSkeletons, EmptyState, MenuList, Modal, Popover, Progress, Spinner, Thumb, useAsync, useFilePicker, type MenuItemDef, usePageTitle } from '../ui'
-import { absoluteUrl, aspectLabel, copyText, formatBytes, formatDuration, relativeTime } from '../util'
+import { absoluteUrl, aspectLabel, copyText, downloadUrl, formatBytes, formatDuration, relativeTime } from '../util'
 import { filterAssets, filterProjects, mergeProjects, ORIGIN_LABEL, PROJECT_FILTERS, SORTS, toggleInSet, type AssetFilter, type ProjectFilter, type SortKey } from './libraryLogic'
 
 type Tab = 'projects' | 'assets' | 'trash'
@@ -340,7 +340,7 @@ function AssetPreview({ a, onClose }: { a: AssetRecord; onClose: () => void }) {
         {k === 'image' && <img src={mediaUrl(a.asset.id, 'source')} alt={a.asset.name} />}
       </div>
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 14 }}>
-        <a className="btn" href={mediaUrl(a.asset.id, 'source')} download={a.asset.name}><Download size={14} /> Download original</a>
+        <a className="btn" href={downloadUrl(mediaUrl(a.asset.id, 'source'))} download><Download size={14} /> Download original</a>
       </div>
     </Modal>
   )
@@ -495,7 +495,7 @@ function AssetsTab({ q }: { q: string }) {
                   {(close) => (
                     <>
                       <MenuList close={close} items={[{ label: 'Preview', icon: <Eye size={15} />, disabled: a.status !== 'ready', onClick: () => setPreview(a) }, { label: 'Rename', icon: <Pencil size={15} />, onClick: () => setRenaming(a.asset.id) }]} />
-                      <a className="ps-menu-item" href={mediaUrl(a.asset.id, 'source')} download={a.asset.name} onClick={close}><Download size={15} /> Download</a>
+                      <a className="ps-menu-item" href={downloadUrl(mediaUrl(a.asset.id, 'source'))} download onClick={close}><Download size={15} /> Download</a>
                       <div className="ps-menu-sep" />
                       <MenuList close={close} items={[{ label: 'Delete', icon: <Trash2 size={15} />, danger: true, onClick: () => setConfirm(a) }]} />
                     </>

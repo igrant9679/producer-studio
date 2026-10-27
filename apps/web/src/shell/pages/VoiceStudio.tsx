@@ -22,7 +22,7 @@ const Gallery = lazy(() => import('../voicestudio/Gallery'))
 const Stories = lazy(() => import('../voicestudio/Stories'))
 const AudioTools = lazy(() => import('../voicestudio/AudioTools'))
 const EnginePanel = lazy(() => import('../voicestudio/EnginePanel'))
-import { formatDuration, relativeTime } from '../util'
+import { downloadUrl, formatDuration, relativeTime } from '../util'
 
 const EXAMPLES: Array<{ label: string; text: string }> = [
   { label: 'Podcast intro', text: "Welcome back to the show. I'm your host, and this week we're digging into the small habits that make remote teams feel close — even when they're oceans apart. Grab a coffee; let's get into it." },
@@ -208,7 +208,7 @@ function HistoryRow({ a, onChange, onRemove }: { a: AssetRecord; onChange: (a: A
           >
             {(close) => (
               <>
-                <a className="ps-menu-item" href={mediaUrl(a.asset.id, 'source')} download={a.asset.name} onClick={close}>
+                <a className="ps-menu-item" href={downloadUrl(mediaUrl(a.asset.id, 'source'))} download onClick={close}>
                   <Download size={15} /> Download
                 </a>
                 <MenuList

@@ -104,6 +104,9 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/** A media link that saves the file (an attachment named with its type's extension) instead of opening a player. */
+export const downloadUrl = (url: string) => `${url}${url.includes('?') ? '&' : '?'}download=1`
+
 export function absoluteUrl(url: string): string {
   try {
     return new URL(url, window.location.origin).toString()
