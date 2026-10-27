@@ -140,12 +140,22 @@ describe('context-menu actions (EDT-33)', () => {
     S().select(['v1'])
     S().setPlayhead(5)
     // right-clicked v2 at 13 s with the playhead over v1
-    A.freeze({ itemId: 'v2', at: 13 })
+    A.freezeClip('v2', 13)
     const items = mainTrack(S().project)!.items as VideoItem[]
     // v1 untouched; v2 cut at 13 s with the hold in between
     expect(items.map((i) => (i.freezeAt !== undefined ? 'hold' : i.assetId))).toEqual(['as_a', 'as_b', 'hold', 'as_b'])
     expect(items.map((i) => i.start)).toEqual([0, 10, 13, 15])
     expect(items[2].freezeAt).toBeCloseTo(3, 3)
+  })
+
+  it('the Speed tab button still freezes the frame under the playhead', () => {
+    S().select(['v1'])
+    S().setPlayhead(4)
+    S().set({ activeRightTab: 'speed' })
+    render(<PropertiesPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /Freeze frame at playhead/ }))
+    const holds = (mainTrack(S().project)!.items as VideoItem[]).filter((i) => i.freezeAt !== undefined)
+    expect(holds.map((h) => [h.start, h.freezeAt])).toEqual([[4, 4]])
   })
 
   it('the cut button between two text clips adds a transition', () => {

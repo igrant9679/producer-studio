@@ -149,24 +149,30 @@ const SEPARATE_REFUSED: Record<string, string> = {
   separated: "This clip's audio is already on its own track",
 }
 
-/**
- * Hold a frame for 2 s: the frame under the playhead on the selected (else the main-track) clip. From a clip's context
- * menu, `on` names the clip right-clicked: its frame under the playhead, or at the point clicked when the playhead is
- * elsewhere.
- */
-export function freeze(on?: { itemId: string; at: number }) {
+const underAt = (i: Item, t: number) => i.type === 'video' && i.start <= t && itemEnd(i) > t
+
+/** Hold the frame under the playhead for 2 s, on the selected (else the main-track) clip. */
+export function freeze() {
   const { playhead, project } = S()
-  const under = (i: Item, t: number) => i.type === 'video' && i.start <= t && itemEnd(i) > t
-  let v: Item | undefined
-  let t = playhead
-  if (on) {
-    v = findItem(project, on.itemId)?.item
-    if (v?.type !== 'video') v = undefined
-    else if (!under(v, t)) t = Math.max(v.start, Math.min(on.at, itemEnd(v) - 1 / project.fps))
-  } else v = selectedItems().find((i) => under(i, t)) ?? (mainTrack(project)?.items ?? []).find((i) => under(i, t))
+  const v = selectedItems().find((i) => underAt(i, playhead)) ?? (mainTrack(project)?.items ?? []).find((i) => underAt(i, playhead))
+  holdFrame(v, playhead)
+}
+
+/**
+ * Freeze from a clip's context menu: the clip right-clicked, at the playhead when it's over that clip, else at the
+ * point clicked (`at`).
+ */
+export function freezeClip(itemId: string, at: number) {
+  const { playhead, project } = S()
+  const v = findItem(project, itemId)?.item
+  if (v?.type !== 'video') return holdFrame(undefined, playhead)
+  holdFrame(v, underAt(v, playhead) ? playhead : Math.max(v.start, Math.min(at, itemEnd(v) - 1 / project.fps)))
+}
+
+function holdFrame(v: Item | undefined, t: number) {
   if (!v) return toast('Put the playhead over a video clip to freeze a frame')
   if (!editableIds([v.id]).length) return
-  S().commit(freezeFrame(project, v.id, t, 2), 'Freeze frame')
+  S().commit(freezeFrame(S().project, v.id, t, 2), 'Freeze frame')
 }
 
 export function setTransition(itemId: string, type: TransitionType | null, duration = 0.6) {
