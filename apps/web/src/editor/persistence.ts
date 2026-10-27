@@ -100,6 +100,24 @@ export async function flush(force = false): Promise<void> {
   return inflight
 }
 
+/**
+ * Save what's on screen and wait for it (export renders the server's copy). Returns null once the server has it,
+ * otherwise why it doesn't.
+ */
+export async function saveForExport(): Promise<string | null> {
+  // edits made while a save is out leave it 'dirty': go round again
+  for (let i = 0; i < 3 && useEditor.getState().saveState !== 'saved'; i++) {
+    await flush()
+    if (useEditor.getState().saveState !== 'dirty') break
+  }
+  const s = useEditor.getState()
+  if (s.saveState === 'saved') return null
+  if (s.saveState === 'conflict') return 'This project was also changed somewhere else, so your version isn’t saved yet. Resolve the conflict (the banner at the top), then export.'
+  if (s.saveState === 'error') return `${s.saveError?.message ?? 'The server refused your latest changes.'} Export renders the saved version, so it waits until they’re saved.`
+  if (s.saveState === 'offline') return 'Can’t reach the server, so your latest changes aren’t saved yet. Export renders the saved version: try again once you’re back online.'
+  return 'Your latest changes are still saving. Try again in a moment.'
+}
+
 /** Swap in a server document, keeping the playhead and whatever selection still exists. */
 function adoptServerDoc(project: Project, version: number) {
   const s = useEditor.getState()

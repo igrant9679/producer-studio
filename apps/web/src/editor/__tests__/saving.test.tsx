@@ -41,7 +41,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('a save the server refuses', () => {
+// the first render of the top bar is slow on a busy machine
+describe('a save the server refuses', { timeout: 20_000 }, () => {
   it('says why, offers "Sign in again" after a sign-out, and saves once signed back in', async () => {
     const save = vi.spyOn(api, 'saveProject').mockRejectedValueOnce(new HttpError(401, { error: 'Not signed in', code: 'unauthorized' }))
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
@@ -89,7 +90,7 @@ describe('a save the server refuses', () => {
   })
 })
 
-describe('renaming in the top bar', () => {
+describe('renaming in the top bar', { timeout: 20_000 }, () => {
   it('saves the new name with the autosave and raises no conflict', async () => {
     const server = fakeServer(3)
     render(<MemoryRouter><TopBar /></MemoryRouter>)

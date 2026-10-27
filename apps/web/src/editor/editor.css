@@ -100,6 +100,8 @@
 .ed-chiprow { display: flex; flex-wrap: wrap; gap: 6px; }
 .ed-chiprow .chip { height: 24px; padding: 0 10px; font-size: 0.6875rem; }
 .ed-note { font-size: 0.75rem; color: var(--text-3); line-height: 1.5; margin: 6px 0; }
+.ed-note-warn { color: var(--text); display: flex; gap: 6px; align-items: flex-start; }
+.ed-note-warn > svg { color: var(--danger); flex: none; margin-top: 2px; }
 .ed-empty { display: grid; justify-items: center; text-align: center; gap: 6px; padding: 28px 12px; color: var(--text-3); }
 .ed-empty .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--surface-2); color: var(--text-2); }
 .ed-empty .t { color: var(--text); font-weight: 600; }
