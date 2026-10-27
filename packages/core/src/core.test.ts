@@ -660,4 +660,27 @@ describe('caption line length (EDT-4)', () => {
     const back = captionTrack(rechunkCaptions(q, track.id, 7)).items.filter((c) => (c as CaptionItem).words)
     expect(back.length).toBeLessThan(remade.length)
   })
+
+  it('never makes a caption shorter than a frame (EDT-13)', () => {
+    // a transcript with words timed at the same moment used to give a zero-length line, which the server refuses
+    let p = createProject()
+    const a = asset('z')
+    a.transcript!.segments[0].words = [
+      { w: 'one', start: 1, end: 1 },
+      { w: 'two', start: 1, end: 1 },
+      { w: 'three', start: 1, end: 1.4 },
+      { w: 'four', start: 2, end: 2.3 },
+    ]
+    p = addAsset(p, a)
+    p = addItem(p, createVideoItem(p.assets.z, 0))
+    const gen = generateCaptions(p)
+    const once = clone(gen)
+    captionTrack(once).captionStyle!.maxWordsPerLine = 1
+    for (const q of [generateCaptions(once), rechunkCaptions(gen, captionTrack(gen).id, 1)]) {
+      const lines = captionTrack(q).items as CaptionItem[]
+      expect(lines.every((c) => c.duration >= 1 / q.fps - 1e-9)).toBe(true)
+      expect(lines.flatMap((c) => c.words!.map((w) => w.w))).toEqual(['one', 'two', 'three', 'four'])
+      for (let i = 1; i < lines.length; i++) expect(lines[i].start).toBeGreaterThanOrEqual(itemEnd(lines[i - 1]) - 1e-6)
+    }
+  })
 })

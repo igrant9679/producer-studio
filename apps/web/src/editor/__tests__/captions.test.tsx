@@ -34,13 +34,16 @@ function twoVoices(): Project {
 const captions = (p: Project) => p.tracks.filter((t) => t.kind === 'caption').flatMap((t) => t.items)
 
 describe('caption length', () => {
-  it('stretches generated captions that would be zero-length to one frame', () => {
+  it('never generates a zero-length caption, and stretches any that arrive to one frame', () => {
     const p = twoVoices()
+    // lines that start together used to leave a zero-length caption the server refuses; core now joins them
     const generated = generateCaptions(p, { style: { ...captionStyleFromPreset('clean'), maxWordsPerLine: 1 } })
-    // what core produces today: lines that start together leave a zero-length caption the server refuses
-    expect(captions(generated).some((c) => c.duration <= 0)).toBe(true)
-    const fixed = captionsAtLeastOneFrame(generated)
-    expect(captions(fixed)).toHaveLength(captions(generated).length)
+    expect(captions(generated).every((c) => c.duration >= 1 / p.fps)).toBe(true)
+    // one that comes from elsewhere (an older document, an AI result) is stretched before it's saved
+    const short = structuredClone(generated)
+    short.tracks.find((t) => t.kind === 'caption')!.items[0].duration = 0
+    const fixed = captionsAtLeastOneFrame(short)
+    expect(captions(fixed)).toHaveLength(captions(short).length)
     expect(captions(fixed).every((c) => c.duration >= 1 / p.fps)).toBe(true)
   })
 

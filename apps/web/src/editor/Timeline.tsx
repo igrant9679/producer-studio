@@ -897,7 +897,8 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
   const kfTimes = useMemo(() => {
     if (!('keyframes' in item) || !item.keyframes) return []
     const s = new Set<number>()
-    for (const list of Object.values(item.keyframes)) for (const k of list ?? []) s.add(Math.round(k.t * 1000) / 1000)
+    // a split or trim keeps the nearest keyframe beyond each edge so the curve inside stays the same; only mark the inside
+    for (const list of Object.values(item.keyframes)) for (const k of list ?? []) if (k.t >= -1e-3 && k.t <= item.duration + 1e-3) s.add(Math.round(k.t * 1000) / 1000)
     return [...s].sort((a, b) => a - b)
   }, [item])
   const tr = 'transitionOut' in item ? item.transitionOut : undefined

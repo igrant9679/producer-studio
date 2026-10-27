@@ -764,17 +764,26 @@ export function generateCaptions(p0: Project, opts: { itemIds?: string[]; style?
   if (!words.length) return touch(p)
   const track = insertTrack(p, 'caption')
   if (style) track.captionStyle = clone(style)
-  track.items.push(...captionLines(words, track.captionStyle!.maxWordsPerLine))
+  track.items.push(...captionLines(words, track.captionStyle!.maxWordsPerLine, 1 / p.fps))
   return touch(p)
 }
 
-/** Caption items for timed words (timeline seconds), at most `maxWords` a line; no line runs past `until`. */
-function captionLines(words: TranscriptWord[], maxWords: number, until = Infinity): CaptionItem[] {
-  const lines = chunkWords(words, maxWords)
+/**
+ * Caption items for timed words (timeline seconds), at most `maxWords` a line; no line runs past `until`. A line that
+ * would last less than `minDur` (words timed at the same moment) joins the next, so no caption is shorter than a frame.
+ */
+function captionLines(words: TranscriptWord[], maxWords: number, minDur: number, until = Infinity): CaptionItem[] {
+  const lines: TranscriptWord[][] = []
+  for (const line of chunkWords(words, maxWords)) {
+    const last = lines[lines.length - 1]
+    if (last && line[0].start - last[0].start < minDur) last.push(...line)
+    else lines.push([...line])
+  }
+  if (lines.length > 1 && until - lines[lines.length - 1][0].start < minDur) lines[lines.length - 2].push(...lines.pop()!)
   return lines.map((line, i) => {
     const start = line[0].start
     const nextStart = lines[i + 1]?.[0].start ?? until
-    const end = Math.min(Math.max(line[line.length - 1].end + 0.15, start + 0.6), nextStart)
+    const end = Math.max(Math.min(Math.max(line[line.length - 1].end + 0.15, start + 0.6), nextStart), start + minDur)
     return createCaptionItem(round(start, 4), round(end - start, 4), line.map((w) => w.w).join(' '), line.map((w) => ({ w: w.w, start: round(w.start - start, 4), end: round(w.end - start, 4) })))
   })
 }
@@ -793,7 +802,7 @@ export function rechunkCaptions(p0: Project, trackId: string, maxWords: number):
   const flush = (until: number) => {
     // words a trim cut off the end stay off
     const words = run.flatMap((c) => c.words!.filter((w) => w.start < c.duration).map((w) => ({ w: w.w, start: round(c.start + w.start, 4), end: round(c.start + w.end, 4) })))
-    if (words.length) items.push(...captionLines(words, maxWords, until))
+    if (words.length) items.push(...captionLines(words, maxWords, 1 / p.fps, until))
     run = []
   }
   for (const it of track.items) {
