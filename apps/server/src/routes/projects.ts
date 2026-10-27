@@ -14,6 +14,12 @@ import { getBrand } from './workspaces'
 
 export const projectRoutes = new Hono<AppEnv>()
 
+/** Tell open screens (home, library, editors, desktops) that a project was made, changed, trashed or deleted. */
+function announce(row: { id: string; workspaceId: string; version: number }, deleted = false) {
+  const data = deleted ? { id: row.id, version: row.version, deleted: true } : { id: row.id, version: row.version }
+  ctx().bus.publish(row.workspaceId, 'project', data, { id: row.id, inline: data })
+}
+
 projectRoutes.get('/', async (c) => {
   const u = requireUser(c)
   const workspaceId = c.req.query('workspaceId')
@@ -98,6 +104,7 @@ projectRoutes.post('/', async (c) => {
     doc = createProject({ id, name: b.name || 'Untitled project', width: b.width, height: b.height, fps: b.fps })
   }
   const row = await insertProject({ workspaceId: b.workspaceId, userId: u.id, doc, kind: b.kind })
+  announce(row)
   const res: ProjectDocResponse = { summary: projectSummary(row), project: row.doc, version: row.version }
   return c.json(res)
 })
@@ -139,7 +146,8 @@ projectRoutes.patch('/:id', async (c) => {
   if (b.trashed !== undefined) set.trashedAt = b.trashed ? now : null
   if (b.isTemplate !== undefined) set.isTemplate = b.isTemplate
   const [updated] = await ctx().db.update(projects).set(set).where(eq(projects.id, id)).returning()
-  if (b.name !== undefined) ctx().bus.publish(updated.workspaceId, 'project', { id, version: updated.version }, { id, inline: { id, version: updated.version } })
+  // trash, restore and template changes keep the version but still change what other screens list
+  announce(updated)
   return c.json({ ...projectSummary(updated), version: updated.version })
 })
 
@@ -150,6 +158,7 @@ projectRoutes.post('/:id/duplicate', async (c) => {
   const doc = withFreshIds(row.doc, uid('p'))
   doc.name = `${row.name} copy`
   const copy = await insertProject({ workspaceId: row.workspaceId, userId: u.id, doc, kind: row.kind })
+  announce(copy)
   return c.json(projectSummary(copy))
 })
 
@@ -159,5 +168,6 @@ projectRoutes.delete('/:id', async (c) => {
   await requireRole(u.id, row.workspaceId, 'editor')
   if (row.trashedAt == null) throw new HttpError(409, 'conflict', 'Move the project to the trash before deleting it')
   await ctx().db.delete(projects).where(eq(projects.id, row.id))
+  announce(row, true)
   return c.json({ ok: true })
 })

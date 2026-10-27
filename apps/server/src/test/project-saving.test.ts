@@ -68,3 +68,38 @@ describe('rename and autosave at the same moment', () => {
     expect(got.project).toMatchObject({ name: 'After', background: '#abcdef' })
   })
 })
+
+describe('live updates for every change other screens show', () => {
+  it('trash, restore, template, copy and delete each announce the project', async () => {
+    const { client, workspaceId } = await signup(t.app)
+    const { body } = await client.json('POST', '/api/projects', { workspaceId, name: 'Live' })
+    const id = body.project.id
+    const seen: unknown[] = []
+    const off = ctx().bus.subscribe(workspaceId, (e) => e.event === 'project' && seen.push(e.data))
+    await client.json('PATCH', `/api/projects/${id}`, { isTemplate: true })
+    await client.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    await client.json('PATCH', `/api/projects/${id}`, { trashed: false })
+    const copy = await client.json('POST', `/api/projects/${id}/duplicate`)
+    await client.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    expect((await client.json('DELETE', `/api/projects/${id}`)).status).toBe(200)
+    off()
+    expect(seen).toEqual([
+      { id, version: 1 },
+      { id, version: 1 },
+      { id, version: 1 },
+      { id: copy.body.id, version: 1 },
+      { id, version: 1 },
+      { id, version: 1, deleted: true },
+    ])
+  })
+
+  it('a brand kit save announces itself to the space', async () => {
+    const { client, workspaceId } = await signup(t.app)
+    const seen: Array<{ event: string; data: unknown }> = []
+    const off = ctx().bus.subscribe(workspaceId, (e) => seen.push({ event: e.event, data: e.data }))
+    const kit = { name: 'Acme', colors: ['#112233'], fonts: { headline: 'Inter', body: 'Inter' } }
+    expect((await client.json('PUT', `/api/workspaces/${workspaceId}/brand`, kit)).status).toBe(200)
+    off()
+    expect(seen).toEqual([{ event: 'workspace', data: { id: workspaceId, deleted: false, brand: true } }])
+  })
+})
