@@ -160,7 +160,8 @@ export interface BrandKitDoc {
 // POST   /api/projects  CreateProjectRequest                    -> ProjectDocResponse
 // GET    /api/projects/:id                                     -> ProjectDocResponse
 // PUT    /api/projects/:id  SaveProjectRequest                 -> {version, updatedAt} | 409 {error, code:'conflict', details:{version}}
-// PATCH  /api/projects/:id  {name?, trashed?, isTemplate?}     -> ProjectSummary
+// PATCH  /api/projects/:id  {name?, trashed?, isTemplate?}     -> ProjectSummary & {version}  (a rename is one SQL
+//        update of the stored row and bumps the version; trash/template keep it)
 // POST   /api/projects/:id/duplicate                           -> ProjectSummary
 // DELETE /api/projects/:id   (only when trashed)               -> {ok}
 export interface ProjectSummary {
@@ -247,7 +248,9 @@ export interface AssetRecord {
 // GET /api/jobs/:id                    -> Job
 // GET /api/jobs?projectId=&workspaceId= -> Job[]
 // POST /api/jobs/:id/cancel            -> Job
-// GET /api/events?workspaceId=         -> text/event-stream, events: `job` (Job), `asset` (AssetRecord), `project` ({id, version})
+// GET /api/events?workspaceId=         -> text/event-stream, events: `job` (Job), `asset` (AssetRecord), `project`
+//   ({id, version, deleted?}: created, saved, renamed, trashed/restored, template flag, deleted), `workspace`
+//   ({id, name?, deleted, members?, brand?}: renamed, deleted, members changed, brand kit saved), `sync`
 export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task'
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
