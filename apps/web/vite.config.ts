@@ -13,5 +13,6 @@ export default defineConfig({
     },
   },
   build: { outDir: 'dist', sourcemap: 'hidden', chunkSizeWarningLimit: 1500 },
-  test: { environment: 'jsdom' },
+  // Slower machines (and several suites at once) push some render-heavy tests past the 5 s default.
+  test: { environment: 'jsdom', testTimeout: 20_000 },
 } as never)

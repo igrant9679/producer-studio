@@ -60,6 +60,8 @@ const users: Array<User & { password: string }> = [{ ...demoUser, password: 'pas
 const workspaces: Workspace[] = [
   { id: 'ws_personal', name: "Alex's space", role: 'owner', personal: true, memberCount: 1 },
   { id: 'ws_team', name: 'Northwind Marketing', role: 'editor', personal: false, memberCount: 4 },
+  // a space the demo user only views, so the viewer experience can be tried without a second account
+  { id: 'ws_client', name: 'Acme client review', role: 'viewer', personal: false, memberCount: 3 },
 ]
 
 const members: Record<string, Member[]> = {
@@ -69,6 +71,11 @@ const members: Record<string, Member[]> = {
     { userId: 'u_demo', name: 'Alex Rivera', email: 'alex@example.com', role: 'editor' },
     { userId: 'u_3', name: 'Marcus Oyelaran', email: 'marcus@northwind.test', role: 'editor' },
     { userId: 'u_4', name: 'Dana Whitfield', email: 'dana@northwind.test', role: 'viewer' },
+  ],
+  ws_client: [
+    { userId: 'u_5', name: 'Jordan Acme', email: 'jordan@acme.test', role: 'owner' },
+    { userId: 'u_6', name: 'Sam Lee', email: 'sam@acme.test', role: 'editor' },
+    { userId: 'u_demo', name: 'Alex Rivera', email: 'alex@example.com', role: 'viewer' },
   ],
 }
 
@@ -122,6 +129,7 @@ const projects: MockProject[] = [
   mkProject({ id: 'p_team1', name: 'Q3 feature recap', workspaceId: 'ws_team', kind: 'producer', duration: 128, updatedAt: now - 2 * HOUR }),
   mkProject({ id: 'p_team2', name: 'Event teaser 9:16', workspaceId: 'ws_team', width: 1080, height: 1920, duration: 24, updatedAt: now - 2 * DAY }),
   mkProject({ id: 'p_team3', name: 'Team lower-third pack', workspaceId: 'ws_team', isTemplate: true, duration: 10, updatedAt: now - 6 * DAY }),
+  mkProject({ id: 'p_client1', name: 'Acme launch cut — for review', workspaceId: 'ws_client', duration: 66, updatedAt: now - 5 * HOUR }),
 ]
 
 interface MockAsset extends AssetRecord {
@@ -475,6 +483,12 @@ on('DELETE', '/api/workspaces/([^/]+)/members/([^/]+)', (m) => {
   return json({ ok: true })
 })
 // like the server: an invite is a pending link for one address (owners only) until that account accepts it
+// like the server's requireRole(…, 'editor'): viewers look, they don't change anything
+const editorOnly = (wsId: string | undefined) =>
+  ['owner', 'editor'].includes(workspaces.find((x) => x.id === wsId)?.role ?? '') ? null : fail(403, 'Viewers cannot make changes in this workspace', 'forbidden')
+const projectWs = (id: string) => projects.find((x) => x.id === id)?.workspaceId
+const assetWs = (id: string) => assets.find((x) => x.asset.id === id)?.workspaceId
+
 const mockInvites: Array<{ token: string; workspaceId: string; email: string; role: Member['role']; createdAt: number; expiresAt: number; acceptedAt?: number; revokedAt?: number }> = []
 const ownerOnly = (wsId: string) => (workspaces.find((x) => x.id === wsId)?.role === 'owner' ? null : fail(403, 'Only workspace owners can do that', 'forbidden'))
 on('POST', '/api/workspaces/([^/]+)/invites', async (m, _q, b) => {
@@ -530,6 +544,8 @@ on('POST', '/api/invites/([^/]+)/accept', (m) => {
 on('GET', '/api/workspaces/([^/]+)/brand', (m) => json(brands[m[1]] ?? { name: '', colors: [], fonts: { headline: 'Space Grotesk', body: 'Inter' } }))
 on('PUT', '/api/workspaces/([^/]+)/brand', async (m, _q, b) => {
   await delay(250)
+  const denied = editorOnly(m[1])
+  if (denied) return denied
   brands[m[1]] = b as unknown as BrandKitDoc
   return json(brands[m[1]])
 })
@@ -543,6 +559,8 @@ on('GET', '/api/projects', async (_m, q) => {
 })
 on('POST', '/api/projects', async (_m, _q, b) => {
   await delay(300)
+  const denied = editorOnly(String(b.workspaceId))
+  if (denied) return denied
   const tpl = b.templateId ? templates.find((t) => t.id === b.templateId) ?? projects.find((p) => p.id === b.templateId) : undefined
   let width = Number(b.width) || 1920
   let height = Number(b.height) || 1080
@@ -566,6 +584,8 @@ on('GET', '/api/projects/([^/]+)', (m) => {
 on('PUT', '/api/projects/([^/]+)', (m, _q, b) => {
   const p = projects.find((x) => x.id === m[1])
   if (!p) return fail(404, 'Project not found', 'not_found')
+  const denied = editorOnly(p.workspaceId)
+  if (denied) return denied
   p.doc = b.project as Project
   p.version++
   p.updatedAt = Date.now()
@@ -575,6 +595,8 @@ on('PATCH', '/api/projects/([^/]+)', async (m, _q, b) => {
   await delay(200)
   const p = projects.find((x) => x.id === m[1])
   if (!p) return fail(404, 'Project not found', 'not_found')
+  const denied = editorOnly(p.workspaceId)
+  if (denied) return denied
   if (typeof b.name === 'string') p.name = b.name
   if (typeof b.trashed === 'boolean') p.trashed = b.trashed
   if (typeof b.isTemplate === 'boolean') p.isTemplate = b.isTemplate
@@ -585,6 +607,8 @@ on('POST', '/api/projects/([^/]+)/duplicate', async (m) => {
   await delay(300)
   const p = projects.find((x) => x.id === m[1])
   if (!p) return fail(404, 'Project not found', 'not_found')
+  const denied = editorOnly(p.workspaceId)
+  if (denied) return denied
   const c = mkProject({ ...p, id: undefined, name: `${p.name} (copy)`, updatedAt: Date.now(), createdAt: Date.now(), doc: undefined, isTemplate: false })
   c.thumbnailUrl = p.thumbnailUrl
   projects.unshift(c)
@@ -593,6 +617,8 @@ on('POST', '/api/projects/([^/]+)/duplicate', async (m) => {
 on('DELETE', '/api/projects/([^/]+)', (m) => {
   const i = projects.findIndex((x) => x.id === m[1])
   if (i < 0) return fail(404, 'Project not found', 'not_found')
+  const denied = editorOnly(projects[i].workspaceId)
+  if (denied) return denied
   if (!projects[i].trashed) return fail(409, 'Move the project to trash first', 'conflict')
   projects.splice(i, 1)
   return json({ ok: true })
@@ -600,6 +626,8 @@ on('DELETE', '/api/projects/([^/]+)', (m) => {
 
 on('POST', '/api/uploads', async (_m, _q, b) => {
   await delay(150)
+  const denied = editorOnly(String(b.workspaceId))
+  if (denied) return denied
   const mime = String(b.mime)
   const kind = mime.startsWith('audio') ? 'audio' : mime.startsWith('image') ? 'image' : 'video'
   const a = mkAsset(String(b.workspaceId), kind, String(b.filename), 'upload', { sizeBytes: Number(b.size), duration: kind === 'image' ? undefined : 45 + Math.round(Math.random() * 120) }, 0, seq)
@@ -635,10 +663,14 @@ on('GET', '/api/assets/([^/]+)', (m) => {
 on('PATCH', '/api/assets/([^/]+)', (m, _q, b) => {
   const a = assets.find((x) => x.asset.id === m[1])
   if (!a) return fail(404, 'Asset not found', 'not_found')
+  const denied = editorOnly(a.workspaceId)
+  if (denied) return denied
   a.asset.name = String(b.name)
   return json(pub(a))
 })
 on('DELETE', '/api/assets/([^/]+)', (m) => {
+  const denied = editorOnly(assetWs(m[1]))
+  if (denied) return denied
   const i = assets.findIndex((x) => x.asset.id === m[1])
   if (i >= 0) assets.splice(i, 1)
   return json({ ok: true })
@@ -760,6 +792,8 @@ on('GET', '/api/exports', (_m, q) => json(exportsByProject[q.get('projectId') ??
 // like the server: one link per export (reused), nothing to share before an export, and links can be stopped
 on('POST', '/api/projects/([^/]+)/share', async (m, _q, b) => {
   await delay(200)
+  const denied = editorOnly(projectWs(m[1]))
+  if (denied) return denied
   const exportId = (b.exportId as string | undefined) ?? exportsByProject[m[1]]?.[0]?.exportId
   if (!exportId) return fail(409, 'Export the video first: a share link shows a finished export.', 'conflict')
   let token = Object.keys(shares).find((t) => shares[t].projectId === m[1] && shares[t].exportId === exportId)
