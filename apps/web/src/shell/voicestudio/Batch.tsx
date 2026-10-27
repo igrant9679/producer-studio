@@ -30,6 +30,10 @@ interface BatchJob {
 
 type Item = { file?: File; asset?: AssetRecord; name: string }
 
+export const BATCH_POLL_MS = 3000
+/** Wait before the n-th retry of a failed poll: 3 s, 6 s, 12 s… at most 60 s. */
+export const batchRetryMs = (n: number) => Math.min(60_000, BATCH_POLL_MS * 2 ** Math.max(0, n - 1))
+
 const langLabel = (c: string) => DUB_LANGUAGES.find((l) => l.code === c)?.label ?? c
 const PROVIDERS = [
   { id: 'argos', label: 'Argos (offline)' },
@@ -66,23 +70,33 @@ function BatchStudio() {
   const [jobs, setJobs] = useState<BatchJob[]>()
   const [tracked, setTracked] = useState<string[]>([])
   const [tick, setTick] = useState(0)
+  // failed polls in a row: retried with backoff (the engine may be restarting) instead of stopping for good
+  const [pollFails, setPollFails] = useState(0)
+  const fails = useRef(0)
 
   // jobs list: poll while anything is queued/running
   useEffect(() => {
     let alive = true
+    let timer: ReturnType<typeof setTimeout> | undefined
     ;(async () => {
       try {
         const [j, t] = await Promise.all([vsGet<BatchJob[]>('/batch/jobs', { query: { limit: 100 } }), sysFetch<Array<{ jobId: string }>>('GET', '/voicestudio/batch/tracked')])
         if (!alive) return
         setJobs(j)
         setTracked(t.map((x) => x.jobId))
-        if (j.some((x) => x.status === 'queued' || x.status === 'running')) setTimeout(() => alive && setTick((n) => n + 1), 3000)
+        fails.current = 0
+        setPollFails(0)
+        if (j.some((x) => x.status === 'queued' || x.status === 'running')) timer = setTimeout(() => alive && setTick((n) => n + 1), BATCH_POLL_MS)
       } catch {
-        /* engine restarting */
+        if (!alive) return
+        fails.current++
+        setPollFails(fails.current)
+        timer = setTimeout(() => alive && setTick((k) => k + 1), batchRetryMs(fails.current))
       }
     })()
     return () => {
       alive = false
+      clearTimeout(timer)
     }
   }, [tick])
 
@@ -101,6 +115,8 @@ function BatchStudio() {
     if (!items.length || !langs.length) return
     setBusy(true)
     let ok = 0
+    // items that couldn't be queued stay in the list to try again
+    const failed: Item[] = []
     for (const it of items) {
       const fields = { langs: langs.join(','), voice_id: voice || undefined, preserve_bg: String(keepBg), translation_provider: provider }
       try {
@@ -115,13 +131,14 @@ function BatchStudio() {
         if (autoAdd) await sysFetch('POST', '/voicestudio/batch/track', { jobId: r.job_id, workspaceId, name: it.name.replace(/\.[^.]+$/, ''), langs })
         ok++
       } catch (e) {
+        failed.push(it)
         toastError(new Error(`${it.name}: ${e instanceof Error ? e.message : String(e)}`))
       }
     }
     setBusy(false)
     if (ok) {
       toast(`Queued ${ok} video${ok === 1 ? '' : 's'} × ${langs.length} language${langs.length === 1 ? '' : 's'}`)
-      setItems([])
+      setItems(failed)
       setTick((n) => n + 1)
     }
   }
@@ -223,8 +240,14 @@ function BatchStudio() {
 
       <div className="ps-section" style={{ marginTop: 22 }}>
         <div className="ps-section-head"><h2 className="ps-h2">Queue</h2><span className="muted" style={{ fontSize: '0.75rem' }}>{jobs ? `${jobs.length} job${jobs.length === 1 ? '' : 's'}` : ''}</span></div>
+        {pollFails > 0 && (
+          <div className="ps-alert info" role="status" style={{ marginBottom: 10, alignItems: 'center' }}>
+            <span style={{ flex: 1 }}>Can’t reach the batch queue right now (VoiceStudio may be restarting). Trying again…</span>
+            <button className="btn sm" onClick={() => setTick((n) => n + 1)}><RotateCcw size={13} /> Retry now</button>
+          </div>
+        )}
         {!jobs ? (
-          <Spinner />
+          pollFails > 0 ? null : <Spinner />
         ) : !jobs.length ? (
           <EmptyState icon={<Layers size={24} />} title="Nothing queued" body="Add videos above to dub them in the background." />
         ) : (

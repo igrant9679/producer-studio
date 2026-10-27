@@ -2,7 +2,7 @@
 // (or keep the language to re-voice) → choose a voice per speaker → generate → add the results to the library.
 import type { AssetRecord, VoiceProfile } from '@producer/core'
 import clsx from 'clsx'
-import { Captions, Check, Download, FileVideo, Languages, Library, Mic, Play, RotateCcw, Square, Upload, Wand2 } from 'lucide-react'
+import { AlertTriangle, Captions, Check, Download, FileVideo, Languages, Library, Mic, Play, RotateCcw, Square, Upload, Wand2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
@@ -69,6 +69,10 @@ function DubSession() {
   const [tracks, setTracks] = useState<string[]>([])
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
+  // a step that failed: its panel stops (no spinner or running bar) and offers Try again
+  const [stopped, setStopped] = useState(false)
+  const lastUpload = useRef<{ file?: File; asset?: AssetRecord }>()
+  const cancelled = useRef(false)
   const abort = useRef<AbortController>()
   const task = useRef<string>()
   const profiles = useAsync(() => vsApi.profiles(workspaceId), [workspaceId])
@@ -76,10 +80,23 @@ function DubSession() {
 
   useEffect(() => () => abort.current?.abort(), [])
   const fail = (e: unknown) => {
-    setError(e instanceof Error ? e.message : String(e))
     setBusy(false)
+    // Cancel / Start over aborts the step on purpose: not a failure to show
+    if (cancelled.current) return
+    setError(e instanceof Error ? e.message : String(e))
+    setStopped(true)
+  }
+  const retry = () => {
+    setError(undefined)
+    setStopped(false)
+    if (stage === 'transcribe' && job) {
+      setBusy(true)
+      transcribe(job.id).catch(fail)
+    } else if (lastUpload.current) void start(lastUpload.current)
   }
   const reset = async () => {
+    cancelled.current = true
+    setStopped(false)
     abort.current?.abort()
     if (job) await vsFetch(`/dub/abort/${job.id}`, { method: 'POST' }).catch(() => undefined)
     if (task.current) await vsFetch(`/tasks/cancel/${task.current}`, { method: 'POST' }).catch(() => undefined)
@@ -110,7 +127,10 @@ function DubSession() {
 
   // ---- 1. source → 2. prepare
   async function start(upload: { file?: File; asset?: AssetRecord }) {
+    lastUpload.current = upload
+    cancelled.current = false
     setError(undefined)
+    setStopped(false)
     setBusy(true)
     const id = uuid()
     const audioOnly = (upload.file ? upload.file.type.startsWith('audio') : upload.asset?.asset.kind === 'audio') ?? false
@@ -206,6 +226,7 @@ function DubSession() {
   // ---- 5. generate
   async function generate() {
     if (!job) return
+    cancelled.current = false
     setBusy(true)
     setError(undefined)
     setStage('generate')
@@ -235,6 +256,8 @@ function DubSession() {
       setStage('done')
     } catch (e) {
       fail(e)
+      // back to the script, which offers Generate again
+      setStopped(false)
       setStage('script')
     } finally {
       setBusy(false)
@@ -289,10 +312,17 @@ function DubSession() {
 
       {(stage === 'prepare' || stage === 'transcribe' || stage === 'generate') && (
         <div style={{ padding: '18px 0' }}>
-          <div className="row" style={{ gap: 8, marginBottom: 10 }}><Spinner size={14} /> <strong>{job?.filename}</strong>{job?.duration ? <span className="muted">· {formatDuration(job.duration)}</span> : null}</div>
-          <Progress value={pct} />
-          <div className="muted" style={{ fontSize: '0.8125rem', marginTop: 8 }}>{log}</div>
-          <button className="btn ghost sm" style={{ marginTop: 12 }} onClick={reset}><Square size={12} /> Cancel</button>
+          <div className="row" style={{ gap: 8, marginBottom: 10 }}>{stopped ? <AlertTriangle size={14} style={{ color: 'var(--danger)' }} /> : <Spinner size={14} />} <strong>{job?.filename ?? lastUpload.current?.file?.name ?? lastUpload.current?.asset?.asset.name}</strong>{job?.duration ? <span className="muted">· {formatDuration(job.duration)}</span> : null}</div>
+          {!stopped && <Progress value={pct} />}
+          <div className="muted" style={{ fontSize: '0.8125rem', marginTop: 8 }}>{stopped ? `Stopped while: ${log.toLowerCase()}` : log}</div>
+          {stopped ? (
+            <div className="row" style={{ gap: 8, marginTop: 12 }}>
+              <button className="btn primary sm" onClick={retry}><RotateCcw size={12} /> Try again</button>
+              <button className="btn ghost sm" onClick={reset}>Start over</button>
+            </div>
+          ) : (
+            <button className="btn ghost sm" style={{ marginTop: 12 }} onClick={reset}><Square size={12} /> Cancel</button>
+          )}
         </div>
       )}
 
