@@ -23,6 +23,8 @@ export interface ProbeResult {
   /** Absolute stream indexes of the picture and the sound probe chose (cover art is never the picture). */
   videoStream?: number
   audioStream?: number
+  /** EXIF orientation of a photo (2–8; absent when upright). width/height are already the upright size. */
+  orientation?: number
 }
 
 interface FfStream {
@@ -68,6 +70,10 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
   let height = v?.height
   const rot = Math.abs(Number(v?.side_data_list?.find((d) => d.rotation !== undefined)?.rotation ?? v?.tags?.rotate ?? 0))
   if (rot === 90 || rot === 270) [width, height] = [height, width]
+  // a phone photo is stored sideways with a tag saying how to turn it; browsers draw it upright, so its size is the
+  // upright one (ffprobe reports the stored pixels)
+  const orientation = kind === 'image' ? exifOrientation(file) : undefined
+  if (orientation && orientation >= 5) [width, height] = [height, width]
   return {
     kind,
     duration: kind === 'image' ? undefined : duration,
@@ -79,6 +85,80 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
     formatName,
     videoStream: v?.index,
     audioStream: a?.index,
+    ...(orientation && orientation > 1 ? { orientation } : {}),
+  }
+}
+
+/** The EXIF orientation (1–8) of a JPEG or TIFF, from its first 256 KB; undefined when it has none. */
+export function exifOrientation(file: string): number | undefined {
+  let buf: Buffer
+  try {
+    const fd = fs.openSync(file, 'r')
+    try {
+      buf = Buffer.alloc(256 * 1024)
+      buf = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0))
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch {
+    return undefined
+  }
+  const fromTiff = (t: number): number | undefined => {
+    if (t + 8 > buf.length) return undefined
+    const le = buf.toString('latin1', t, t + 2) === 'II'
+    if (!le && buf.toString('latin1', t, t + 2) !== 'MM') return undefined
+    const u16 = (o: number) => (le ? buf.readUInt16LE(o) : buf.readUInt16BE(o))
+    const u32 = (o: number) => (le ? buf.readUInt32LE(o) : buf.readUInt32BE(o))
+    const ifd = t + u32(t + 4)
+    if (ifd + 2 > buf.length) return undefined
+    for (let i = 0, n = u16(ifd); i < n; i++) {
+      const e = ifd + 2 + i * 12
+      if (e + 12 > buf.length) return undefined
+      if (u16(e) === 0x0112) {
+        const o = u16(e + 8)
+        return o >= 1 && o <= 8 ? o : undefined
+      }
+    }
+    return undefined
+  }
+  // TIFF: the file is the IFD structure
+  if (/^(II\*\0|MM\0\*)/.test(buf.toString('latin1', 0, 4))) return fromTiff(0)
+  if (buf[0] !== 0xff || buf[1] !== 0xd8) return undefined
+  // JPEG: walk the segments to APP1 "Exif"
+  for (let i = 2; i + 4 <= buf.length; ) {
+    if (buf[i] !== 0xff) return undefined
+    const marker = buf[i + 1]
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      i += 2
+      continue
+    }
+    if (marker === 0xda || marker === 0xd9) return undefined
+    const len = buf.readUInt16BE(i + 2)
+    if (marker === 0xe1 && buf.toString('latin1', i + 4, i + 10) === 'Exif\0\0') return fromTiff(i + 10)
+    i += 2 + len
+  }
+  return undefined
+}
+
+/** ffmpeg filters that turn a picture stored with EXIF `orientation` upright (use with -noautorotate). */
+export function uprightFilters(orientation?: number): string[] {
+  switch (orientation) {
+    case 2:
+      return ['hflip']
+    case 3:
+      return ['hflip', 'vflip']
+    case 4:
+      return ['vflip']
+    case 5:
+      return ['transpose=0']
+    case 6:
+      return ['transpose=1']
+    case 7:
+      return ['transpose=3']
+    case 8:
+      return ['transpose=2']
+    default:
+      return []
   }
 }
 
@@ -256,7 +336,9 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
     } else {
       jc.progress(0.3, 'Thumbnail')
       const thumb = path.join(work, 'thumb.jpg')
-      await ffmpeg(['-i', src, '-frames:v', '1', '-vf', "scale='min(640,iw)':-2", '-q:v', '4', thumb], { signal: jc.signal })
+      // turned upright here whatever this ffmpeg does with the tag (6.1 turns JPEGs itself, 5.1 doesn't)
+      const vf = [...uprightFilters(info.orientation), "scale='min(640,iw)':-2"].join(',')
+      await ffmpeg(['-noautorotate', '-i', src, '-frames:v', '1', '-vf', vf, '-q:v', '4', thumb], { signal: jc.signal })
       keys.thumbKey = await put(thumb, 'thumb.jpg', 'image/jpeg')
     }
     jc.check()
