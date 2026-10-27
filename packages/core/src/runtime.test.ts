@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { addAsset, addItem, compileToHyperFrames, createAudioItem, createProject, createVideoItem, mainTrack, setKeyframe, updateItem, type Asset, type Project } from './index'
-import { StageRenderer } from './runtime'
+import { StageRenderer, followRate } from './runtime'
 
 const asset = (id: string, duration = 10): Asset => ({ id, kind: 'video', name: `${id}.mp4`, src: `${id}.mp4`, duration, width: 1920, height: 1080, hasAudio: true })
 
@@ -22,6 +22,8 @@ function fakeMedia() {
   const get = (el: HTMLMediaElement) => state.get(el) ?? (state.set(el, { paused: true, t: 0 }), state.get(el)!)
   Object.defineProperty(P, 'paused', { configurable: true, get(this: HTMLMediaElement) { return get(this).paused } })
   Object.defineProperty(P, 'currentTime', { configurable: true, get(this: HTMLMediaElement) { return get(this).t }, set(this: HTMLMediaElement, v: number) { get(this).t = v } })
+  Object.defineProperty(P, 'readyState', { configurable: true, get: () => 4 })
+  Object.defineProperty(P, 'seeking', { configurable: true, get: () => false })
   P.play = function (this: HTMLMediaElement) { get(this).paused = false; return Promise.resolve() }
   P.pause = function (this: HTMLMediaElement) { get(this).paused = true }
   P.load = function () {}
@@ -85,6 +87,84 @@ describe('preview renderer', () => {
     } finally {
       window.Audio = Orig
     }
+  })
+
+  describe('buffering and drift (EDT-24)', () => {
+    function talk() {
+      let p = createProject()
+      p = addAsset(p, asset('a', 60))
+      p = addAsset(p, { id: 'm', kind: 'audio', name: 'm.mp3', src: 'm.mp3', duration: 60 })
+      p = addItem(p, createVideoItem(p.assets.a, 0, { duration: 30 }))
+      return addItem(p, createAudioItem(p.assets.m, 0, { duration: 30 }))
+    }
+    const created: HTMLAudioElement[] = []
+    const Orig = window.Audio
+    beforeEach(() => {
+      created.length = 0
+      window.Audio = function () { const a = new Orig(); created.push(a); return a } as unknown as typeof Audio
+    })
+    afterEach(() => {
+      window.Audio = Orig
+    })
+
+    it('takes up a small drift with the playback rate and seeks only a large one', () => {
+      expect(followRate(1, 0)).toBe(1)
+      expect(followRate(1, 0.2)).toBeCloseTo(0.9)
+      expect(followRate(1, -0.04)).toBeCloseTo(1.02)
+      expect(followRate(2, 1)).toBeCloseTo(1.8)
+      const { root, r } = preview(talk())
+      r.setPlaying(true)
+      r.render(10)
+      const v = root.querySelector('video')!
+      v.currentTime = 10.2 // 0.2 s ahead
+      r.render(10)
+      expect(v.currentTime).toBe(10.2)
+      expect(v.playbackRate).toBeCloseTo(0.9)
+      v.currentTime = 12 // 2 s off: seek
+      r.render(10)
+      expect(v.currentTime).toBe(10)
+      expect(v.playbackRate).toBe(1)
+      r.destroy()
+    })
+
+    it('holds the other media while one buffers, and says so', () => {
+      const calls: boolean[] = []
+      let p = talk()
+      const root = document.createElement('div')
+      const r = new StageRenderer(root, p, { mode: 'preview', resolveUrl: (id) => id, onBuffering: (b) => calls.push(b) })
+      r.setPlaying(true)
+      r.render(5)
+      const v = root.querySelector('video')!
+      const sound = created.find((a) => a.getAttribute('src') === 'm')!
+      expect(sound.paused).toBe(false)
+      v.dispatchEvent(new Event('waiting'))
+      expect(calls).toEqual([true])
+      expect(r.mediaClock()).toBeUndefined()
+      r.render(5)
+      expect(sound.paused).toBe(true)
+      expect(v.paused).toBe(false) // the stalled one carries on loading
+      v.dispatchEvent(new Event('playing'))
+      expect(calls).toEqual([true, false])
+      r.render(5)
+      expect(sound.paused).toBe(false)
+      // a clip removed while it buffers doesn't leave the preview buffering for good
+      v.dispatchEvent(new Event('waiting'))
+      p = { ...p, tracks: p.tracks.map((t) => ({ ...t, items: t.items.filter((i) => i.type !== 'video') })) }
+      r.setProject(p)
+      expect(calls.at(-1)).toBe(false)
+      r.destroy()
+    })
+
+    it('reports where the playing sound is, for the transport clock to follow', () => {
+      const { r } = preview(talk())
+      expect(r.mediaClock()).toBeUndefined() // stopped
+      r.setPlaying(true)
+      r.render(3)
+      // the sound has run 0.3 s ahead of the playhead
+      for (const a of created) a.currentTime = 3.3
+      expect(r.mediaClock()).toBeCloseTo(3.3)
+      r.destroy()
+    })
   })
 
   describe('volume above 100 % (EDT-16)', () => {

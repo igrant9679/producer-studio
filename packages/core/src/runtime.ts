@@ -47,6 +47,18 @@ const KEEP_BEHIND = 8
 /** How many upcoming video clips get their player ahead of time. */
 const PRELOAD_VIDEOS = 2
 
+/** Further off the playhead than this (seconds), a playing element seeks; closer, it changes speed a little. */
+const SEEK_DRIFT = 0.5
+
+/**
+ * Playback rate that pulls a playing element back onto the playhead without a seek: up to 10 % faster or slower, in
+ * 2 % steps so the rate doesn't change every frame. `drift` is how far ahead of the playhead the element is (seconds).
+ */
+export function followRate(speed: number, drift: number): number {
+  const k = Math.round(Math.max(-0.1, Math.min(0.1, drift * 0.5)) / 0.02) * 0.02
+  return Math.min(16, Math.max(0.0625, speed * (1 - k)))
+}
+
 const LAYER_BASE = 'position:absolute;transform-origin:50% 50%;will-change:transform,opacity;'
 const MEDIA_FILL = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;display:block'
 
@@ -62,6 +74,8 @@ export class StageRenderer {
   private rate = 1
   private waiting = new Set<string>()
   private items = new Map<string, { item: Item; track: Track }>()
+  private rendering = false
+  private bufferChanged = false
 
   constructor(root: HTMLElement, project: Project, opts: RendererOptions) {
     this.root = root
@@ -96,12 +110,31 @@ export class StageRenderer {
     this.playing = playing
     this.rate = rate
     if (!playing) {
-      for (const el of this.layers.values()) if (el.content instanceof HTMLVideoElement) el.content.pause()
+      for (const el of this.layers.values()) for (const m of [el.content, el.bgMedia]) if (m instanceof HTMLVideoElement) m.pause()
       for (const a of this.voices.values()) a.el.pause()
+      // stopped, nothing is waiting to play
+      if (this.waiting.size) {
+        this.waiting.clear()
+        this.opts.onBuffering?.(false)
+      }
     } else if (this.audioCtx?.state === 'suspended') void this.audioCtx.resume().catch(() => undefined)
   }
 
   render(t: number) {
+    this.rendering = true
+    try {
+      this.draw(t)
+    } finally {
+      this.rendering = false
+    }
+    // told once the frame is drawn: the listener may render again
+    if (this.bufferChanged) {
+      this.bufferChanged = false
+      this.opts.onBuffering?.(this.waiting.size > 0)
+    }
+  }
+
+  private draw(t: number) {
     const frame = evaluate(this.project, t)
     const seen = new Set<string>()
     for (const layer of frame.layers) {
@@ -112,7 +145,11 @@ export class StageRenderer {
       if (!seen.has(id)) {
         el.wrap.style.display = 'none'
         if (el.bg) el.bg.style.display = 'none'
-        if (this.opts.mode === 'preview' && el.content instanceof HTMLVideoElement && !el.content.paused) el.content.pause()
+        if (this.opts.mode === 'preview') {
+          for (const m of [el.content, el.bgMedia]) if (m instanceof HTMLVideoElement && !m.paused) m.pause()
+          // a clip that has ended isn't something to wait for
+          this.setWaiting(id, false)
+        }
       }
     }
     if (this.opts.mode === 'preview') {
@@ -161,9 +198,37 @@ export class StageRenderer {
     }
   }
 
+  /**
+   * Preview: the timeline time the sound (or else the picture) that is playing has reached, for the transport clock
+   * to follow; undefined while nothing plays steadily.
+   */
+  mediaClock(): number | undefined {
+    if (!this.playing || this.waiting.size) return undefined
+    const at = (id: string, m: HTMLMediaElement) => {
+      const it = this.items.get(id)?.item
+      if (!it || (it.type !== 'audio' && it.type !== 'video') || m.paused || m.seeking || m.readyState < 3) return undefined
+      if (it.type === 'video' && (it.reverse || it.freezeAt !== undefined)) return undefined
+      const t = it.start + (m.currentTime - it.in) / it.speed
+      return t >= it.start && t <= itemEnd(it) ? t : undefined
+    }
+    for (const [id, v] of this.voices) {
+      const t = at(id, v.el)
+      if (t !== undefined) return t
+    }
+    for (const [id, el] of this.layers) {
+      const t = el.content instanceof HTMLVideoElement && el.wrap.style.display !== 'none' ? at(id, el.content) : undefined
+      if (t !== undefined) return t
+    }
+    return undefined
+  }
+
   destroy() {
     for (const [id, el] of this.layers) this.removeLayer(id, el)
     for (const id of [...this.voices.keys()]) this.dropVoice(id)
+    if (this.waiting.size) {
+      this.waiting.clear()
+      this.opts.onBuffering?.(false)
+    }
     void this.audioCtx?.close().catch(() => undefined)
     this.audioCtx = undefined
   }
@@ -177,6 +242,7 @@ export class StageRenderer {
     if (this.opts.mode === 'preview') {
       el.wrap.remove()
       el.bg?.remove()
+      this.setWaiting(id, false)
     }
     this.layers.delete(id)
   }
@@ -200,9 +266,8 @@ export class StageRenderer {
         v.playsInline = true
         v.preload = 'auto'
         v.src = this.opts.resolveUrl(layer.assetId!, 'proxy')
-        v.addEventListener('waiting', () => this.setWaiting(layer.itemId, true))
-        v.addEventListener('playing', () => this.setWaiting(layer.itemId, false))
-        v.addEventListener('seeked', () => this.setWaiting(layer.itemId, false))
+        v.addEventListener('waiting', () => this.playing && this.layers.get(layer.itemId)?.content === v && this.setWaiting(layer.itemId, true))
+        for (const ev of ['playing', 'seeked', 'error']) v.addEventListener(ev, () => this.setWaiting(layer.itemId, false))
         content = v
       } else if (layer.type === 'image') {
         const img = document.createElement('img')
@@ -325,20 +390,26 @@ export class StageRenderer {
     }
   }
 
+  /** Preview: another element is still loading, so this one waits for it (the transport clock waits too). */
+  private held(key: string): boolean {
+    return this.waiting.size > 0 && !this.waiting.has(key)
+  }
+
   private syncVideo(v: HTMLVideoElement, mediaTime: number, itemId: string, isBg = false) {
     const item = this.findVideoItem(itemId)
     const frozen = item?.freezeAt !== undefined
     const speed = (item?.speed ?? 1) * this.rate
-    if (this.playing && !frozen && !item?.reverse) {
-      if (Math.abs(v.playbackRate - speed) > 0.001) v.playbackRate = Math.min(16, Math.max(0.0625, speed))
-      const drift = Math.abs(v.currentTime - mediaTime)
-      if (drift > 0.25) v.currentTime = mediaTime
+    if (this.playing && !frozen && !item?.reverse && !this.held(isBg ? `bg:${itemId}` : itemId)) {
+      const drift = v.currentTime - mediaTime
+      const far = Math.abs(drift) > SEEK_DRIFT * speed
+      if (far) v.currentTime = mediaTime
+      const rate = followRate(speed, far ? 0 : drift / speed)
+      if (Math.abs(v.playbackRate - rate) > 0.001) v.playbackRate = rate
       if (v.paused) void v.play().catch(() => undefined)
     } else {
       if (!v.paused) v.pause()
       if (Math.abs(v.currentTime - mediaTime) > 0.01) v.currentTime = mediaTime
     }
-    void isBg
   }
 
   private findVideoItem(id: string): VideoItem | undefined {
@@ -370,6 +441,9 @@ export class StageRenderer {
     el.preload = 'auto'
     const ctx = plain ? null : this.context()
     const voice: Voice = { el }
+    const key = `a:${itemId}`
+    el.addEventListener('waiting', () => this.playing && this.voices.get(itemId) === voice && this.setWaiting(key, true))
+    for (const ev of ['playing', 'seeked', 'error']) el.addEventListener(ev, () => this.setWaiting(key, false))
     if (ctx) {
       try {
         el.crossOrigin = 'anonymous'
@@ -401,6 +475,7 @@ export class StageRenderer {
     release(v.el)
     v.gain?.disconnect()
     this.voices.delete(itemId)
+    this.setWaiting(`a:${itemId}`, false)
   }
 
   private syncAudio(levels: ReturnType<typeof evaluate>['audio'], t: number) {
@@ -414,21 +489,31 @@ export class StageRenderer {
         if (Math.abs(voice.gain.gain.value - level) > 1e-4) voice.gain.gain.value = level
         if (el.volume !== 1) el.volume = 1
       } else el.volume = Math.min(1, level)
-      if (this.playing) {
-        const rate = Math.min(16, Math.max(0.0625, a.speed * this.rate))
+      if (this.playing && !this.held(`a:${a.itemId}`)) {
+        const speed = a.speed * this.rate
+        // small drifts are taken up by the rate, so the sound doesn't skip (captions follow the playhead)
+        const drift = el.currentTime - a.mediaTime
+        const far = Math.abs(drift) > SEEK_DRIFT * speed
+        if (far) el.currentTime = a.mediaTime
+        const rate = followRate(speed, far ? 0 : drift / speed)
         if (Math.abs(el.playbackRate - rate) > 0.001) el.playbackRate = rate
-        if (Math.abs(el.currentTime - a.mediaTime) > 0.3) el.currentTime = a.mediaTime
         if (el.paused) void el.play().catch(() => undefined)
       } else if (!el.paused) el.pause()
     }
-    for (const [id, v] of this.voices) if (!active.has(id) && !v.el.paused) v.el.pause()
+    for (const [id, v] of this.voices)
+      if (!active.has(id)) {
+        if (!v.el.paused) v.el.pause()
+        this.setWaiting(`a:${id}`, false)
+      }
     void t
   }
 
   private setWaiting(id: string, on: boolean) {
+    if (on === this.waiting.has(id)) return
     if (on) this.waiting.add(id)
     else this.waiting.delete(id)
-    this.opts.onBuffering?.(this.waiting.size > 0)
+    if (this.rendering) this.bufferChanged = true
+    else this.opts.onBuffering?.(this.waiting.size > 0)
   }
 }
 

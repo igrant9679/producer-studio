@@ -1,8 +1,19 @@
-// Transport clock: while `playing`, advance the playhead by real elapsed time on every animation frame and
-// stop at the end. The canvas subscribes to playhead changes and renders; nothing else re-renders per frame
-// unless it explicitly subscribes to the playhead.
+// Transport clock: while `playing`, advance the playhead on every animation frame and stop at the end. It holds
+// while the preview's media is buffering, and follows the media that is playing (the renderer's media clock), so a
+// slow connection doesn't run the playhead ahead of a stalled video and captions stay with the sound. The canvas
+// subscribes to playhead changes and renders; nothing else re-renders per frame unless it subscribes to the playhead.
 import { projectDuration } from '@producer/core'
 import { useEditor } from './store'
+
+let mediaClock: (() => number | undefined) | null = null
+
+/** The canvas's renderer reports where its playing media is (timeline seconds); null when there is none. */
+export function setMediaClock(fn: (() => number | undefined) | null) {
+  mediaClock = fn
+}
+
+/** Share of the gap to the media's time closed each frame: no visible jumps, in step within a few frames. */
+const FOLLOW = 0.2
 
 export function startPlaybackClock(): () => void {
   let raf = 0
@@ -12,8 +23,15 @@ export function startPlaybackClock(): () => void {
     if (!s.playing) return
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0
     last = now
+    if (s.buffering) {
+      // the media is loading: wait for it instead of running on
+      raf = requestAnimationFrame(tick)
+      return
+    }
     const end = projectDuration(s.project)
-    const next = s.playhead + dt
+    let next = s.playhead + dt
+    const m = mediaClock?.()
+    if (m !== undefined && Math.abs(m - next) < 1) next += (m - next) * FOLLOW
     if (next >= end) {
       useEditor.setState({ playhead: end, playing: false })
       return

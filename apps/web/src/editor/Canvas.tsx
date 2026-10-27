@@ -8,6 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import * as A from './actions'
 import { Menu, MenuItem, Slider } from './controls'
 import { dragPayload, isInternalDrag, makeResolver } from './media'
+import { setMediaClock } from './playback'
 import { useEditor } from './store'
 
 const TRANSFORM_RE = /rotate\(([-\d.e]+)deg\) scale\(([-\d.e]+), ([-\d.e]+)\)/
@@ -74,13 +75,15 @@ export function Canvas() {
       onBuffering: (b) => useEditor.setState({ buffering: b }),
     })
     r.render(st.playhead)
+    setMediaClock(() => r.mediaClock())
     let disposed = false
     const media = watchMediaLoading(root, setLoadingMedia, () => !disposed && r.render(useEditor.getState().playhead))
     const unsub = useEditor.subscribe((s, prev) => {
       const pc = s.project !== prev.project
       if (pc) r.setProject(s.project)
       if (s.playing !== prev.playing) r.setPlaying(s.playing)
-      if (pc || s.playhead !== prev.playhead || s.playing !== prev.playing) {
+      // buffering starts or ends: the other media pause for it, or carry on
+      if (pc || s.playhead !== prev.playhead || s.playing !== prev.playing || s.buffering !== prev.buffering) {
         r.render(s.playhead)
         media.recount()
       }
@@ -89,6 +92,7 @@ export function Canvas() {
     void document.fonts?.ready.then(() => !disposed && r.render(useEditor.getState().playhead))
     return () => {
       disposed = true
+      setMediaClock(null)
       media.stop()
       unsub()
       r.destroy()
