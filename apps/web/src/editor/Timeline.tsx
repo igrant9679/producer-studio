@@ -1277,7 +1277,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
   const y = Math.min(ctx.y, window.innerHeight - (it ? 420 : 120))
   const canTransition = it && A.transitionTargetFor(it.id) !== null && it.type !== 'audio' && it.type !== 'caption'
   return (
-    <Menu open onClose={onClose} className="tl-ctx" style={{ left: x, top: y }}>
+    <Menu open onClose={onClose} className="tl-ctx" style={{ left: x, top: y }} label={it ? 'Clip' : 'Timeline'}>
       {it ? (
         <>
           <MenuItem icon={<Scissors size={14} />} label="Split" kbd="Ctrl B" onClick={run(A.split)} />
@@ -1332,15 +1332,15 @@ function TransitionPopover({ pop, onClose }: { pop: TransPop; onClose: () => voi
   const x = Math.min(pop.x - 140, window.innerWidth - 300)
   const y = Math.max(8, pop.y - 300)
   return (
-    <Menu open onClose={onClose} className="tl-transpop" style={{ left: Math.max(8, x), top: y }}>
+    <Menu open onClose={onClose} className="tl-transpop" style={{ left: Math.max(8, x), top: y }} role="dialog" label="Transition">
       <div className="row" style={{ marginBottom: 8 }}>
         <span className="eyebrow">Transition</span>
         <div className="spacer" />
-        <button className="btn sm ghost icon" onClick={onClose} title="Close"><X size={14} /></button>
+        <button className="btn sm ghost icon" onClick={onClose} title="Close" aria-label="Close"><X size={14} /></button>
       </div>
       <div className="tl-transgrid">
         {TRANSITIONS.map((t) => (
-          <button key={t.id} className={clsx(t.id === tr.type && 'on')} onClick={() => A.setTransition(it.id, t.id, tr.duration)}>
+          <button key={t.id} className={clsx(t.id === tr.type && 'on')} aria-pressed={t.id === tr.type} onClick={() => A.setTransition(it.id, t.id, tr.duration)}>
             {t.name}
           </button>
         ))}

@@ -3,32 +3,49 @@ import type { AnimProp, Item } from '@producer/core'
 import { isSafeColor, removeKeyframe, setKeyframe } from '@producer/core'
 import clsx from 'clsx'
 import { ChevronDown, ChevronRight, Diamond } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { localTime, readProp } from './actions'
 import { useEditor } from './store'
 
 export function Section({ title, children, right, defaultOpen = true }: { title: string; children: ReactNode; right?: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
+  const bodyId = useId()
   return (
-    <section className={clsx('ed-section', !open && 'closed')}>
-      <header onClick={() => setOpen(!open)}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        <span>{title}</span>
-        <div className="spacer" />
-        <div onClick={(e) => e.stopPropagation()} className="row" style={{ gap: 4 }}>
+    <section className={clsx('ed-section', !open && 'closed')} aria-label={title}>
+      <header>
+        <button type="button" className="ed-section-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          <span>{title}</span>
+        </button>
+        <div className="row" style={{ gap: 4 }}>
           {right}
         </div>
       </header>
-      {open && <div className="ed-section-body">{children}</div>}
+      {open && (
+        <div className="ed-section-body" id={bodyId}>
+          {children}
+        </div>
+      )}
     </section>
   )
 }
 
+const FieldIds = createContext<{ control: string; label: string } | null>(null)
+
+/** The ids of the Field a control sits in: its label names the control. */
+export function useFieldIds() {
+  return useContext(FieldIds)
+}
+
 export function Field({ label, children, keyframe, className }: { label: ReactNode; children: ReactNode; keyframe?: ReactNode; className?: string }) {
+  const id = useId()
+  const ids = useMemo(() => ({ control: `${id}c`, label: `${id}l` }), [id])
   return (
     <div className={clsx('ed-field', className)}>
-      <label>{label}</label>
-      <div className="ed-field-ctl">{children}</div>
+      <label id={ids.label} htmlFor={ids.control}>{label}</label>
+      <div className="ed-field-ctl" role="group" aria-labelledby={ids.label}>
+        <FieldIds.Provider value={ids}>{children}</FieldIds.Provider>
+      </div>
       <div className="ed-field-kf">{keyframe}</div>
     </div>
   )
@@ -39,7 +56,8 @@ function fmtNum(v: number, step: number) {
   return v.toFixed(places)
 }
 
-export function NumberInput({ value, onChange, step = 1, min, max, suffix, width = 58 }: { value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number; suffix?: string; width?: number }) {
+export function NumberInput({ value, onChange, step = 1, min, max, suffix, width = 58, label }: { value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number; suffix?: string; width?: number; label?: string }) {
+  const field = useFieldIds()
   const [text, setText] = useState(fmtNum(value, step))
   const focused = useRef(false)
   useEffect(() => {
@@ -60,6 +78,9 @@ export function NumberInput({ value, onChange, step = 1, min, max, suffix, width
     <div className="ed-num" style={{ width }}>
       <input
         value={text}
+        inputMode="decimal"
+        aria-label={label}
+        aria-labelledby={label ? undefined : field?.label}
         onFocus={(e) => {
           focused.current = true
           e.currentTarget.select()
@@ -116,7 +137,7 @@ export function Slider({
   const shown = display ? display.to(value) : value
   return (
     <Field label={label} keyframe={keyframe}>
-      <input
+      <SliderRange
         type="range"
         className="ed-range"
         min={min}
@@ -137,17 +158,25 @@ export function Slider({
         value={shown}
         step={display?.step ?? step}
         suffix={suffix}
+        label={typeof label === 'string' ? `${label} value` : undefined}
         onChange={(v) => onChange(Math.max(min, Math.min(max, display ? display.from(v) : v)))}
       />
     </Field>
   )
 }
 
+/** The range input of a Slider: its Field's label is its name. */
+function SliderRange(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  const field = useFieldIds()
+  return <input id={field?.control} {...props} />
+}
+
 export function Segmented<T extends string>({ value, options, onChange, size = 'md' }: { value: T; options: Array<{ value: T; label: ReactNode; title?: string }>; onChange: (v: T) => void; size?: 'sm' | 'md' }) {
+  const field = useFieldIds()
   return (
-    <div className={clsx('ed-seg', size)}>
+    <div className={clsx('ed-seg', size)} role="group" aria-labelledby={field?.label}>
       {options.map((o) => (
-        <button key={o.value} title={o.title} className={clsx(o.value === value && 'on')} onClick={() => onChange(o.value)} type="button">
+        <button key={o.value} title={o.title} aria-label={o.title} aria-pressed={o.value === value} className={clsx(o.value === value && 'on')} onClick={() => onChange(o.value)} type="button">
           {o.label}
         </button>
       ))}
@@ -156,13 +185,15 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
 }
 
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: ReactNode }) {
+  const field = useFieldIds()
+  const own = useId()
   return (
     <label className="ed-toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <input type="checkbox" role="switch" checked={checked} id={field && !label ? field.control : undefined} aria-labelledby={field ? (label ? `${field.label} ${own}` : field.label) : undefined} onChange={(e) => onChange(e.target.checked)} />
       <span className="track">
         <span className="knob" />
       </span>
-      {label && <span className="lbl">{label}</span>}
+      {label && <span className="lbl" id={own}>{label}</span>}
     </label>
   )
 }
@@ -176,16 +207,18 @@ function toHex(c: string): string | null {
 }
 
 export function ColorInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const field = useFieldIds()
   const hex = toHex(value) ?? '#000000'
   const [text, setText] = useState(value)
   useEffect(() => setText(value), [value])
   return (
     <div className="ed-color">
       <label className="sw" style={{ background: value }}>
-        <input type="color" value={hex} onChange={(e) => onChange(e.target.value)} onBlur={() => useEditor.getState().endCoalesce()} />
+        <input type="color" value={hex} aria-labelledby={field?.label} onChange={(e) => onChange(e.target.value)} onBlur={() => useEditor.getState().endCoalesce()} />
       </label>
       <input
         className="hex"
+        id={field?.control}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={() => {
@@ -252,33 +285,80 @@ export function KeyframeToggle({ item, prop }: { item: Item; prop: AnimProp }) {
   )
 }
 
-export function Menu({ open, onClose, children, className, style }: { open: boolean; onClose: () => void; children: ReactNode; className?: string; style?: React.CSSProperties }) {
+const ITEMS = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
+const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+
+/**
+ * A pop-up menu (or, with role "dialog", a small popover). Opening it moves focus to its first item; the arrow keys,
+ * Home and End move between items; Escape or Tab closes it and focus returns to where it was.
+ */
+export function Menu({ open, onClose, children, className, style, role = 'menu', label }: { open: boolean; onClose: () => void; children: ReactNode; className?: string; style?: React.CSSProperties; role?: 'menu' | 'dialog'; label?: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
   useEffect(() => {
     if (!open) return
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const first = ref.current?.querySelector<HTMLElement>(role === 'menu' ? ITEMS : FOCUSABLE)
+    ;(first ?? ref.current)?.focus({ preventScroll: true })
     const onDown = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      if (ref.current && !ref.current.contains(e.target as Node)) close.current()
     }
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    // Escape with focus somewhere else on the page (the menu's own keys handle it inside)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close.current()
     const id = setTimeout(() => window.addEventListener('pointerdown', onDown), 0)
     window.addEventListener('keydown', onKey)
+    const box = ref.current
     return () => {
       clearTimeout(id)
       window.removeEventListener('pointerdown', onDown)
       window.removeEventListener('keydown', onKey)
+      // closed from inside (an item, Escape): focus goes back to what opened it; a click elsewhere keeps its focus
+      const at = document.activeElement
+      if (opener?.isConnected && (!at || at === document.body || box?.contains(at))) opener.focus({ preventScroll: true })
     }
-  }, [open, onClose])
+  }, [open, role])
   if (!open) return null
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape' || e.key === 'Tab') {
+      if (e.key === 'Escape') e.preventDefault()
+      e.stopPropagation()
+      onClose()
+      return
+    }
+    if (role !== 'menu') return
+    const items = [...(ref.current?.querySelectorAll<HTMLElement>(ITEMS) ?? [])]
+    if (!items.length) return
+    const at = items.indexOf(document.activeElement as HTMLElement)
+    const go = (i: number) => {
+      e.preventDefault()
+      e.stopPropagation()
+      items[(i + items.length) % items.length].focus()
+    }
+    if (e.key === 'ArrowDown') go(at + 1)
+    else if (e.key === 'ArrowUp') go(at < 0 ? items.length - 1 : at - 1)
+    else if (e.key === 'Home') go(0)
+    else if (e.key === 'End') go(items.length - 1)
+  }
   return (
-    <div ref={ref} className={clsx('ed-menu', className)} style={style}>
+    <div ref={ref} className={clsx('ed-menu', className)} style={style} role={role} aria-label={label} tabIndex={-1} onKeyDown={onKeyDown}>
       {children}
     </div>
   )
 }
 
 export function MenuItem({ icon, label, kbd, onClick, disabled, danger, active }: { icon?: ReactNode; label: ReactNode; kbd?: string; onClick: () => void; disabled?: boolean; danger?: boolean; active?: boolean }) {
+  const choice = active !== undefined
   return (
-    <button type="button" className={clsx('ed-menu-item', danger && 'danger', active && 'active')} disabled={disabled} onClick={onClick}>
+    <button
+      type="button"
+      role={choice ? 'menuitemradio' : 'menuitem'}
+      aria-checked={choice ? active : undefined}
+      tabIndex={-1}
+      className={clsx('ed-menu-item', danger && 'danger', active && 'active')}
+      disabled={disabled}
+      onClick={onClick}
+    >
       <span className="ic">{icon}</span>
       <span className="lb">{label}</span>
       {kbd && <span className="kb">{kbd}</span>}
