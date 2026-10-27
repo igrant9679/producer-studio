@@ -110,22 +110,30 @@ export function insertTrack(p: Project, kind: TrackKind, aboveIndex?: number): T
   return track
 }
 
+/** Move the items carrying `linkId` on every track but `except` by `by` seconds. */
+function shiftLinked(p: Project, linkId: string, by: number, except?: Track) {
+  for (const tr of p.tracks) {
+    if (tr === except) continue
+    for (const o of tr.items) if (o.linkId === linkId) o.start = Math.max(0, round(o.start + by, 4))
+  }
+}
+
 /** Pack the magnetic main track: items edge to edge in their current order starting at 0. */
 export function packMain(p: Project) {
   const m = mainTrack(p)
   if (!m) return
   sortItems(m)
   let t = 0
+  const led = new Set<string>()
   for (const it of m.items) {
     const delta = round(t, 4) - it.start
     it.start = round(t, 4)
     t += it.duration
-    // linked items on other tracks (separated audio) ride along with their main-track clip
-    if (it.linkId && Math.abs(delta) > EPS) {
-      for (const tr of p.tracks) {
-        if (tr === m) continue
-        for (const o of tr.items) if (o.linkId === it.linkId) o.start = Math.max(0, round(o.start + delta, 4))
-      }
+    // linked items on other tracks (separated audio) ride along with their main-track clip; the first clip of a
+    // link leads, so older documents where split pieces share one link still move it only once
+    if (it.linkId && !led.has(it.linkId)) {
+      led.add(it.linkId)
+      if (Math.abs(delta) > EPS) shiftLinked(p, it.linkId, delta, m)
     }
   }
 }
@@ -286,9 +294,31 @@ export function splitItem(p0: Project, itemId: string, t: number): { project: Pr
   const p = clone(p0)
   const f = findItem(p, itemId)
   if (!f || f.item.locked) return { project: p0 }
-  const it = f.item
+  const linkId = f.item.linkId
+  const right = cutAt(p, f.track, f.index, t)
+  if (!right) return { project: p0 }
+  // linked items (separated audio) are cut at the same moment, and the right-hand pieces get a link of their own
+  if (linkId) {
+    right.linkId = uid('l')
+    for (const tr of p.tracks)
+      for (let i = 0; i < tr.items.length; i++) {
+        const o = tr.items[i]
+        if (o.linkId !== linkId || o.id === itemId) continue
+        const r = o.locked ? null : cutAt(p, tr, i, t)
+        if (r) {
+          r.linkId = right.linkId
+          i++
+        } else if (o.start + o.duration / 2 >= t) o.linkId = right.linkId
+      }
+  }
+  return { project: touch(p), rightId: right.id }
+}
+
+/** Cut the item at `index` on `track` at timeline time t, in place. Returns the right piece (null too near an edge). */
+function cutAt(p: Project, track: Track, index: number, t: number): Item | null {
+  const it = track.items[index]
   const local = t - it.start
-  if (local <= 1 / p.fps || local >= it.duration - 1 / p.fps) return { project: p0 }
+  if (local <= 1 / p.fps || local >= it.duration - 1 / p.fps) return null
   const right = clone(it)
   right.id = uid(it.id.split('_')[0] || 'i')
   right.start = round(t, 4)
@@ -317,8 +347,8 @@ export function splitItem(p0: Project, itemId: string, t: number): { project: Pr
     it.words = words.filter((w) => w.start < local)
     ;(right as typeof it).words = words.filter((w) => w.start >= local).map((w) => ({ ...w, start: w.start - local, end: w.end - local }))
   }
-  f.track.items.splice(f.index + 1, 0, right)
-  return { project: touch(p), rightId: right.id }
+  track.items.splice(index + 1, 0, right)
+  return right
 }
 
 /** Split every unlocked item under the playhead (Ctrl+B with nothing selected splits the selection or main). */
@@ -332,17 +362,29 @@ export function splitAt(p0: Project, t: number, itemIds?: string[]): Project {
 export function deleteItems(p0: Project, ids: string[], opts: { ripple?: boolean } = {}): Project {
   const p = clone(p0)
   const set = new Set(ids)
+  // links led by a clip staying on the main track move with that clip when the main track packs, not by a ripple
+  const anchored = new Set(mainTrack(p)?.items.filter((i) => i.linkId && !set.has(i.id)).map((i) => i.linkId!))
+  const shifts = new Map<Item, number>()
   for (const t of p.tracks) {
     if (t.locked) continue
     const removed = t.items.filter((i) => set.has(i.id))
     t.items = t.items.filter((i) => !set.has(i.id))
     if (opts.ripple && !t.main && removed.length) {
       // close the gap left by each removed item on that track
-      for (const r of removed.sort((a, b) => b.start - a.start)) {
-        for (const i of t.items) if (i.start >= itemEnd(r) - EPS) i.start = round(i.start - r.duration, 4)
+      for (const i of t.items) {
+        const by = removed.reduce((n, r) => (i.start >= itemEnd(r) - EPS ? n + r.duration : n), 0)
+        if (by > 0 && !(i.linkId && anchored.has(i.linkId))) shifts.set(i, by)
       }
     }
   }
+  // linked items close up together, by the first gap found for their link
+  const byLink = new Map<string, number>()
+  for (const [i, by] of shifts) if (i.linkId && !byLink.has(i.linkId)) byLink.set(i.linkId, by)
+  for (const t of p.tracks)
+    for (const i of t.items) {
+      const by = i.linkId && byLink.has(i.linkId) ? byLink.get(i.linkId) : shifts.get(i)
+      if (by) i.start = round(i.start - by, 4)
+    }
   packMain(p)
   pruneEmptyTracks(p)
   return touch(p)
@@ -430,10 +472,19 @@ export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2)
   const srcTime = v.in + (t - v.start) * v.speed
   const { project: split, rightId } = splitItem(p0, itemId, t)
   const p = clone(split)
-  const freeze: VideoItem = { ...clone(v), id: uid('v'), start: t, duration: holdSec, freezeAt: round(srcTime, 4), fadeIn: 0, fadeOut: 0, animations: {}, transitionOut: undefined, keyframes: {} }
+  // the held picture has no sound, so it is linked to nothing
+  const freeze: VideoItem = { ...clone(v), id: uid('v'), start: t, duration: holdSec, freezeAt: round(srcTime, 4), fadeIn: 0, fadeOut: 0, animations: {}, transitionOut: undefined, keyframes: {}, linkId: undefined }
   const track = findTrack(p, f.track.id)!
   const insertAt = rightId ? track.items.findIndex((i) => i.id === rightId) : track.items.length
-  if (!track.main) for (const i of track.items) if (i.start >= t - EPS) i.start = round(i.start + holdSec, 4)
+  if (!track.main) {
+    const links = new Set<string>()
+    for (const i of track.items)
+      if (i.start >= t - EPS) {
+        i.start = round(i.start + holdSec, 4)
+        if (i.linkId) links.add(i.linkId)
+      }
+    for (const l of links) shiftLinked(p, l, holdSec, track)
+  }
   track.items.splice(insertAt < 0 ? track.items.length : insertAt, 0, freeze)
   if (track.main) packMain(p)
   else sortItems(track)
@@ -578,6 +629,10 @@ export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ sta
       p = b.project
       ids.push(b.rightId)
     }
+    // the same stretch of the linked audio goes too; it follows the ripple of the item's own track
+    const link = findItem(p, midId)!.item.linkId
+    const partners = link ? p.tracks.flatMap((t) => t.items).filter((i) => i.linkId === link && i.id !== midId) : []
+    if (partners.length) p = deleteItems(p, partners.map((i) => i.id))
     p = deleteItems(p, [midId], { ripple: true })
     ids = ids.filter((id) => id !== midId)
   }

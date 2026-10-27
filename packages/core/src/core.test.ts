@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   addAsset,
   addItem,
+  clone,
   compileToHyperFrames,
+  createAudioItem,
+  createCaptionItem,
   createProject,
   createTextItem,
   createVideoItem,
@@ -13,6 +16,8 @@ import {
   freezeFrame,
   generateCaptions,
   isSafeColor,
+  itemEnd,
+  itemWords,
   safeColor,
   textBackgroundCss,
   importSrt,
@@ -20,15 +25,20 @@ import {
   mainTrack,
   moveItem,
   projectDuration,
+  removeSilences,
+  round,
   separateAudio,
   presetCanvasSize,
   setAspect,
   setCanvasSize,
   setKeyframe,
+  splitAt,
   splitItem,
   trimItem,
   updateItem,
+  type AudioItem,
   type Asset,
+  type CaptionItem,
   type Project,
   type VideoItem,
 } from './index'
@@ -309,3 +319,142 @@ describe('colours from the document', () => {
     expect(css).not.toContain('NaN')
   })
 })
+
+// ---------- timeline ops keep every piece in step ----------
+
+/** Every separated audio clip has exactly one video, and the two start, end and play the same source range. */
+function expectInSync(p: Project) {
+  const items = p.tracks.flatMap((t) => t.items)
+  const audio = items.filter((i): i is AudioItem => i.type === 'audio' && !!i.linkId)
+  expect(audio.length).toBeGreaterThan(0)
+  const span = (i: AudioItem | VideoItem) => ({ start: round(i.start, 4), end: round(itemEnd(i), 4), in: round(i.in, 4) })
+  for (const a of audio) {
+    const videos = items.filter((i): i is VideoItem => i.type === 'video' && i.linkId === a.linkId)
+    expect(videos).toHaveLength(1)
+    expect(span(a)).toEqual(span(videos[0]))
+  }
+  for (const v of items.filter((i): i is VideoItem => i.type === 'video' && !!i.linkId && i.freezeAt === undefined))
+    expect(audio.filter((a) => a.linkId === v.linkId)).toHaveLength(1)
+}
+
+/** A 1 s clip, then a 10 s clip at 1 s whose audio is separated onto an audio track. */
+function separated() {
+  let p = createProject()
+  p = addAsset(p, asset('x', 1))
+  p = addAsset(p, asset('a'))
+  p = addItem(p, createVideoItem(p.assets.x, 0))
+  p = addItem(p, createVideoItem(p.assets.a, 999))
+  const [first, clip] = mainTrack(p)!.items.map((i) => i.id)
+  return { p: separateAudio(p, clip), first, clip }
+}
+
+const audioOf = (p: Project) => p.tracks.filter((t) => t.kind === 'audio').flatMap((t) => t.items) as AudioItem[]
+
+describe('separated audio stays with its video (EDT-2)', () => {
+  it('a split cuts the audio too, and deleting a clip before moves both halves together', () => {
+    const { p: p0, first, clip } = separated()
+    let p = splitItem(p0, clip, 5).project
+    expectInSync(p)
+    p = deleteItems(p, [first])
+    expectInSync(p)
+    expect(audioOf(p).map((a) => [a.start, a.duration])).toEqual([
+      [0, 4],
+      [4, 6],
+    ])
+  })
+
+  it('splitting everything under the playhead cuts each piece once', () => {
+    const { p: p0, first } = separated()
+    let p = splitAt(p0, 5)
+    expect(audioOf(p)).toHaveLength(2)
+    p = deleteItems(p, [first])
+    expectInSync(p)
+  })
+
+  it('a transcript cut takes the words out of the audio as well', () => {
+    const { p: p0, clip } = separated()
+    const p = cutSourceRanges(p0, clip, [{ start: 1.6, end: 2.9 }])
+    expectInSync(p)
+    const audio = audioOf(p)
+    expect(audio.reduce((n, a) => n + a.duration, 0)).toBeCloseTo(10 - 1.3, 3)
+    for (const a of audio) expect(a.in + a.duration * a.speed <= 1.6 + 1e-3 || a.in >= 2.9 - 1e-3).toBe(true)
+  })
+
+  it('cutting words from the separated audio cuts its video as well', () => {
+    const { p: p0 } = separated()
+    const p = cutSourceRanges(p0, audioOf(p0)[0].id, [{ start: 1.6, end: 2.9 }])
+    expectInSync(p)
+    expect(projectDuration(p)).toBeCloseTo(11 - 1.3, 3)
+  })
+
+  it('a transcript cut on an overlay clip closes up its audio with it', () => {
+    let p = createProject()
+    p = addAsset(p, asset('a'))
+    p = addItem(p, createVideoItem(p.assets.a, 0))
+    const v = createVideoItem(p.assets.a, 2)
+    p = addItem(p, v, 'nope')
+    p = separateAudio(p, v.id)
+    p = cutSourceRanges(p, v.id, [{ start: 1.6, end: 2.9 }])
+    expectInSync(p)
+    expect(audioOf(p).reduce((n, a) => n + a.duration, 0)).toBeCloseTo(10 - 1.3, 3)
+  })
+
+  it('a freeze frame holds the picture and the rest of the audio waits for the rest of the clip', () => {
+    const { p: p0, first, clip } = separated()
+    let p = freezeFrame(p0, clip, 4, 2)
+    expectInSync(p)
+    expect(audioOf(p).map((a) => [a.start, round(itemEnd(a), 4)])).toEqual([
+      [1, 4],
+      [6, 13],
+    ])
+    p = deleteItems(p, [first])
+    expectInSync(p)
+  })
+
+  it('a freeze frame on an overlay clip moves its audio too', () => {
+    let p = createProject()
+    p = addAsset(p, asset('a'))
+    p = addItem(p, createVideoItem(p.assets.a, 0))
+    const v = createVideoItem(p.assets.a, 2)
+    p = addItem(p, v, 'nope')
+    p = separateAudio(p, v.id)
+    p = freezeFrame(p, v.id, 5, 2)
+    expectInSync(p)
+    expect(audioOf(p).map((a) => a.start)).toEqual([2, 7])
+  })
+
+  it("a ripple delete on the audio track leaves a clip's audio with its clip", () => {
+    let p = createProject()
+    p = addAsset(p, asset('x', 1))
+    p = addAsset(p, asset('a'))
+    p = addAsset(p, { ...asset('m', 1), kind: 'audio' })
+    p = addItem(p, createVideoItem(p.assets.x, 0))
+    p = addItem(p, createVideoItem(p.assets.a, 999))
+    p = addItem(p, createAudioItem(p.assets.m, 0))
+    p = separateAudio(p, mainTrack(p)!.items[1].id)
+    const tracks = p.tracks.filter((t) => t.kind === 'audio')
+    expect(tracks).toHaveLength(1) // the music and the separated audio share a track
+    p = deleteItems(p, [tracks[0].items[0].id], { ripple: true })
+    expectInSync(p)
+  })
+
+  it('moves the audio of a document split before this fix only once', () => {
+    // older splits gave both video pieces the audio's link, and each piece moved the audio again
+    let p = createProject()
+    p = addAsset(p, asset('x', 1))
+    p = addAsset(p, asset('a'))
+    p = addItem(p, createVideoItem(p.assets.x, 0))
+    p = addItem(p, createVideoItem(p.assets.x, 999))
+    p = addItem(p, createVideoItem(p.assets.a, 999))
+    const [first, , clip] = mainTrack(p)!.items.map((i) => i.id)
+    p = clone(separateAudio(p, clip))
+    const m = mainTrack(p)!
+    const v = m.items[2] as VideoItem
+    m.items.push({ ...clone(v), id: 'v_legacy', start: 7, duration: 5, in: 5 })
+    v.duration = 5
+    const audioId = audioOf(p)[0].id
+    p = deleteItems(p, [first])
+    expect(findItem(p, audioId)!.item.start).toBe(1)
+  })
+})
+
