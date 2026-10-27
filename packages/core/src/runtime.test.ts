@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
-import { addAsset, addItem, compileToHyperFrames, createProject, createVideoItem, mainTrack, type Asset, type Project } from './index'
+import { afterEach, describe, expect, it } from 'vitest'
+import { addAsset, addItem, compileToHyperFrames, createAudioItem, createProject, createVideoItem, mainTrack, setKeyframe, updateItem, type Asset, type Project } from './index'
 import { StageRenderer } from './runtime'
 
 const asset = (id: string, duration = 10): Asset => ({ id, kind: 'video', name: `${id}.mp4`, src: `${id}.mp4`, duration, width: 1920, height: 1080, hasAudio: true })
@@ -49,6 +49,130 @@ describe('preview renderer', () => {
     expect(kinds).toContain('audio')
     expect(kinds).not.toContain('media')
     r.destroy()
+  })
+
+  it('keeps only the players near the playhead and makes the next ones ahead of time (EDT-9)', () => {
+    let p = createProject()
+    p = addAsset(p, asset('a', 600))
+    // 120 one-second clips of one long file on the main track
+    for (let i = 0; i < 120; i++) p = addItem(p, createVideoItem(p.assets.a, i, { in: i, duration: 1 }))
+    const created: HTMLAudioElement[] = []
+    const Orig = window.Audio
+    window.Audio = function () { const a = new Orig(); created.push(a); return a } as unknown as typeof Audio
+    try {
+      const { root, r } = preview(p)
+      r.setPlaying(true)
+      let most = 0
+      for (let t = 0; t < 120; t += 0.25) {
+        r.render(t)
+        const live = [...root.querySelectorAll('video')].filter((v) => v.getAttribute('src')).length
+        most = Math.max(most, live)
+        // the clip after next already has its player, parked on its first frame and hidden
+        if (t === 50) {
+          const next = mainTrack(p)!.items[52]
+          const wrap = root.querySelector(`[data-ps-layer="${next.id}"]`) as HTMLElement
+          expect(wrap).not.toBeNull()
+          expect(wrap.style.display).toBe('none')
+          expect(wrap.querySelector('video')!.currentTime).toBe(52)
+        }
+      }
+      expect(most).toBeLessThanOrEqual(16)
+      // sound players too: every clip had one at some point, but few at once
+      const liveAudio = created.filter((a) => a.getAttribute('src')).length
+      expect(created.length).toBeGreaterThan(100)
+      expect(liveAudio).toBeLessThanOrEqual(16)
+      r.destroy()
+    } finally {
+      window.Audio = Orig
+    }
+  })
+
+  describe('volume above 100 % (EDT-16)', () => {
+    const gains: Array<{ gain: { value: number } }> = []
+    class FakeContext {
+      state = 'running'
+      destination = {}
+      createGain() {
+        const g = { gain: { value: 1 }, connect() {}, disconnect() {} }
+        gains.push(g)
+        return g
+      }
+      createMediaElementSource() {
+        return { connect: (n: unknown) => n }
+      }
+      resume() { return Promise.resolve() }
+      close() { return Promise.resolve() }
+    }
+    const loud = () => {
+      let p = createProject()
+      p = addAsset(p, { id: 'm', kind: 'audio', name: 'm.mp3', src: 'm.mp3', duration: 10 })
+      return addItem(p, createAudioItem(p.assets.m, 0, { volume: 1.5 }))
+    }
+    afterEach(() => {
+      delete (window as { AudioContext?: unknown }).AudioContext
+      gains.length = 0
+    })
+
+    it('plays through a gain node at the clip level, as the export does', () => {
+      ;(window as { AudioContext?: unknown }).AudioContext = FakeContext
+      const { root, r } = preview(loud())
+      r.render(1)
+      expect(gains).toHaveLength(1)
+      expect(gains[0].gain.value).toBe(1.5)
+      void root
+      r.destroy()
+    })
+
+    it("falls back to the element's own volume (at most 100 %) when the file can't be played through Web Audio", () => {
+      ;(window as { AudioContext?: unknown }).AudioContext = FakeContext
+      const created: HTMLAudioElement[] = []
+      const Orig = window.Audio
+      window.Audio = function () { const a = new Orig(); created.push(a); return a } as unknown as typeof Audio
+      try {
+        const { r } = preview(loud())
+        r.render(1)
+        expect(created[0].crossOrigin).toBe('anonymous')
+        // the bucket doesn't answer CORS: the routed element fails and a plain one takes over
+        created[0].dispatchEvent(new Event('error'))
+        r.render(1.1)
+        expect(created).toHaveLength(2)
+        expect(created[1].crossOrigin).toBeNull()
+        expect(created[1].volume).toBe(1)
+        r.destroy()
+      } finally {
+        window.Audio = Orig
+      }
+    })
+  })
+})
+
+describe('export volume (EDT-16)', () => {
+  const lanePoints = (html: string) => JSON.parse(html.match(/data-automation='([^']+)'/)![1]).lanes[0].points as Array<{ t: number; v: number }>
+  const compile = (p: Project) => compileToHyperFrames(p, { assetPath: (id) => `assets/${id}`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '' })
+  const music = () => {
+    let p = createProject()
+    p = addAsset(p, { id: 'm', kind: 'audio', name: 'm.mp3', src: 'm.mp3', duration: 10 })
+    return addItem(p, createAudioItem(p.assets.m, 0, { duration: 4 }))
+  }
+
+  it('a ramp from a base level of 0 is heard, at the levels its keyframes give', () => {
+    let p = music()
+    const id = p.tracks.find((t) => t.kind === 'audio')!.items[0].id
+    p = updateItem(p, id, { volume: 0 })
+    p = setKeyframe(p, id, 'volume', 0, 0, 'linear')
+    p = setKeyframe(p, id, 'volume', 2, 1, 'linear')
+    const pts = lanePoints(compile(p))
+    expect(pts[0].v).toBe(0)
+    expect(pts.find((x) => x.t === 1)!.v).toBeCloseTo(0.5, 3)
+    expect(pts.at(-1)!.v).toBe(1)
+  })
+
+  it('a fade on a clip at 50 % rises to 50 %, not 100 %', () => {
+    let p = music()
+    const id = p.tracks.find((t) => t.kind === 'audio')!.items[0].id
+    p = updateItem(p, id, { volume: 0.5, fadeIn: 1 })
+    const pts = lanePoints(compile(p))
+    expect(Math.max(...pts.map((x) => x.v))).toBe(0.5)
   })
 })
 

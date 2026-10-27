@@ -2,7 +2,7 @@
 // attributes (HyperFrames owns decode/seek/mix); one paused GSAP timeline drives the bundled StageRenderer so every
 // frame is produced by the same evaluate() the editor preview uses.
 import { itemEnd, projectDuration } from './ops'
-import { exportVideoTiming } from './runtime'
+import { MAX_GAIN, exportVideoTiming } from './runtime'
 import type { AudioItem, Project, VideoItem } from './types'
 import { escapeHtml, round, safeColor, sampleKeyframes } from './util'
 
@@ -35,18 +35,22 @@ function attr(v: string | number): string {
   return escapeHtml(String(v))
 }
 
-/** Volume automation lane (clip-local seconds) from keyframes + fades, sampled at 10 Hz where needed. */
+/**
+ * Volume automation lane (clip-local seconds) from keyframes + fades, sampled at 10 Hz where needed. HyperFrames
+ * plays a lane's values as the gain itself, in place of data-volume: they are the clip's real level (as the preview
+ * hears it), not a multiple of its base volume.
+ */
 function volumeLane(it: AudioItem | VideoItem): string | undefined {
   const kf = it.keyframes?.volume
   if (!kf?.length && !it.fadeIn && !it.fadeOut) return undefined
   const pts: Array<{ t: number; v: number }> = []
   const step = 0.1
   for (let t = 0; t <= it.duration + 1e-6; t += step) {
-    let v = sampleKeyframes(kf, t, it.volume) / Math.max(0.0001, it.volume)
+    let v = sampleKeyframes(kf, t, it.volume)
     if (it.fadeIn > 0 && t < it.fadeIn) v *= t / it.fadeIn
     const rem = it.duration - t
     if (it.fadeOut > 0 && rem < it.fadeOut) v *= Math.max(0, rem) / it.fadeOut
-    pts.push({ t: round(t, 3), v: round(Math.max(0, v), 4) })
+    pts.push({ t: round(t, 3), v: round(Math.min(MAX_GAIN, Math.max(0, v)), 4) })
   }
   // drop collinear runs to keep the attribute small
   const out = pts.filter((p, i) => i === 0 || i === pts.length - 1 || !(pts[i - 1].v === p.v && pts[i + 1].v === p.v))
@@ -96,7 +100,7 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
           if (!it.muted && !track.muted && asset?.hasAudio !== false && !it.reverse) {
             const lane = volumeLane(it)
             audio.push(
-              `<audio id="a-${attr(it.id)}" src="${attr(opts.assetPath(it.assetId))}" data-start="${round(it.start, 4)}" data-duration="${round(it.duration, 4)}" data-media-start="${round(it.in, 4)}" data-volume="${round(Math.min(3.98, it.volume), 3)}" data-track-index="${100 + trackIndex}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane ? ` data-automation='${lane}'` : ''}></audio>`,
+              `<audio id="a-${attr(it.id)}" src="${attr(opts.assetPath(it.assetId))}" data-start="${round(it.start, 4)}" data-duration="${round(it.duration, 4)}" data-media-start="${round(it.in, 4)}" data-volume="${round(Math.min(MAX_GAIN, Math.max(0, it.volume)), 3)}" data-track-index="${100 + trackIndex}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane ? ` data-automation='${lane}'` : ''}></audio>`,
             )
           }
         }
@@ -117,7 +121,7 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
       if (it.type !== 'audio' || it.muted) continue
       const lane = volumeLane(it)
       audio.push(
-        `<audio id="a-${attr(it.id)}" src="${attr(opts.assetPath(it.assetId))}" data-start="${round(it.start, 4)}" data-duration="${round(it.duration, 4)}" data-media-start="${round(it.in, 4)}" data-volume="${round(Math.min(3.98, it.volume), 3)}" data-track-index="${audioTrack}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane ? ` data-automation='${lane}'` : ''}></audio>`,
+        `<audio id="a-${attr(it.id)}" src="${attr(opts.assetPath(it.assetId))}" data-start="${round(it.start, 4)}" data-duration="${round(it.duration, 4)}" data-media-start="${round(it.in, 4)}" data-volume="${round(Math.min(MAX_GAIN, Math.max(0, it.volume)), 3)}" data-track-index="${audioTrack}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane ? ` data-automation='${lane}'` : ''}></audio>`,
       )
     }
   }

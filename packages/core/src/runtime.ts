@@ -3,7 +3,7 @@
 // composition and HyperFrames owns their playback, the renderer only positions and styles them).
 import { evaluate, textBackgroundCss, textCss } from './evaluate'
 import { itemEnd, projectDuration } from './ops'
-import type { FrameLayer, Project, VideoItem } from './types'
+import type { FrameLayer, Item, Project, Track, VideoItem } from './types'
 import { cssNumber, escapeHtml, safeColor } from './util'
 
 /** `audio`: what the preview plays a clip's sound from (for a video, its small sound-only copy when there is one). */
@@ -29,6 +29,24 @@ interface LayerEl {
   lastStyle?: string
 }
 
+/** The loudest a clip plays (+12 dB), in the preview as in the export. */
+export const MAX_GAIN = 3.98
+
+interface Voice {
+  el: HTMLAudioElement
+  /** Web Audio gain the element plays through: levels above 100 % are heard as the export renders them. */
+  gain?: GainNode
+}
+
+/**
+ * Preview: a browser allows only so many media players at once (Chrome about 75), so a clip's players are made
+ * shortly before it plays and released once the playhead is well past or before it.
+ */
+const PRELOAD_AHEAD = 4
+const KEEP_BEHIND = 8
+/** How many upcoming video clips get their player ahead of time. */
+const PRELOAD_VIDEOS = 2
+
 const LAYER_BASE = 'position:absolute;transform-origin:50% 50%;will-change:transform,opacity;'
 const MEDIA_FILL = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;display:block'
 
@@ -37,15 +55,19 @@ export class StageRenderer {
   private project: Project
   private opts: RendererOptions
   private layers = new Map<string, LayerEl>()
-  private audioEls = new Map<string, HTMLAudioElement>()
+  private voices = new Map<string, Voice>()
+  /** undefined until the first sound; null where Web Audio isn't available. */
+  private audioCtx?: AudioContext | null
   private playing = false
   private rate = 1
   private waiting = new Set<string>()
+  private items = new Map<string, { item: Item; track: Track }>()
 
   constructor(root: HTMLElement, project: Project, opts: RendererOptions) {
     this.root = root
     this.project = project
     this.opts = opts
+    this.index()
     root.style.position = 'relative'
     root.style.overflow = 'hidden'
     root.style.background = safeColor(project.background, '#000000')
@@ -54,15 +76,15 @@ export class StageRenderer {
   setProject(p: Project) {
     this.project = p
     this.root.style.background = safeColor(p.background, '#000000')
+    this.index()
     // drop elements for items that no longer exist
-    const ids = new Set(p.tracks.flatMap((t) => t.items.map((i) => i.id)))
-    for (const [id, el] of this.layers) if (!ids.has(id)) this.removeLayer(id, el)
-    for (const [id, el] of this.audioEls)
-      if (!ids.has(id)) {
-        el.pause()
-        el.remove()
-        this.audioEls.delete(id)
-      }
+    for (const [id, el] of this.layers) if (!this.items.has(id)) this.removeLayer(id, el)
+    for (const id of [...this.voices.keys()]) if (!this.items.has(id)) this.dropVoice(id)
+  }
+
+  private index() {
+    this.items.clear()
+    for (const track of this.project.tracks) for (const item of track.items) this.items.set(item.id, { item, track })
   }
 
   get duration() {
@@ -75,8 +97,8 @@ export class StageRenderer {
     this.rate = rate
     if (!playing) {
       for (const el of this.layers.values()) if (el.content instanceof HTMLVideoElement) el.content.pause()
-      for (const a of this.audioEls.values()) a.pause()
-    }
+      for (const a of this.voices.values()) a.el.pause()
+    } else if (this.audioCtx?.state === 'suspended') void this.audioCtx.resume().catch(() => undefined)
   }
 
   render(t: number) {
@@ -93,23 +115,65 @@ export class StageRenderer {
         if (this.opts.mode === 'preview' && el.content instanceof HTMLVideoElement && !el.content.paused) el.content.pause()
       }
     }
-    if (this.opts.mode === 'preview') this.syncAudio(frame.audio, t)
+    if (this.opts.mode === 'preview') {
+      this.syncAudio(frame.audio, t)
+      this.releaseFar(t)
+      this.preloadAhead(t)
+    }
+  }
+
+  /** Whether an item's players are worth keeping at time t. */
+  private near(id: string, t: number): boolean {
+    const it = this.items.get(id)?.item
+    return !!it && t >= it.start - PRELOAD_AHEAD - 0.5 && t <= itemEnd(it) + KEEP_BEHIND
+  }
+
+  /** Preview: free the players of clips far from the playhead. */
+  private releaseFar(t: number) {
+    for (const [id, el] of this.layers) if (el.kind === 'video' && el.wrap.style.display === 'none' && !this.near(id, t)) this.removeLayer(id, el)
+    for (const [id, v] of [...this.voices]) if (v.el.paused && !this.near(id, t)) this.dropVoice(id)
+  }
+
+  /** Preview: make the players of the next clips before they start, parked on their first frame. */
+  private preloadAhead(t: number) {
+    const soon: VideoItem[] = []
+    for (const track of this.project.tracks) {
+      if (track.kind === 'audio') {
+        if (track.muted) continue
+        for (const it of track.items)
+          if (it.type === 'audio' && !it.muted && it.start > t && it.start - t <= PRELOAD_AHEAD && !this.voices.has(it.id)) this.createVoice(it.id, it.assetId).el.currentTime = it.in
+        continue
+      }
+      if (track.kind === 'caption') continue
+      for (const it of track.items) if (it.type === 'video' && it.start > t && it.start - t <= PRELOAD_AHEAD) soon.push(it)
+    }
+    soon.sort((a, b) => a.start - b.start)
+    for (const it of soon.slice(0, PRELOAD_VIDEOS)) {
+      const track = this.items.get(it.id)?.track
+      if (!this.layers.has(it.id) && !track?.hidden) {
+        const el = this.createLayer({ itemId: it.id, type: 'video', assetId: it.assetId } as FrameLayer)
+        el.wrap.style.display = 'none'
+        const v = el.content as HTMLVideoElement
+        v.currentTime = it.freezeAt ?? (it.reverse ? it.in + it.duration * it.speed : it.in)
+      }
+      const silent = it.muted || track?.muted || it.reverse || it.freezeAt !== undefined || this.project.assets[it.assetId]?.hasAudio === false
+      if (!silent && !this.voices.has(it.id)) this.createVoice(it.id, it.assetId).el.currentTime = it.in
+    }
   }
 
   destroy() {
     for (const [id, el] of this.layers) this.removeLayer(id, el)
-    for (const a of this.audioEls.values()) {
-      a.pause()
-      a.remove()
-    }
-    this.audioEls.clear()
+    for (const id of [...this.voices.keys()]) this.dropVoice(id)
+    void this.audioCtx?.close().catch(() => undefined)
+    this.audioCtx = undefined
   }
 
   private removeLayer(id: string, el: LayerEl) {
-    if (el.content instanceof HTMLVideoElement) {
-      el.content.pause()
-      if (this.opts.mode === 'preview') el.content.removeAttribute('src')
-    }
+    for (const m of [el.content, el.bgMedia])
+      if (m instanceof HTMLVideoElement) {
+        m.pause()
+        if (this.opts.mode === 'preview') release(m)
+      }
     if (this.opts.mode === 'preview') {
       el.wrap.remove()
       el.bg?.remove()
@@ -278,21 +342,78 @@ export class StageRenderer {
   }
 
   private findVideoItem(id: string): VideoItem | undefined {
-    for (const t of this.project.tracks) for (const i of t.items) if (i.id === id && i.type === 'video') return i
-    return undefined
+    const it = this.items.get(id)?.item
+    return it?.type === 'video' ? it : undefined
+  }
+
+  private context(): AudioContext | null {
+    if (this.audioCtx === undefined) {
+      const w = typeof window !== 'undefined' ? (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }) : undefined
+      const Ctx = w?.AudioContext ?? w?.webkitAudioContext
+      try {
+        this.audioCtx = Ctx ? new Ctx() : null
+      } catch {
+        this.audioCtx = null
+      }
+    }
+    return this.audioCtx
+  }
+
+  /**
+   * A clip's sound. Where Web Audio is available it plays through a gain node, so 150 % sounds like the export's
+   * 150 % (an element's own volume stops at 100 %). That needs the file to answer CORS; if it doesn't, the element
+   * fails and is replaced by a plain one, which plays at most at 100 %.
+   */
+  private createVoice(itemId: string, assetId: string, plain = false): Voice {
+    const url = this.opts.resolveUrl(assetId, 'audio')
+    const el = new Audio()
+    el.preload = 'auto'
+    const ctx = plain ? null : this.context()
+    const voice: Voice = { el }
+    if (ctx) {
+      try {
+        el.crossOrigin = 'anonymous'
+        const gain = ctx.createGain()
+        ctx.createMediaElementSource(el).connect(gain)
+        gain.connect(ctx.destination)
+        voice.gain = gain
+        el.addEventListener('error', () => this.voices.get(itemId) === voice && this.replaceVoice(itemId, assetId), { once: true })
+      } catch {
+        el.removeAttribute('crossorigin')
+      }
+    }
+    el.src = url
+    this.voices.set(itemId, voice)
+    return voice
+  }
+
+  private replaceVoice(itemId: string, assetId: string) {
+    const was = this.voices.get(itemId)
+    this.dropVoice(itemId)
+    const v = this.createVoice(itemId, assetId, true)
+    if (was) v.el.currentTime = was.el.currentTime
+  }
+
+  private dropVoice(itemId: string) {
+    const v = this.voices.get(itemId)
+    if (!v) return
+    v.el.pause()
+    release(v.el)
+    v.gain?.disconnect()
+    this.voices.delete(itemId)
   }
 
   private syncAudio(levels: ReturnType<typeof evaluate>['audio'], t: number) {
     const active = new Set<string>()
     for (const a of levels) {
       active.add(a.itemId)
-      let el = this.audioEls.get(a.itemId)
-      if (!el) {
-        el = new Audio(this.opts.resolveUrl(a.assetId, 'audio'))
-        el.preload = 'auto'
-        this.audioEls.set(a.itemId, el)
-      }
-      el.volume = Math.min(1, Math.max(0, a.volume))
+      const voice = this.voices.get(a.itemId) ?? this.createVoice(a.itemId, a.assetId)
+      const el = voice.el
+      const level = Math.min(MAX_GAIN, Math.max(0, a.volume))
+      if (voice.gain) {
+        if (Math.abs(voice.gain.gain.value - level) > 1e-4) voice.gain.gain.value = level
+        if (el.volume !== 1) el.volume = 1
+      } else el.volume = Math.min(1, level)
       if (this.playing) {
         const rate = Math.min(16, Math.max(0.0625, a.speed * this.rate))
         if (Math.abs(el.playbackRate - rate) > 0.001) el.playbackRate = rate
@@ -300,7 +421,7 @@ export class StageRenderer {
         if (el.paused) void el.play().catch(() => undefined)
       } else if (!el.paused) el.pause()
     }
-    for (const [id, el] of this.audioEls) if (!active.has(id) && !el.paused) el.pause()
+    for (const [id, v] of this.voices) if (!active.has(id) && !v.el.paused) v.el.pause()
     void t
   }
 
@@ -308,6 +429,16 @@ export class StageRenderer {
     if (on) this.waiting.add(id)
     else this.waiting.delete(id)
     this.opts.onBuffering?.(this.waiting.size > 0)
+  }
+}
+
+/** Free a media element's player: without its source (and a reload) the browser keeps the decoder. */
+function release(m: HTMLMediaElement) {
+  m.removeAttribute('src')
+  try {
+    m.load()
+  } catch {
+    /* nothing loaded */
   }
 }
 
