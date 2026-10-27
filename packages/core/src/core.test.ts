@@ -577,4 +577,51 @@ describe('freeze frames and reversed clips in the transcript (EDT-17)', () => {
     for (const [t, m] of [[0.5, 9.5], [4, 6], [8.4, 1.6], [8.6, 1.0], [9.5, 0.1]]) expect(frame(t)).toBeCloseTo(m, 3)
   })
 })
+describe('export pre-roll into a transition (EDT-3)', () => {
+  const opts = { assetPath: (id: string) => `assets/${id}.mp4`, reversedPath: (id: string) => `reversed/${id}.mp4`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '' }
+  function media(html: string, id: string, tag: 'video' | 'audio') {
+    const el = html.match(new RegExp(`<${tag} id="${tag[0]}-${id}"[^>]*>`))![0]
+    const num = (name: string) => Number(el.match(new RegExp(` ${name}="([-\\d.]+)"`))![1])
+    return { start: num('data-start'), duration: num('data-duration'), mediaStart: num('data-media-start') }
+  }
+  function crossfadeInto(over: Partial<VideoItem>) {
+    let p = twoClips()
+    const [a, b] = mainTrack(p)!.items.map((i) => i.id)
+    p = updateItem<VideoItem>(p, a, { transitionOut: { type: 'crossfade', duration: 1 } })
+    return { p: updateItem<VideoItem>(p, b, over), b }
+  }
+  /** The exported picture shows what the preview shows at every moment it is on screen. */
+  function expectMatchesPreview(p: Project, id: string, sourceAt: (fileTime: number) => number) {
+    const v = media(compileToHyperFrames(p, opts), id, 'video')
+    for (let t = v.start; t < v.start + v.duration; t += 0.1) {
+      const preview = evaluate(p, t).layers.find((l) => l.itemId === id)
+      if (preview) expect(sourceAt(v.mediaStart + (t - v.start))).toBeCloseTo(preview.mediaTime!, 2)
+    }
+    return v
+  }
+
+  it('plays a clip that starts at its source beginning in step with its own audio', () => {
+    const { p, b } = crossfadeInto({})
+    const html = compileToHyperFrames(p, opts)
+    const v = media(html, b, 'video')
+    const a = media(html, b, 'audio')
+    expect(v.mediaStart + (a.start - v.start)).toBeCloseTo(a.mediaStart, 4)
+    expectMatchesPreview(p, b, (f) => f)
+  })
+
+  it('pre-rolls only as much source as the clip has before its in-point', () => {
+    const short = crossfadeInto({ in: 0.2, duration: 5 })
+    expect(expectMatchesPreview(short.p, short.b, (f) => f)).toMatchObject({ start: 9.8, mediaStart: 0 })
+    const long = crossfadeInto({ in: 2, duration: 4 })
+    expect(expectMatchesPreview(long.p, long.b, (f) => f)).toMatchObject({ start: 9.5, mediaStart: 1.5 })
+  })
+
+  it('keeps a reversed clip in step with the preview', () => {
+    const { p, b } = crossfadeInto({ reverse: true })
+    const clip = findItem(p, b)!.item as VideoItem
+    // the reversed copy starts at the end of the clip's source range and runs backwards
+    const v = expectMatchesPreview(p, b, (f) => clip.in + clip.duration * clip.speed - f)
+    expect(v.start).toBe(10)
+  })
+})
 
