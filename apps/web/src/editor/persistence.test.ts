@@ -1,5 +1,5 @@
 import { createProject, updateProject } from '@producer/core'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
   project: vi.fn(),
@@ -93,6 +93,44 @@ describe('save + sync', () => {
     await onProjectEvent({ id: 'other', version: 99 })
     await onProjectEvent({ id: 'p1', version: 3 })
     expect(api.project).not.toHaveBeenCalled()
+    expect(S().saveState).toBe('saved')
+  })
+})
+
+describe('a save the server refuses', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('shows the real reason and stops pretending to retry', async () => {
+    vi.useFakeTimers()
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    api.saveProject.mockRejectedValueOnce(new HttpError(400, { error: 'Invalid project: name: Too big: expected string to have <=200 characters', code: 'invalid' }))
+    await flush()
+    expect(S().saveState).toBe('error')
+    expect(S().saveError).toMatchObject({ status: 400 })
+    expect(S().saveError?.message).toContain('expected string to have <=200 characters')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(api.saveProject).toHaveBeenCalledTimes(1)
+  })
+
+  it('an expired session is told apart, and saving resumes once signed in', async () => {
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    api.saveProject.mockRejectedValueOnce(new HttpError(401, { error: 'Not signed in', code: 'unauthorized' }))
+    await flush()
+    expect(S()).toMatchObject({ saveState: 'error', saveError: { status: 401 } })
+    api.saveProject.mockResolvedValueOnce({ version: 4, updatedAt: 1 })
+    await flush()
+    expect(S()).toMatchObject({ saveState: 'saved', version: 4, saveError: undefined })
+  })
+
+  it('a network failure is still "offline" and retries on its own', async () => {
+    vi.useFakeTimers()
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    api.saveProject.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    api.saveProject.mockResolvedValueOnce({ version: 4, updatedAt: 1 })
+    await flush()
+    expect(S().saveState).toBe('offline')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(api.saveProject).toHaveBeenCalledTimes(2)
     expect(S().saveState).toBe('saved')
   })
 })

@@ -1,12 +1,12 @@
 // The editor's saving against a small fake server: base versions, 409s and the live update every write sends.
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { createProject, type ProjectSummary } from '@producer/core'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { createProject, updateProject, type ProjectSummary } from '@producer/core'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpError, api } from '../../lib/api'
-import { flush, onProjectEvent } from '../persistence'
+import { flush, onProjectEvent, startAutosave } from '../persistence'
 import { useEditor } from '../store'
-import { TopBar } from '../TopBar'
+import { SaveErrorBanner, TopBar } from '../TopBar'
 
 const S = () => useEditor.getState()
 
@@ -30,12 +30,63 @@ function fakeServer(version: number) {
   return server
 }
 
+let stopAutosave: () => void
 beforeEach(() => {
   S().load({ project: createProject({ id: 'p1', name: 'First name' }), version: 3, projectId: 'p1', demo: false, workspaceId: 'w1' })
+  stopAutosave = startAutosave()
 })
 afterEach(() => {
+  stopAutosave()
   cleanup()
   vi.restoreAllMocks()
+})
+
+describe('a save the server refuses', () => {
+  it('says why, offers "Sign in again" after a sign-out, and saves once signed back in', async () => {
+    const save = vi.spyOn(api, 'saveProject').mockRejectedValueOnce(new HttpError(401, { error: 'Not signed in', code: 'unauthorized' }))
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    render(<MemoryRouter><TopBar /><SaveErrorBanner /></MemoryRouter>)
+    S().commit(updateProject(S().project, { name: 'Edited' }), 'Rename project')
+    await act(() => flush())
+    expect(screen.getByText('Not saved')).toBeTruthy()
+    expect(screen.queryByText('Offline')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toMatch(/signed out/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+    expect(open).toHaveBeenCalledWith('/login', '_blank')
+    // back in this tab after signing in: the edit saves
+    save.mockResolvedValueOnce({ version: 4, updatedAt: 1 })
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      await flush()
+    })
+    expect(S().saveState).toBe('saved')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('shows the server’s reason for any other refusal, with Try again', async () => {
+    const save = vi.spyOn(api, 'saveProject').mockRejectedValueOnce(new HttpError(413, { error: 'Request body too large', code: 'invalid' }))
+    render(<MemoryRouter><SaveErrorBanner /></MemoryRouter>)
+    S().commit(updateProject(S().project, { name: 'Edited' }), 'Rename project')
+    await act(() => flush())
+    expect(screen.getByRole('alert').textContent).toMatch(/too large/i)
+    expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull()
+    save.mockResolvedValueOnce({ version: 4, updatedAt: 1 })
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Try again' })))
+    await act(() => flush())
+    expect(S().saveState).toBe('saved')
+  })
+
+  it('keeps project names to the 200 characters the server takes', async () => {
+    fakeServer(3)
+    render(<MemoryRouter><TopBar /></MemoryRouter>)
+    const input = screen.getByLabelText('Project name') as HTMLInputElement
+    expect(input.maxLength).toBe(200)
+    fireEvent.change(input, { target: { value: 'x'.repeat(300) } })
+    fireEvent.blur(input)
+    expect(S().project.name).toHaveLength(200)
+    await flush()
+    expect(S().saveState).toBe('saved')
+  })
 })
 
 describe('renaming in the top bar', () => {

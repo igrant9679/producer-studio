@@ -1,6 +1,7 @@
 // Loading, autosave and multi-replica sync. Server projects: debounce 1.2 s -> PUT with baseVersion;
-// 409 -> conflict banner (reload theirs / overwrite / keep both). SSE `project` events from other clients or the
-// desktop sync engine reload silently when there are no local edits. Demo: localStorage, no network.
+// 409 -> conflict banner (reload theirs / overwrite / keep both); other 4xx -> "Not saved" with the server's reason;
+// unreachable -> offline, retried every 5 s. SSE `project` events from other clients or the desktop sync engine
+// reload silently when there are no local edits. Demo: localStorage, no network.
 import type { Project } from '@producer/core'
 import { projectDuration } from '@producer/core'
 import { HttpError, api } from '../lib/api'
@@ -49,22 +50,32 @@ async function saveNow(force = false): Promise<void> {
     // another project, or this one again, was opened meanwhile: its own load and live updates are what count
     if (now.session !== session) return
     const changed = now.project !== project
-    useEditor.setState({ version: r.version, conflictVersion: undefined, conflictProject: undefined, saveState: changed ? 'dirty' : 'saved' })
+    useEditor.setState({ version: r.version, conflictVersion: undefined, conflictProject: undefined, saveError: undefined, saveState: changed ? 'dirty' : 'saved' })
     if (changed) schedule()
   } catch (e) {
     if (useEditor.getState().session !== session) return
     if (e instanceof HttpError && e.status === 409) {
       const d = (e.body.details ?? {}) as { version?: number; project?: Project }
       useEditor.setState({ saveState: 'conflict', conflictVersion: d.version, conflictProject: d.project })
-    } else if (e instanceof HttpError && e.status < 500 && e.status !== 408) {
-      // a request the server rejects (401/403/413…) won't succeed on retry
-      useEditor.setState({ saveState: 'offline' })
+    } else if (e instanceof HttpError && e.status < 500 && e.status !== 408 && e.status !== 429) {
+      // refused (signed out, no access, invalid, too large): the same request won't succeed on retry, so say why.
+      // The next edit, "Try again" or coming back to the tab tries again.
+      useEditor.setState({ saveState: 'error', saveError: { status: e.status, message: refusalMessage(e) } })
     } else {
       useEditor.setState({ saveState: 'offline' })
       clearTimeout(timer)
       timer = setTimeout(() => void flush(), 5000)
     }
   }
+}
+
+/** A refused save in words. */
+function refusalMessage(e: HttpError): string {
+  if (e.status === 401) return 'You were signed out, so your changes aren’t being saved. Sign in again and they’ll save from here.'
+  if (e.status === 403) return 'You can no longer edit this project (your role in this space may have changed). Your changes are only in this tab.'
+  if (e.status === 404) return 'This project no longer exists on the server. Your changes are only in this tab.'
+  if (e.status === 413) return 'This project is too large to save. Remove some captions, clips or tracks and try again.'
+  return `The server refused this version: ${e.message}`
 }
 
 function schedule() {
@@ -97,6 +108,7 @@ function adoptServerDoc(project: Project, version: number) {
     project,
     version,
     saveState: 'saved',
+    saveError: undefined,
     conflictVersion: undefined,
     conflictProject: undefined,
     history: { past: [], future: [] },
@@ -182,15 +194,21 @@ export function startAutosave(): () => void {
       if (st.loaded) saveDemoProject(st.project)
       return
     }
-    if (st.saveState === 'dirty' || st.saveState === 'saving' || st.saveState === 'offline' || st.saveState === 'conflict') {
+    if (st.saveState !== 'saved') {
       e.preventDefault()
       e.returnValue = ''
     }
   }
+  // back from signing in (or fixing access) in another tab: try the refused save again
+  const onFocus = () => {
+    if (useEditor.getState().saveState === 'error') void flush()
+  }
   window.addEventListener('beforeunload', beforeUnload)
+  window.addEventListener('focus', onFocus)
   return () => {
     unsub()
     clearTimeout(timer)
     window.removeEventListener('beforeunload', beforeUnload)
+    window.removeEventListener('focus', onFocus)
   }
 }

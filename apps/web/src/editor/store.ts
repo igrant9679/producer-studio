@@ -3,7 +3,8 @@
 import type { Item, Project } from '@producer/core'
 import { create } from 'zustand'
 
-export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict'
+/** `offline`: the server couldn't be reached (retries on its own). `error`: the server refused the save (see saveError). */
+export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'error'
 export type LeftTab = 'media' | 'audio' | 'text' | 'captions' | 'transcript' | 'effects' | 'transitions' | 'filters' | 'brand' | 'ai'
 export type CanvasTool = 'select' | 'hand'
 
@@ -14,6 +15,8 @@ export interface HistoryEntry {
 }
 
 export const HISTORY_CAP = 200
+/** The longest project name the server accepts. */
+export const PROJECT_NAME_MAX = 200
 /** Commits with the same coalesce key within this window merge into one undo entry. */
 export const COALESCE_MS = 1200
 
@@ -48,6 +51,8 @@ export interface EditorState {
   leftCollapsed: boolean
   rightCollapsed: boolean
   saveState: SaveState
+  /** Why the last save was refused (HTTP status and a sentence for the person), while saveState is 'error'. */
+  saveError?: { status: number; message: string }
   /** On a 409 (or a newer server version while we have unsaved edits): the other replica's version/doc. */
   conflictVersion?: number
   conflictProject?: Project
@@ -144,6 +149,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       playhead: 0,
       playing: false,
       saveState: 'saved',
+      saveError: undefined,
       conflictVersion: undefined,
       conflictProject: undefined,
     }),

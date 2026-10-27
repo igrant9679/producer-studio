@@ -31,7 +31,7 @@ import * as A from './actions'
 import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
 import { resetDemoProject } from './demo'
 import { thumbUrl } from './media'
-import { useEditor } from './store'
+import { PROJECT_NAME_MAX, useEditor } from './store'
 import { timecode } from './timelineMath'
 
 const BLENDS: BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion']
@@ -191,7 +191,7 @@ function ProjectTab({ project }: { project: Project }) {
     <>
       <Section title="Project">
         <Field label="Name">
-          <input className="ed-input" defaultValue={project.name} key={project.name} onBlur={(e) => e.target.value !== project.name && commit(updateProject(project, { name: e.target.value || 'Untitled project' }), 'Rename project')} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+          <input className="ed-input" defaultValue={project.name} key={project.name} maxLength={PROJECT_NAME_MAX} onBlur={(e) => e.target.value !== project.name && commit(updateProject(project, { name: e.target.value || 'Untitled project' }), 'Rename project')} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
         </Field>
         <CanvasSizeFields project={project} />
         <Field label="Frame rate">

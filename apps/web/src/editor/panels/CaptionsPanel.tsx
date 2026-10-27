@@ -6,6 +6,7 @@ import { Download, FileUp, Loader2, Plus, Subtitles, Trash2, Wand2 } from 'lucid
 import { useRef, useState } from 'react'
 import { api, waitForJob } from '../../lib/api'
 import { toast, toastError } from '../../lib/toast'
+import { captionsAtLeastOneFrame } from '../actions'
 import { Empty } from '../controls'
 import { CaptionStyleEditor } from '../PropertiesPanel'
 import { useEditor } from '../store'
@@ -46,7 +47,7 @@ export function CaptionsPanel() {
       }
       setBusy('Building captions…')
       const style = track?.captionStyle ?? captionStyleFromPreset('clean')
-      const next = generateCaptions(p, { style })
+      const next = captionsAtLeastOneFrame(generateCaptions(p, { style }))
       const n = next.tracks.find((t) => t.kind === 'caption')?.items.length ?? 0
       if (!n) {
         toast('No speech found to caption')
@@ -80,7 +81,7 @@ export function CaptionsPanel() {
     const text = await f.text()
     const s = useEditor.getState()
     const style = track?.captionStyle
-    let p = importSrt(s.project, text)
+    let p = captionsAtLeastOneFrame(importSrt(s.project, text))
     if (style) {
       p = clone(p)
       const ct = p.tracks.find((t) => t.kind === 'caption')

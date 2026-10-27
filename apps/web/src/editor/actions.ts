@@ -247,3 +247,16 @@ export function demoBlocked(what = 'AI and export'): boolean {
   }
   return false
 }
+
+/**
+ * Captions last at least one frame. Generated lines that start together can come out zero-length, and the server
+ * refuses a zero-length item, which would fail every later save. Returns `p` itself when nothing is shorter.
+ */
+export function captionsAtLeastOneFrame(p: Project): Project {
+  const frame = 1 / p.fps
+  const short = (i: Item) => i.type === 'caption' && !(i.duration >= frame)
+  if (!p.tracks.some((t) => t.items.some(short))) return p
+  const next = clone(p)
+  for (const t of next.tracks) for (const i of t.items) if (short(i)) i.duration = frame
+  return next
+}
