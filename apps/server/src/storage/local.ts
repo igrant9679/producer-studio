@@ -74,8 +74,11 @@ export class LocalStorage implements Storage {
     try {
       const st = await fsp.stat(this.localPath(key))
       return st.isFile() ? { size: st.size, mtimeMs: st.mtimeMs } : null
-    } catch {
-      return null
+    } catch (err) {
+      // a missing file is null; a folder the server may not read (EACCES, EIO) is an error to report
+      const code = (err as NodeJS.ErrnoException).code
+      if (!code || code === 'ENOENT' || code === 'ENOTDIR') return null
+      throw err
     }
   }
 

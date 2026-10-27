@@ -3,9 +3,11 @@ import { Readable } from 'node:stream'
 import type { Context } from 'hono'
 import { ctx } from '../context'
 import { HttpError, notFound } from '../http'
+import { log } from '../log'
 import { SVG_MIME, isMediaMime } from '../services/assets'
+import { describeStorageError } from '../services/storage-health'
 
-export type Variant = 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio'
+export type Variant = 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' | 'waveform'
 
 export interface ServeTarget {
   key: string
@@ -35,10 +37,17 @@ export function parseRange(header: string | undefined, size: number): { start: n
   return { start, end }
 }
 
-/** `inline` or `attachment` with an ASCII fallback + RFC 5987 UTF-8 name (header values must be Latin-1). */
+/**
+ * `inline` or `attachment` with an ASCII fallback + RFC 5987 UTF-8 name (header values must be Latin-1). Local storage
+ * sends it as a header and S3 as the signed URL's response-content-disposition, so both name a download alike.
+ * encodeURIComponent leaves ' ( ) * ! as they are; in an RFC 5987 value they must be escaped too ("it's.mp4" would
+ * end the charset'language' prefix early).
+ */
 export function contentDisposition(kind: 'inline' | 'attachment', filename: string): string {
-  const ascii = filename.replace(/["\\\r\n]/g, '').replace(/[^\x20-\x7e]/g, '_')
-  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename.replace(/[\r\n]/g, ''))}`
+  const name = filename.replace(/[\r\n]/g, '')
+  const ascii = name.replace(/["\\]/g, '').replace(/[^\x20-\x7e]/g, '_')
+  const ext = encodeURIComponent(name).replace(/['()*!]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${ext}`
 }
 
 /**
@@ -60,7 +69,11 @@ export async function serveObject(c: Context, t: ServeTarget, opts: { cache?: st
     const url = await storage.presignGet(t.key, { expiresSec: 900, contentType: d.contentType, disposition: d.disposition })
     return c.redirect(url, 302)
   }
-  const st = await storage.stat(t.key)
+  const st = await storage.stat(t.key).catch((err) => {
+    // storage that can't be read is not a missing file: say what is wrong
+    log.warn('media: storage stat failed', { key: t.key, err })
+    throw new HttpError(503, 'server', describeStorageError(err))
+  })
   if (!st) throw notFound('Media not available')
   const headers = new Headers({
     'Content-Type': d.contentType,
@@ -101,6 +114,6 @@ export async function serveObject(c: Context, t: ServeTarget, opts: { cache?: st
 }
 
 export function assertVariant(v: string): Variant {
-  if (!['source', 'proxy', 'thumb', 'filmstrip', 'audio'].includes(v)) throw new HttpError(400, 'invalid', `Unknown media variant "${v}"`)
+  if (!['source', 'proxy', 'thumb', 'filmstrip', 'audio', 'waveform'].includes(v)) throw new HttpError(400, 'invalid', `Unknown media variant "${v}"`)
   return v as Variant
 }

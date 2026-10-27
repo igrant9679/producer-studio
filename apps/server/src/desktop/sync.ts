@@ -711,6 +711,9 @@ export class SyncEngine {
       hasAudio: a.hasAudio,
       filmstrip: a.filmstrip ? { frames: a.filmstrip.frames, frameWidth: a.filmstrip.frameWidth, frameHeight: a.filmstrip.frameHeight } : undefined,
       waveform: a.waveform,
+      // a long clip's record carries a shortened waveform; the full one is fetched from the cloud when zoomed into
+      waveformRate: a.waveformRate,
+      waveformFull: a.waveformSrc ? true : undefined,
       transcript: a.transcript,
       silences: a.silences,
     }
@@ -724,7 +727,8 @@ export class SyncEngine {
       origin: rec.origin,
       error: rec.error ?? null,
       sourceKey: row?.sourceKey ?? `${prefix}/source${extFor(a.name, a.mime ?? '')}`,
-      proxyKey: a.proxySrc ? (row?.proxyKey ?? `${prefix}/proxy.mp4`) : null,
+      // a picture's proxy is a PNG (a TIFF's copy): the export names its file by this key's extension
+      proxyKey: a.proxySrc ? (row?.proxyKey ?? `${prefix}/${a.kind === 'image' ? 'display.png' : 'proxy.mp4'}`) : null,
       thumbKey: a.thumbnail ? (row?.thumbKey ?? `${prefix}/thumb.jpg`) : null,
       filmstripKey: a.filmstrip ? (row?.filmstripKey ?? `${prefix}/filmstrip.jpg`) : null,
       audioKey: null,

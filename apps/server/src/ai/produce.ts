@@ -252,7 +252,9 @@ export async function produceScript(jc: JobContext): Promise<{ script: { scenes:
       const r = rows[i]
       if (r.kind === 'image') continue
       const sub = subContext(jc, (i / rows.length) * 0.45, ((i + 1) / rows.length) * 0.45, `Transcribing ${r.name}`)
-      transcripts.set(r.id, r.meta?.transcript ?? (whisperAvailable() ? await ensureTranscript(r.id, sub) : { language: 'en', engine: 'none', segments: [] }))
+      // a recording with no sound (a screen capture without a microphone) is footage only: nothing to transcribe
+      const hear = r.meta?.hasAudio !== false && whisperAvailable()
+      transcripts.set(r.id, r.meta?.transcript ?? (hear ? await ensureTranscript(r.id, sub) : { language: 'en', engine: 'none', segments: [] }))
       jc.check()
     }
     // 2. contact sheets (≤ 3 images)

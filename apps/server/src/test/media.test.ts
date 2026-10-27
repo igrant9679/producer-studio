@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { ctx } from '../context'
 import { parseRange } from '../media/serve'
 import { setup, signup, type Client, type TestEnv } from './helpers'
 
@@ -58,6 +59,16 @@ describe('media Range requests', () => {
     expect((await client.req('GET', `/api/media/${assetId}/proxy`, undefined, { range: 'bytes=0-9' })).status).toBe(206)
     expect((await client.req('GET', `/api/media/${assetId}/filmstrip`)).status).toBe(404)
     expect((await client.req('GET', `/api/media/${assetId}/bogus`)).status).toBe(400)
+  })
+
+  it('storage that refuses a read answers 503 with the reason, not 404 (PIP-26)', async () => {
+    const stat = vi.spyOn(ctx().storage, 'stat').mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied, stat '/data/x'"), { code: 'EACCES' }))
+    const res = await client.json('GET', `/api/media/${assetId}/source`)
+    expect(stat).toHaveBeenCalled()
+    expect(res.status).toBe(503)
+    expect(res.body.error).toMatch(/Local storage can't be used \(EACCES\)/)
+    expect(res.body.error).not.toMatch(/\/data/)
+    stat.mockRestore()
   })
 
   it('parseRange edge cases', () => {

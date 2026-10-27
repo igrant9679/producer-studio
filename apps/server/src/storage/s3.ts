@@ -15,6 +15,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import type { Config } from '../config'
+import { isStorageNotFound } from './errors'
 import { type Storage, UploadTooLargeError } from './index'
 
 /**
@@ -121,8 +122,10 @@ export class S3Storage implements Storage {
     try {
       const res = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }))
       return { size: Number(res.ContentLength ?? 0), mtimeMs: res.LastModified?.getTime() ?? 0 }
-    } catch {
-      return null
+    } catch (err) {
+      // only a 404 is "not there": a revoked key or an unreachable bucket must not read as a missing file
+      if (isStorageNotFound(err)) return null
+      throw err
     }
   }
 

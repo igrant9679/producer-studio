@@ -94,6 +94,24 @@ describe('stuck clips', () => {
     expect((await statusOf(voiceover)).status).toBe('processing')
   })
 
+  it('on a desktop, leaves a clip synced from the cloud alone: the cloud processes it (PIP-27)', async () => {
+    const now = Date.now()
+    const { ensureDesktopTables, putSync } = await import('../desktop/db')
+    await ensureDesktopTables()
+    const fromCloud = await asset('processing', now - 40 * 60_000)
+    await putSync('asset', fromCloud, { remote: true })
+    const local = await asset('processing', now - 40 * 60_000)
+    const mode = ctx().config.mode
+    ctx().config.mode = 'desktop'
+    try {
+      await reconcileAssets(now)
+    } finally {
+      ctx().config.mode = mode
+    }
+    expect((await statusOf(fromCloud)).status).toBe('processing')
+    expect(await statusOf(local)).toMatchObject({ status: 'error', error: ASSET_ERRORS.neverStarted })
+  })
+
   it('fails a clip made inside another job (a Producer AI voice) once that job has ended without finishing it', async () => {
     const now = Date.now()
     const parent = await enqueue('ai.produce.assemble', { projectId: 'p_rec' }, { workspaceId: WS, userId: USER })

@@ -4,7 +4,8 @@ import path from 'node:path'
 import type { Transcript, TranscriptSegment } from '@producer/core'
 import { ctx } from '../context'
 import { ffmpeg, runOk } from '../media/proc'
-import { HttpError } from '../http'
+import { probe } from '../media/process'
+import { HttpError, invalid } from '../http'
 
 interface WhisperToken {
   text: string
@@ -19,6 +20,41 @@ interface WhisperSegment {
 export function whisperAvailable(): boolean {
   const { whisperCli, whisperModel } = ctx().config
   return Boolean(whisperCli && whisperModel && fs.existsSync(whisperCli) && fs.existsSync(whisperModel))
+}
+
+/** whisper.cpp's `-l` codes. */
+const WHISPER_LANGUAGES = new Set(
+  'en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue'.split(' '),
+)
+
+/** English-only models (ggml-small.en.bin, ggml-base.en-q5_1.bin) hear every language as English: they ignore `-l`. */
+export function whisperMultilingual(model = ctx().config.whisperModel ?? ''): boolean {
+  return !/\.en(?:[._-]|$)/i.test(path.basename(model).replace(/\.bin$/i, ''))
+}
+
+function languageName(code: string): string {
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
+/**
+ * The `-l` value for a requested language ("fr", "pt-BR", "auto" or nothing). Nothing asked for is auto-detect on a
+ * multilingual model and English on an English-only one; a language the model can't hear is refused in words, not
+ * transcribed as English gibberish.
+ */
+export function whisperLanguage(requested: string | undefined, model?: string): string {
+  const multi = whisperMultilingual(model)
+  const code = (requested ?? '').trim().toLowerCase().split(/[-_]/)[0]
+  if (!code || code === 'auto') return multi ? 'auto' : 'en'
+  if (!WHISPER_LANGUAGES.has(code)) throw invalid(`Transcription doesn't support the language "${requested}".`)
+  if (code !== 'en' && !multi)
+    throw invalid(
+      `Transcription on this server only understands English, so it can't transcribe ${languageName(code)}. Transcribe in English, or install a multilingual Whisper model on the server (WHISPER_MODEL, e.g. ggml-small.bin).`,
+    )
+  return code
 }
 
 /** Map whisper.cpp `-ojf` output to the core Transcript shape. */
@@ -52,7 +88,10 @@ export function mapWhisperJson(data: { transcription?: WhisperSegment[]; result?
 export async function transcribeFile(file: string, opts: { language?: string; workDir: string; signal?: AbortSignal; progress?: (f: number) => void }): Promise<Transcript> {
   const cfg = ctx().config
   if (!whisperAvailable()) throw new HttpError(503, 'server', 'Transcription is not configured on this server (set WHISPER_CLI and WHISPER_MODEL)')
-  const lang = opts.language || 'en'
+  const lang = whisperLanguage(opts.language, cfg.whisperModel)
+  // a screen recording without a microphone has nothing to hear (ffmpeg would fail to extract audio from it)
+  const info = await probe(file, opts.signal).catch(() => undefined)
+  if (info && !info.hasAudio) return silentTranscript(lang)
   const wav = path.join(opts.workDir, 'speech-16k.wav')
   await ffmpeg(['-i', file, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], { signal: opts.signal })
   const base = path.join(opts.workDir, 'whisper')
@@ -70,5 +109,10 @@ export async function transcribeFile(file: string, opts: { language?: string; wo
     'whisper.cpp',
   )
   const json = JSON.parse(fs.readFileSync(base + '.json', 'utf8'))
-  return mapWhisperJson(json, lang)
+  return mapWhisperJson(json, lang === 'auto' ? 'und' : lang)
+}
+
+/** The transcript of a clip with no sound: no speech, nothing to fail on. */
+export function silentTranscript(language = 'en'): Transcript {
+  return { language: language === 'auto' ? 'und' : language, engine: 'whisper.cpp', segments: [] }
 }

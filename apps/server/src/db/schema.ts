@@ -86,6 +86,10 @@ export interface AssetMeta {
   hasAudio?: boolean
   filmstrip?: { frames: number; frameWidth: number; frameHeight: number }
   waveform?: number[]
+  /** Peaks per second of `waveform` (absent: 50, the full rate). */
+  waveformRate?: number
+  /** The full 50/s waveform is stored as `waveform.bin` next to the clip (`waveform` is then a shortened copy). */
+  waveformFull?: boolean
   transcript?: import('@producer/core').Transcript
   silences?: Array<{ start: number; end: number }>
   tts?: { text: string; voice: string; speed: number }

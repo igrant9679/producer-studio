@@ -14,7 +14,7 @@ import { newId } from '../ids'
 import { emitJob } from '../jobs/queue'
 import { CancelledError, type JobContext } from '../jobs/worker'
 import { log } from '../log'
-import { probe } from '../media/process'
+import { probe, renderMediaKey, sdrStillArgs } from '../media/process'
 import { ffmpeg, run } from '../media/proc'
 import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAsset } from '../services/assets'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
@@ -139,7 +139,7 @@ export async function prepareRenderDir(
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
     opts.progress?.(i / Math.max(1, rows.length), `Gathering media (${i + 1}/${rows.length})`)
-    const key = opts.useProxy && r.kind === 'video' && r.proxyKey ? r.proxyKey : r.sourceKey
+    const key = renderMediaKey(r, opts.useProxy)
     const name = `${r.id}${path.extname(key) || '.bin'}`
     const dest = path.join(dir, 'assets', name)
     const src = await localSource(r, path.join(dir, '.dl'), key)
@@ -177,8 +177,9 @@ export async function prepareRenderDir(
       if (it.freezeAt !== undefined) {
         const out = `stills/${it.id}.png`
         fs.mkdirSync(path.join(dir, 'stills'), { recursive: true })
-        await ffmpeg(['-ss', String(Math.max(0, it.freezeAt)), '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
-        if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        const sdr = await sdrStillArgs(src, opts.signal) // an HDR clip's still is tone-mapped like its proxy
+        await ffmpeg(['-ss', String(Math.max(0, it.freezeAt)), '-i', src, ...sdr, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, ...sdr, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
         freeze.set(it.id, out)
         files.push(out)
       } else if (it.reverse && timing.reversed) {
