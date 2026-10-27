@@ -1,5 +1,6 @@
-// Child-process helpers: run with an AbortSignal (kills the process tree on cancel), capture output.
-import { spawn, type SpawnOptions } from 'node:child_process'
+// Child-process helpers: run with an AbortSignal (ends the process tree on cancel), capture output.
+import { execFileSync, spawn, type SpawnOptions } from 'node:child_process'
+import fs from 'node:fs'
 import { childEnv } from '../child-env'
 import { CancelledError } from '../jobs/worker'
 import { ctx } from '../context'
@@ -22,22 +23,90 @@ export interface RunOptions extends Pick<SpawnOptions, 'cwd' | 'env'> {
   input?: string
 }
 
-/** Kill a process and its children (taskkill /T on Windows, the process group elsewhere). */
-export function killTree(pid: number | undefined) {
-  if (!pid) return
-  if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => undefined)
-  } else {
-    try {
-      process.kill(-pid, 'SIGKILL')
-    } catch {
+/** How long a process gets to clean up (Chrome closing its pages, ffmpeg its file) between SIGTERM and SIGKILL. */
+export const KILL_GRACE_MS = 3000
+
+export interface KillSystem {
+  platform: NodeJS.Platform
+  kill(pid: number, signal: NodeJS.Signals): void
+  /** Every descendant of `pid`, whatever process group it moved to. */
+  descendants(pid: number): number[]
+  taskkill(pid: number): void
+}
+
+/** pid → parent pid for every process (Linux /proc, else `ps`). */
+function processTable(): Array<[number, number]> {
+  if (process.platform === 'linux') {
+    const rows: Array<[number, number]> = []
+    for (const d of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(d)) continue
       try {
-        process.kill(pid, 'SIGKILL')
+        // "pid (comm) state ppid ...": comm can hold spaces and parentheses
+        const stat = fs.readFileSync(`/proc/${d}/stat`, 'utf8')
+        rows.push([Number(d), Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1])])
+      } catch {
+        /* exited meanwhile */
+      }
+    }
+    return rows
+  }
+  return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' })
+    .split('\n')
+    .map((l) => l.trim().split(/\s+/).map(Number) as [number, number])
+    .filter(([pid, ppid]) => pid > 0 && ppid >= 0)
+}
+
+const realSystem: KillSystem = {
+  platform: process.platform,
+  kill: (pid, signal) => process.kill(pid, signal),
+  descendants(pid) {
+    let table: Array<[number, number]>
+    try {
+      table = processTable()
+    } catch {
+      return []
+    }
+    const out: number[] = []
+    const queue = [pid]
+    while (queue.length) {
+      const p = queue.shift()!
+      for (const [c, pp] of table) if (pp === p && !out.includes(c)) (out.push(c), queue.push(c))
+    }
+    return out
+  },
+  taskkill: (pid) => void spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => undefined),
+}
+
+/**
+ * End a process and everything it started. Windows (the desktop edition): taskkill /T. Elsewhere SIGTERM first, to
+ * the process group and to every descendant (Chrome and its ffmpeg run in process groups of their own, and a parent
+ * killed outright never closes them), then SIGKILL to all of them after `graceMs`.
+ */
+export function killTree(pid: number | undefined, graceMs = KILL_GRACE_MS, sys: KillSystem = realSystem) {
+  if (!pid) return
+  if (sys.platform === 'win32') return sys.taskkill(pid)
+  // read the tree before anything dies: an orphan is re-parented and can't be found from `pid` afterwards
+  const tree = new Set(sys.descendants(pid))
+  const signal = (sig: NodeJS.Signals) => {
+    try {
+      sys.kill(-pid, sig)
+    } catch {
+      /* the group is gone */
+    }
+    for (const p of [pid, ...tree]) {
+      try {
+        sys.kill(p, sig)
       } catch {
         /* gone */
       }
     }
   }
+  signal('SIGTERM')
+  const t = setTimeout(() => {
+    for (const p of sys.descendants(pid)) tree.add(p)
+    signal('SIGKILL')
+  }, graceMs)
+  t.unref?.()
 }
 
 export function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<RunResult> {
