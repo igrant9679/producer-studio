@@ -1,7 +1,7 @@
 // Transcript-based editing: words of the selected (or main-track) media, click to seek, select + Delete to cut,
 // remove filler words / pauses, search.
 import type { Item, Project, Transcript as TranscriptT, TranscriptWord } from '@producer/core'
-import { clone, cutSourceRanges, fillerWordRanges, findItem, itemWords, mainTrack, removeSilences } from '@producer/core'
+import { cutSourceRanges, fillerWordRanges, findItem, itemWords, mainTrack, removeSilences } from '@producer/core'
 import clsx from 'clsx'
 import { FileText, Loader2, Scissors, Search, Timer, Eraser } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -115,16 +115,12 @@ export function TranscriptPanel() {
   const transcribe = async () => {
     if (demo) return toast('Sign in to transcribe your own media — the demo clips already have transcripts.')
     try {
-      let p = useEditor.getState().project
       for (let i = 0; i < missingIds.length; i++) {
         setBusy(`Transcribing ${i + 1}/${missingIds.length}…`)
         const job = await api.transcribe(missingIds[i])
         const done = await waitForJob<{ assetId: string; transcript: TranscriptT }>(job.id)
-        if (done.result?.transcript) {
-          p = clone(useEditor.getState().project)
-          p.assets[missingIds[i]] = { ...p.assets[missingIds[i]], transcript: done.result.transcript }
-          useEditor.getState().commit(p, 'Transcribe')
-        }
+        // a media record, not an edit: undo never takes it away again
+        if (done.result?.transcript) useEditor.getState().updateMedia({ id: missingIds[i], transcript: done.result.transcript })
       }
     } catch (e) {
       toastError(e)

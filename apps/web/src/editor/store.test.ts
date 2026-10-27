@@ -1,4 +1,4 @@
-import { createProject, updateProject } from '@producer/core'
+import { addAsset, addItem, createProject, createVideoItem, updateProject, type Asset } from '@producer/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { COALESCE_MS, HISTORY_CAP, useEditor } from './store'
 
@@ -93,5 +93,49 @@ describe('editor store history', () => {
   it('identical project is a no-op', () => {
     S().commit(S().project, 'Nothing')
     expect(S().history.past).toHaveLength(0)
+  })
+})
+
+describe('media records and undo', () => {
+  const uploading: Asset = { id: 'as1', kind: 'video', name: 'clip.mp4', src: '/api/media/as1/source' }
+  const processed: Partial<Asset> = { duration: 12, proxySrc: '/api/media/as1/proxy', waveform: [0.1, 0.5], transcript: { language: 'en', engine: 'test', segments: [] } }
+
+  beforeEach(() => {
+    S().load({ project: addAsset(createProject({ id: 'p1', name: 'start' }), uploading), version: 1, projectId: 'p1', demo: false, workspaceId: 'w1' })
+  })
+
+  it('undo after processing finishes keeps the processed record', () => {
+    S().commit(addItem(S().project, createVideoItem(uploading, 0, { duration: 5 })), 'Add clip')
+    S().commit(named('renamed'), 'Rename')
+    S().updateMedia({ id: 'as1', ...processed })
+    expect(S().history.past).toHaveLength(2)
+    expect(S().saveState).toBe('dirty')
+    S().undo()
+    expect(S().project.name).toBe('start')
+    expect(S().project.assets.as1).toMatchObject(processed)
+    S().undo()
+    expect(S().project.assets.as1).toMatchObject(processed)
+    S().redo()
+    S().redo()
+    expect(S().project.name).toBe('renamed')
+    expect(S().project.assets.as1).toMatchObject(processed)
+  })
+
+  it('a record that arrives while its clip is undone away comes back fresh on redo', () => {
+    S().load({ project: createProject({ id: 'p1', name: 'start' }), version: 1, projectId: 'p1', demo: false, workspaceId: 'w1' })
+    S().commit(addItem(addAsset(S().project, uploading), createVideoItem(uploading, 0, { duration: 5 })), 'Add clip')
+    S().undo()
+    expect(S().project.assets.as1).toBeUndefined()
+    S().updateMedia({ id: 'as1', ...processed })
+    expect(S().project.assets.as1).toBeUndefined()
+    S().redo()
+    expect(S().project.assets.as1).toMatchObject(processed)
+  })
+
+  it('ignores records for clips this project never had', () => {
+    const before = S().project
+    S().updateMedia({ id: 'elsewhere', duration: 3 })
+    expect(S().project).toBe(before)
+    expect(S().media.elsewhere).toBeUndefined()
   })
 })

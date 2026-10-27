@@ -42,13 +42,8 @@ function upsertRecord(r: AssetRecord) {
   useLibrary.setState({
     uploads: useLibrary.getState().uploads.map((u) => (u.assetId === r.asset.id ? { ...u, status: r.status === 'uploading' ? 'processing' : r.status, error: r.error } : u)),
   })
-  // refresh metadata of assets already used in the project (waveform, filmstrip, transcript arrive later)
-  const s = useEditor.getState()
-  if (r.status === 'ready' && s.project.assets[r.asset.id]) {
-    const p = structuredClone(s.project)
-    p.assets[r.asset.id] = { ...p.assets[r.asset.id], ...r.asset }
-    s.replaceSilently(p)
-  }
+  // refresh metadata of assets the project uses (waveform, filmstrip, transcript arrive later), outside undo history
+  if (r.status === 'ready') useEditor.getState().updateMedia(r.asset)
 }
 
 export async function loadLibrary(workspaceId: string) {
