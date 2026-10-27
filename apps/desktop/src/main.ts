@@ -88,7 +88,11 @@ if (!app.requestSingleInstanceLock()) {
     w.webContents.on('did-navigate', onNav)
     w.webContents.on('did-navigate-in-page', onNav)
     w.on('closed', () => {
-      if (mainWin === w) mainWin = undefined
+      if (mainWin !== w) return
+      mainWin = undefined
+      // the app has no tray: closing its window quits it, even when the dictation widget (a window of its own) is
+      // still around; otherwise the engine, VoiceStudio and the shortcut would keep running unseen
+      if (!quitting) app.quit()
     })
     void w.loadURL(`${origin}/`)
     return w
@@ -295,7 +299,11 @@ if (!app.requestSingleInstanceLock()) {
   app.on('web-contents-created', (_e, wc) => hardenContents(wc))
 
   app.on('second-instance', () => {
-    if (!mainWin) return
+    // launched again while running: show the window, or open one if it was closed (never "nothing happens")
+    if (!mainWin) {
+      if (server?.running && !quitting) mainWin = createMain(server.origin)
+      return
+    }
     if (mainWin.isMinimized()) mainWin.restore()
     mainWin.focus()
   })
