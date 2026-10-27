@@ -514,7 +514,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
         continue
       }
     }
-    const v = await synthesizeToAsset({ workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, text: s.narration, voice: brief.voice, name: `${s.id} · ${s.title}` }, sub)
+    const v = await synthesizeToAsset({ workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, text: s.narration, voice: brief.voice, name: `${s.id} · ${s.title}`, jobId: jc.job.id }, sub)
     voices.set(s.id, { asset: v.asset.asset, duration: v.duration })
   }
   // 2. word timings for captions (whisper round trip, or an estimate)
@@ -583,7 +583,7 @@ async function makeSceneVisuals(
       }
       const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
       try {
-        const made = await makeOne(sub, { ...o, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work })
+        const made = await makeOne(sub, { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work })
         if (v.kind === 'aiVideo') clips++
         generated.set(s.id, made.asset)
         s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
@@ -603,7 +603,7 @@ async function makeSceneVisuals(
 
 async function makeOne(
   jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
-  o: { workspaceId: string; userId: string; projectId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: 'image' | 'stock' | 'aiVideo' }; ask: string; seconds: number; work: string },
+  o: { workspaceId: string; userId: string; projectId: string; jobId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: 'image' | 'stock' | 'aiVideo' }; ask: string; seconds: number; work: string },
 ): Promise<{ asset: Asset; credit?: { author: string; url: string } }> {
   const { kind } = o.visual
   let file: { file: string; mime: string; provider: string; model: string }
@@ -631,7 +631,7 @@ async function makeOne(
     mime: file.mime,
     kind: kind === 'image' ? 'image' : 'video',
     origin: kind === 'stock' ? 'stock' : 'ai',
-    meta: { generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}) } },
+    meta: { generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}) }, jobId: o.jobId },
   })
   jc.progress(0.85, 'Preparing it for the editor')
   const ready = await processAsset(row.id, jc)

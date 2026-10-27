@@ -9,7 +9,8 @@
 //
 // Only hard evidence fails a clip. Voiceovers and renders are created `processing` inside other jobs and a long
 // proxy encode is legitimately quiet, so there is no "quiet for N minutes" rule: an upload whose one-hour ticket
-// has long expired, or a processing clip whose latest asset.process job has ended after the clip last changed.
+// has long expired, a processing clip whose latest asset.process job has ended after the clip last changed, or a
+// clip made inside another job (its `meta.jobId`: Producer AI voices and visuals, voiceovers) once that job ended.
 import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import { ctx } from '../context'
 import { assets, jobs } from '../db/schema'
@@ -40,9 +41,19 @@ async function failAsset(id: string, from: Array<'uploading' | 'processing'>, er
   return Boolean(row)
 }
 
-/** A job that will never run again: if it was processing a clip, the clip has failed too. */
-export async function failAssetOfJob(job: { kind: string; input: unknown }, error: string): Promise<void> {
-  if (job.kind !== 'asset.process') return
+const parentJobOf = sql<string | null>`${assets.meta}->>'jobId'`
+
+/** A job that will never run again: if it was processing a clip (or still making some, as a parent job), they failed too. */
+export async function failAssetOfJob(job: { id: string; kind: string; input: unknown }, error: string): Promise<void> {
+  if (job.kind !== 'asset.process') {
+    const made = await ctx()
+      .db.select({ id: assets.id })
+      .from(assets)
+      .where(and(eq(assets.status, 'processing'), eq(parentJobOf, job.id)))
+      .catch((err) => (log.warn('could not find the clips of a job', { jobId: job.id, err }), []))
+    for (const a of made) await failAsset(a.id, ['processing'], error).catch((err) => log.warn('could not mark asset failed', { assetId: a.id, err }))
+    return
+  }
   const assetId = (job.input as { assetId?: unknown } | null)?.assetId
   if (typeof assetId !== 'string') return
   await failAsset(assetId, ['processing'], error).catch((err) => log.warn('could not mark asset failed', { assetId, err }))
@@ -68,7 +79,7 @@ export async function reconcileAssets(now = Date.now()): Promise<number> {
 
   // a minute of grace covers the gap between the complete route marking a clip processing and enqueueing its job
   const processing = await db
-    .select({ id: assets.id, origin: assets.origin, updatedAt: assets.updatedAt })
+    .select({ id: assets.id, origin: assets.origin, updatedAt: assets.updatedAt, parentJob: parentJobOf })
     .from(assets)
     .where(and(eq(assets.status, 'processing'), lt(assets.updatedAt, now - 60_000)))
     .limit(500)
@@ -83,8 +94,22 @@ export async function reconcileAssets(now = Date.now()): Promise<number> {
     const cur = latest.get(r.assetId)
     if (!cur || r.createdAt > cur.createdAt) latest.set(r.assetId, r)
   }
+  // voiceovers and Producer AI visuals are processed inside the job that made them (recorded on the clip)
+  const parentIds = [...new Set(processing.filter((a) => a.parentJob && !latest.has(a.id)).map((a) => a.parentJob!))]
+  const parents = new Map(
+    (parentIds.length ? await db.select({ id: jobs.id, status: jobs.status, updatedAt: jobs.updatedAt }).from(jobs).where(inArray(jobs.id, parentIds)) : []).map((j) => [j.id, j]),
+  )
   for (const a of processing) {
     const job = latest.get(a.id)
+    if (!job && a.parentJob) {
+      const parent = parents.get(a.parentJob)
+      if (parent && (parent.status === 'queued' || parent.status === 'running')) continue
+      // the clip changed after its job ended: a retry is on its way
+      if (parent && a.updatedAt > parent.updatedAt) continue
+      // the job ended (or is long gone) without finishing this clip: a crash mid-voice, say
+      if (await failAsset(a.id, ['processing'], parent?.status === 'cancelled' ? ASSET_ERRORS.cancelled : ASSET_ERRORS.endedWithoutResult)) n++
+      continue
+    }
     if (!job) {
       // uploads always get an asset.process job; voiceovers and renders are processed inside their own job
       if (a.origin === 'upload' && a.updatedAt < now - 30 * 60_000 && (await failAsset(a.id, ['processing'], ASSET_ERRORS.neverStarted))) n++

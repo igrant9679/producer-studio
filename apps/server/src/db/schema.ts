@@ -92,6 +92,9 @@ export interface AssetMeta {
   codec?: string
   /** Made for a scene of a video made from an idea: what was asked for (re-assembling reuses it while that's unchanged). */
   generated?: { kind: 'image' | 'stock' | 'aiVideo'; prompt: string; provider?: string; model?: string; credit?: { author: string; url: string } }
+  /** The job that made this clip and processes it inside itself (voiceovers, Producer AI visuals): once that job has
+   * ended, a clip still "processing" never will finish, and asset recovery fails it. */
+  jobId?: string
 }
 
 export const assets = pgTable('assets', {

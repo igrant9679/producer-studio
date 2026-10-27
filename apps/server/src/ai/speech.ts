@@ -46,6 +46,8 @@ export interface TtsInput {
   voice: string
   speed?: number
   name?: string
+  /** The job making this voice (recorded on the clip, so a crash can't leave it "processing" for good). */
+  jobId?: string
 }
 
 /** Synthesize narration → WAV → audio asset (origin 'tts'), processed inline for waveform. */
@@ -70,7 +72,7 @@ export async function synthesizeToAsset(input: TtsInput, jc: Step): Promise<{ as
       mime: 'audio/wav',
       kind: 'audio',
       origin: 'tts',
-      meta: { tts: { text: input.text, voice, speed }, duration: Math.round(r.duration * 1000) / 1000 },
+      meta: { tts: { text: input.text, voice, speed }, duration: Math.round(r.duration * 1000) / 1000, ...(input.jobId ? { jobId: input.jobId } : {}) },
     })
     jc.progress(0.8, 'Analysing audio')
     const row = await processAsset(created.id, { signal: jc.signal, check: jc.check, progress: () => undefined })

@@ -25,6 +25,8 @@ export interface ProfileTtsInput {
   voice: string
   speed?: number
   name?: string
+  /** The job making this voice, recorded on the clip (see AssetMeta.jobId). */
+  jobId?: string
 }
 
 const autoName = (text: string) => `Voiceover · ${text.replace(/\s+/g, ' ').slice(0, 40)}${text.length > 40 ? '…' : ''}`
@@ -100,7 +102,7 @@ export async function synthesizeProfileToAsset(input: ProfileTtsInput, jc: Step,
       mime: 'audio/wav',
       kind: 'audio',
       origin: 'tts',
-      meta: { tts: { text: input.text, voice: input.voice, speed: input.speed ?? 1 }, duration: Math.round(r.duration * 1000) / 1000 },
+      meta: { tts: { text: input.text, voice: input.voice, speed: input.speed ?? 1 }, duration: Math.round(r.duration * 1000) / 1000, ...(input.jobId ? { jobId: input.jobId } : {}) },
     })
     jc.progress(0.8, 'Analysing audio')
     const row = await processAsset(created.id, { signal: jc.signal, check: jc.check, progress: () => undefined })
