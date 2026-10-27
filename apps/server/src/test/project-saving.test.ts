@@ -23,6 +23,27 @@ function projectVersions(workspaceId: string, id: string): { versions: number[];
   return { versions, off }
 }
 
+describe('an editor save and the Producer AI draft', () => {
+  it('keeps the stored draft when an editor with an older copy saves over a conflict', async () => {
+    const { client, workspaceId } = await signup(t.app)
+    const created = (await client.json('POST', '/api/projects', { workspaceId, name: 'Wizard', kind: 'producer' })).body
+    const { project, version } = created
+    // the editor opened the project before the wizard saved a draft
+    const brief = { source: 'idea', idea: 'A short tour of the studio', title: 'Studio tour', voice: 'af_heart' }
+    const scenes = [{ id: 'sc_1', title: 'Welcome', headline: 'The studio', narration: 'Edited on the Review step.', footage: [] }]
+    const draft = await client.json('PUT', '/api/ai/produce/draft', { projectId: project.id, brief, scenes })
+    expect(draft.status).toBe(200)
+    // its save is refused, and "Keep mine" saves its copy again on the new version
+    const stale = { ...project, background: '#123456' }
+    expect((await client.json('PUT', `/api/projects/${project.id}`, { project: stale, baseVersion: version })).status).toBe(409)
+    expect((await client.json('PUT', `/api/projects/${project.id}`, { project: stale, baseVersion: draft.body.version })).status).toBe(200)
+    const got = (await client.json('GET', `/api/projects/${project.id}`)).body.project
+    expect(got.background).toBe('#123456')
+    expect(got.ai?.script?.scenes).toEqual(scenes)
+    expect(got.ai?.brief).toMatchObject({ idea: brief.idea })
+  })
+})
+
 describe('rename and autosave at the same moment', () => {
   it('keeps both the saved edit and the new name, with distinct versions, at every interleaving', async () => {
     const { client, workspaceId } = await signup(t.app)

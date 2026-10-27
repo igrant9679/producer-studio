@@ -125,6 +125,9 @@ projectRoutes.put('/:id', async (c) => {
   const b = await body(c, z.object({ project: z.unknown(), baseVersion: z.number().int() }))
   const doc = validateProject(b.project)
   if (doc.id !== id) throw invalid('project.id does not match the URL')
+  // Producer AI's draft and assembly record are written by the wizard and its jobs; an editor's copy of them can be
+  // older (a draft saved while the editor was open, then "Keep mine"), so a save keeps the stored ones
+  if (row.doc.ai) doc.ai = row.doc.ai
   const r = await saveProjectDoc(id, doc, b.baseVersion)
   return c.json({ version: r.version, updatedAt: r.updatedAt })
 })
