@@ -34,6 +34,7 @@ export function voiceProfileDto(r: VoiceProfileRow): VoiceProfile {
     createdBy: r.createdBy,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+    version: r.version,
   }
 }
 
@@ -97,7 +98,7 @@ voiceRoutes.patch('/profiles/:id', async (c) => {
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(80).optional(), description: z.string().max(2000).optional(), gender: z.string().max(20).optional(), language: z.string().max(60).optional() }))
   const [upd] = await ctx()
     .db.update(voiceProfiles)
-    .set({ ...b, updatedAt: Date.now() })
+    .set({ ...b, updatedAt: Date.now(), version: sql`${voiceProfiles.version} + 1` })
     .where(eq(voiceProfiles.id, row.id))
     .returning()
   await voicesChangedLocally()
@@ -129,6 +130,12 @@ const PushSchema = z.object({
   consent: z.object({ statement: z.string().max(2000), attestedBy: z.string().max(80), attestedAt: z.number(), speaker: z.string().max(120).optional() }),
   createdAt: z.number(),
   updatedAt: z.number(),
+  /**
+   * The version of the cloud copy this one was made from (0 for a voice the desktop hasn't pushed yet). A cloud copy
+   * changed since is refused (409, with that copy) so the desktop merges; without it (older desktops) the newer
+   * device timestamp wins.
+   */
+  baseVersion: z.number().int().min(0).optional(),
 })
 
 voiceRoutes.put('/profiles/:id', async (c) => {
@@ -141,18 +148,27 @@ voiceRoutes.put('/profiles/:id', async (c) => {
   if (cur && cur.workspaceId !== b.workspaceId) throw new HttpError(409, 'conflict', 'That voice belongs to another space')
   // only the computer that made the voice (or the person who made it) pushes changes to it
   if (cur && cur.deviceId !== deviceId && cur.createdBy !== userId) throw new HttpError(403, 'forbidden', 'Only the computer that made this voice can change it')
-  // timestamps from a device's clock can't be in the future, or a copy could pin itself as "newest" for good
   const now = Date.now()
-  const updatedAt = Math.min(b.updatedAt, now)
-  if (cur && cur.updatedAt >= updatedAt) return c.json(voiceProfileDto(cur)) // cloud copy is as new or newer
+  const stale = (r: VoiceProfileRow) => new HttpError(409, 'conflict', 'This voice was changed in the cloud since this computer last saw it', { version: r.version, profile: voiceProfileDto(r) })
+  if (cur && b.baseVersion !== undefined && b.baseVersion !== cur.version) throw stale(cur)
+  // older desktops: timestamps from a device's clock can't be in the future, or a copy could pin itself as "newest"
+  // for good. With a base version the time is ours.
+  const updatedAt = b.baseVersion !== undefined ? now : Math.min(b.updatedAt, now)
+  if (cur && b.baseVersion === undefined && cur.updatedAt >= updatedAt) return c.json(voiceProfileDto(cur)) // cloud copy is as new or newer
   const values = { workspaceId: b.workspaceId, name: b.name, kind: b.kind, engine: b.engine, language: b.language ?? null, gender: b.gender ?? null, description: b.description ?? null, updatedAt }
   // the consent record is written once, when the voice is created, and never replaced afterwards
   const [row] = cur
-    ? await ctx().db.update(voiceProfiles).set(values).where(eq(voiceProfiles.id, id)).returning()
+    ? await ctx()
+        .db.update(voiceProfiles)
+        .set({ ...values, version: cur.version + 1 })
+        .where(and(eq(voiceProfiles.id, id), eq(voiceProfiles.version, cur.version)))
+        .returning()
     : await ctx()
         .db.insert(voiceProfiles)
         .values({ id, ...values, consent: { ...b.consent, attestedAt: Math.min(b.consent.attestedAt, now) }, deviceId, createdBy: userId, createdAt: Math.min(b.createdAt, now) })
         .returning()
+  // another change got in between (a web edit at the same moment)
+  if (!row) throw stale(await loadVoiceProfile(id))
   return c.json(voiceProfileDto(row))
 })
 

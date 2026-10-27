@@ -6,7 +6,10 @@
 //                 (cloud version that conflicts with local edits), cloud_trashed/cloud_template (flags last seen in
 //                 the cloud; a local trash/template toggle that differs ⇒ dirty);
 //       assets:   remote (bytes live in the cloud; fetched on demand), uploaded (exists in the cloud);
-//       brand:    local_version = brand kit updated_at (ms) at the last sync.
+//       brand:    local_version = brand kit updated_at (ms) at the last sync;
+//       voices:   cloud_version = the cloud's (server-stamped) version, local_version = local updated_at at the last sync;
+//       base:     what both sides last agreed on for fields either side may change (a clip's name and transcript, a
+//                 voice's name and description…): a field that differs from it here was changed here.
 //   desktop_sync_failures — items whose push keeps failing (the rest of the cycle carries on): the reason, attempts,
 //                 when to try again, and whether the person chose Skip (stays on this computer until Retry).
 import { sql } from 'drizzle-orm'
@@ -29,6 +32,7 @@ CREATE TABLE IF NOT EXISTS desktop_sync (
   updated_at double precision NOT NULL,
   PRIMARY KEY (kind, id)
 );
+ALTER TABLE desktop_sync ADD COLUMN IF NOT EXISTS base jsonb;
 CREATE TABLE IF NOT EXISTS desktop_sync_failures (
   kind text NOT NULL,
   id text NOT NULL,
@@ -76,6 +80,7 @@ export interface SyncRow {
   uploaded: boolean
   cloudTrashed: boolean | null
   cloudTemplate: boolean | null
+  base: Record<string, unknown> | null
 }
 
 interface RawSyncRow {
@@ -88,6 +93,7 @@ interface RawSyncRow {
   uploaded: boolean
   cloud_trashed: boolean | null
   cloud_template: boolean | null
+  base: Record<string, unknown> | string | null
 }
 
 const toRow = (r: RawSyncRow): SyncRow => ({
@@ -100,6 +106,7 @@ const toRow = (r: RawSyncRow): SyncRow => ({
   uploaded: r.uploaded,
   cloudTrashed: r.cloud_trashed,
   cloudTemplate: r.cloud_template,
+  base: typeof r.base === 'string' ? (JSON.parse(r.base) as Record<string, unknown>) : r.base,
 })
 
 export async function syncRows(kind: SyncRow['kind']): Promise<Map<string, SyncRow>> {
@@ -115,12 +122,13 @@ export async function syncRow(kind: SyncRow['kind'], id: string): Promise<SyncRo
 /** Insert or merge fields of a sync row. */
 export async function putSync(kind: SyncRow['kind'], id: string, patch: Partial<Omit<SyncRow, 'kind' | 'id'>>) {
   const cur = await syncRow(kind, id)
-  const next: SyncRow = { kind, id, cloudVersion: null, localVersion: null, conflictVersion: null, remote: false, uploaded: false, cloudTrashed: null, cloudTemplate: null, ...cur, ...patch }
+  const next: SyncRow = { kind, id, cloudVersion: null, localVersion: null, conflictVersion: null, remote: false, uploaded: false, cloudTrashed: null, cloudTemplate: null, base: null, ...cur, ...patch }
+  const base = next.base == null ? null : JSON.stringify(next.base)
   await ctx().db.execute(sql`
-    INSERT INTO desktop_sync (kind, id, cloud_version, local_version, conflict_version, remote, uploaded, cloud_trashed, cloud_template, updated_at)
-    VALUES (${kind}, ${id}, ${next.cloudVersion}, ${next.localVersion}, ${next.conflictVersion}, ${next.remote}, ${next.uploaded}, ${next.cloudTrashed}, ${next.cloudTemplate}, ${Date.now()})
+    INSERT INTO desktop_sync (kind, id, cloud_version, local_version, conflict_version, remote, uploaded, cloud_trashed, cloud_template, base, updated_at)
+    VALUES (${kind}, ${id}, ${next.cloudVersion}, ${next.localVersion}, ${next.conflictVersion}, ${next.remote}, ${next.uploaded}, ${next.cloudTrashed}, ${next.cloudTemplate}, ${base}::jsonb, ${Date.now()})
     ON CONFLICT (kind, id) DO UPDATE SET cloud_version = EXCLUDED.cloud_version, local_version = EXCLUDED.local_version, conflict_version = EXCLUDED.conflict_version,
-      remote = EXCLUDED.remote, uploaded = EXCLUDED.uploaded, cloud_trashed = EXCLUDED.cloud_trashed, cloud_template = EXCLUDED.cloud_template, updated_at = EXCLUDED.updated_at`)
+      remote = EXCLUDED.remote, uploaded = EXCLUDED.uploaded, cloud_trashed = EXCLUDED.cloud_trashed, cloud_template = EXCLUDED.cloud_template, base = EXCLUDED.base, updated_at = EXCLUDED.updated_at`)
 }
 
 export async function deleteSync(kind: SyncRow['kind'], id: string) {

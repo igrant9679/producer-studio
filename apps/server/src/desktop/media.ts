@@ -3,6 +3,7 @@
 // for the source, and then served like any local file (Range support). While a download runs, the media route
 // answers 202 + Retry-After and the editor retries.
 import crypto from 'node:crypto'
+import fsp from 'node:fs/promises'
 import { Readable, Transform } from 'node:stream'
 import type { Context } from 'hono'
 import { ctx } from '../context'
@@ -36,6 +37,11 @@ async function download(row: AssetRow, key: string, variant: Variant): Promise<v
     await res.body?.cancel().catch(() => undefined)
     throw new CloudError(res.status, { error: `The cloud has no ${variant} for this asset (HTTP ${res.status})` }, res.status >= 502)
   }
+  // media never comes as a web page: that's a Wi-Fi sign-in page answering for the cloud
+  if (/^text\/html/i.test(res.headers.get('content-type') ?? '')) {
+    await res.body.cancel().catch(() => undefined)
+    throw new CloudError(0, { error: 'The cloud is unreachable (something else answered instead, such as a Wi-Fi sign-in page)' }, true)
+  }
   const hash = crypto.createHash('sha256')
   const tap = new Transform({
     transform(chunk: Buffer, _e, cb) {
@@ -46,13 +52,18 @@ async function download(row: AssetRow, key: string, variant: Variant): Promise<v
   const body = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream)
   // .pipe() doesn't pass a failed download on: without this the save would wait for good
   body.on('error', (err) => tap.destroy(err))
-  await ctx().storage.put(key, body.pipe(tap), { contentType: res.headers.get('content-type') ?? undefined })
-  if (variant === 'source' && row.sha256) {
+  const storage = ctx().storage
+  // an original lands under a temporary name and takes its own only once its hash checks out: nothing can read it before
+  const verify = variant === 'source' && !!row.sha256 && !!storage.localPath
+  const target = verify ? `${key}.download` : key
+  await storage.put(target, body.pipe(tap), { contentType: res.headers.get('content-type') ?? undefined })
+  if (verify) {
     const got = hash.digest('hex')
     if (got !== row.sha256) {
-      await ctx().storage.delete(key)
+      await storage.delete(target)
       throw new Error(`Downloaded media for ${row.name} failed its integrity check (sha256 mismatch)`)
     }
+    await fsp.rename(storage.localPath!(target), storage.localPath!(key))
   }
   log.info('desktop: cached cloud media', { assetId: row.id, variant })
 }

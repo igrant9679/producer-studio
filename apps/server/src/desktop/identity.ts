@@ -82,8 +82,8 @@ export function secretMatches(given: string | undefined): boolean {
 }
 
 /**
- * Re-key the local user to the cloud user (same id, email, name, colour). References are moved inside one
- * transaction; the old row is deleted afterwards.
+ * Re-key the local user to the cloud user (same id, email, name, colour). References (authorship, memberships,
+ * appearance settings, voice consent records) are moved inside one transaction, which also deletes the old row.
  */
 export async function adoptCloudIdentity(cloud: User): Promise<void> {
   const db = ctx().db
@@ -109,6 +109,7 @@ export async function adoptCloudIdentity(cloud: User): Promise<void> {
       ['assets', 'created_by'],
       ['workspaces', 'created_by'],
       ['invites', 'created_by'],
+      ['invites', 'accepted_by'],
       ['exports', 'created_by'],
       ['share_links', 'created_by'],
       ['voice_profiles', 'created_by'],
@@ -117,6 +118,11 @@ export async function adoptCloudIdentity(cloud: User): Promise<void> {
     }
     // memberships: move, skipping workspaces the cloud user already belongs to locally
     await tx.execute(sql`UPDATE memberships SET user_id = ${cloud.id} WHERE user_id = ${oldId} AND workspace_id NOT IN (SELECT workspace_id FROM memberships WHERE user_id = ${cloud.id})`)
+    // appearance settings go with the person (unless the cloud user already has their own here); deleting the old user
+    // would otherwise take them along
+    await tx.execute(sql`UPDATE user_preferences SET user_id = ${cloud.id} WHERE user_id = ${oldId} AND NOT EXISTS (SELECT 1 FROM user_preferences WHERE user_id = ${cloud.id})`)
+    // a voice's consent record names who attested it
+    await tx.execute(sql`UPDATE voice_profiles SET consent = jsonb_set(consent, '{attestedBy}', to_jsonb(${cloud.id}::text)) WHERE consent->>'attestedBy' = ${oldId}`)
     await tx.execute(sql`DELETE FROM users WHERE id = ${oldId}`)
   })
   await kvSet('localUserId', cloud.id)

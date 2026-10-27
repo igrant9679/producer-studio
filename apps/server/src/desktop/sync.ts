@@ -16,17 +16,18 @@
 //   failures — an item whose push fails for any reason but "offline" or "signed out" is recorded (desktop_sync_failures)
 //            and retried on its own backoff; the rest of the cycle carries on. The person can Retry or Skip it.
 // Runs on start, every 60 s, and 3 s after local saves; backs off while offline; SSE `sync` carries SyncStatus.
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncFailure, type SyncProject, type SyncStatus, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
+import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncFailure, type SyncProject, type SyncStatus, type Transcript, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
 import { ctx } from '../context'
 import { type AssetMeta, assets, brandKits, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
 import { HttpError } from '../http'
 import { log } from '../log'
-import { assetPrefix, extFor, hashObject } from '../services/assets'
+import { type AssetRow, assetDirs, assetPrefix, emitAsset, extFor, hashObject, uploadMime } from '../services/assets'
 import { derived, hydrateAssets, insertProject } from '../services/projects'
 import { CloudClient, CloudError, normalizeCloudUrl } from './cloud'
 import { type FailureKind, addNotice, clearFailure, clearFailures, clearSync, deleteSync, failureKey, failureMap, kvGet, kvSet, listNotices, putSync, rawQuery, recordFailure, removeNotice, setFailure, syncRow, syncRows, type SyncRow } from './db'
@@ -62,6 +63,8 @@ interface ParkedAccount {
   account?: string
   workspaces: string[]
   cursor: number
+  /** Where pushing this computer's deletes had got to (deletes in its spaces made since are pushed when it's back). */
+  tombCursor?: number
 }
 
 const accountKey = (cloudUrl: string, cloudUserId: string) => `${cloudUrl}|${cloudUserId}`
@@ -75,6 +78,61 @@ function cloudHasFile(rec: { status: AssetRecord['status']; sha256?: string }, l
 }
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+const hashJson = (v: unknown) => crypto.createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 32)
+
+/** What of a clip either side may change once it's synced, in a form to compare: its name and its transcript's hash. */
+interface ClipFields {
+  name: string
+  transcript: string | null
+}
+
+const clipFields = (name: string, transcript: unknown): ClipFields => ({ name, transcript: transcript ? hashJson(transcript) : null })
+
+/**
+ * A clip here meets the cloud's copy: its name and its transcript are each the cloud's, unless changed here since the
+ * two last agreed (`base`; before anything was agreed, `oursWithoutBase` decides). A transcript only the copy here has
+ * is kept (it's pushed).
+ */
+function mergeClipFields(row: AssetRow, base: Record<string, unknown> | null | undefined, cloud: ClipFields, cloudTranscript: Transcript | undefined, oursWithoutBase: boolean): { name: string; transcript: Transcript | undefined } {
+  const here = clipFields(row.name, row.meta?.transcript)
+  const changedHere = (k: keyof ClipFields) => (base ? here[k] !== base[k] : oursWithoutBase)
+  return {
+    name: changedHere('name') ? row.name : cloud.name,
+    transcript: changedHere('transcript') || !cloudTranscript ? row.meta?.transcript : cloudTranscript,
+  }
+}
+
+/** A document's own content, to compare two copies: not when it was saved, nor the clip records the server refreshes. */
+function contentKey(p: Project): string {
+  const { updatedAt: _u, assets: a, ...rest } = p
+  return stableJson({ ...rest, assets: Object.keys(a ?? {}).sort() })
+}
+
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson(o[k])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(v) ?? 'null'
+}
+
+const sameContent = (a: Project, b: Project) => contentKey(a) === contentKey(b)
+
+/** What of a voice either side may edit. */
+interface VoiceFields {
+  name: string
+  language: string | null
+  gender: string | null
+  description: string | null
+}
+
+const voiceFields = (v: { name: string; language?: string | null; gender?: string | null; description?: string | null }): VoiceFields => ({ name: v.name, language: v.language ?? null, gender: v.gender ?? null, description: v.description ?? null })
 
 /** What a failed delete is called in the sync menu (the item itself is gone from this computer). */
 const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted here', voice: 'A voice deleted here' } as const
@@ -97,13 +155,20 @@ export class SyncEngine {
   private debounce?: NodeJS.Timeout
   private backoffUntil = 0
   private backoffMs = 0
-  private suppress = 0
+  /**
+   * True only while this engine publishes an event about its own write (that's synchronous), so the listener never
+   * takes it for a local save; a save made while a long sync write is under way is still seen.
+   */
+  private quiet = false
   private unsubs: Array<() => void> = []
   private stopped = false
   private relayTimer?: NodeJS.Timeout
   private relayBusy = false
   private relayCheckAt = 0
   private relayHasVoices = false
+  /** After a failed claim, the relay waits until this time (doubling up to 5 minutes; a success starts it over). */
+  private relayRetryAt = 0
+  private relayBackoffMs = 0
   /** How often a relayed voice in progress tells the cloud it's still alive (well inside the cloud's 2-minute lease). */
   private relayBeatMs = RELAY_BEAT_MS
   /** Items that failed before (loaded at the start of each cycle). */
@@ -119,7 +184,7 @@ export class SyncEngine {
     this.lastSyncAt = (await kvGet<number>('lastSyncAt')) ?? undefined
     this.unsubs.push(
       ctx().bus.onAny((e) => {
-        if (this.suppress || (e.event !== 'project' && e.event !== 'asset')) return
+        if (this.quiet || (e.event !== 'project' && e.event !== 'asset')) return
         if (getSettings().autoSync) this.schedule(AFTER_SAVE_MS)
       }),
       onSettingsChange((s, prev) => {
@@ -272,16 +337,24 @@ export class SyncEngine {
     return this.status()
   }
 
+  /** Publish an event about the engine's own write: not a local save, so it schedules no push. */
+  private quietly(fn: () => void) {
+    const was = this.quiet
+    this.quiet = true
+    try {
+      fn()
+    } finally {
+      this.quiet = was
+    }
+  }
+
   private async emit() {
     const s = await this.status().catch(() => undefined)
     if (!s) return
     const ws = await ctx().db.select({ id: memberships.workspaceId }).from(memberships)
-    this.suppress++
-    try {
+    this.quietly(() => {
       for (const w of new Set(ws.map((x) => x.id))) ctx().bus.publish(w, 'sync', s)
-    } finally {
-      this.suppress--
-    }
+    })
   }
 
   private setState(state: SyncStatus['state'], error?: string) {
@@ -325,15 +398,21 @@ export class SyncEngine {
     if (!last || last.cloudUrl !== cloudUrl) await kvSet('safeCursor', false)
     // what failed for another account means nothing here (it shows up again if it still fails)
     if (!last || last.cloudUrl !== cloudUrl || last.cloudUserId !== me.user.id) await clearFailures()
-    await this.resumeAccount(cloudUrl, me.user.id)
+    const resumed = await this.resumeAccount(cloudUrl, me.user.id)
     await adoptCloudIdentity(me.user)
     await this.mirrorWorkspaces(me.workspaces)
     await this.mergeLocalWorkspaces(c, me.workspaces)
-    const tomb = await rawQuery<{ m: string | null }>(sql`SELECT max(change_seq)::text AS m FROM tombstones`)
-    await kvSet('tombCursor', Number(tomb[0]?.m ?? 0))
+    // the same account again: deletes made here while unlinked are pushed. A first link has nothing in the cloud to
+    // delete; an account linked again after another carries on from where its deletes stopped.
+    if (!last || last.cloudUrl !== cloudUrl || last.cloudUserId !== me.user.id) {
+      const tomb = await rawQuery<{ m: string | null }>(sql`SELECT max(change_seq)::text AS m FROM tombstones`)
+      await kvSet('tombCursor', resumed?.tombCursor ?? Number(tomb[0]?.m ?? 0))
+    }
     await saveLink({ cloudUrl, account: me.user.email, cloudUserId: me.user.id, deviceId: dev.deviceId, linkedAt: Date.now() }, dev.token)
     this.backoffMs = 0
     this.backoffUntil = 0
+    this.relayRetryAt = 0
+    this.relayBackoffMs = 0
     this.state = 'idle'
     this.error = undefined
     log.info('desktop: linked', { cloudUrl, account: me.user.email })
@@ -351,7 +430,7 @@ export class SyncEngine {
     const ids = (await kvGet<string[]>('cloudWorkspaces')) ?? []
     const here = ids.length ? await db.select({ id: workspaces.id, name: workspaces.name }).from(workspaces).where(inArray(workspaces.id, ids)) : []
     const parked = (await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}
-    parked[accountKey(last.cloudUrl, last.cloudUserId)] = { account: last.account, workspaces: here.map((w) => w.id), cursor: (await kvGet<number>('cursor')) ?? 0 }
+    parked[accountKey(last.cloudUrl, last.cloudUserId)] = { account: last.account, workspaces: here.map((w) => w.id), cursor: (await kvGet<number>('cursor')) ?? 0, tombCursor: (await kvGet<number>('tombCursor')) ?? 0 }
     await kvSet('parkedAccounts', parked)
     await kvSet('cloudWorkspaces', [])
     await kvSet('cursor', 0)
@@ -364,16 +443,17 @@ export class SyncEngine {
   }
 
   /** Spaces set aside for this account by an earlier switch sync again, from where they stopped. */
-  private async resumeAccount(cloudUrl: string, cloudUserId: string) {
+  private async resumeAccount(cloudUrl: string, cloudUserId: string): Promise<ParkedAccount | undefined> {
     const parked = (await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}
     const key = accountKey(cloudUrl, cloudUserId)
     const mine = parked[key]
-    if (!mine) return
+    if (!mine) return undefined
     delete parked[key]
     await kvSet('parkedAccounts', parked)
     const here = mine.workspaces.length ? await ctx().db.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.id, mine.workspaces)) : []
     await kvSet('cloudWorkspaces', here.map((w) => w.id))
     await kvSet('cursor', mine.cursor)
+    return mine
   }
 
   /** Spaces that belong to another account, set aside here. */
@@ -570,24 +650,20 @@ export class SyncEngine {
     const ws = (await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]
     if (!ws) return
     const kept = recover ? await this.recoverWork(ws) : new Set<string>()
-    const dropped = await db.select({ id: assets.id }).from(assets).where(eq(assets.workspaceId, id))
+    const dropped = await db.select({ id: assets.id, workspaceId: assets.workspaceId, sourceKey: assets.sourceKey }).from(assets).where(eq(assets.workspaceId, id))
     for (const p of await db.select({ id: projects.id }).from(projects).where(eq(projects.workspaceId, id))) await deleteSync('project', p.id)
     for (const a of dropped) await deleteSync('asset', a.id)
     for (const v of await db.select({ id: voiceProfiles.id }).from(voiceProfiles).where(eq(voiceProfiles.workspaceId, id))) await deleteSync('voice', v.id)
     await deleteSync('brand', id)
-    this.suppress++
-    try {
-      await db.transaction(async (tx) => {
-        await tx.delete(exportsTable).where(eq(exportsTable.workspaceId, id))
-        await tx.delete(jobs).where(eq(jobs.workspaceId, id))
-        await tx.delete(workspaces).where(eq(workspaces.id, id)) // projects, assets, memberships, brand kit cascade
-      })
-      // recovered clips keep their files where they are (storage keys don't move)
-      if (!kept.size) await ctx().storage.deletePrefix(`ws/${id}/`).catch(() => undefined)
-      else for (const a of dropped) await ctx().storage.deletePrefix(assetPrefix(id, a.id) + '/').catch(() => undefined)
-    } finally {
-      this.suppress--
-    }
+    await db.transaction(async (tx) => {
+      await tx.delete(exportsTable).where(eq(exportsTable.workspaceId, id))
+      await tx.delete(jobs).where(eq(jobs.workspaceId, id))
+      await tx.delete(workspaces).where(eq(workspaces.id, id)) // projects, assets, memberships, brand kit cascade
+    })
+    // recovered clips keep their files where they are (storage keys don't move); a clip made here before linking keeps
+    // its files under its first space's prefix
+    if (!kept.size) await ctx().storage.deletePrefix(`ws/${id}/`).catch(() => undefined)
+    for (const a of dropped) for (const dir of assetDirs(a)) if (kept.size || !dir.startsWith(`ws/${id}/`)) await ctx().storage.deletePrefix(dir).catch(() => undefined)
     await kvSet('cloudWorkspaces', ((await kvGet<string[]>('cloudWorkspaces')) ?? []).filter((w) => w !== id))
     ctx().bus.publish(id, 'workspace', { id, deleted: true })
     log.info('desktop: removed workspace deleted in the cloud', { id })
@@ -623,17 +699,12 @@ export class SyncEngine {
     const name = `Recovered from ${ws.name}`.slice(0, 80)
     const { createWorkspace } = await import('../routes/workspaces')
     const rec = await createWorkspace(await localUserId(), name)
-    this.suppress++
-    try {
-      await db.transaction(async (tx) => {
-        if (projs.length) await tx.update(projects).set({ workspaceId: rec.id }).where(inArray(projects.id, [...keptProjects]))
-        if (keptClips.size) await tx.update(assets).set({ workspaceId: rec.id }).where(inArray(assets.id, [...keptClips]))
-        if (voices.length) await tx.update(voiceProfiles).set({ workspaceId: rec.id }).where(inArray(voiceProfiles.id, voices.map((v) => v.id)))
-        if (projs.length) await tx.update(exportsTable).set({ workspaceId: rec.id }).where(inArray(exportsTable.projectId, [...keptProjects]))
-      })
-    } finally {
-      this.suppress--
-    }
+    await db.transaction(async (tx) => {
+      if (projs.length) await tx.update(projects).set({ workspaceId: rec.id }).where(inArray(projects.id, [...keptProjects]))
+      if (keptClips.size) await tx.update(assets).set({ workspaceId: rec.id }).where(inArray(assets.id, [...keptClips]))
+      if (voices.length) await tx.update(voiceProfiles).set({ workspaceId: rec.id }).where(inArray(voiceProfiles.id, voices.map((v) => v.id)))
+      if (projs.length) await tx.update(exportsTable).set({ workspaceId: rec.id }).where(inArray(exportsTable.projectId, [...keptProjects]))
+    })
     // no longer tied to anything in the cloud
     for (const id of keptProjects) await deleteSync('project', id)
     for (const id of keptClips) await deleteSync('asset', id)
@@ -697,12 +768,27 @@ export class SyncEngine {
     const a = rec.asset
     const row = (await db.select().from(assets).where(eq(assets.id, a.id)).limit(1))[0]
     const s = await syncRow('asset', a.id)
-    if (row && !s?.remote) {
+    const cloudFields = clipFields(a.name, a.transcript)
+    // a clip whose sync record never got written (cut short between two writes) has no file here while the cloud has
+    // one: it's a cloud clip, fetched on demand, not one of ours
+    const ours = row && !s?.remote && ((await ctx().storage.stat(row.sourceKey)) || !cloudHasFile(rec, null))
+    if (row && ours) {
       // our own upload echoed back (or an id we already hold locally): local bytes and derived files win. It only
       // counts as uploaded once the cloud has the same file; an upload cut short is sent again by the push.
-      if (!s?.uploaded && cloudHasFile(rec, row.sha256)) await putSync('asset', a.id, { uploaded: true, remote: false })
+      const uploaded = s?.uploaded || cloudHasFile(rec, row.sha256)
+      if (!uploaded) return
+      // a rename or transcript made in the cloud since comes here, unless this computer changed it too (then ours is
+      // pushed); before anything was agreed, ours counts as changed
+      const take = mergeClipFields(row, s?.base, cloudFields, a.transcript, true)
+      if (take.name !== row.name || take.transcript !== row.meta?.transcript) {
+        const [saved] = await db.update(assets).set({ name: take.name, meta: { ...(row.meta ?? {}), transcript: take.transcript }, updatedAt: Date.now() }).where(eq(assets.id, a.id)).returning()
+        this.quietly(() => emitAsset(saved))
+      }
+      await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...cloudFields } })
       return
     }
+    // ours to keep: a name or transcript changed here and not pushed yet
+    const take = row ? mergeClipFields(row, s?.base, cloudFields, a.transcript, false) : undefined
     const prefix = assetPrefix(rec.workspaceId, a.id)
     const meta: AssetMeta = {
       duration: a.duration,
@@ -715,14 +801,15 @@ export class SyncEngine {
       // a long clip's record carries a shortened waveform; the full one is fetched from the cloud when zoomed into
       waveformRate: a.waveformRate,
       waveformFull: a.waveformSrc ? true : undefined,
-      transcript: a.transcript,
+      transcript: take ? take.transcript : a.transcript,
       silences: a.silences,
     }
     const values = {
       workspaceId: rec.workspaceId,
       kind: a.kind,
-      name: a.name,
-      mime: a.mime ?? 'application/octet-stream',
+      name: take ? take.name : a.name,
+      // served from this computer's origin: a type that isn't media is never served as what the cloud called it
+      mime: uploadMime(a.mime ?? '', a.name) ?? 'application/octet-stream',
       size: a.sizeBytes ?? 0,
       status: rec.status,
       origin: rec.origin,
@@ -737,20 +824,15 @@ export class SyncEngine {
       sha256: rec.sha256 ?? null,
       updatedAt: Date.now(),
     }
-    this.suppress++
-    try {
-      const [saved] = row
-        ? await db.update(assets).set(values).where(eq(assets.id, a.id)).returning()
-        : await db
-            .insert(assets)
-            .values({ id: a.id, ...values, createdBy: await localUserId(), createdAt: a.createdAt ?? rec.createdAt ?? Date.now() })
-            .returning()
-      await putSync('asset', a.id, { remote: true, uploaded: true })
-      const { emitAsset } = await import('../services/assets')
-      emitAsset(saved)
-    } finally {
-      this.suppress--
-    }
+    // the sync record first: a crash before the row is written leaves nothing that looks like a clip made here
+    await putSync('asset', a.id, { remote: true, uploaded: true, base: { ...cloudFields } })
+    const [saved] = row
+      ? await db.update(assets).set(values).where(eq(assets.id, a.id)).returning()
+      : await db
+          .insert(assets)
+          .values({ id: a.id, ...values, createdBy: await localUserId(), createdAt: a.createdAt ?? rec.createdAt ?? Date.now() })
+          .returning()
+    this.quietly(() => emitAsset(saved))
   }
 
   /** Write a cloud document over the local copy (or insert it). Returns false if a local save raced us. */
@@ -768,29 +850,25 @@ export class SyncEngine {
       updatedAt: sp.summary.updatedAt,
     }
     let saved: ProjectRow | undefined
-    this.suppress++
-    try {
-      if (!local) {
-        ;[saved] = await db
-          .insert(projects)
-          .values({ id: doc.id, ...base, version: sp.version, createdBy: sp.summary.createdBy, createdAt: sp.summary.createdAt })
-          .onConflictDoNothing()
-          .returning()
-      } else {
-        ;[saved] = await db
-          .update(projects)
-          .set({ ...base, version: local.version + 1 })
-          .where(and(eq(projects.id, local.id), eq(projects.version, local.version)))
-          .returning()
-      }
-      if (!saved) return false
-      await putSync('project', saved.id, { cloudVersion: sp.version, localVersion: saved.version, conflictVersion: null, cloudTrashed: sp.summary.trashed, cloudTemplate: sp.summary.isTemplate })
-      // the open editor reloads silently on `project` events when it has no unsaved edits
-      ctx().bus.publish(saved.workspaceId, 'project', { id: saved.id, version: saved.version })
-      return true
-    } finally {
-      this.suppress--
+    if (!local) {
+      ;[saved] = await db
+        .insert(projects)
+        .values({ id: doc.id, ...base, version: sp.version, createdBy: sp.summary.createdBy, createdAt: sp.summary.createdAt })
+        .onConflictDoNothing()
+        .returning()
+    } else {
+      ;[saved] = await db
+        .update(projects)
+        .set({ ...base, version: local.version + 1 })
+        .where(and(eq(projects.id, local.id), eq(projects.version, local.version)))
+        .returning()
     }
+    if (!saved) return false
+    await putSync('project', saved.id, { cloudVersion: sp.version, localVersion: saved.version, conflictVersion: null, cloudTrashed: sp.summary.trashed, cloudTemplate: sp.summary.isTemplate })
+    // the open editor reloads silently on `project` events when it has no unsaved edits
+    const row = saved
+    this.quietly(() => ctx().bus.publish(row.workspaceId, 'project', { id: row.id, version: row.version }))
+    return true
   }
 
   private async applyProject(sp: SyncProject) {
@@ -804,6 +882,12 @@ export class SyncEngine {
     if (s?.conflictVersion != null && sp.version <= s.conflictVersion) return
     const local = (await ctx().db.select().from(projects).where(eq(projects.id, id)).limit(1))[0]
     if (local && isDirty(local, s)) {
+      if (sameContent(local.doc, sp.project)) {
+        // the cloud already holds what we have (our own save whose answer was lost): not a conflict; a trash or
+        // template change made here is still pushed
+        await putSync('project', id, { cloudVersion: sp.version, localVersion: local.version, conflictVersion: null, cloudTrashed: sp.summary.trashed, cloudTemplate: sp.summary.isTemplate })
+        return
+      }
       await putSync('project', id, { conflictVersion: sp.version })
       log.info('desktop: sync conflict', { projectId: id, localVersion: local.version, cloudVersion: sp.version })
       return
@@ -822,13 +906,8 @@ export class SyncEngine {
     if (localTrashed === (s.cloudTrashed ?? localTrashed) && localTrashed !== trashed) set.trashedAt = trashed ? Date.now() : null
     if (local.isTemplate === (s.cloudTemplate ?? local.isTemplate) && local.isTemplate !== isTemplate) set.isTemplate = isTemplate
     if (Object.keys(set).length) {
-      this.suppress++
-      try {
-        await ctx().db.update(projects).set(set).where(eq(projects.id, local.id))
-        ctx().bus.publish(local.workspaceId, 'project', { id: local.id, version: local.version })
-      } finally {
-        this.suppress--
-      }
+      await ctx().db.update(projects).set(set).where(eq(projects.id, local.id))
+      this.quietly(() => ctx().bus.publish(local.workspaceId, 'project', { id: local.id, version: local.version }))
     }
     await putSync('project', local.id, { cloudTrashed: trashed, cloudTemplate: isTemplate })
   }
@@ -856,13 +935,8 @@ export class SyncEngine {
     const row = (await ctx().db.select().from(assets).where(eq(assets.id, id)).limit(1))[0]
     await deleteSync('asset', id)
     if (!row) return
-    this.suppress++
-    try {
-      await ctx().db.delete(assets).where(eq(assets.id, id))
-      await ctx().storage.deletePrefix(assetPrefix(row.workspaceId, id) + '/').catch(() => undefined)
-    } finally {
-      this.suppress--
-    }
+    await ctx().db.delete(assets).where(eq(assets.id, id))
+    for (const dir of assetDirs(row)) await ctx().storage.deletePrefix(dir).catch(() => undefined)
   }
 
   private async applyProjectDelete(id: string) {
@@ -872,12 +946,7 @@ export class SyncEngine {
     if (!local) return
     // edited here since: keep it; with no sync row it is pushed again as a new cloud project
     if (isDirty(local, s)) return
-    this.suppress++
-    try {
-      await ctx().db.delete(projects).where(eq(projects.id, id))
-    } finally {
-      this.suppress--
-    }
+    await ctx().db.delete(projects).where(eq(projects.id, id))
   }
 
   // ---------------- push ----------------
@@ -956,10 +1025,32 @@ export class SyncEngine {
     const local = await ctx().db.select().from(assets)
     for (const a of local) {
       const s = rows.get(a.id)
-      if (s?.uploaded || s?.remote) await this.resolved('asset', a.id)
-      if (s?.uploaded || s?.remote || a.origin === 'render' || a.status === 'uploading' || !cloudWs.has(a.workspaceId)) continue
+      if (!cloudWs.has(a.workspaceId)) continue
+      if (s?.uploaded || s?.remote) {
+        // in the cloud already: a rename or a transcript made here since goes up (synced before this was tracked: what
+        // is here now counts as agreed)
+        const here = clipFields(a.name, a.meta?.transcript)
+        if (!s.base) await putSync('asset', a.id, { base: { ...here } })
+        if (!s.base || (s.base.name === here.name && s.base.transcript === here.transcript)) await this.resolved('asset', a.id)
+        else await this.item('asset', a.id, a.name, () => this.pushClipFields(c, a, s))
+        continue
+      }
+      if (a.origin === 'render' || a.status === 'uploading') continue
       await this.item('asset', a.id, a.name, () => this.pushAsset(c, a))
     }
+  }
+
+  /** A clip's name or transcript changed here since it last matched the cloud's: send what changed. */
+  private async pushClipFields(c: CloudClient, a: AssetRow, s: SyncRow) {
+    const here = clipFields(a.name, a.meta?.transcript)
+    const patch = { ...(here.name !== s.base?.name ? { name: a.name } : {}), ...(here.transcript !== s.base?.transcript && a.meta?.transcript ? { transcript: a.meta.transcript } : {}) }
+    if (Object.keys(patch).length) {
+      await c.json('PATCH', `/api/assets/${encodeURIComponent(a.id)}`, patch).catch((err) => {
+        // gone in the cloud (its delete comes with the next pull), or no longer ours to change: stays as it is here
+        if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
+      })
+    }
+    await putSync('asset', a.id, { base: { ...here } })
   }
 
   private async pushAsset(c: CloudClient, a: typeof assets.$inferSelect) {
@@ -984,7 +1075,7 @@ export class SyncEngine {
         // a different file under this id, or (older clouds) an upload that never arrived: never count that as done
         if (exists.sha256 && exists.sha256 !== sha) throw new Error('The cloud already has a different file under this clip’s id')
         if (exists.asset?.status === 'uploading') throw new Error('The cloud has an unfinished upload of this clip and won’t take it again (the cloud server needs updating)')
-        await putSync('asset', a.id, { uploaded: true, remote: false })
+        await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...clipFields(exists.asset?.asset.name ?? a.name, exists.asset?.asset.transcript) } })
         return
       }
       throw err
@@ -1002,8 +1093,9 @@ export class SyncEngine {
       throw new CloudError(put.status, { error: `Upload of ${a.name} failed: ${parsed?.error ?? (text.slice(0, 200) || put.statusText)}` })
     }
     await put.body?.cancel().catch(() => undefined)
-    await c.json('POST', `/api/assets/${encodeURIComponent(a.id)}/complete`)
-    await putSync('asset', a.id, { uploaded: true, remote: false })
+    const done = await c.json<AssetRecord | undefined>('POST', `/api/assets/${encodeURIComponent(a.id)}/complete`)
+    // what the cloud has now: a name it shortened, no transcript yet (one made here goes up next)
+    await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...clipFields(done?.asset?.name ?? a.name, done?.asset?.transcript) } })
     log.info('desktop: uploaded asset', { assetId: a.id, bytes })
   }
 
@@ -1034,13 +1126,16 @@ export class SyncEngine {
       try {
         cloudVersion = (await c.json<{ version: number }>('PUT', `/api/projects/${encodeURIComponent(p.id)}`, { project: doc, baseVersion: s.cloudVersion })).version
       } catch (err) {
-        if (err instanceof CloudError && err.status === 409) {
-          const v = (err.body?.details as { version?: number } | undefined)?.version ?? s.cloudVersion + 1
+        const details = err instanceof CloudError && err.status === 409 ? (err.body?.details as { version?: number; project?: Project } | undefined) : undefined
+        if (details?.version != null && details.project && sameContent(details.project, doc)) {
+          // the cloud already has this content (an earlier save whose answer was lost)
+          cloudVersion = details.version
+        } else if (err instanceof CloudError && err.status === 409) {
+          const v = details?.version ?? s.cloudVersion + 1
           await putSync('project', p.id, { conflictVersion: v })
           log.info('desktop: push conflict', { projectId: p.id, cloudVersion: v })
           return
-        }
-        if (err instanceof CloudError && err.status === 404) cloudVersion = await create()
+        } else if (err instanceof CloudError && err.status === 404) cloudVersion = await create()
         else throw err
       }
     } else cloudVersion = s.cloudVersion
@@ -1098,35 +1193,40 @@ export class SyncEngine {
 
   // ---------------- voice profiles ----------------
 
-  /** Cloud → here: upsert the metadata, keeping this replica's VoiceStudio link (vs_profile_id) untouched. */
-  private async applyVoiceProfile(v: VoiceProfile & { changeSeq: number }) {
+  /**
+   * Cloud → here: upsert the metadata, keeping this replica's VoiceStudio link (vs_profile_id) untouched. Copies are
+   * ordered by the cloud's version, never by clocks: a voice edited here and not pushed yet keeps the fields changed
+   * here and takes the cloud's others (and is then pushed on top of that version).
+   */
+  private async applyVoiceProfile(v: VoiceProfile) {
     const db = ctx().db
     const cur = (await db.select().from(voiceProfiles).where(eq(voiceProfiles.id, v.id)).limit(1))[0]
     const s = await syncRow('voice', v.id)
-    // edited here, not pushed yet, and newer: keep ours (pushed next)
-    if (cur && s?.localVersion !== cur.updatedAt && cur.updatedAt > v.updatedAt) return
+    const editedHere = !!cur && s?.localVersion !== cur.updatedAt
+    // a cloud too old to stamp versions: the newer timestamp wins, as before
+    if (v.version == null && editedHere && cur.updatedAt > v.updatedAt) return
+    if (v.version != null && s?.cloudVersion != null && v.version <= s.cloudVersion) return // already here
     if (!(await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, v.workspaceId)).limit(1)).length) return
+    const cloudFields = voiceFields(v)
+    const base = s?.base as Partial<VoiceFields> | null | undefined
+    const mine = cur ? voiceFields(cur) : undefined
+    // before anything was agreed, everything edited here counts as changed here
+    const keep = (k: keyof VoiceFields) => editedHere && !!mine && (!base || mine[k] !== base[k])
+    const fields = Object.fromEntries((Object.keys(cloudFields) as Array<keyof VoiceFields>).map((k) => [k, keep(k) ? mine![k] : cloudFields[k]])) as unknown as VoiceFields
     const values = {
       workspaceId: v.workspaceId,
-      name: v.name,
+      ...fields,
       kind: v.kind,
       engine: v.engine,
-      language: v.language ?? null,
-      gender: v.gender ?? null,
-      description: v.description ?? null,
       consent: v.consent,
       deviceId: v.deviceId ?? null,
       sampleAssetId: v.sampleAssetId ?? null,
-      updatedAt: v.updatedAt,
+      // still edited here: the local time stays, so it's still pushed
+      updatedAt: editedHere ? cur.updatedAt : v.updatedAt,
     }
-    this.suppress++
-    try {
-      if (cur) await db.update(voiceProfiles).set(values).where(eq(voiceProfiles.id, v.id))
-      else await db.insert(voiceProfiles).values({ id: v.id, ...values, createdBy: v.createdBy, createdAt: v.createdAt })
-    } finally {
-      this.suppress--
-    }
-    await putSync('voice', v.id, { localVersion: v.updatedAt, cloudVersion: 1 })
+    if (cur) await db.update(voiceProfiles).set(values).where(eq(voiceProfiles.id, v.id))
+    else await db.insert(voiceProfiles).values({ id: v.id, ...values, createdBy: v.createdBy, createdAt: v.createdAt })
+    await putSync('voice', v.id, { ...(editedHere ? {} : { localVersion: v.updatedAt }), cloudVersion: v.version ?? 1, base: { ...cloudFields } })
   }
 
   private async applyVoiceProfileDelete(id: string) {
@@ -1138,12 +1238,7 @@ export class SyncEngine {
       const { deleteVsProfile } = await import('./voicestudio/profiles')
       await deleteVsProfile(cur.vsProfileId).catch(() => undefined)
     }
-    this.suppress++
-    try {
-      await db.delete(voiceProfiles).where(eq(voiceProfiles.id, id))
-    } finally {
-      this.suppress--
-    }
+    await db.delete(voiceProfiles).where(eq(voiceProfiles.id, id))
   }
 
   /** Here → cloud: new or edited profiles (metadata only). Profiles made before linking adopt this device. */
@@ -1162,31 +1257,43 @@ export class SyncEngine {
         await this.resolved('voice', row.id)
         continue
       }
-      await this.item('voice', row.id, row.name, async () => {
-        try {
-          await c.json('PUT', `/api/voice/profiles/${encodeURIComponent(row.id)}`, {
-            workspaceId: row.workspaceId,
-            name: row.name,
-            kind: row.kind,
-            engine: row.engine,
-            language: row.language ?? undefined,
-            gender: row.gender ?? undefined,
-            description: row.description ?? undefined,
-            consent: row.consent,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-          })
-        } catch (err) {
-          if (err instanceof CloudError && (err.status === 403 || err.status === 409)) {
-            // viewers can't add voices / id clash: leave it local-only
-            await putSync('voice', row.id, { localVersion: row.updatedAt })
-            return
-          }
-          throw err
-        }
-        await putSync('voice', row.id, { localVersion: row.updatedAt, cloudVersion: 1 })
-      })
+      await this.item('voice', row.id, row.name, () => this.pushVoiceProfile(c, row, s))
     }
+  }
+
+  /** Push one voice on top of the cloud version this copy is based on. Changed in the cloud since: merge, push again. */
+  private async pushVoiceProfile(c: CloudClient, row: typeof voiceProfiles.$inferSelect, s: SyncRow | undefined, again = true): Promise<void> {
+    let saved: VoiceProfile
+    try {
+      saved = await c.json<VoiceProfile>('PUT', `/api/voice/profiles/${encodeURIComponent(row.id)}`, {
+        workspaceId: row.workspaceId,
+        name: row.name,
+        kind: row.kind,
+        engine: row.engine,
+        language: row.language ?? undefined,
+        gender: row.gender ?? undefined,
+        description: row.description ?? undefined,
+        consent: row.consent,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        baseVersion: s?.cloudVersion ?? 0,
+      })
+    } catch (err) {
+      const newer = err instanceof CloudError && err.status === 409 ? (err.body?.details as { profile?: VoiceProfile } | undefined)?.profile : undefined
+      if (newer && again) {
+        await this.applyVoiceProfile(newer)
+        const merged = (await ctx().db.select().from(voiceProfiles).where(eq(voiceProfiles.id, row.id)).limit(1))[0]
+        if (merged) await this.pushVoiceProfile(c, merged, await syncRow('voice', row.id), false)
+        return
+      }
+      if (err instanceof CloudError && (err.status === 403 || err.status === 409)) {
+        // viewers can't add voices / id clash: leave it local-only
+        await putSync('voice', row.id, { localVersion: row.updatedAt })
+        return
+      }
+      throw err
+    }
+    await putSync('voice', row.id, { localVersion: row.updatedAt, cloudVersion: saved.version ?? 1, base: { ...voiceFields(row) } })
   }
 
   // ---------------- relay: generate for the web app ----------------
@@ -1203,13 +1310,18 @@ export class SyncEngine {
       const n = await rawQuery<{ n: string }>(sql`SELECT count(*)::text AS n FROM voice_profiles WHERE vs_profile_id IS NOT NULL`).catch(() => [{ n: '0' }])
       this.relayHasVoices = Number(n[0]?.n ?? 0) > 0
     }
-    if (!this.relayHasVoices) return
+    if (!this.relayHasVoices || Date.now() < this.relayRetryAt) return
     this.relayBusy = true
     try {
       const r = await c.json<{ job: RelayClaim | null }>('GET', '/api/voice/relay/claim')
+      this.relayBackoffMs = 0
       if (r.job) await this.runRelay(c, r.job)
     } catch (err) {
-      if (!(err instanceof CloudError && err.offline)) log.warn('desktop: voice relay failed', { err: String(err) })
+      // offline, refused (a revoked device) or failing: ask again less and less often (at most every 5 minutes), and
+      // say so once per wait rather than every 5 s
+      this.relayBackoffMs = Math.min(MAX_BACKOFF_MS, Math.max(RELAY_POLL_MS * 2, this.relayBackoffMs * 2))
+      this.relayRetryAt = Date.now() + this.relayBackoffMs
+      if (!(err instanceof CloudError && err.offline)) log.warn('desktop: voice relay failed', { err: String(err), retryInMs: this.relayBackoffMs })
     } finally {
       this.relayBusy = false
     }
@@ -1273,29 +1385,36 @@ export class SyncEngine {
         throw err
       }
     }
+    // the cloud copy first: offline, nothing here has changed yet (and a retry can't make a second copy)
+    const remote = await fetchCloud()
     const takeCloud = async () => {
-      const remote = await fetchCloud()
       const cur = (await ctx().db.select().from(projects).where(eq(projects.id, projectId)).limit(1))[0]
       if (!remote) {
         // deleted in the cloud: the local copy becomes a new cloud project on the next push
         await deleteSync('project', projectId)
-        return
+        return true
       }
-      if (!(await this.writeCloudProject(remote, cur))) throw new HttpError(409, 'conflict', 'The project changed while resolving; try again')
+      return this.writeCloudProject(remote, cur)
     }
+    const changed = () => new HttpError(409, 'conflict', 'The project changed while resolving; try again')
     if (mode === 'keep-local') {
-      const remote = await fetchCloud()
       await putSync('project', projectId, { cloudVersion: remote?.version ?? null, localVersion: -1, conflictVersion: null, cloudTrashed: remote?.summary.trashed ?? null, cloudTemplate: remote?.summary.isTemplate ?? null })
       const fresh = (await ctx().db.select().from(projects).where(eq(projects.id, projectId)).limit(1))[0]
       await this.pushProject(c, fresh, await syncRow('project', projectId))
     } else if (mode === 'keep-cloud') {
-      await takeCloud()
+      if (!(await takeCloud())) throw changed()
     } else {
       const copyId = uid('p')
       const doc: Project = { ...structuredClone(local.doc), id: copyId, name: `${local.name} (conflicted copy)`.slice(0, 200) }
       const row = await insertProject({ workspaceId: local.workspaceId, userId: await localUserId(), doc, kind: local.kind, isTemplate: local.isTemplate })
-      await this.pushProject(c, row, undefined)
-      await takeCloud()
+      if (!(await takeCloud())) {
+        await ctx().db.delete(projects).where(eq(projects.id, copyId))
+        throw changed()
+      }
+      // the copy is a new project here: if the connection drops now, the next sync pushes it
+      await this.pushProject(c, row, undefined).catch((err) => {
+        if (!(err instanceof CloudError && err.offline)) throw err
+      })
     }
     void this.emit()
     return this.status()

@@ -191,11 +191,16 @@ export class CloudClient {
       if (res.ok) throw new CloudError(0, { error: `The cloud is unreachable (${(err as Error).message})` }, true)
     }
     let parsed: unknown
+    let json = true
     try {
       parsed = text ? JSON.parse(text) : undefined
     } catch {
       parsed = undefined
+      json = false
     }
+    // a "success" that isn't JSON is someone else answering for the cloud (a hotel or airport Wi-Fi sign-in page): the
+    // cloud isn't reachable from here yet
+    if (res.ok && !json) throw new CloudError(0, { error: 'The cloud is unreachable (something else answered instead, such as a Wi-Fi sign-in page)' }, true)
     if (!res.ok) {
       const offline = res.status === 502 || res.status === 503 || res.status === 504 ? !parsed : false
       throw new CloudError(res.status, (parsed as ApiError) ?? { error: text.slice(0, 200) || res.statusText }, offline)

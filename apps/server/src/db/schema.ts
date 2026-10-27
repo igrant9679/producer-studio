@@ -202,6 +202,8 @@ export const voiceProfiles = pgTable('voice_profiles', {
   createdBy: text('created_by').notNull(),
   createdAt: ms('created_at').notNull(),
   updatedAt: ms('updated_at').notNull(),
+  /** Server-stamped: +1 on every change this database accepts (v9). */
+  version: integer('version').notNull().default(1),
   changeSeq: seq(),
 })
 

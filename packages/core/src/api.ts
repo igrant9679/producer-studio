@@ -353,6 +353,8 @@ export interface VoiceProfile {
   createdBy: string
   createdAt: number
   updatedAt: number
+  /** Stamped by the server that holds it: +1 on every change it accepts (replicas compare these, not clocks). */
+  version?: number
 }
 
 export interface VoiceStudioStatus {

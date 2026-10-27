@@ -14,7 +14,7 @@ import { cancelJobsOfAsset, enqueue } from '../jobs/queue'
 import { waveformKey } from '../media/process'
 import { assertVariant, serveObject, type Variant } from '../media/serve'
 import { waveformBytes } from '../media/waveform'
-import { type AssetRow, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset, uploadMime } from '../services/assets'
+import { type AssetRow, assetDirs, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset, uploadMime } from '../services/assets'
 import { UploadTooLargeError } from '../storage'
 import { abortUpload } from '../services/asset-recovery'
 import { assertProjectInWorkspace } from '../services/projects'
@@ -196,12 +196,29 @@ assetRoutes.get('/:id', async (c) => {
   return c.json(assetRecord(row))
 })
 
+/** A clip's transcript as a desktop sends one it made (PATCH /api/assets/:id). */
+const TranscriptSchema = z.object({
+  language: z.string().max(40),
+  engine: z.string().max(80),
+  segments: z
+    .array(
+      z.object({
+        start: z.number(),
+        end: z.number(),
+        text: z.string().max(20_000),
+        words: z.array(z.object({ w: z.string().max(400), start: z.number(), end: z.number() })).max(10_000),
+        speaker: z.string().max(120).optional(),
+      }),
+    )
+    .max(50_000),
+})
+
 assetRoutes.patch('/:id', async (c) => {
   const u = requireUser(c)
   const row = await loadAsset(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'editor')
-  const b = await body(c, z.object({ name: z.string().trim().min(1).max(200) }))
-  return c.json(assetRecord(await updateAsset(row.id, { name: b.name })))
+  const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), transcript: TranscriptSchema.optional() }).refine((x) => x.name !== undefined || x.transcript !== undefined, 'Nothing to change'))
+  return c.json(assetRecord(await updateAsset(row.id, { ...(b.name !== undefined ? { name: b.name } : {}), ...(b.transcript ? { meta: { transcript: b.transcript } } : {}) })))
 })
 
 assetRoutes.delete('/:id', async (c) => {
@@ -211,7 +228,7 @@ assetRoutes.delete('/:id', async (c) => {
   // its processing and transcription stop first; whatever they write after this is swept when they end
   await cancelJobsOfAsset(row.id)
   await ctx().db.delete(assets).where(eq(assets.id, row.id))
-  await ctx().storage.deletePrefix(assetPrefix(row.workspaceId, row.id) + '/').catch(() => undefined)
+  for (const dir of assetDirs(row)) await ctx().storage.deletePrefix(dir).catch(() => undefined)
   return c.json({ ok: true })
 })
 

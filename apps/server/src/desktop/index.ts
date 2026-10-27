@@ -111,7 +111,10 @@ export const desktopGuard: MiddlewareHandler<AppEnv> = async (c, next) => {
   const peer = remoteAddress(c)
   if (peer && !LOOPBACK.test(peer)) return c.json({ error: 'Forbidden', code: 'forbidden' }, 403)
   await next()
+  // a response's own policy (`sandbox` on a file served as a download) is kept: both are enforced
+  const own = c.res.headers.get('Content-Security-Policy')
   c.res.headers.set('Content-Security-Policy', CSP)
+  if (own && own !== CSP) c.res.headers.append('Content-Security-Policy', own)
   c.res.headers.set('X-Content-Type-Options', 'nosniff')
   c.res.headers.set('Referrer-Policy', 'no-referrer')
   c.res.headers.set('Cross-Origin-Opener-Policy', 'same-origin')
@@ -209,7 +212,7 @@ desktopRoutes.post('/sync/notices/:id', async (c) => {
 desktopRoutes.post('/projects/:id/sync', async (c) => {
   requireUser(c)
   const b = await body(c, z.object({ mode: z.enum(['keep-local', 'keep-cloud', 'keep-both']) }))
-  return c.json(await syncEngine.resolve(c.req.param('id'), b.mode))
+  return c.json(await viaCloud(() => syncEngine.resolve(c.req.param('id'), b.mode)))
 })
 
 // while linked, new workspaces are created in the cloud first (it owns workspace ids) and mirrored here
@@ -218,7 +221,7 @@ desktopRoutes.post('/workspaces', async (c, next) => {
   const raw = (await c.req.raw.clone().json().catch(() => ({}))) as { name?: unknown }
   const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 80) : ''
   if (!name) return next()
-  const w = await syncEngine.createWorkspace(name)
+  const w = await viaCloud(() => syncEngine.createWorkspace(name))
   if (!w) return next()
   return c.json(w)
 })
