@@ -69,9 +69,11 @@ export function DictationController() {
         toast('Dictation copied to the clipboard')
       }
     } catch (e) {
-      toastError(new Error(friendly(e)))
+      s.cancel()
+      // a failure already said by the session's error event isn't said twice
+      if (session.current === s) toastError(new Error(friendly(e)))
     } finally {
-      session.current = undefined
+      if (session.current === s) session.current = undefined
       setState('idle')
       setText('')
     }
@@ -89,23 +91,36 @@ export function DictationController() {
     const el = document.activeElement
     if (!isEditable(el)) return toast(`Click into a text box first, then press ${IN_APP_SHORTCUT}`)
     target.current = el
-    const s = new DictationSession({
+    setState('listening')
+    setText('')
+    // the model as set now (Settings may have changed it since launch)
+    settings.current = await systemApi.settings().catch(() => settings.current)
+    const s: DictationSession = new DictationSession({
       model: settings.current?.dictationModel || undefined,
       onEvent: (e) => {
+        if (session.current !== s) return
         if (e.type === 'partial') setText(e.text)
         else if (e.type === 'level') setLevel(e.level)
         else if (e.type === 'status' && e.stage !== 'ready') setText(e.stage === 'downloading' ? 'Downloading the dictation model…' : 'Loading the dictation model…')
+        else if (e.type === 'error') {
+          // an error or a dropped connection mid-dictation: say so and stop listening, instead of "Listening…"
+          session.current = undefined
+          setState('idle')
+          setText('')
+          toastError(new Error(friendly(e.message)))
+        }
       },
     })
     session.current = s
-    setState('listening')
-    setText('')
     try {
       await s.start()
     } catch (e) {
-      session.current = undefined
-      setState('idle')
-      toastError(new Error(friendly(e)))
+      s.cancel()
+      if (session.current === s) {
+        session.current = undefined
+        setState('idle')
+        toastError(new Error(friendly(e)))
+      }
     }
   }, [status])
 
@@ -158,27 +173,40 @@ export default function DictationWidget() {
     systemApi.settings().then((s) => (model.current = s.dictationModel || undefined)).catch(() => undefined)
     const b = dictationBridge()
     if (!b) return
+    const showError = (e: unknown) => {
+      setErr(friendly(e))
+      setState('error')
+      setTimeout(() => void b.cancel(), 2500)
+    }
     const begin = async () => {
       session.current?.cancel()
       setErr(undefined)
       setText('')
       setState('listening')
-      const s = new DictationSession({
+      // the model as set now: Settings may have changed it since this widget opened
+      model.current = await systemApi.settings().then((st) => st.dictationModel || undefined, () => model.current)
+      const s: DictationSession = new DictationSession({
         model: model.current,
         onEvent: (e) => {
+          if (session.current !== s) return
           if (e.type === 'partial') setText(e.text)
           else if (e.type === 'level') setLevel(e.level)
           else if (e.type === 'status' && e.stage !== 'ready') setText('Loading the dictation model…')
+          else if (e.type === 'error') {
+            session.current = undefined
+            showError(e.message)
+          }
         },
       })
       session.current = s
       try {
         await s.start()
       } catch (e) {
-        setErr(friendly(e))
-        setState('error')
-        session.current = undefined
-        setTimeout(() => void b.cancel(), 2500)
+        s.cancel()
+        if (session.current === s) {
+          session.current = undefined
+          showError(e)
+        }
       }
     }
     const finish = async () => {
@@ -188,13 +216,14 @@ export default function DictationWidget() {
       try {
         const final = await s.stop()
         await b.result(final)
+        // functional: an error shown meanwhile stays on screen
+        setState((st) => (st === 'error' ? st : 'idle'))
       } catch (e) {
-        setErr(friendly(e))
-        setState('error')
-        setTimeout(() => void b.cancel(), 2500)
+        s.cancel()
+        // a failure the session's error event already showed isn't shown twice
+        if (session.current === s) showError(e)
       } finally {
-        session.current = undefined
-        if (state !== 'error') setState('idle')
+        if (session.current === s) session.current = undefined
       }
     }
     return b.onCommand((cmd) => (cmd === 'start' ? void begin() : cmd === 'stop' ? void finish() : undefined))
