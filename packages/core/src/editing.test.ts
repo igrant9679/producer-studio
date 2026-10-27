@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addAsset,
   addItem,
+  clone,
   createProject,
   createTextItem,
   createVideoItem,
@@ -11,7 +12,9 @@ import {
   duplicateItems,
   findItem,
   freezeFrame,
+  insertTrack,
   isEditable,
+  itemEnd,
   mainTrack,
   moveItem,
   separateAudio,
@@ -23,6 +26,8 @@ import {
   updateTrack,
   type Asset,
   type Project,
+  type Track,
+  type VideoItem,
 } from './index'
 
 const video = (id: string, duration = 10): Asset => ({
@@ -104,3 +109,48 @@ describe('locks (EDT-19)', () => {
   })
 })
 
+/** Two clips back to back on an overlay track (o1: 0-4, o2: 4-8) above the main track. */
+function overlayPair(): Project {
+  const p = clone(twoClips())
+  const ov = insertTrack(p, 'overlay')
+  let q = addItem(p, createVideoItem(p.assets.a, 0, { id: 'o1', duration: 4 }), ov.id)
+  q = addItem(q, createVideoItem(q.assets.a, 4, { id: 'o2', duration: 4, in: 4 }), ov.id)
+  return q
+}
+
+const overlapping = (t: Track) => t.items.some((a, i) => t.items.some((b, j) => i !== j && a.start < itemEnd(b) - 1e-6 && itemEnd(a) > b.start + 1e-6))
+
+describe('clips on overlay tracks never overlap (EDT-15)', () => {
+  it('an edge trim stops at the neighbouring clip', () => {
+    const p = overlayPair()
+    expect(findItem(p, 'o1')!.track.id).toBe(findItem(p, 'o2')!.track.id)
+    expect(itemEnd(item(trimItem(p, 'o1', 'end', 7), 'o1'))).toBe(4)
+    const q = trimItem(p, 'o2', 'start', 1)
+    expect(item(q, 'o2').start).toBe(4)
+    expect((item(q, 'o2') as VideoItem).in).toBe(4)
+    // shortening still works
+    expect(itemEnd(item(trimItem(p, 'o1', 'end', 3), 'o1'))).toBe(3)
+  })
+
+  it('a clip slowed down past its neighbour moves to a free track', () => {
+    const p = overlayPair()
+    const q = updateItem<VideoItem>(p, 'o1', { speed: 0.5, duration: 8 })
+    expect(findItem(q, 'o1')!.track.id).not.toBe(findItem(q, 'o2')!.track.id)
+    expect(findItem(q, 'o1')!.track.kind).toBe('overlay')
+    expect(q.tracks.some(overlapping)).toBe(false)
+    expect(item(q, 'o2').start).toBe(4)
+  })
+})
+
+describe('trim below zero (EDT-35)', () => {
+  it('clamps the start to 0 before working out the source offset', () => {
+    const p = clone(twoClips())
+    const ov = insertTrack(p, 'overlay')
+    const q = addItem(p, createVideoItem(p.assets.a, 5, { id: 'late', duration: 2, in: 8 }), ov.id)
+    const r = trimItem(q, 'late', 'start', -1)
+    expect(item(r, 'late').start).toBe(0)
+    // the frame at the old start (source 8 at time 5) is still at time 5
+    expect((item(r, 'late') as VideoItem).in).toBe(3)
+    expect(item(r, 'late').duration).toBe(7)
+  })
+})

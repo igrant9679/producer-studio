@@ -213,8 +213,24 @@ export function updateItem<T extends Item>(p0: Project, itemId: string, patch: P
   if (!f || (!(onlyLock && !f.track.locked) && !editable(f))) return p0
   Object.assign(f.item, clone(patch))
   if (f.track.main) packMain(p)
-  else sortItems(f.track)
+  else {
+    sortItems(f.track)
+    if ('duration' in patch || 'start' in patch) unstack(p, f.track, f.item)
+  }
   return touch(p)
+}
+
+/**
+ * A clip made longer (slowed down) or moved onto its neighbour on a non-main track goes to a free track of the same
+ * kind, or a new one just above, instead of playing over it. Caption lines stay on their one track.
+ */
+function unstack(p: Project, track: Track, it: Item) {
+  if (track.main || track.kind === 'caption' || !overlaps(track, it.start, itemEnd(it), new Set([it.id]))) return
+  track.items.splice(track.items.indexOf(it), 1)
+  const room = p.tracks.find((t) => t !== track && !t.main && !t.locked && t.kind === track.kind && !overlaps(t, it.start, itemEnd(it), new Set([it.id])))
+  const to = room ?? insertTrack(p, track.kind, p.tracks.indexOf(track))
+  to.items.push(it)
+  sortItems(to)
 }
 
 export function updateTrack(p0: Project, trackId: string, patch: Partial<Track>): Project {
@@ -279,8 +295,8 @@ function timeAt(it: VideoItem | AudioItem, src: number): number {
 }
 
 /**
- * Trim an edge to timeline time `t`. Media items can't be extended past their source bounds.
- * Main-track trims ripple (the track re-packs).
+ * Trim an edge to timeline time `t`. Media items can't be extended past their source bounds or before 0.
+ * Main-track trims ripple (the track re-packs); on other tracks an edge stops at the neighbouring clip.
  */
 export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: number): Project {
   const p = clone(p0)
@@ -290,8 +306,12 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
   const minDur = 1 / p.fps
   const span = mediaSpan(p, it)
   const frozen = it.type === 'video' && it.freezeAt !== undefined
+  // clips on other tracks never overlap; one that already does can shrink but not grow further into it
+  const others = f.track.main ? [] : f.track.items.filter((i) => i !== it)
   if (edge === 'end') {
     let dur = Math.max(minDur, t - it.start)
+    const next = Math.min(...others.filter((i) => i.start > it.start + EPS).map((i) => i.start))
+    if (Number.isFinite(next)) dur = Math.min(dur, Math.max(next, itemEnd(it)) - it.start)
     if (span && isReversed(it)) {
       // the end of a reversed clip is the start of its range: trimming it moves `in`, extending needs source before it
       dur = Math.min(dur, it.duration + span.in / span.speed)
@@ -300,7 +320,9 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
     it.duration = round(dur, 4)
   } else {
     const end = itemEnd(it)
-    let start = Math.min(t, end - minDur)
+    const prev = Math.max(0, ...others.filter((i) => i.start < it.start - EPS).map(itemEnd))
+    // clamped before `in` is worked out from it, so a start asked for below 0 can't shift the source
+    let start = Math.max(Math.min(prev, it.start), Math.min(t, end - minDur))
     if (span && isReversed(it)) {
       // the start of a reversed clip is the end of its range: `in` stays, extending needs source after the range
       start = Math.max(start, it.start - (span.max - span.in - it.duration * span.speed) / span.speed)
