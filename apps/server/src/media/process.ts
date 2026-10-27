@@ -20,9 +20,13 @@ export interface ProbeResult {
   hasAudio: boolean
   codec?: string
   formatName: string
+  /** Absolute stream indexes of the picture and the sound probe chose (cover art is never the picture). */
+  videoStream?: number
+  audioStream?: number
 }
 
 interface FfStream {
+  index: number
   codec_type: string
   codec_name?: string
   width?: number
@@ -73,8 +77,13 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
     hasAudio: Boolean(a),
     codec: v?.codec_name ?? a?.codec_name,
     formatName,
+    videoStream: v?.index,
+    audioStream: a?.index,
   }
 }
+
+/** Proxies play at no more than this: a 240 fps slow-motion clip makes a proxy no browser can decode smoothly. */
+export const PROXY_MAX_FPS = 60
 
 async function sha256File(file: string): Promise<string> {
   const h = crypto.createHash('sha256')
@@ -186,10 +195,13 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       const dur = info.duration ?? 0
       const W = info.width ?? 1280
       const H = info.height ?? 720
+      // the picture probe chose, never cover art (ffmpeg's own pick is the largest picture, often the cover)
+      const vmap = ['-map', `0:${info.videoStream ?? 'v:0'}`]
+      const amap = ['-map', `0:${info.audioStream ?? 'a:0'}`]
       // thumbnail + filmstrip first so the library shows something quickly
       jc.progress(0.05, 'Thumbnail')
       const thumb = path.join(work, 'thumb.jpg')
-      await ffmpeg(['-ss', String(Math.min(1, dur * 0.1)), '-i', src, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
+      await ffmpeg(['-ss', String(Math.min(1, dur * 0.1)), '-i', src, ...vmap, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
       keys.thumbKey = await put(thumb, 'thumb.jpg', 'image/jpeg')
       jc.check()
       jc.progress(0.1, 'Filmstrip')
@@ -198,7 +210,7 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       const fw = even((W / H) * fh)
       const strip = path.join(work, 'filmstrip.jpg')
       const fpsExpr = dur > 0 ? `${frames}/${Math.max(0.5, dur).toFixed(3)}` : '1'
-      await ffmpeg(['-i', src, '-vf', `fps=${fpsExpr},scale=${fw}:${fh},tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', strip], { signal: jc.signal })
+      await ffmpeg(['-i', src, ...vmap, '-vf', `fps=${fpsExpr},scale=${fw}:${fh},tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', strip], { signal: jc.signal })
       keys.filmstripKey = await put(strip, 'filmstrip.jpg', 'image/jpeg')
       meta.filmstrip = { frames, frameWidth: fw, frameHeight: fh }
       jc.check()
@@ -208,7 +220,7 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
         meta.waveform = a.waveform
         meta.silences = a.silences
         const m4a = path.join(work, 'audio.m4a')
-        await ffmpeg(['-i', src, '-vn', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', m4a], { signal: jc.signal })
+        await ffmpeg(['-i', src, ...amap, '-vn', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', m4a], { signal: jc.signal })
         keys.audioKey = await put(m4a, 'audio.m4a', 'audio/mp4')
         jc.check()
       }
@@ -217,12 +229,14 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       jc.progress(0.25, 'Building edit proxy')
       const { w, h } = proxySize(W, H)
       const proxy = path.join(work, 'proxy.mp4')
-      const gop = String(Math.max(1, Math.round(info.fps ?? 30)))
+      // slow-motion footage (120/240 fps) is shown at 60: the clip's own rate stays in its metadata for the export
+      const fast = (info.fps ?? 30) > PROXY_MAX_FPS
+      const gop = String(Math.max(1, Math.round(Math.min(info.fps ?? 30, PROXY_MAX_FPS))))
       await ffmpegProgress(
         [
           '-i', src,
-          '-map', '0:v:0', ...(info.hasAudio ? ['-map', '0:a:0?'] : []),
-          '-vf', `scale=${w}:${h},format=yuv420p`,
+          ...vmap, ...(info.hasAudio ? amap : []),
+          '-vf', `${fast ? `fps=${PROXY_MAX_FPS},` : ''}scale=${w}:${h},format=yuv420p`,
           '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-g', gop, '-keyint_min', gop,
           ...(info.hasAudio ? ['-c:a', 'aac', '-b:a', '128k', '-ac', '2'] : ['-an']),
           '-movflags', '+faststart',
