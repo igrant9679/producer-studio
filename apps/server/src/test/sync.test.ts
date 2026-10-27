@@ -245,10 +245,15 @@ describe('change feed', () => {
     expect(Number(seen[0].low)).toBeLessThan(seqInTx)
     expect(await rows(LOCKS)).toEqual([])
 
-    // a slow transaction: registered, holds a change number, not committed while 30 newer changes land
+    // a slow transaction: registered, holds a change number, not committed while 30 newer changes land. Its stand-in
+    // session lock is taken and released on one connection (on a real Postgres the pool may hand out another)
+    const { default: postgres } = await import('postgres')
+    const one = process.env.TEST_DATABASE_URL ? postgres(process.env.TEST_DATABASE_URL, { max: 1, onnotice: () => undefined }) : undefined
+    const held = async <T,>(q: ReturnType<typeof sql>, raw: string) => (one ? ((await one.unsafe(raw)) as unknown as T[]) : rows<T>(q))
     const [{ v: low }] = await rows<{ v: string }>(sql`SELECT last_value::text AS v FROM change_seq`)
     const key = sql`((20563::bigint << 48) | ${Number(low)}::bigint)`
-    await rows(sql`SELECT pg_advisory_lock_shared(${key})`)
+    const rawKey = `((20563::bigint << 48) | ${Number(low)}::bigint)`
+    await held(sql`SELECT pg_advisory_lock_shared(${key})`, `SELECT pg_advisory_lock_shared(${rawKey})`)
     const [{ s: slowSeq }] = await rows<{ s: string }>(sql`SELECT nextval('change_seq')::text AS s`)
     for (let i = 0; i < 30; i++) await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: `Newer ${i}` })
     const page = (await A.client.json('GET', `/api/sync/changes?since=${c0}&limit=500`)).body
@@ -259,7 +264,8 @@ describe('change feed', () => {
     await rows(sql`ALTER TABLE projects DISABLE TRIGGER projects_change_seq`)
     await rows(sql`UPDATE projects SET name = 'Slow, committed late', change_seq = ${Number(slowSeq)} WHERE id = ${slow}`)
     await rows(sql`ALTER TABLE projects ENABLE TRIGGER projects_change_seq`)
-    await rows(sql`SELECT pg_advisory_unlock_shared(${key})`)
+    await held(sql`SELECT pg_advisory_unlock_shared(${key})`, `SELECT pg_advisory_unlock_shared(${rawKey})`)
+    await one?.end()
     // resuming from `safe` delivers it; resuming from the old count-based lookback would not
     const resumed = (await A.client.json('GET', `/api/sync/changes?since=${page.safe}&limit=500`)).body
     expect(resumed.projects.find((p: { project: { id: string } }) => p.project.id === slow)?.summary.name).toBe('Slow, committed late')

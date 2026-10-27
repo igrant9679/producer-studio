@@ -18,7 +18,9 @@ export async function setup(): Promise<TestEnv> {
   process.env.LOG_SILENT = '1'
   process.env.DATA_DIR = dataDir
   process.env.PGLITE_DIR = 'memory://'
-  delete process.env.DATABASE_URL
+  // TEST_DATABASE_URL runs the suite on a real Postgres (a throwaway one: tests write to it) instead of PGlite
+  if (process.env.TEST_DATABASE_URL) process.env.DATABASE_URL = process.env.TEST_DATABASE_URL
+  else delete process.env.DATABASE_URL
   delete process.env.S3_BUCKET
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.ANTHROPIC_AUTH_TOKEN
