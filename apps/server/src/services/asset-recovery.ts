@@ -77,11 +77,14 @@ export async function reconcileAssets(now = Date.now()): Promise<number> {
     .limit(200)
   for (const a of abandoned) if (await failAsset(a.id, ['uploading'], ASSET_ERRORS.uploadAbandoned)) n++
 
-  // a minute of grace covers the gap between the complete route marking a clip processing and enqueueing its job
+  // a minute of grace covers the gap between the complete route marking a clip processing and enqueueing its job.
+  // On a desktop, a clip synced down from the cloud is processed by the cloud (no job here ever will): its status
+  // arrives with a later pull, so the desktop leaves it alone.
+  const notSynced = ctx().config.mode === 'desktop' ? sql`NOT EXISTS (SELECT 1 FROM desktop_sync s WHERE s.kind = 'asset' AND s.id = ${assets.id} AND s.remote)` : undefined
   const processing = await db
     .select({ id: assets.id, origin: assets.origin, updatedAt: assets.updatedAt, parentJob: parentJobOf })
     .from(assets)
-    .where(and(eq(assets.status, 'processing'), lt(assets.updatedAt, now - 60_000)))
+    .where(and(eq(assets.status, 'processing'), lt(assets.updatedAt, now - 60_000), notSynced))
     .limit(500)
   if (!processing.length) return n
   const assetIdOf = sql<string>`${jobs.input}->>'assetId'`
