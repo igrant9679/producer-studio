@@ -34,8 +34,11 @@ useWizard.subscribe((st, prev) => {
   const p = prev.s
   // an edit to the brief or script of this project: save it to the project shortly
   if (s.projectId && s.projectId === p.projectId && (s.brief !== p.brief || s.scenes !== p.scenes || s.scriptBrief !== p.scriptBrief) && canSaveDraft(s)) {
-    if (s.draft?.state !== 'pending') useWizard.getState().patch({ draft: { state: 'pending' } })
-    scheduleDraftSave()
+    // what a job just wrote to the project (or an edit undone) needs no save
+    const held = savedDrafts.get(s.projectId) === draftKey(s)
+    const state = held ? 'saved' : 'pending'
+    if (s.draft?.state !== state) useWizard.getState().patch({ draft: { state } })
+    if (!held) scheduleDraftSave()
   }
 })
 
