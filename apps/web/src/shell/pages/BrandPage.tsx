@@ -52,6 +52,8 @@ export default function BrandPage() {
   const [doc, setDoc] = useState<BrandKitDoc>()
   const [saved, setSaved] = useState<BrandKitDoc>()
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string>()
+  const [attempt, setAttempt] = useState(0)
   const [saving, setSaving] = useState(false)
   const [logoBusy, setLogoBusy] = useState(0)
   const [logoErr, setLogoErr] = useState(false)
@@ -61,25 +63,28 @@ export default function BrandPage() {
     if (!workspaceId) return
     let alive = true
     setLoading(true)
+    setLoadError(undefined)
     api
       .brand(workspaceId)
       .then((b) => {
         if (!alive) return
+        // a space without a kit gets the server's defaults here
         const d = { ...EMPTY, ...b, fonts: { ...EMPTY.fonts, ...(b?.fonts ?? {}) }, colors: b?.colors ?? EMPTY.colors }
         setDoc(d)
         setSaved(d)
       })
-      .catch(() => {
+      .catch((e) => {
         if (!alive) return
-        setDoc({ ...EMPTY, name: ws?.name ?? '' })
+        // never stand in defaults for a kit we couldn't read: saving them would replace the real one
+        setDoc(undefined)
         setSaved(undefined)
+        setLoadError(e instanceof Error ? e.message : String(e))
       })
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId])
+  }, [workspaceId, attempt])
 
   const pickLogo = useFilePicker('image/png,image/svg+xml,image/jpeg,image/webp', false, async ([file]) => {
     if (!workspaceId || !file) return
@@ -94,6 +99,23 @@ export default function BrandPage() {
       setLogoBusy(0)
     }
   })
+
+  if (loadError && !loading) {
+    return (
+      <div className="ps-page">
+        <div className="ps-page-head">
+          <div>
+            <span className="eyebrow">{ws?.name}</span>
+            <h1>Brand kit</h1>
+          </div>
+        </div>
+        <div className="ps-alert" role="alert" style={{ alignItems: 'center' }}>
+          <span style={{ flex: 1 }}>Couldn’t load this space’s brand kit: {loadError}. Nothing was changed; try again before editing it.</span>
+          <button className="btn sm" onClick={() => setAttempt((n) => n + 1)}><RotateCcw size={13} /> Retry</button>
+        </div>
+      </div>
+    )
+  }
 
   if (loading || !doc) {
     return (
@@ -117,7 +139,8 @@ export default function BrandPage() {
   const cap = CAPTION_PRESETS.find((c) => c.id === (doc.captionPreset ?? 'clean')) ?? CAPTION_PRESETS[0]
 
   async function save() {
-    if (!workspaceId || !doc) return
+    // only ever over a kit that loaded
+    if (!workspaceId || !doc || !saved) return
     setSaving(true)
     try {
       const out = await api.saveBrand(workspaceId, { ...doc, colors: doc.colors.filter(isHex) })
@@ -141,7 +164,7 @@ export default function BrandPage() {
         </div>
         <span className="spacer" />
         {dirty && <button className="btn ghost" onClick={() => saved && setDoc(saved)} disabled={!saved}><RotateCcw size={14} /> Discard</button>}
-        <button className="btn primary" onClick={save} disabled={!dirty || saving || !canEdit}>{saving ? <Spinner /> : <Save size={15} />} {dirty ? 'Save changes' : 'Saved'}</button>
+        <button className="btn primary" onClick={save} disabled={!dirty || saving || !canEdit || !saved}>{saving ? <Spinner /> : <Save size={15} />} {dirty ? 'Save changes' : 'Saved'}</button>
       </div>
       {!canEdit && <div className="ps-alert info" style={{ marginBottom: 18 }}>You have view-only access to this space’s brand kit.</div>}
 
