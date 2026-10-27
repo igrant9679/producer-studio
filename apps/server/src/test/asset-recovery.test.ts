@@ -3,7 +3,7 @@
 import { eq } from 'drizzle-orm'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { ctx } from '../context'
-import { assets, jobs } from '../db/schema'
+import { type AssetMeta, assets, jobs } from '../db/schema'
 import { cancelJob, claimNext, enqueue, recoverStale } from '../jobs/queue'
 import { ASSET_ERRORS, UPLOAD_ABANDONED_MS, reconcileAssets } from '../services/asset-recovery'
 import { checkStorage, describeStorageError, storageHealth } from '../services/storage-health'
@@ -15,7 +15,7 @@ let WS = ''
 let USER = ''
 let n = 0
 
-async function asset(status: 'uploading' | 'processing' | 'ready', updatedAt: number, origin = 'upload') {
+async function asset(status: 'uploading' | 'processing' | 'ready', updatedAt: number, origin = 'upload', meta: AssetMeta = {}) {
   const id = `as_rec_${++n}`
   await ctx().db.insert(assets).values({
     id,
@@ -25,6 +25,7 @@ async function asset(status: 'uploading' | 'processing' | 'ready', updatedAt: nu
     mime: 'video/quicktime',
     status,
     origin,
+    meta,
     sourceKey: `ws/${WS}/assets/${id}/source.mov`,
     createdBy: USER,
     createdAt: updatedAt,
@@ -89,6 +90,32 @@ describe('stuck clips', () => {
     await reconcileAssets(now)
     expect(await statusOf(upload)).toMatchObject({ status: 'error', error: ASSET_ERRORS.neverStarted })
     expect((await statusOf(voiceover)).status).toBe('processing')
+  })
+
+  it('fails a clip made inside another job (a Producer AI voice) once that job has ended without finishing it', async () => {
+    const now = Date.now()
+    const parent = await enqueue('ai.produce.assemble', { projectId: 'p_rec' }, { workspaceId: WS, userId: USER })
+    const voice = await asset('processing', now - 10 * 60_000, 'tts', { jobId: parent.id })
+    // its job is still queued or running: left alone
+    await reconcileAssets(now)
+    expect((await statusOf(voice)).status).toBe('processing')
+    // the worker died mid-voice and the job ended: the clip says so instead of "processing" for good
+    await ctx().db.update(jobs).set({ status: 'error', error: 'TTS worker exited (code 1)', updatedAt: now - 5 * 60_000 }).where(eq(jobs.id, parent.id))
+    await reconcileAssets(now)
+    expect(await statusOf(voice)).toMatchObject({ status: 'error', error: ASSET_ERRORS.endedWithoutResult })
+    // a parent job that no longer exists (pruned) can't finish it either
+    const orphan = await asset('processing', now - 10 * 60_000, 'tts', { jobId: 'j_pruned_long_ago' })
+    await reconcileAssets(now)
+    expect((await statusOf(orphan)).status).toBe('error')
+  })
+
+  it('cancelling a job fails the clips it was still making, and only those', async () => {
+    const parent = await enqueue('ai.produce.assemble', { projectId: 'p_rec' }, { workspaceId: WS, userId: USER })
+    const voice = await asset('processing', Date.now(), 'tts', { jobId: parent.id })
+    const finished = await asset('ready', Date.now(), 'tts', { jobId: parent.id })
+    await cancelJob(parent.id)
+    expect(await statusOf(voice)).toMatchObject({ status: 'error', error: ASSET_ERRORS.cancelled })
+    expect((await statusOf(finished)).status).toBe('ready')
   })
 
   it('cancelling a queued processing job fails its clip at once', async () => {

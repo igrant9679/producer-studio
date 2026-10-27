@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { ctx } from '../context'
 import { type AssetMeta, assets } from '../db/schema'
 import { assetRecord } from '../dto'
@@ -20,10 +20,15 @@ export async function loadAsset(id: string): Promise<AssetRow> {
   return row
 }
 
-export async function updateAsset(id: string, patch: Partial<AssetRow>): Promise<AssetRow> {
+/**
+ * Update an asset row. `meta` is a patch merged into the stored metadata in SQL, never a snapshot written back:
+ * processing, transcription and voice jobs write their own keys of the same clip at the same time.
+ */
+export async function updateAsset(id: string, patch: Omit<Partial<AssetRow>, 'meta'> & { meta?: Partial<AssetMeta> }): Promise<AssetRow> {
+  const { meta, ...rest } = patch
   const [row] = await ctx()
     .db.update(assets)
-    .set({ ...patch, updatedAt: Date.now() })
+    .set({ ...rest, ...(meta ? { meta: sql`coalesce(${assets.meta}, '{}'::jsonb) || ${JSON.stringify(meta)}::jsonb` } : {}), updatedAt: Date.now() })
     .where(eq(assets.id, id))
     .returning()
   if (!row) throw notFound('Asset not found')
@@ -32,8 +37,7 @@ export async function updateAsset(id: string, patch: Partial<AssetRow>): Promise
 }
 
 export async function mergeAssetMeta(id: string, patch: Partial<AssetMeta>): Promise<AssetRow> {
-  const cur = await loadAsset(id)
-  return updateAsset(id, { meta: { ...(cur.meta ?? {}), ...patch } })
+  return updateAsset(id, { meta: patch })
 }
 
 export const assetPrefix = (workspaceId: string, assetId: string) => `ws/${workspaceId}/assets/${assetId}`

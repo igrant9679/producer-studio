@@ -3,7 +3,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import * as z from 'zod/v4'
-import { VOICES, isProfileVoice, profileIdOf, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
+import { VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { jobDto } from '../dto'
@@ -15,7 +15,7 @@ import { assertQueueRoom, limitAi } from '../limits'
 import { inlineContext } from '../jobs/worker'
 import { log } from '../log'
 import { loadAsset } from '../services/assets'
-import { assertProjectInWorkspace, loadProjectRow } from '../services/projects'
+import { assertProjectInWorkspace, insertProject, loadProjectRow, withFreshIds } from '../services/projects'
 import { runAssistant } from '../ai/assistant'
 import { requireProvider } from '../ai/provider'
 import { ensureTranscript, synthesizeToAsset } from '../ai/speech'
@@ -23,7 +23,7 @@ import { tts, validVoice } from '../ai/tts'
 import { whisperAvailable } from '../ai/whisper'
 import { enqueueRelay } from '../services/voice'
 import { generationCapabilities } from '../ai/generate'
-import { MAX_AI_CLIPS, allowedVisualKinds } from '../ai/produce'
+import { type AssembleJobInput, MAX_AI_CLIPS, allowedVisualKinds, editedSinceAssembly, saveOnLatest, timelineFingerprint } from '../ai/produce'
 import { VisualSchema } from '../ai/scenes'
 import { profileVoices } from './voice'
 
@@ -177,6 +177,25 @@ const SceneSchema = z.object({
   voice: z.object({ assetId: z.string(), duration: z.number() }).optional(),
 })
 
+/**
+ * The wizard's brief and script edits, saved to the project's `ai` as they're typed, so another tab or device resumes
+ * them. Only `ai` changes (on the latest version): the timeline and everything else stay as they are.
+ */
+aiRoutes.put('/produce/draft', async (c) => {
+  const u = requireUser(c)
+  // a scene still being written may have no narration yet
+  const DraftScene = SceneSchema.extend({ narration: z.string().max(5000) })
+  const b = await body(c, z.object({ projectId: z.string().min(1), brief: BriefSchema, scenes: z.array(DraftScene).max(100), scriptBrief: BriefSchema.optional() }))
+  const row = await loadProjectRow(b.projectId)
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const brief = { ...b.brief, voice: validVoice(b.brief.voice) }
+  const saved = await saveOnLatest(row.id, (cur) => ({
+    ...cur,
+    ai: { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes: b.scenes, ...(b.scriptBrief ? { brief: b.scriptBrief } : {}) } },
+  }))
+  return c.json({ version: saved.version })
+})
+
 /** What Producer AI can make for this space without recordings (which keys exist, whether stock footage is set up). */
 aiRoutes.get('/produce/capabilities', async (c) => {
   const u = requireUser(c)
@@ -189,11 +208,27 @@ aiRoutes.get('/produce/capabilities', async (c) => {
 
 aiRoutes.post('/produce/assemble', async (c) => {
   const u = requireUser(c)
-  const b = await body(c, z.object({ projectId: z.string().min(1), scenes: z.array(SceneSchema).min(1).max(40) }))
+  const b = await body(
+    c,
+    z.object({ projectId: z.string().min(1), scenes: z.array(SceneSchema).min(1).max(40), brief: BriefSchema.optional(), replace: z.boolean().optional(), intoCopy: z.boolean().optional() }),
+  )
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
   await assertQueueRoom(row.workspaceId)
-  const j = await enqueue('ai.produce.assemble', b, { workspaceId: row.workspaceId, userId: u.id, projectId: row.id, message: 'Assembling' })
+  // assembling replaces the whole timeline: ask first when it holds edits made since the last assembly
+  if (!b.replace && !b.intoCopy && editedSinceAssembly(row.doc)) {
+    throw new HttpError(409, 'conflict', 'This project was edited since it was assembled. Assembling again replaces the whole timeline, including those edits.', { reason: 'edited' })
+  }
+  let target = row
+  if (b.intoCopy) {
+    const doc = withFreshIds(row.doc, uid('p'))
+    doc.name = `${row.name} copy`.slice(0, 200)
+    target = await insertProject({ workspaceId: row.workspaceId, userId: u.id, doc, kind: row.kind })
+  }
+  // the brief as it is on screen (voice, look, title): not the one the script was written from
+  const brief = b.brief ? { ...b.brief, voice: validVoice(b.brief.voice) } : undefined
+  const input: AssembleJobInput = { projectId: target.id, scenes: b.scenes, ...(brief ? { brief } : {}), base: timelineFingerprint(target.doc) }
+  const j = await enqueue('ai.produce.assemble', { ...input }, { workspaceId: row.workspaceId, userId: u.id, projectId: target.id, message: 'Assembling' })
   return c.json(jobDto(j))
 })
 

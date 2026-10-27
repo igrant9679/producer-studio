@@ -735,13 +735,25 @@ on('POST', '/api/ai/produce/assemble', (_m, _q, b) => {
         p.thumbnailUrl = thumbSvg(p.id, 320, (320 * p.height) / p.width)
         p.updatedAt = Date.now()
         const d = docFor(p)
-        d.ai = { ...(d.ai ?? {}), script: { scenes }, status: 'assembled' }
+        // like the server: the brief sent with Assemble is the one used
+        d.ai = { ...(d.ai ?? {}), ...(b.brief ? { brief: b.brief as NonNullable<Project['ai']>['brief'] } : {}), script: { ...(d.ai?.script ?? {}), scenes }, status: 'assembled' }
         emit('project', { id: p.id, version: p.version, workspaceId: p.workspaceId })
       }
       return { version: p?.version ?? 1 }
     },
   })
   return json(publicJob(j))
+})
+
+// like the server: the wizard's brief and script edits are saved onto the project's `ai`
+on('PUT', '/api/ai/produce/draft', (_m, _q, b) => {
+  const p = projects.find((x) => x.id === b.projectId)
+  if (!p) return fail(404, 'Project not found', 'not_found')
+  const d = docFor(p)
+  const scenes = b.scenes as ScriptScene[]
+  d.ai = { ...(d.ai ?? {}), brief: b.brief as NonNullable<Project['ai']>['brief'], script: { ...(d.ai?.script ?? {}), scenes, ...(b.scriptBrief ? { brief: b.scriptBrief as NonNullable<Project['ai']>['brief'] } : {}) } }
+  p.version++
+  return json({ version: p.version })
 })
 
 on('GET', '/api/exports', (_m, q) => json(exportsByProject[q.get('projectId') ?? ''] ?? []))

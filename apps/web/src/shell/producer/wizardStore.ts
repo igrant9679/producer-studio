@@ -1,11 +1,12 @@
 // Wizard state lives in a module store so long-running steps (uploads, transcription, script, assembly)
-// keep going across route changes/remounts. Every change is mirrored to sessionStorage per project.
+// keep going across route changes/remounts. Every change is mirrored to sessionStorage per project, and the brief and
+// script are saved to the project itself (ai.brief, ai.script) as they're typed, so another tab or device resumes them.
 import type { AssetRecord, Job } from '@producer/core'
 import { create } from 'zustand'
 import { api, HttpError, waitForJob } from '../../lib/api'
 import { useJobs, waitForAssetReady } from '../stores'
 import { aspectFor, ssSet } from '../util'
-import { isIdea, readyAssetIds, storageKey, type WizardAsset, type WizardState, initialState } from './wizardLogic'
+import { draftKey, isIdea, readyAssetIds, storageKey, type WizardAsset, type WizardState, initialState } from './wizardLogic'
 
 interface WizardStore {
   s: WizardState
@@ -29,6 +30,16 @@ useWizard.subscribe((st, prev) => {
   if (st.s === prev.s) return
   // Persist (drop in-flight progress noise is fine — it is small).
   ssSet(storageKey(st.s.projectId), st.s)
+  const s = st.s
+  const p = prev.s
+  // an edit to the brief or script of this project: save it to the project shortly
+  if (s.projectId && s.projectId === p.projectId && (s.brief !== p.brief || s.scenes !== p.scenes || s.scriptBrief !== p.scriptBrief) && canSaveDraft(s)) {
+    // what a job just wrote to the project (or an edit undone) needs no save
+    const held = savedDrafts.get(s.projectId) === draftKey(s)
+    const state = held ? 'saved' : 'pending'
+    if (s.draft?.state !== state) useWizard.getState().patch({ draft: { state } })
+    if (!held) scheduleDraftSave()
+  }
 })
 
 type Patch = Partial<WizardState> | ((s: WizardState) => Partial<WizardState>)
@@ -57,10 +68,87 @@ function trackJob(j: Job) {
   useJobs.getState().upsert(j)
 }
 
+// ---------------- draft: the brief and script, saved to the project as they're typed ----------------
+
+/** What each project holds (draftKey), so only real edits are sent. */
+const savedDrafts = new Map<string, string>()
+let draftTimer: ReturnType<typeof setTimeout> | undefined
+let draftSaving = false
+
+/** The project already holds this state's brief and script (it was loaded from there, or a job just wrote them). */
+export function markDraftSaved(s: WizardState) {
+  if (s.projectId) savedDrafts.set(s.projectId, draftKey(s))
+}
+
+// the editor autosaves on the same beat
+function scheduleDraftSave(ms = 1200) {
+  clearTimeout(draftTimer)
+  draftTimer = setTimeout(() => void saveDraft(), ms)
+}
+
+/** While a job runs, or the Write step is replacing the script, the job owns it: edits are saved once it's done. */
+function canSaveDraft(s: WizardState): boolean {
+  return !!s.projectId && s.run.status !== 'running' && s.step !== 'generate'
+}
+
+/** Save the brief and script to the project now (the debounce and "Retry" both land here). */
+export async function saveDraft(): Promise<void> {
+  const s = get()
+  if (!canSaveDraft(s)) return
+  const { patch, live } = scoped()
+  const key = draftKey(s)
+  if (savedDrafts.get(s.projectId!) === key) {
+    if (s.draft?.state !== 'saved') patch({ draft: { state: 'saved' } })
+    return
+  }
+  // one save at a time, so an older one can never land after a newer one
+  if (draftSaving) return scheduleDraftSave()
+  draftSaving = true
+  patch({ draft: { state: 'saving' } })
+  try {
+    await api.saveProducerDraft({ projectId: s.projectId!, brief: s.brief, scenes: s.scenes, ...(s.scriptBrief ? { scriptBrief: s.scriptBrief } : {}) })
+    savedDrafts.set(s.projectId!, key)
+    patch({ draft: { state: draftKey(get()) === key ? 'saved' : 'pending' } })
+  } catch (e) {
+    patch({ draft: { state: 'error', error: errMsg(e) } })
+  } finally {
+    draftSaving = false
+  }
+  // typed more while it was saving
+  if (live() && get().draft?.state === 'pending') scheduleDraftSave(0)
+}
+
+/**
+ * After a reload with this tab's copy: send edits that weren't saved yet; otherwise take the project's brief and script
+ * (another tab or device may have edited them since).
+ */
+export async function resumeDraft() {
+  const s = get()
+  if (!s.projectId) return
+  const { patch, live } = scoped()
+  // a copy from before drafts were saved to the project holds edits the project never got
+  if (!s.draft || s.draft.state !== 'saved') {
+    if (canSaveDraft(s)) scheduleDraftSave(0)
+    return
+  }
+  markDraftSaved(s)
+  const res = await api.project(s.projectId).catch(() => undefined)
+  const ai = res?.project.ai
+  const cur = get()
+  if (!live() || !ai?.script?.scenes || cur.draft?.state !== 'saved' || cur.run.status === 'running') return
+  const next = { brief: ai.brief ?? cur.brief, scenes: ai.script.scenes, scriptBrief: ai.script.brief ?? cur.scriptBrief }
+  if (draftKey(next) === draftKey(cur)) return
+  markDraftSaved({ ...cur, ...next })
+  patch(next)
+}
+
+// ---------------- uploads ----------------
+
+/** Uploads go to the wizard's own space (`workspaceId`); the first one binds a new draft to it. */
 export async function uploadToWizard(workspaceId: string, files: File[]) {
   const { patch, patchAsset } = scoped()
   const items: Array<{ file: File; localId: string }> = files.map((file) => ({ file, localId: `l${Date.now().toString(36)}${++n}` }))
-  patch((s) => ({ assets: [...s.assets, ...items.map(({ file, localId }) => ({ localId, name: file.name, size: file.size, status: 'uploading' as const, progress: 0 }))] }))
+  patch((s) => ({ ...(s.workspaceId ? {} : { workspaceId }), assets: [...s.assets, ...items.map(({ file, localId }) => ({ localId, name: file.name, size: file.size, status: 'uploading' as const, progress: 0 }))] }))
   await Promise.all(
     items.map(async ({ file, localId }) => {
       try {
@@ -89,13 +177,14 @@ export function resumeProcessingAssets() {
   for (const a of get().assets) if (a.status === 'processing' && a.assetId) void waitAsset(a.localId, a.assetId)
 }
 
-export function addLibraryAssets(recs: AssetRecord[]) {
+/** Recordings picked from the library of `workspaceId` (the wizard's own space). */
+export function addLibraryAssets(recs: AssetRecord[], workspaceId?: string) {
   patch((s) => {
     const have = new Set(s.assets.map((a) => a.assetId))
     const add = recs
       .filter((r) => !have.has(r.asset.id))
       .map((r) => ({ localId: r.asset.id, assetId: r.asset.id, name: r.asset.name, size: r.asset.sizeBytes ?? 0, status: r.status === 'ready' ? ('ready' as const) : r.status === 'error' ? ('error' as const) : ('processing' as const), progress: 1, duration: r.asset.duration }))
-    return { assets: [...s.assets, ...add] }
+    return { ...(s.workspaceId || !workspaceId ? {} : { workspaceId }), assets: [...s.assets, ...add] }
   })
   for (const r of recs) if (r.status !== 'ready' && r.status !== 'error') void waitAsset(r.asset.id, r.asset.id)
 }
@@ -103,6 +192,8 @@ export function addLibraryAssets(recs: AssetRecord[]) {
 export function removeWizardAsset(localId: string) {
   patch((s) => ({ assets: s.assets.filter((a) => a.localId !== localId) }))
 }
+
+// ---------------- runs ----------------
 
 async function runJob<R>(patch: (p: Patch) => void, start: () => Promise<Job<R>>, onUpdate: (j: Job<R>) => void, existingJobId?: string): Promise<Job<R>> {
   const id = existingJobId ?? (await start()).id
@@ -166,7 +257,9 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
     )
     const scenes = job.result?.script?.scenes ?? []
     if (!scenes.length) throw new Error('The script came back empty. Try adding more detail to the brief.')
-    patch({ scenes, step: 'review', run: { status: 'done', phase: 'script', message: `Script ready — ${scenes.length} scenes` } })
+    // the script job saved these (and the brief it wrote from) to the project
+    markDraftSaved({ ...get(), scenes, scriptBrief: s.brief })
+    patch({ scenes, scriptBrief: s.brief, step: 'review', run: { status: 'done', phase: 'script', message: `Script ready — ${scenes.length} scenes` } })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') {
       // Only the run that was cancelled reports it; a run superseded by a newer one stays silent.
@@ -175,35 +268,56 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
   }
 }
 
-export async function runAssemble() {
+/**
+ * Narrate and assemble with the brief as it is now. A timeline edited since the last assembly makes the server ask
+ * (run.confirm = 'edited'); then `replace` replaces it, or `intoCopy` assembles into a copy, which the wizard follows
+ * (`onProject` gets its id).
+ */
+export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean; onProject?: (id: string) => void } = {}) {
   abort?.abort()
   abort = new AbortController()
   const signal = abort.signal
   const { patch } = scoped()
   const s = get()
   if (!s.projectId) return
+  let projectId = s.projectId
   const resumeJob = s.run.interrupted && s.run.phase === 'assemble' ? s.run.jobId : undefined
   patch({ step: 'assemble', run: { status: 'running', phase: 'assemble', message: 'Narrating and assembling your video…', progress: 0 } })
   try {
     const job = await runJob(
       patch,
-      () => api.produceAssemble(s.projectId!, s.scenes),
+      async () => {
+        const j = await api.produceAssemble({ projectId, scenes: s.scenes, brief: s.brief, ...(opts.replace ? { replace: true } : {}), ...(opts.intoCopy ? { intoCopy: true } : {}) })
+        if (j.projectId && j.projectId !== projectId) {
+          // into a copy: the wizard follows the copy; the edited project stays as it is
+          ssSet(storageKey(projectId), undefined)
+          projectId = j.projectId
+          patch({ projectId, assembledVersion: undefined, assembledFrom: undefined })
+          opts.onProject?.(projectId)
+        }
+        return j
+      },
       (j) => patch((st) => ({ run: { ...st.run, message: j.message || 'Assembling…', progress: j.progress } })),
       resumeJob,
     )
     if (signal.aborted) return
-    // the server saved scene visuals with what it made (so re-assembling reuses them): keep the wizard in step
-    const fresh = await api.project(s.projectId).catch(() => undefined)
+    // the server saved scene voices and visuals with what it made (so re-assembling reuses them): keep the wizard in step
+    const fresh = await api.project(projectId).catch(() => undefined)
+    const done = { ...get(), ...(fresh?.project.ai?.script?.scenes ? { scenes: fresh.project.ai.script.scenes } : {}) }
+    markDraftSaved(done)
     patch({
       assembledVersion: job.result?.version,
       assembleNotes: job.result?.notes,
-      ...(fresh?.project.ai?.script?.scenes ? { scenes: fresh.project.ai.script.scenes } : {}),
+      scenes: done.scenes,
+      assembledFrom: draftKey(done),
       run: { status: 'done', phase: 'assemble', message: 'Your video is ready' },
     })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') {
       // Only the run that was cancelled reports it; a run superseded by a newer one stays silent.
       if (abort?.signal === signal) patch((st) => ({ run: { ...st.run, status: 'idle', message: 'Stopped', jobId: undefined, interrupted: false } }))
+    } else if (e instanceof HttpError && e.status === 409 && (e.body?.details as { reason?: string } | undefined)?.reason === 'edited') {
+      if (abort?.signal === signal) patch({ run: { status: 'idle', phase: 'assemble', confirm: 'edited', message: errMsg(e) } })
     } else if (abort?.signal === signal) patch((st) => ({ run: { ...st.run, status: 'error', error: errMsg(e) } }))
   }
 }

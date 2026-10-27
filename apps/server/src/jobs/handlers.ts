@@ -23,7 +23,7 @@ export function registerHandlers() {
   })
   registerHandler('ai.tts', async (jc) => {
     const i = jc.job.input as { workspaceId: string; projectId?: string; text: string; voice: string; speed?: number; name?: string }
-    const r = await synthesizeToAsset({ ...i, userId: jc.job.userId }, jc)
+    const r = await synthesizeToAsset({ ...i, userId: jc.job.userId, jobId: jc.job.id }, jc)
     return { asset: r.asset, duration: r.duration }
   })
   registerHandler('ai.produce.script', produceScript)

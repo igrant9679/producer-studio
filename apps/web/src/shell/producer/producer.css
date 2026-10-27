@@ -182,3 +182,8 @@
 @media (max-width: 700px) {
   .ps-source { grid-template-columns: 1fr; }
 }
+
+/* the draft saved to the project; a space switched mid-wizard */
+.ps-draft { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--text-3); }
+.ps-draft.err { color: var(--danger-text); }
+.ps-space-mismatch { margin-bottom: 16px; align-items: center; flex-wrap: wrap; }

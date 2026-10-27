@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import { AudioLines, BookOpen, Layers, Library, Users, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { create } from 'zustand'
 import { api, mediaUrl, waitForJob } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
@@ -31,6 +32,51 @@ const EXAMPLES: Array<{ label: string; text: string }> = [
 ]
 
 const MAX_CHARS = 5000
+
+/**
+ * The text-to-speech draft and the voiceover being generated from it. A store, not component state: the script and
+ * the progress survive Voice Studio's own tabs (and other pages) while the generation carries on.
+ */
+interface TtsDraft {
+  text: string
+  name: string
+  speed: number
+  gen?: { progress: number; message: string }
+  /** The last voiceover generated, for the History list. */
+  made?: AssetRecord
+  /** How many Voice Studio pages are on screen: a voiceover finishing later plays only then. */
+  shown: number
+  set: (p: Partial<TtsDraft> | ((s: TtsDraft) => Partial<TtsDraft>)) => void
+}
+
+export const useTtsDraft = create<TtsDraft>((set) => ({ text: '', name: '', speed: 1, shown: 0, set: (p) => set(p) }))
+
+/** Generate a voiceover from the draft. */
+async function generateVoiceover(workspaceId: string, voice: string, voiceName: string) {
+  const d = useTtsDraft.getState()
+  const text = d.text.trim()
+  if (!text || d.gen) return
+  d.set({ gen: { progress: -1, message: 'Queued…' } })
+  try {
+    const job = await api.tts({ workspaceId, text, voice, speed: d.speed, name: d.name.trim() || `${text.split(/\s+/).slice(0, 5).join(' ')}… — ${voiceName}` })
+    const done = await waitForJob<{ asset: AssetRecord; duration: number }>(job.id, (j) => {
+      useJobs.getState().upsert(j)
+      useTtsDraft.getState().set({ gen: { progress: j.progress, message: j.message || 'Generating…' } })
+    })
+    const rec = done.result?.asset
+    if (rec) {
+      useTtsDraft.getState().set({ made: rec })
+      // play it only while Voice Studio is on screen, never on whatever page the person moved on to
+      if (useTtsDraft.getState().shown > 0 && document.visibilityState !== 'hidden') useAudioPreview.getState().toggle(`asset:${rec.asset.id}`, mediaUrl(rec.asset.id, 'source'))
+    }
+    toast('Voiceover ready')
+    useTtsDraft.getState().set({ name: '' })
+  } catch (e) {
+    toastError(e)
+  } finally {
+    useTtsDraft.getState().set({ gen: undefined })
+  }
+}
 
 function AiWriter({ onClose, hasText, onStream }: { onClose: () => void; hasText: boolean; onStream: (kind: 'voiceover' | 'rewrite', prompt: string) => void }) {
   const [kind, setKind] = useState<'voiceover' | 'rewrite'>('voiceover')
@@ -184,14 +230,12 @@ function HistoryRow({ a, onChange, onRemove }: { a: AssetRecord; onChange: (a: A
 function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: string; setVoice: (v: string) => void; onOpenVoices: () => void; onOpenTab: (t: Tab) => void }) {
   const workspaceId = useSession((s) => s.workspaceId)
   const voices = useVoices()
-  const [text, setText] = useState('')
-  const [name, setName] = useState('')
-  const [speed, setSpeed] = useState(1)
+  const { text, name, speed, gen, made, set } = useTtsDraft()
+  const setText = (t: string | ((t: string) => string)) => set((d) => ({ text: typeof t === 'function' ? t(d.text) : t }))
   const [filter, setFilter] = useState<VoiceFilter>('All')
   const [q, setQ] = useState('')
   const [writer, setWriter] = useState(false)
   const [writing, setWriting] = useState(false)
-  const [gen, setGen] = useState<{ progress: number; message: string }>()
   const taRef = useRef<HTMLTextAreaElement>(null)
   const writeCtrl = useRef<AbortController>()
   const history = useAsync(async () => {
@@ -200,6 +244,10 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
     return list.filter((a) => a.origin === 'tts').sort((x, y) => y.createdAt - x.createdAt)
   }, [workspaceId])
 
+  // a voiceover finished (perhaps while another tab was open): top of the History
+  useEffect(() => {
+    if (made && made.workspaceId === workspaceId) history.setData((cur) => [made, ...(cur ?? []).filter((x) => x.asset.id !== made.asset.id)])
+  }, [made, workspaceId, history.setData])
 
   useEffect(
     () =>
@@ -266,28 +314,9 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
     }
   }
 
-  async function generate() {
-    if (!workspaceId || !text.trim()) return
-    setGen({ progress: -1, message: 'Queued…' })
-    try {
-      const vName = selected?.name ?? voice
-      const job = await api.tts({ workspaceId, text: text.trim(), voice, speed, name: name.trim() || `${text.trim().split(/\s+/).slice(0, 5).join(' ')}… — ${vName}` })
-      const done = await waitForJob<{ asset: AssetRecord; duration: number }>(job.id, (j) => {
-        useJobs.getState().upsert(j)
-        setGen({ progress: j.progress, message: j.message || 'Generating…' })
-      })
-      const rec = done.result?.asset
-      if (rec) {
-        history.setData((cur) => [rec, ...(cur ?? []).filter((x) => x.asset.id !== rec.asset.id)])
-        useAudioPreview.getState().toggle(`asset:${rec.asset.id}`, mediaUrl(rec.asset.id, 'source'))
-      } else history.reload()
-      toast('Voiceover ready')
-      setName('')
-    } catch (e) {
-      toastError(e)
-    } finally {
-      setGen(undefined)
-    }
+  function generate() {
+    if (!workspaceId) return
+    void generateVoiceover(workspaceId, voice, selected?.name ?? voice)
   }
 
   const unavailable = selected?.available === false
@@ -296,7 +325,7 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
       <div className="ps-vs">
         <div className="ps-vs-main">
           <div className={clsx('ps-vs-editor', writing && 'writing')}>
-            <input className="ps-vs-name" placeholder="Untitled voiceover" value={name} onChange={(e) => setName(e.target.value)} aria-label="Voiceover name" />
+            <input className="ps-vs-name" placeholder="Untitled voiceover" value={name} onChange={(e) => set({ name: e.target.value })} aria-label="Voiceover name" />
             <div style={{ position: 'relative' }}>
               <textarea
                 ref={taRef}
@@ -403,9 +432,9 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
                 <label className="label" htmlFor="vs-speed" style={{ margin: 0 }}>Speed</label>
                 <span className="spacer" />
                 <span className="kbd">{speed.toFixed(2)}×</span>
-                {speed !== 1 && <button className="btn ghost sm" onClick={() => setSpeed(1)}>Reset</button>}
+                {speed !== 1 && <button className="btn ghost sm" onClick={() => set({ speed: 1 })}>Reset</button>}
               </div>
-              <input id="vs-speed" type="range" min={0.5} max={2} step={0.05} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="ps-range" />
+              <input id="vs-speed" type="range" min={0.5} max={2} step={0.05} value={speed} onChange={(e) => set({ speed: Number(e.target.value) })} className="ps-range" />
             </div>
             {gen ? (
               <div className="ps-vs-gen">
@@ -473,6 +502,11 @@ export default function VoiceStudio() {
     return n
   }, { replace: true })
   const [voice, setVoice] = useState('af_heart')
+  // a voiceover that finishes later plays only while Voice Studio is on screen
+  useEffect(() => {
+    useTtsDraft.getState().set((d) => ({ shown: d.shown + 1 }))
+    return () => useTtsDraft.getState().set((d) => ({ shown: d.shown - 1 }))
+  }, [])
   useEffect(() => {
     if (!workspaceId) return
     api.brand(workspaceId).then((b) => b.voice && setVoice(b.voice)).catch(() => undefined)

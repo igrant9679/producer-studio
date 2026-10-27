@@ -1,7 +1,8 @@
 // Producer AI pipeline: ai.produce.script (Claude structured output) and ai.produce.assemble (TTS + timeline).
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import {
   captionStyleFromPreset,
@@ -47,6 +48,47 @@ import { IDEA_SYSTEM, IdeaScriptSchema, VISUAL_KINDS, buildIdeaPrompt, normalize
 import { type Placed, type SceneFrame, diagramItems, motionItems, slotIndex } from './scene-layout'
 
 export type Brief = NonNullable<ProducerMeta['brief']>
+
+/**
+ * Re-read the project and save `next(current)` on top of that version; if another save lands in between, do it
+ * again on the newer one. Jobs that write the project (script, assembly, wizard drafts) never save over edits made
+ * while they ran.
+ */
+export async function saveOnLatest(id: string, next: (cur: Project) => Project, tries = 5): Promise<Awaited<ReturnType<typeof saveProjectDoc>>> {
+  for (let i = 0; ; i++) {
+    const row = await loadProjectRow(id)
+    const doc = next(row.doc)
+    try {
+      return await saveProjectDoc(id, doc, row.version)
+    } catch (err) {
+      if (!(err instanceof HttpError && err.status === 409) || i >= tries - 1) throw err
+    }
+  }
+}
+
+/** Sorted-key JSON: a document read back from Postgres (jsonb reorders keys) fingerprints like the one saved. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map((x) => (x === undefined ? 'null' : canonical(x))).join(',')}]`
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v) ?? 'null'
+}
+
+/** The part of a project assembly replaces, and a person edits: the tracks and the canvas. */
+export function timelineFingerprint(p: Project): string {
+  return crypto.createHash('sha256').update(canonical({ tracks: p.tracks, width: p.width, height: p.height, fps: p.fps, background: p.background })).digest('hex').slice(0, 32)
+}
+
+/** The timeline holds work an assembly would replace: edited since the last assembly, or built by hand before one. */
+export function editedSinceAssembly(p: Project): boolean {
+  if (!p.tracks.some((t) => t.items.length)) return false
+  return p.ai?.assembled?.fingerprint !== timelineFingerprint(p)
+}
+
+export const EDITED_WHILE_ASSEMBLING =
+  'Someone edited this project’s timeline while it was being assembled, so nothing was replaced. Assemble again to replace those edits, or assemble into a copy.'
 
 export const ScriptSchema = z.object({
   message: z.string().describe('The one-sentence message of the video'),
@@ -191,9 +233,7 @@ async function produceIdeaScript(jc: JobContext, input: { projectId: string; bri
   if (!check.success) throw new HttpError(502, 'server', 'The AI response did not match the script format')
   const scenes = normalizeIdeaScript(check.data, kinds)
   jc.check()
-  const fresh = await loadProjectRow(input.projectId)
-  const ai: ProducerMeta = { ...(fresh.doc.ai ?? {}), brief: input.brief, script: { scenes, message: check.data.message }, status: 'scripted' }
-  await saveProjectDoc(input.projectId, { ...fresh.doc, ai })
+  await saveOnLatest(input.projectId, (cur) => ({ ...cur, ai: { ...(cur.ai ?? {}), brief: input.brief, script: { scenes, message: check.data.message, brief: input.brief }, status: 'scripted' } }))
   jc.progress(1, `${scenes.length} scenes`)
   return { script: { scenes, message: check.data.message } }
 }
@@ -244,9 +284,7 @@ export async function produceScript(jc: JobContext): Promise<{ script: { scenes:
     const scenes = validateScript(parsed, durations)
     jc.check()
     // 4. save onto the project
-    const fresh = await loadProjectRow(input.projectId)
-    const ai: ProducerMeta = { ...(fresh.doc.ai ?? {}), brief: input.brief, script: { scenes, message: parsed.message }, status: 'scripted' }
-    await saveProjectDoc(input.projectId, { ...fresh.doc, ai })
+    await saveOnLatest(input.projectId, (cur) => ({ ...cur, ai: { ...(cur.ai ?? {}), brief: input.brief, script: { scenes, message: parsed.message, brief: input.brief }, status: 'scripted' } }))
     jc.progress(1, `${scenes.length} scenes`)
     return { script: { scenes, message: parsed.message } }
   } finally {
@@ -489,32 +527,76 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   return { ...withCaptions, updatedAt: Date.now() }
 }
 
+export interface AssembleJobInput {
+  projectId: string
+  scenes: ScriptScene[]
+  /** The brief as it was on screen when Assemble was pressed (older jobs: none, so the project's). */
+  brief?: Brief
+  /** Fingerprint of the timeline the person chose to replace when they pressed Assemble. */
+  base?: string
+}
+
+type Voice = { asset: Asset; duration: number }
+
+/**
+ * A voice already made for this narration in this voice: the scene's own, else one made for this project (a failed
+ * run's: a retry re-voices nothing it already has). One this job made before its worker died is processed now.
+ */
+async function reuseVoice(jc: JobContext, o: { workspaceId: string; projectId: string; text: string; voice: string; hint?: string }): Promise<Voice | undefined> {
+  const db = ctx().db
+  const same = (r: AssetRow) => r.meta?.tts?.text === o.text && r.meta.tts.voice === o.voice && (r.meta.tts.speed ?? 1) === 1
+  if (o.hint) {
+    const r = (await db.select().from(assets).where(and(eq(assets.id, o.hint), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
+    if (r && r.status === 'ready' && same(r)) return { asset: assetDoc(r), duration: r.meta.duration ?? 0 }
+  }
+  const rows = (
+    await db
+      .select()
+      .from(assets)
+      .where(and(eq(assets.workspaceId, o.workspaceId), eq(assets.projectId, o.projectId), eq(assets.origin, 'tts'), sql`${assets.meta}->'tts'->>'text' = ${o.text}`))
+      .orderBy(desc(assets.createdAt))
+      .limit(20)
+  ).filter(same)
+  const ready = rows.find((r) => r.status === 'ready')
+  if (ready) return { asset: assetDoc(ready), duration: ready.meta.duration ?? 0 }
+  const left = rows.find((r) => r.status === 'processing' && r.meta.jobId === jc.job.id)
+  if (left) {
+    try {
+      const done = await processAsset(left.id, { signal: jc.signal, check: jc.check, progress: () => undefined })
+      return { asset: assetDoc(done), duration: done.meta?.duration ?? 0 }
+    } catch (err) {
+      if (jc.signal.aborted) throw err
+      log.warn('could not finish an earlier voice; making it again', { assetId: left.id, err })
+    }
+  }
+  return undefined
+}
+
 export async function produceAssemble(jc: JobContext): Promise<{ version: number }> {
-  const input = jc.job.input as { projectId: string; scenes: ScriptScene[] }
+  const input = jc.job.input as unknown as AssembleJobInput
   const row = await loadProjectRow(input.projectId)
   const doc = row.doc
-  const brief: Brief = doc.ai?.brief ?? { title: doc.name, audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' }
+  const brief: Brief = input.brief ?? doc.ai?.brief ?? { title: doc.name, audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' }
+  // the timeline the person agreed to replace; edits saved after it are never overwritten
+  const base = input.base ?? timelineFingerprint(doc)
   const brand = await getBrand(row.workspaceId)
   if (!input.scenes?.length) throw invalid('No scenes to assemble')
   const footageIds = [...new Set(input.scenes.flatMap((s) => s.footage.map((f) => f.assetId)))]
   const footageRows = await ctx().db.select().from(assets).where(and(eq(assets.workspaceId, row.workspaceId), inArray(assets.id, footageIds.length ? footageIds : ['-'])))
   const footage = new Map(footageRows.map((r) => [r.id, assetDoc(r)]))
-  // 1. voice per scene (reuse an existing voice when the narration is unchanged)
-  const voices = new Map<string, { asset: Asset; duration: number }>()
+  // 1. voice per scene (reuse one already made for the same narration and voice)
+  const voices = new Map<string, Voice>()
   const prior = new Map((doc.ai?.script?.scenes ?? []).map((s) => [s.id, s]))
   for (let i = 0; i < input.scenes.length; i++) {
     const s = input.scenes[i]
     jc.check()
     const sub = subContext(jc, (i / input.scenes.length) * 0.6, ((i + 1) / input.scenes.length) * 0.6, `Voicing ${s.id}`)
-    const old = s.voice ?? prior.get(s.id)?.voice
-    if (old) {
-      const r = (await ctx().db.select().from(assets).where(and(eq(assets.id, old.assetId), eq(assets.workspaceId, row.workspaceId))).limit(1))[0]
-      if (r && r.meta?.tts?.text === s.narration && r.meta.tts.voice === brief.voice) {
-        voices.set(s.id, { asset: assetDoc(r), duration: r.meta.duration ?? old.duration })
-        continue
-      }
+    const reused = await reuseVoice(jc, { workspaceId: row.workspaceId, projectId: row.id, text: s.narration, voice: brief.voice, hint: (s.voice ?? prior.get(s.id)?.voice)?.assetId })
+    if (reused) {
+      voices.set(s.id, reused)
+      continue
     }
-    const v = await synthesizeToAsset({ workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, text: s.narration, voice: brief.voice, name: `${s.id} · ${s.title}` }, sub)
+    const v = await synthesizeToAsset({ workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, text: s.narration, voice: brief.voice, name: `${s.id} · ${s.title}`, jobId: jc.job.id }, sub)
     voices.set(s.id, { asset: v.asset.asset, duration: v.duration })
   }
   // 2. word timings for captions (whisper round trip, or an estimate)
@@ -533,12 +615,17 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   }
   // 3. generated visuals (videos made from an idea): AI stills, stock clips, AI clips
   const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices })
-  // 4. timeline
+  // 4. timeline, built on the project as it is now (a rename or script edit saved meanwhile stays); a timeline
+  // edited while this ran is left alone
   jc.progress(0.92, 'Assembling timeline')
+  jc.check()
   const scenes = made.scenes.map((s) => ({ ...s, voice: voices.has(s.id) ? { assetId: voices.get(s.id)!.asset.id, duration: voices.get(s.id)!.duration } : undefined }))
-  const built = buildProducerTimeline({ project: doc, brief, scenes, footage, voices, generated: made.generated, brand })
-  built.ai = { ...(doc.ai ?? {}), brief, script: { ...(doc.ai?.script ?? {}), scenes }, status: 'assembled' }
-  const saved = await saveProjectDoc(row.id, built)
+  const saved = await saveOnLatest(row.id, (cur) => {
+    if (timelineFingerprint(cur) !== base) throw new HttpError(409, 'conflict', EDITED_WHILE_ASSEMBLING)
+    const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, brand })
+    built.ai = { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes }, status: 'assembled', assembled: { fingerprint: timelineFingerprint(built), at: Date.now() } }
+    return built
+  })
   jc.progress(1, made.notes.length ? `Assembled · ${made.notes.length} scene${made.notes.length === 1 ? '' : 's'} used animated text instead` : 'Assembled')
   return { version: saved.version, ...(made.notes.length ? { notes: made.notes } : {}) }
 }
@@ -583,7 +670,7 @@ async function makeSceneVisuals(
       }
       const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
       try {
-        const made = await makeOne(sub, { ...o, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work })
+        const made = await makeOne(sub, { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work })
         if (v.kind === 'aiVideo') clips++
         generated.set(s.id, made.asset)
         s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
@@ -603,7 +690,7 @@ async function makeSceneVisuals(
 
 async function makeOne(
   jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
-  o: { workspaceId: string; userId: string; projectId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: 'image' | 'stock' | 'aiVideo' }; ask: string; seconds: number; work: string },
+  o: { workspaceId: string; userId: string; projectId: string; jobId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: 'image' | 'stock' | 'aiVideo' }; ask: string; seconds: number; work: string },
 ): Promise<{ asset: Asset; credit?: { author: string; url: string } }> {
   const { kind } = o.visual
   let file: { file: string; mime: string; provider: string; model: string }
@@ -631,7 +718,7 @@ async function makeOne(
     mime: file.mime,
     kind: kind === 'image' ? 'image' : 'video',
     origin: kind === 'stock' ? 'stock' : 'ai',
-    meta: { generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}) } },
+    meta: { generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}) }, jobId: o.jobId },
   })
   jc.progress(0.85, 'Preparing it for the editor')
   const ready = await processAsset(row.id, jc)
