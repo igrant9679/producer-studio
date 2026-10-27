@@ -478,6 +478,7 @@ export interface TemplateSummary {
 // POST /api/sync/now                       -> SyncStatus
 // GET  /api/sync/status                    -> SyncStatus
 // POST /api/projects/:id/sync {mode:'keep-local'|'keep-cloud'|'keep-both'} -> SyncStatus  (resolve a conflict)
+// POST /api/sync/failures/:kind/:id {action:'retry'|'skip'} -> SyncStatus  (an item that keeps failing)
 // Cloud sync surface (used by desktop replicas; Bearer device token or cookie):
 // POST /api/devices {name}                 -> {deviceId, token}   (token shown once; stored hashed)
 // GET  /api/devices                        -> Device[]
@@ -518,7 +519,23 @@ export interface SyncStatus {
   pending: number
   /** Projects edited on both sides since the last sync. */
   conflicts: Array<{ projectId: string; name: string; localVersion: number; cloudVersion: number }>
+  /** Items that keep failing to sync while everything else carries on (Retry or Skip each). Optional: older desktops omit it. */
+  failures?: SyncFailure[]
   error?: string
+}
+
+/** One item the desktop couldn't push. It is retried on its own schedule; Skip keeps it on this computer only. */
+export interface SyncFailure {
+  kind: 'project' | 'asset' | 'brand' | 'voice' | 'project-delete' | 'asset-delete' | 'voice-delete'
+  id: string
+  name: string
+  /** The cloud's (or this computer's) reason, for a person. */
+  error: string
+  attempts: number
+  skipped: boolean
+  at: number
+  /** Next automatic retry (absent when skipped). */
+  nextAt?: number
 }
 
 export interface DesktopSettings {

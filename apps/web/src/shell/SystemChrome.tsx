@@ -52,6 +52,8 @@ export function syncSummary(s: SyncStatus): { label: string; tone: 'ok' | 'busy'
   if (s.state === 'offline') return { label: 'Offline', tone: 'warn' }
   if (s.state === 'error') return { label: 'Sync error', tone: 'bad' }
   if (s.conflicts.length) return { label: `${s.conflicts.length} conflict${s.conflicts.length === 1 ? '' : 's'}`, tone: 'warn' }
+  const failing = (s.failures ?? []).filter((f) => !f.skipped).length
+  if (failing) return { label: `${failing} not synced`, tone: 'warn' }
   if (s.pending) return { label: `${s.pending} pending`, tone: 'busy' }
   return { label: `Synced ${shortAgo(s.lastSyncAt)}`, tone: 'ok' }
 }
@@ -137,6 +139,33 @@ export function SyncIndicator() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {(sync.failures?.length ?? 0) > 0 && (
+            <div className="ps-conflicts">
+              <div className="ps-menu-label">Couldn’t sync</div>
+              {sync.failures!.map((f) => {
+                const key = `${f.kind}:${f.id}`
+                return (
+                  <div key={key} className="ps-conflict">
+                    <div className="ps-conflict-name">
+                      <strong title={f.name}>{f.name}</strong>
+                      <span>{f.skipped ? 'Skipped — stays on this computer only' : f.error}</span>
+                    </div>
+                    <div className="row" style={{ gap: 4 }}>
+                      <button className="btn sm" disabled={!!busy} onClick={() => run(`${key}:r`, () => systemApi.syncFailure(f, 'retry'))}>
+                        {busy === `${key}:r` ? <Spinner size={12} /> : <RefreshCw size={12} />} Retry
+                      </button>
+                      {!f.skipped && (
+                        <button className="btn sm" disabled={!!busy} onClick={() => run(`${key}:s`, () => systemApi.syncFailure(f, 'skip'), 'Skipped — it stays on this computer')} title="Stop trying; keep it on this computer only">
+                          {busy === `${key}:s` ? <Spinner size={12} /> : <HardDrive size={12} />} Skip
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
 

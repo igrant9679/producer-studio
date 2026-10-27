@@ -10,13 +10,15 @@
 //   voices — VoiceStudio voice profiles sync as metadata (the reference audio and VoiceStudio-side profile stay on the
 //            desktop that made them); the relay poller generates speech for the web app with this desktop's voices.
 //   resolve— keep-local (force-push over the latest cloud version), keep-cloud, keep-both (local → "(conflicted copy)").
+//   failures — an item whose push fails for any reason but "offline" or "signed out" is recorded (desktop_sync_failures)
+//            and retried on its own backoff; the rest of the cycle carries on. The person can Retry or Skip it.
 // Runs on start, every 60 s, and 3 s after local saves; backs off while offline; SSE `sync` carries SyncStatus.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncProject, type SyncStatus, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
+import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncFailure, type SyncProject, type SyncStatus, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
 import { ctx } from '../context'
 import { type AssetMeta, assets, brandKits, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
 import { HttpError } from '../http'
@@ -24,7 +26,7 @@ import { log } from '../log'
 import { assetPrefix, extFor, hashObject } from '../services/assets'
 import { derived, hydrateAssets, insertProject } from '../services/projects'
 import { CloudClient, CloudError, normalizeCloudUrl } from './cloud'
-import { clearSync, deleteSync, kvGet, kvSet, putSync, rawQuery, syncRow, syncRows, type SyncRow } from './db'
+import { type FailureKind, clearFailure, clearSync, deleteSync, failureKey, failureMap, kvGet, kvSet, putSync, rawQuery, recordFailure, setFailure, syncRow, syncRows, type SyncRow } from './db'
 import { adoptCloudIdentity, localUserId } from './identity'
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
 import { prefetchAllMedia } from './media'
@@ -40,6 +42,9 @@ const RELAY_POLL_MS = 5_000
 type ProjectRow = typeof projects.$inferSelect
 
 const mediaId = (url?: string) => url?.match(/^\/api\/media\/([^/]+)\//)?.[1] ?? null
+
+/** What a failed delete is called in the sync menu (the item itself is gone from this computer). */
+const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted here', voice: 'A voice deleted here' } as const
 
 function isDirty(p: Pick<ProjectRow, 'version' | 'trashedAt' | 'isTemplate'>, s: SyncRow | undefined): boolean {
   if (!s || s.cloudVersion == null) return true
@@ -66,6 +71,8 @@ export class SyncEngine {
   private relayBusy = false
   private relayCheckAt = 0
   private relayHasVoices = false
+  /** Items that failed before (loaded at the start of each cycle). */
+  private failures = new Map<string, SyncFailure>()
 
   async start() {
     const link = await loadLink()
@@ -116,26 +123,85 @@ export class SyncEngine {
     const rows = await syncRows('project')
     const conflicted = [...rows.values()].filter((r) => r.conflictVersion != null)
     const names = conflicted.length ? await ctx().db.select({ id: projects.id, name: projects.name, version: projects.version }).from(projects).where(inArray(projects.id, conflicted.map((c) => c.id))) : []
+    const failures = await failureMap()
     return {
       linked: true,
       cloudUrl: link.cloudUrl,
       account: link.account,
       state: this.state,
       lastSyncAt: this.lastSyncAt,
-      pending: await this.pendingCount(rows),
+      pending: await this.pendingCount(rows, failures),
       conflicts: names.map((n) => ({ projectId: n.id, name: n.name, localVersion: n.version, cloudVersion: conflicted.find((c) => c.id === n.id)!.conflictVersion! })),
+      failures: [...failures.values()],
       ...(this.error ? { error: this.error } : {}),
     }
   }
 
-  private async pendingCount(rows?: Map<string, SyncRow>): Promise<number> {
+  private async pendingCount(rows?: Map<string, SyncRow>, failures?: Map<string, SyncFailure>): Promise<number> {
     const pr = rows ?? (await syncRows('project'))
+    // skipped items stay on this computer: not pending
+    const skipped = new Set([...(failures ?? new Map<string, SyncFailure>()).values()].filter((f) => f.skipped).map((f) => failureKey(f.kind, f.id)))
     const local = await ctx().db.select({ id: projects.id, version: projects.version, trashedAt: projects.trashedAt, isTemplate: projects.isTemplate }).from(projects)
-    let n = local.filter((p) => pr.get(p.id)?.conflictVersion == null && isDirty(p, pr.get(p.id))).length
+    let n = local.filter((p) => pr.get(p.id)?.conflictVersion == null && isDirty(p, pr.get(p.id)) && !skipped.has(failureKey('project', p.id))).length
     const ar = await syncRows('asset')
     const la = await ctx().db.select({ id: assets.id, origin: assets.origin, status: assets.status }).from(assets)
-    n += la.filter((a) => a.origin !== 'render' && a.status !== 'uploading' && !ar.get(a.id)?.uploaded && !ar.get(a.id)?.remote).length
+    n += la.filter((a) => a.origin !== 'render' && a.status !== 'uploading' && !ar.get(a.id)?.uploaded && !ar.get(a.id)?.remote && !skipped.has(failureKey('asset', a.id))).length
     return n
+  }
+
+  // ---------------- items that keep failing ----------------
+
+  private due(f: SyncFailure | undefined): boolean {
+    return !f || (!f.skipped && (f.nextAt == null || f.nextAt <= Date.now()))
+  }
+
+  /**
+   * Push one item. Any failure but "offline" or "signed out" is recorded against that item (tried again on its own
+   * backoff, or skipped by the person) and the rest of the cycle carries on.
+   */
+  private async item(kind: FailureKind, id: string, name: string, fn: () => Promise<void>): Promise<void> {
+    const key = failureKey(kind, id)
+    const f = this.failures.get(key)
+    if (!this.due(f)) return
+    try {
+      await fn()
+      if (f) await this.resolved(kind, id)
+    } catch (err) {
+      if (err instanceof CloudError && (err.offline || err.status === 401)) throw err
+      const message = err instanceof Error ? err.message : String(err)
+      this.failures.set(key, await recordFailure(kind, id, name, message))
+      log.warn('desktop: item failed to sync', { kind, id, err: message })
+    }
+  }
+
+  /** The item synced, or no longer needs to: drop it from the failure list. */
+  private async resolved(kind: FailureKind, id: string) {
+    if (!this.failures.delete(failureKey(kind, id))) return
+    await clearFailure(kind, id)
+  }
+
+  /** Failures whose item is gone from this computer (deleted, or its delete already reached the cloud). */
+  private async pruneFailures() {
+    await ctx().db.execute(sql`
+      DELETE FROM desktop_sync_failures f WHERE
+        (f.kind = 'project' AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = f.id)) OR
+        (f.kind = 'asset' AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.id = f.id)) OR
+        (f.kind = 'voice' AND NOT EXISTS (SELECT 1 FROM voice_profiles v WHERE v.id = f.id)) OR
+        (f.kind = 'brand' AND NOT EXISTS (SELECT 1 FROM brand_kits b WHERE b.workspace_id = f.id)) OR
+        (f.kind LIKE '%-delete' AND NOT EXISTS (SELECT 1 FROM desktop_sync s WHERE s.id = f.id AND s.kind = split_part(f.kind, '-', 1)))`)
+  }
+
+  /** Retry a failed item now (also un-skips it). */
+  async retryFailure(kind: FailureKind, id: string): Promise<SyncStatus> {
+    if (!(await setFailure(kind, id, { skipped: false }))) throw new HttpError(404, 'not_found', 'That item is no longer waiting to sync')
+    return this.syncNow()
+  }
+
+  /** Stop trying: the item stays on this computer only, until Retry. */
+  async skipFailure(kind: FailureKind, id: string): Promise<SyncStatus> {
+    if (!(await setFailure(kind, id, { skipped: true }))) throw new HttpError(404, 'not_found', 'That item is no longer waiting to sync')
+    void this.emit()
+    return this.status()
   }
 
   private async emit() {
@@ -242,12 +308,14 @@ export class SyncEngine {
     if (!c) return
     this.setState('syncing', undefined)
     try {
+      this.failures = await failureMap()
       await this.pushDeletes(c)
       await this.pull(c)
       await this.pushAssets(c)
       await this.pushProjects(c)
       await this.pushBrandKits(c)
       await this.pushVoiceProfiles(c)
+      await this.pruneFailures()
       this.lastSyncAt = Date.now()
       await kvSet('lastSyncAt', this.lastSyncAt)
       this.backoffMs = 0
@@ -560,42 +628,41 @@ export class SyncEngine {
     let cursor = (await kvGet<number>('tombCursor')) ?? 0
     const rows = await rawQuery<{ kind: string; id: string; seq: string }>(sql`SELECT kind, id, change_seq::text AS seq FROM tombstones WHERE change_seq > ${cursor} ORDER BY change_seq`)
     for (const t of rows) {
-      if (t.kind === 'voice_profile') {
-        const vs = await syncRow('voice', t.id)
-        if (vs?.cloudVersion != null) {
-          await c.json('DELETE', `/api/voice/profiles/${encodeURIComponent(t.id)}`).catch((err) => {
-            if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
-          })
-        }
-        if (vs) await deleteSync('voice', t.id)
-        cursor = Number(t.seq)
-        await kvSet('tombCursor', cursor)
-        continue
-      }
-      if (t.kind !== 'project' && t.kind !== 'asset') {
-        // membership tombstones (local workspace merges/deletes) aren't pushed
-        cursor = Number(t.seq)
-        await kvSet('tombCursor', cursor)
-        continue
-      }
-      const kind = t.kind
-      const s = await syncRow(kind, t.id)
-      if (s && (kind === 'project' ? s.cloudVersion != null : s.uploaded)) {
-        try {
-          if (kind === 'project') {
-            await c.json('PATCH', `/api/projects/${encodeURIComponent(t.id)}`, { trashed: true }).catch((e) => {
-              if (!(e instanceof CloudError && e.status === 404)) throw e
-            })
-            await c.json('DELETE', `/api/projects/${encodeURIComponent(t.id)}`)
-          } else await c.json('DELETE', `/api/assets/${encodeURIComponent(t.id)}`)
-        } catch (err) {
-          if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
-        }
-      }
-      if (s) await deleteSync(kind, t.id)
+      // membership tombstones (local workspace merges/deletes) aren't pushed
+      const kind = t.kind === 'voice_profile' ? 'voice' : t.kind
+      if (kind === 'project' || kind === 'asset' || kind === 'voice') await this.item(`${kind}-delete`, t.id, DELETED_NAME[kind], () => this.pushDelete(c, kind, t.id))
       cursor = Number(t.seq)
       await kvSet('tombCursor', cursor)
     }
+    // deletes that failed before and are due again
+    for (const f of [...this.failures.values()]) {
+      if (!f.kind.endsWith('-delete') || !this.due(f)) continue
+      const kind = f.kind.slice(0, -'-delete'.length) as keyof typeof DELETED_NAME
+      await this.item(f.kind, f.id, f.name, () => this.pushDelete(c, kind, f.id))
+    }
+  }
+
+  private async pushDelete(c: CloudClient, kind: 'project' | 'asset' | 'voice', id: string) {
+    const s = await syncRow(kind, id)
+    if (kind === 'voice') {
+      if (s?.cloudVersion != null) {
+        await c.json('DELETE', `/api/voice/profiles/${encodeURIComponent(id)}`).catch((err) => {
+          if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
+        })
+      }
+    } else if (s && (kind === 'project' ? s.cloudVersion != null : s.uploaded)) {
+      try {
+        if (kind === 'project') {
+          await c.json('PATCH', `/api/projects/${encodeURIComponent(id)}`, { trashed: true }).catch((e) => {
+            if (!(e instanceof CloudError && e.status === 404)) throw e
+          })
+          await c.json('DELETE', `/api/projects/${encodeURIComponent(id)}`)
+        } else await c.json('DELETE', `/api/assets/${encodeURIComponent(id)}`)
+      } catch (err) {
+        if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
+      }
+    }
+    if (s) await deleteSync(kind, id)
   }
 
   private async pushAssets(c: CloudClient) {
@@ -604,46 +671,51 @@ export class SyncEngine {
     const local = await ctx().db.select().from(assets)
     for (const a of local) {
       const s = rows.get(a.id)
+      if (s?.uploaded || s?.remote) await this.resolved('asset', a.id)
       if (s?.uploaded || s?.remote || a.origin === 'render' || a.status === 'uploading' || !cloudWs.has(a.workspaceId)) continue
-      if (!(await ctx().storage.stat(a.sourceKey))) continue
-      let sha = a.sha256
-      if (!sha) {
-        sha = await hashObject(a.sourceKey)
-        await ctx().db.update(assets).set({ sha256: sha }).where(eq(assets.id, a.id))
-      }
-      const ext = path.extname(a.sourceKey)
-      const filename = path.extname(a.name) ? a.name : `${a.name}${ext}`
-      const file = ctx().storage.localPath?.(a.sourceKey)
-      if (!file) continue
-      // declare the file's real size: the cloud signs it into the upload URL and the bucket refuses any other length
-      const bytes = fs.statSync(file).size
-      let ticket: UploadTicket
-      try {
-        ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: bytes, assetId: a.id, sha256: sha, origin: a.origin, ...(a.meta?.tts ? { tts: a.meta.tts } : {}), ...(a.projectId ? { projectId: a.projectId } : {}) })
-      } catch (err) {
-        if (err instanceof CloudError && err.status === 409 && (err.body?.details as { exists?: boolean } | undefined)?.exists) {
-          await putSync('asset', a.id, { uploaded: true, remote: false })
-          continue
-        }
-        throw err
-      }
-      const body = Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream
-      const put = await c.request('PUT', ticket.url, { body, headers: { ...ticket.headers, 'content-length': String(bytes) } })
-      if (!put.ok) {
-        const text = await put.text().catch(() => '')
-        let parsed: { error?: string } | undefined
-        try {
-          parsed = JSON.parse(text)
-        } catch {
-          /* not json */
-        }
-        throw new CloudError(put.status, { error: `Upload of ${a.name} failed: ${parsed?.error ?? (text.slice(0, 200) || put.statusText)}` })
-      }
-      await put.body?.cancel().catch(() => undefined)
-      await c.json('POST', `/api/assets/${encodeURIComponent(a.id)}/complete`)
-      await putSync('asset', a.id, { uploaded: true, remote: false })
-      log.info('desktop: uploaded asset', { assetId: a.id, bytes })
+      await this.item('asset', a.id, a.name, () => this.pushAsset(c, a))
     }
+  }
+
+  private async pushAsset(c: CloudClient, a: typeof assets.$inferSelect) {
+    if (!(await ctx().storage.stat(a.sourceKey))) return
+    let sha = a.sha256
+    if (!sha) {
+      sha = await hashObject(a.sourceKey)
+      await ctx().db.update(assets).set({ sha256: sha }).where(eq(assets.id, a.id))
+    }
+    const ext = path.extname(a.sourceKey)
+    const filename = path.extname(a.name) ? a.name : `${a.name}${ext}`
+    const file = ctx().storage.localPath?.(a.sourceKey)
+    if (!file) return
+    // declare the file's real size: the cloud signs it into the upload URL and the bucket refuses any other length
+    const bytes = fs.statSync(file).size
+    let ticket: UploadTicket
+    try {
+      ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: bytes, assetId: a.id, sha256: sha, origin: a.origin, ...(a.meta?.tts ? { tts: a.meta.tts } : {}), ...(a.projectId ? { projectId: a.projectId } : {}) })
+    } catch (err) {
+      if (err instanceof CloudError && err.status === 409 && (err.body?.details as { exists?: boolean } | undefined)?.exists) {
+        await putSync('asset', a.id, { uploaded: true, remote: false })
+        return
+      }
+      throw err
+    }
+    const body = Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream
+    const put = await c.request('PUT', ticket.url, { body, headers: { ...ticket.headers, 'content-length': String(bytes) } })
+    if (!put.ok) {
+      const text = await put.text().catch(() => '')
+      let parsed: { error?: string } | undefined
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        /* not json */
+      }
+      throw new CloudError(put.status, { error: `Upload of ${a.name} failed: ${parsed?.error ?? (text.slice(0, 200) || put.statusText)}` })
+    }
+    await put.body?.cancel().catch(() => undefined)
+    await c.json('POST', `/api/assets/${encodeURIComponent(a.id)}/complete`)
+    await putSync('asset', a.id, { uploaded: true, remote: false })
+    log.info('desktop: uploaded asset', { assetId: a.id, bytes })
   }
 
   private async pushProject(c: CloudClient, p: ProjectRow, s: SyncRow | undefined): Promise<void> {
@@ -695,19 +767,12 @@ export class SyncEngine {
     const cloudWs = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
     const rows = await syncRows('project')
     const local = await ctx().db.select().from(projects)
-    const errors: string[] = []
     for (const p of local) {
       const s = rows.get(p.id)
+      if (!isDirty(p, s)) await this.resolved('project', p.id)
       if (s?.conflictVersion != null || !isDirty(p, s) || !cloudWs.has(p.workspaceId)) continue
-      try {
-        await this.pushProject(c, p, s)
-      } catch (err) {
-        if (err instanceof CloudError && (err.offline || err.status === 401)) throw err
-        errors.push(err instanceof Error ? err.message : String(err))
-        log.warn('desktop: project push failed', { projectId: p.id, err })
-      }
+      await this.item('project', p.id, p.name, () => this.pushProject(c, p, s))
     }
-    if (errors.length) throw new Error(errors[0])
   }
 
   private async pushBrandKits(c: CloudClient) {
@@ -716,18 +781,23 @@ export class SyncEngine {
     for (const b of await ctx().db.select().from(brandKits)) {
       if (!cloudWs.has(b.workspaceId)) continue
       const s = rows.get(b.workspaceId)
-      if (s?.localVersion === b.updatedAt) continue
-      try {
-        await c.json('PUT', `/api/workspaces/${encodeURIComponent(b.workspaceId)}/brand`, b.doc)
-      } catch (err) {
-        if (err instanceof CloudError && err.status === 403) {
-          // viewers can't edit the brand kit; drop the local change on the next pull
-          await putSync('brand', b.workspaceId, { localVersion: b.updatedAt })
-          continue
-        }
-        throw err
+      if (s?.localVersion === b.updatedAt) {
+        await this.resolved('brand', b.workspaceId)
+        continue
       }
-      await putSync('brand', b.workspaceId, { localVersion: b.updatedAt })
+      await this.item('brand', b.workspaceId, `Brand kit “${b.doc.name}”`, async () => {
+        try {
+          await c.json('PUT', `/api/workspaces/${encodeURIComponent(b.workspaceId)}/brand`, b.doc)
+        } catch (err) {
+          if (err instanceof CloudError && err.status === 403) {
+            // viewers can't edit the brand kit; drop the local change on the next pull
+            await putSync('brand', b.workspaceId, { localVersion: b.updatedAt })
+            return
+          }
+          throw err
+        }
+        await putSync('brand', b.workspaceId, { localVersion: b.updatedAt })
+      })
     }
   }
 
@@ -793,29 +863,34 @@ export class SyncEngine {
         ;[row] = await ctx().db.update(voiceProfiles).set({ deviceId }).where(eq(voiceProfiles.id, v.id)).returning()
       }
       const s = rows.get(row.id)
-      if (s?.localVersion === row.updatedAt && s.cloudVersion != null) continue
-      try {
-        await c.json('PUT', `/api/voice/profiles/${encodeURIComponent(row.id)}`, {
-          workspaceId: row.workspaceId,
-          name: row.name,
-          kind: row.kind,
-          engine: row.engine,
-          language: row.language ?? undefined,
-          gender: row.gender ?? undefined,
-          description: row.description ?? undefined,
-          consent: row.consent,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-        })
-      } catch (err) {
-        if (err instanceof CloudError && (err.status === 403 || err.status === 409)) {
-          // viewers can't add voices / id clash: leave it local-only
-          await putSync('voice', row.id, { localVersion: row.updatedAt })
-          continue
-        }
-        throw err
+      if (s?.localVersion === row.updatedAt && s.cloudVersion != null) {
+        await this.resolved('voice', row.id)
+        continue
       }
-      await putSync('voice', row.id, { localVersion: row.updatedAt, cloudVersion: 1 })
+      await this.item('voice', row.id, row.name, async () => {
+        try {
+          await c.json('PUT', `/api/voice/profiles/${encodeURIComponent(row.id)}`, {
+            workspaceId: row.workspaceId,
+            name: row.name,
+            kind: row.kind,
+            engine: row.engine,
+            language: row.language ?? undefined,
+            gender: row.gender ?? undefined,
+            description: row.description ?? undefined,
+            consent: row.consent,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+          })
+        } catch (err) {
+          if (err instanceof CloudError && (err.status === 403 || err.status === 409)) {
+            // viewers can't add voices / id clash: leave it local-only
+            await putSync('voice', row.id, { localVersion: row.updatedAt })
+            return
+          }
+          throw err
+        }
+        await putSync('voice', row.id, { localVersion: row.updatedAt, cloudVersion: 1 })
+      })
     }
   }
 

@@ -180,6 +180,18 @@ desktopRoutes.post('/sync/unlink', async (c) => {
   return c.json(await syncEngine.unlink())
 })
 
+const FAILURE_KINDS = ['project', 'asset', 'brand', 'voice', 'project-delete', 'asset-delete', 'voice-delete'] as const
+
+/** An item that keeps failing to sync: try it again now, or skip it (it stays on this computer). */
+desktopRoutes.post('/sync/failures/:kind/:id', async (c) => {
+  requireUser(c)
+  const kind = z.enum(FAILURE_KINDS).safeParse(c.req.param('kind'))
+  if (!kind.success) throw new HttpError(404, 'not_found', 'Unknown kind of sync item')
+  const b = await body(c, z.object({ action: z.enum(['retry', 'skip']) }))
+  const id = c.req.param('id')
+  return c.json(b.action === 'retry' ? await syncEngine.retryFailure(kind.data, id) : await syncEngine.skipFailure(kind.data, id))
+})
+
 desktopRoutes.post('/projects/:id/sync', async (c) => {
   requireUser(c)
   const b = await body(c, z.object({ mode: z.enum(['keep-local', 'keep-cloud', 'keep-both']) }))

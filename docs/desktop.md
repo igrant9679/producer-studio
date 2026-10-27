@@ -112,6 +112,12 @@ the same id + sha256; cloud assets download on demand (202 while downloading, so
 "Download all". Exports (`origin: render`) stay local. Runs at start, every 60 s, 3 s after local saves; backs off
 (5 s → 5 min) while offline.
 
+- **An item that keeps failing never blocks the rest.** Any push error other than "offline" or "signed out" (too
+  large, a role change, an id taken elsewhere, a server error) is recorded for that one item in
+  `desktop_sync_failures` and the cycle carries on. The item is retried on its own backoff (1, 2, 4 … min, at most
+  hourly). The sync menu lists it under "Couldn’t sync" with the reason, **Retry** (now) and **Skip** (stop trying;
+  it stays on this computer and no longer counts as pending, until Retry).
+
 ## Known gaps
 
 - Builds are unsigned; Windows only (macOS/Linux targets not configured).
