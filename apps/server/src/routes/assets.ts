@@ -207,7 +207,11 @@ export function variantTarget(row: AssetRow, variant: Variant): { key: string; c
     case 'source':
       return { key: row.sourceKey, contentType: row.mime, filename: row.name }
     case 'proxy':
-      return row.proxyKey ? { key: row.proxyKey, contentType: 'video/mp4' } : { key: row.sourceKey, contentType: row.mime }
+      // a picture's "proxy" is the PNG copy of a format browsers can't draw (TIFF); a sound's, the AAC copy of one
+      // they can't play (AIFF, WMA, AMR)
+      if (row.proxyKey) return { key: row.proxyKey, contentType: row.kind === 'image' ? 'image/png' : 'video/mp4' }
+      if (row.kind === 'audio' && row.audioKey) return { key: row.audioKey, contentType: 'audio/mp4' }
+      return { key: row.sourceKey, contentType: row.mime }
     case 'thumb':
       return row.thumbKey ? { key: row.thumbKey, contentType: 'image/jpeg' } : row.kind === 'image' ? { key: row.sourceKey, contentType: row.mime } : null
     case 'filmstrip':

@@ -34,7 +34,8 @@ export function assetDoc(a: typeof assets.$inferSelect): Asset {
     kind: a.kind as Asset['kind'],
     name: a.name,
     src: mediaPath(a.id, 'source'),
-    proxySrc: a.proxyKey ? mediaPath(a.id, 'proxy') : undefined,
+    // also a picture's or a sound's playable copy (TIFF → PNG, AIFF → AAC): the editor plays that instead of src
+    proxySrc: a.proxyKey || (a.kind === 'audio' && a.audioKey) ? mediaPath(a.id, 'proxy') : undefined,
     mime: a.mime,
     duration: m.duration,
     width: m.width,

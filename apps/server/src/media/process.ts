@@ -202,6 +202,26 @@ export function uprightFilters(orientation?: number): string[] {
 /** Proxies play at no more than this: a 240 fps slow-motion clip makes a proxy no browser can decode smoothly. */
 export const PROXY_MAX_FPS = 60
 
+const BROWSER_AUDIO_CODECS = new Set(['mp3', 'aac', 'opus', 'vorbis', 'flac', 'pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_f32le', 'pcm_u8'])
+const BROWSER_AUDIO_FORMATS = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'mov,mp4,m4a,3gp,3g2,mj2', 'matroska,webm'])
+/** Pictures every browser draws; anything else an image upload holds (TIFF, JPEG 2000…) gets a PNG copy. */
+const BROWSER_IMAGES = new Set(['png', 'mjpeg', 'webp', 'gif', 'bmp', 'svg'])
+
+/** Whether browsers play this audio file as it is (AIFF, WMA, AMR and ALAC need a copy they can). */
+export function browserPlaysAudio(info: Pick<ProbeResult, 'codec' | 'formatName'>): boolean {
+  return BROWSER_AUDIO_CODECS.has(info.codec ?? '') && BROWSER_AUDIO_FORMATS.has(info.formatName)
+}
+
+/**
+ * The stored file a render reads for a clip: a converted picture (a TIFF's PNG) whenever there is one, since the
+ * renderer is a browser; the edit proxy for video when asked; otherwise the original. Audio stays the original: the
+ * renderer mixes sound with ffmpeg, which reads AIFF, WMA and AMR.
+ */
+export function renderMediaKey(row: Pick<AssetRow, 'kind' | 'sourceKey' | 'proxyKey'>, useProxy?: boolean): string {
+  if (row.proxyKey && (row.kind === 'image' || (useProxy && row.kind === 'video'))) return row.proxyKey
+  return row.sourceKey
+}
+
 async function sha256File(file: string): Promise<string> {
   const h = crypto.createHash('sha256')
   for await (const chunk of fs.createReadStream(file)) h.update(chunk as Buffer)
@@ -429,13 +449,28 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       meta.waveform = a.waveform
       meta.silences = a.silences
       if (!meta.duration) meta.duration = Math.round((a.waveform.length / 50) * 1000) / 1000
+      if (!browserPlaysAudio(info)) {
+        // AIFF, WMA, AMR…: the server reads them, browsers don't. The editor plays this AAC copy (the audio variant)
+        jc.progress(0.95, 'Converting audio')
+        const m4a = path.join(work, 'audio.m4a')
+        await ffmpeg(['-i', src, '-map', `0:${info.audioStream ?? 'a:0'}`, '-vn', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', m4a], { signal: jc.signal })
+        keys.audioKey = await put(m4a, 'audio.m4a', 'audio/mp4')
+      }
     } else {
       jc.progress(0.3, 'Thumbnail')
       const thumb = path.join(work, 'thumb.jpg')
       // turned upright here whatever this ffmpeg does with the tag (6.1 turns JPEGs itself, 5.1 doesn't)
-      const vf = [...uprightFilters(info.orientation), "scale='min(640,iw)':-2"].join(',')
+      const upright = uprightFilters(info.orientation)
+      const vf = [...upright, "scale='min(640,iw)':-2"].join(',')
       await ffmpeg(['-noautorotate', '-i', src, '-frames:v', '1', '-vf', vf, '-q:v', '4', thumb], { signal: jc.signal })
       keys.thumbKey = await put(thumb, 'thumb.jpg', 'image/jpeg')
+      if (!BROWSER_IMAGES.has(info.codec ?? '')) {
+        // TIFF and the like: a PNG copy (upright, alpha kept) is what the editor and the export draw
+        jc.progress(0.6, 'Converting image')
+        const png = path.join(work, 'display.png')
+        await ffmpeg(['-noautorotate', '-i', src, '-frames:v', '1', ...(upright.length ? ['-vf', upright.join(',')] : []), png], { signal: jc.signal })
+        keys.proxyKey = await put(png, 'display.png', 'image/png')
+      }
     }
     jc.check()
     row = await updateAsset(row.id, { ...keys, meta, kind: info.kind, status: 'ready', error: null })

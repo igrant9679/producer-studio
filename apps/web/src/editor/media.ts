@@ -7,7 +7,9 @@ const isDirect = (src?: string) => !!src && (src.startsWith('/') || src.startsWi
 /** URL for playing an asset. Demo/bundled assets carry absolute src; server assets go through /api/media. */
 export function assetUrl(asset: Asset | undefined, assetId: string, kind: 'media' | 'proxy'): string {
   if (asset) {
-    if (kind === 'proxy' && isDirect(asset.proxySrc)) return asset.proxySrc!
+    // a picture's or a sound's proxy is the copy the server made of a format browsers can't use (TIFF → PNG,
+    // AIFF/WMA/AMR → AAC): always use that
+    if ((kind === 'proxy' || asset.kind !== 'video') && isDirect(asset.proxySrc)) return asset.proxySrc!
     if (isDirect(asset.src)) return asset.src
     if (asset.kind === 'audio') return mediaUrl(asset.id, 'audio')
   }
@@ -21,6 +23,7 @@ export function makeResolver(get: () => Project) {
 export function thumbUrl(asset: Asset): string | undefined {
   if (asset.kind === 'audio') return undefined
   if (isDirect(asset.thumbnail)) return asset.thumbnail
+  if (asset.kind === 'image' && isDirect(asset.proxySrc)) return asset.proxySrc
   if (asset.kind === 'image' && isDirect(asset.src)) return asset.src
   return mediaUrl(asset.id, 'thumb')
 }

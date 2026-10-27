@@ -12,7 +12,7 @@ import { HttpError } from '../http'
 import { newId } from '../ids'
 import type { JobContext } from '../jobs/worker'
 import { log } from '../log'
-import { probe, sdrStillArgs } from '../media/process'
+import { probe, renderMediaKey, sdrStillArgs } from '../media/process'
 import { ffmpeg, run } from '../media/proc'
 import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAsset } from '../services/assets'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
@@ -85,7 +85,7 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
     opts.progress?.(i / Math.max(1, rows.length), `Gathering media (${i + 1}/${rows.length})`)
-    const key = opts.useProxy && r.kind === 'video' && r.proxyKey ? r.proxyKey : r.sourceKey
+    const key = renderMediaKey(r, opts.useProxy)
     const name = `${r.id}${path.extname(key) || '.bin'}`
     const dest = path.join(dir, 'assets', name)
     const src = await localSource(r, path.join(dir, '.dl'), key)

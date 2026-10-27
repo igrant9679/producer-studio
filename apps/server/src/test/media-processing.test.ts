@@ -8,7 +8,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { ctx } from '../context'
 import { inlineContext } from '../jobs/worker'
 import * as proc from '../media/proc'
-import { exifOrientation, processAsset, sdrStillArgs } from '../media/process'
+import { exifOrientation, processAsset, renderMediaKey, sdrStillArgs } from '../media/process'
+import { variantTarget } from '../routes/assets'
+import { assetDoc } from '../dto'
 import { type AssetRow, createAssetFromFile, loadAsset } from '../services/assets'
 import { setup, signup } from './helpers'
 
@@ -42,6 +44,7 @@ interface Stream {
   height?: number
   avg_frame_rate?: string
   nb_frames?: string
+  codec_name?: string
   color_transfer?: string
 }
 async function streamsOf(file: string): Promise<Stream[]> {
@@ -221,5 +224,47 @@ describe('iPhone HDR footage (PIP-13)', () => {
   it('SDR footage is left as it is', async () => {
     const clip = await make('sdr.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=1', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p'])
     expect(await sdrStillArgs(clip)).toEqual([])
+  })
+})
+
+describe('formats browsers cannot play (PIP-24)', () => {
+  for (const [name, mime, args] of [
+    ['take.aiff', 'audio/aiff', ['-c:a', 'pcm_s16be']],
+    ['memo.wma', 'audio/x-ms-wma', ['-c:a', 'wmav2']],
+    ['call.amr', 'audio/amr', ['-ar', '8000', '-ac', '1', '-c:a', 'libopencore_amrnb', '-b:a', '12.2k']],
+  ] as const) {
+    it(`${name} gets an AAC copy the editor plays`, async () => {
+      const file = await make(name, ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '1.5', ...args])
+      const row = await processFile(file, mime, 'audio')
+      expect(row.status).toBe('ready')
+      expect(row.audioKey).toBeTruthy()
+      expect((await streamsOf(stored(row.audioKey))).find((s) => s.codec_type === 'audio')).toMatchObject({ codec_name: 'aac' })
+      expect(assetDoc(row).proxySrc).toBe(`/api/media/${row.id}/proxy`)
+      expect(variantTarget(row, 'proxy')).toMatchObject({ key: row.audioKey, contentType: 'audio/mp4' })
+      // the export mixes sound with ffmpeg, which reads the original
+      expect(renderMediaKey(row)).toBe(row.sourceKey)
+    })
+  }
+
+  it('a TIFF gets a PNG copy the editor and the export draw', async () => {
+    const file = await make('scan.tiff', ['-f', 'lavfi', '-i', 'testsrc2=size=320x180', '-frames:v', '1', '-c:v', 'tiff'])
+    const row = await processFile(file, 'image/tiff', 'image')
+    expect(row.status).toBe('ready')
+    expect(row.proxyKey).toBeTruthy()
+    expect((await streamsOf(stored(row.proxyKey)))[0]).toMatchObject({ codec_name: 'png', width: 320, height: 180 })
+    expect(assetDoc(row).proxySrc).toBe(`/api/media/${row.id}/proxy`)
+    expect(variantTarget(row, 'proxy')).toMatchObject({ key: row.proxyKey, contentType: 'image/png' })
+    expect(renderMediaKey(row)).toBe(row.proxyKey)
+  })
+
+  it('an MP3, a WAV and a JPEG are used as they are', async () => {
+    const mp3 = await processFile(await make('song.mp3', ['-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '1']), 'audio/mpeg', 'audio')
+    const wav = await processFile(await make('voice.wav', ['-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '1']), 'audio/wav', 'audio')
+    const jpg = await processFile(await make('photo.jpg', ['-f', 'lavfi', '-i', 'testsrc2=size=320x180', '-frames:v', '1']), 'image/jpeg', 'image')
+    for (const row of [mp3, wav, jpg]) {
+      expect(row.audioKey ?? row.proxyKey ?? null).toBeNull()
+      expect(assetDoc(row).proxySrc).toBeUndefined()
+      expect(renderMediaKey(row)).toBe(row.sourceKey)
+    }
   })
 })
