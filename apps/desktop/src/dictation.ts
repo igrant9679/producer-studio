@@ -1,9 +1,20 @@
 // System-wide dictation: a global shortcut opens a small always-on-top widget (never focused, so the app the user is
 // typing in keeps the caret) that streams the microphone to VoiceStudio and shows live text. Pressing the shortcut again
-// stops; the final text is put on the clipboard and pasted into the focused app with Ctrl+V, then the previous
-// clipboard text is restored. The widget is our own local page (/dictate); IPC is accepted only from local pages.
+// stops; the final text is put on the clipboard and pasted into the focused app with Ctrl+V, then the person's
+// clipboard (every format kept) is put back once the paste has happened. The widget is our own local page (/dictate);
+// IPC is accepted only from local pages.
 import { spawn } from 'node:child_process'
-import { BrowserWindow, clipboard, globalShortcut, ipcMain, screen } from 'electron'
+import { BrowserWindow, ClipboardItem, clipboard, globalShortcut, ipcMain, screen } from 'electron'
+import { type ClipboardLike, pasteKeepingClipboard } from './clipboard'
+
+const systemClipboard: ClipboardLike<ClipboardItem> = {
+  read: () => clipboard.read(),
+  write: (items) => clipboard.write(items),
+  readText: () => clipboard.readText(),
+  writeText: (text) => clipboard.writeText(text),
+  clear: () => clipboard.clear(),
+  item: (data) => new ClipboardItem(data as ConstructorParameters<typeof ClipboardItem>[0]),
+}
 
 export interface DictationDeps {
   origin: () => string | undefined
@@ -101,11 +112,28 @@ export function setupDictation(d: DictationDeps) {
     if (widget && !widget.isDestroyed()) widget.hide()
   }
 
-  /** Paste into the foreground app (the widget never takes focus). */
-  function paste() {
-    if (process.platform !== 'win32') return
-    const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')"], { windowsHide: true, stdio: 'ignore' })
-    ps.on('error', (err) => d.log(`dictation: paste failed: ${String(err)}`))
+  /**
+   * Paste into the foreground app (the widget never takes focus). Resolves once the keystroke has been sent (the
+   * process exited, however long a cold PowerShell takes to start), failed, or after 15 s at most.
+   */
+  function paste(): Promise<void> {
+    if (process.platform !== 'win32') return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')"], { windowsHide: true, stdio: 'ignore' })
+      const t = setTimeout(() => {
+        d.log('dictation: paste took more than 15 s')
+        resolve()
+      }, 15_000)
+      const done = () => {
+        clearTimeout(t)
+        resolve()
+      }
+      ps.on('exit', done)
+      ps.on('error', (err) => {
+        d.log(`dictation: paste failed: ${String(err)}`)
+        done()
+      })
+    })
   }
 
   function apply(next: Config): { ok: boolean; error?: string } {
@@ -142,15 +170,10 @@ export function setupDictation(d: DictationDeps) {
     hide()
     const text = typeof raw === 'string' ? raw.trim().slice(0, 20_000) : ''
     if (!text) return true
-    const prev = await clipboard.readText()
-    await clipboard.writeText(text)
-    if (cfg.paste) {
-      paste()
-      // give the target app time to read the clipboard before restoring the user's own
-      setTimeout(async () => {
-        if ((await clipboard.readText()) === text) await clipboard.writeText(prev)
-      }, 1500)
-    }
+    // without pasting (turned off, or not on Windows), the text stays on the clipboard for the person to paste
+    if (!cfg.paste || process.platform !== 'win32') await clipboard.writeText(text)
+    // the person's clipboard (every format of every item) comes back only after the paste has happened
+    else void pasteKeepingClipboard(systemClipboard, text, paste).catch((err) => d.log(`dictation: clipboard restore failed: ${String(err)}`))
     return true
   })
 

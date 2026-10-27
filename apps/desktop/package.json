@@ -12,7 +12,8 @@
     "stage": "node scripts/stage.mjs",
     "fetch-tools": "node scripts/fetch-tools.mjs",
     "dist": "node scripts/dist.mjs",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
   },
   "devDependencies": {
     "electron": "^44.4.5",
