@@ -458,3 +458,39 @@ describe('separated audio stays with its video (EDT-2)', () => {
   })
 })
 
+describe('keyframed animation survives splits and trims (EDT-7)', () => {
+  const opacityAt = (p: Project, t: number) => evaluate(p, t).layers.find((l) => l.type === 'video')?.opacity ?? 0
+  const times = Array.from({ length: 40 }, (_, i) => i * 0.25)
+  function fadeIn() {
+    let p = twoClips()
+    const id = mainTrack(p)!.items[0].id
+    p = setKeyframe(p, id, 'opacity', 0, 0)
+    p = setKeyframe(p, id, 'opacity', 4, 1)
+    return { p, id }
+  }
+
+  it('a fade-in split in the middle looks the same at every moment', () => {
+    const { p, id } = fadeIn()
+    expect(opacityAt(p, 1)).toBeCloseTo(0.0625, 4)
+    const q = splitItem(p, id, 2).project
+    for (const t of times) expect(opacityAt(q, t)).toBeCloseTo(opacityAt(p, t), 6)
+  })
+
+  it('trimming the start keeps the rest of the fade', () => {
+    const { p, id } = fadeIn()
+    const q = trimItem(p, id, 'start', 1) // the main track re-packs: what played at t now plays at t - 1
+    for (const t of times.filter((t) => t >= 1)) expect(opacityAt(q, t - 1)).toBeCloseTo(opacityAt(p, t), 6)
+  })
+
+  it('each piece keeps only the keyframes that shape it', () => {
+    let p = twoClips()
+    const id = mainTrack(p)!.items[0].id
+    for (let t = 0; t <= 8; t++) p = setKeyframe(p, id, 'opacity', t, t % 2)
+    const { project: q, rightId } = splitItem(p, id, 4.5)
+    const kfs = (i: string) => (findItem(q, i)!.item as VideoItem).keyframes.opacity!.map((k) => k.t)
+    expect(kfs(id)).toEqual([0, 1, 2, 3, 4, 5])
+    expect(kfs(rightId!)).toEqual([-0.5, 0.5, 1.5, 2.5, 3.5])
+    for (const t of times) expect(opacityAt(q, t)).toBeCloseTo(opacityAt(p, t), 6)
+  })
+})
+

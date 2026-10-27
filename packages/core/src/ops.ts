@@ -281,11 +281,25 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
   return touch(p)
 }
 
+/**
+ * Move keyframes by `by` seconds and drop the ones outside 0..maxT, except the nearest one beyond each edge: the
+ * curve inside the item keeps running between the same keyframes with the same easing, so it looks exactly as before.
+ */
 function shiftKeyframes(kfs: Partial<Record<AnimProp, Keyframe[]>>, by: number, maxT: number) {
   for (const k of Object.keys(kfs) as AnimProp[]) {
     const list = kfs[k]
     if (!list) continue
-    kfs[k] = list.map((kf) => ({ ...kf, t: round(kf.t + by, 4) })).filter((kf) => kf.t >= -EPS && kf.t <= maxT + EPS)
+    const moved = list.map((kf) => ({ ...kf, t: round(kf.t + by, 4) }))
+    let before = -1
+    let after = -1
+    moved.forEach((kf, i) => {
+      if (kf.t < -EPS) before = i
+      else if (kf.t > maxT + EPS && after < 0) after = i
+    })
+    // an edge with a keyframe of its own needs nothing from beyond it
+    if (moved.some((kf) => Math.abs(kf.t) <= EPS)) before = -1
+    if (moved.some((kf) => Math.abs(kf.t - maxT) <= EPS)) after = -1
+    kfs[k] = moved.filter((kf, i) => i === before || i === after || (kf.t >= -EPS && kf.t <= maxT + EPS))
   }
 }
 
