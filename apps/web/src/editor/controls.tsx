@@ -11,7 +11,7 @@ export function Section({ title, children, right, defaultOpen = true }: { title:
   const [open, setOpen] = useState(defaultOpen)
   const bodyId = useId()
   return (
-    <section className={clsx('ed-section', !open && 'closed')} aria-label={title}>
+    <section className={clsx('ed-section', !open && 'closed')}>
       <header>
         <button type="button" className="ed-section-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
