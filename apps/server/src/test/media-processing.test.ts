@@ -10,6 +10,7 @@ import { inlineContext } from '../jobs/worker'
 import * as proc from '../media/proc'
 import { exifOrientation, processAsset, renderMediaKey, sdrStillArgs } from '../media/process'
 import { variantTarget } from '../routes/assets'
+import { reverseRange } from '../render/export'
 import { assetDoc, assetRecord } from '../dto'
 import { assets } from '../db/schema'
 import { eq } from 'drizzle-orm'
@@ -220,8 +221,14 @@ describe('iPhone HDR footage (PIP-13)', () => {
         expect(r).toBeGreaterThan(4 * g + 60)
       }
       expect((await streamsOf(stored(row.proxyKey))).find((s) => s.codec_type === 'video')?.color_transfer).toBe('bt709')
-      // the export's freeze-frame stills take the same filters
-      expect((await sdrStillArgs(clip)).join(' ')).toMatch(/-vf .*tonemap/)
+      // the export's freeze-frame and held stills take the same filters, and so does a reversed copy
+      const still = await sdrStillArgs(clip)
+      expect(still.join(' ')).toMatch(/-vf .*tonemap/)
+      const rev = path.join(dir, `rev-${label}.mp4`)
+      await reverseRange(clip, rev, { from: 0, to: 1 }, { fps: 30, toneMap: still[1] })
+      const [r, g] = await rgbOf(rev)
+      expect(g).toBeLessThan(35)
+      expect(r).toBeGreaterThan(4 * g + 60)
     })
   }
 

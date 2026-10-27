@@ -80,7 +80,7 @@ const REVERSE_CHUNK_FRAMES = 60
  * first) at the output size and frame rate, then joined, so memory stays at one chunk whatever the clip's length or
  * resolution. The copy is silent (reversed clips are, in the preview too).
  */
-export async function reverseRange(src: string, out: string, range: { from: number; to: number }, opts: { size?: { w: number; h: number }; fps: number; signal?: AbortSignal }) {
+export async function reverseRange(src: string, out: string, range: { from: number; to: number }, opts: { size?: { w: number; h: number }; fps: number; toneMap?: string; signal?: AbortSignal }) {
   const parts = `${out}.parts`
   fs.mkdirSync(parts, { recursive: true })
   const fps = Math.min(120, Math.max(1, opts.fps))
@@ -88,7 +88,7 @@ export async function reverseRange(src: string, out: string, range: { from: numb
   const len = Math.max(1 / fps, range.to - range.from)
   const n = Math.max(1, Math.ceil(len / chunk - 1e-6))
   // never upscale (a draft reverses the smaller proxy)
-  const vf = `${opts.size ? `scale='min(iw,${opts.size.w})':-2,` : ''}fps=${fps},reverse`
+  const vf = `${opts.size ? `scale='min(iw,${opts.size.w})':-2,` : ''}fps=${fps},${opts.toneMap ? `${opts.toneMap},` : ''}reverse`
   const list: string[] = []
   try {
     for (let i = n - 1; i >= 0; i--) {
@@ -166,18 +166,19 @@ export async function prepareRenderDir(
       const src = localFiles.get(it.assetId)
       if (!src) continue
       const timing = exportVideoTiming(project, ti, ii)
+      // an HDR clip's stills and reversed copy are tone-mapped like its proxy
+      const sdr = it.freezeAt !== undefined || timing.hold || (it.reverse && timing.reversed) ? await sdrStillArgs(src, opts.signal) : []
       if (it.freezeAt === undefined && timing.hold) {
         const out = `stills/${it.id}-hold.png`
         fs.mkdirSync(path.join(dir, 'stills'), { recursive: true })
-        await ffmpeg(['-ss', String(timing.hold.at), '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
-        if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        await ffmpeg(['-ss', String(timing.hold.at), '-i', src, ...sdr, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, ...sdr, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
         holds.set(it.id, out)
         files.push(out)
       }
       if (it.freezeAt !== undefined) {
         const out = `stills/${it.id}.png`
         fs.mkdirSync(path.join(dir, 'stills'), { recursive: true })
-        const sdr = await sdrStillArgs(src, opts.signal) // an HDR clip's still is tone-mapped like its proxy
         await ffmpeg(['-ss', String(Math.max(0, it.freezeAt)), '-i', src, ...sdr, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
         if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, ...sdr, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
         freeze.set(it.id, out)
@@ -185,7 +186,7 @@ export async function prepareRenderDir(
       } else if (it.reverse && timing.reversed) {
         const out = `reversed/${it.id}.mp4`
         const a = project.assets[it.assetId]
-        await reverseRange(src, path.join(dir, out), timing.reversed, { size: reversedSize(a?.width, a?.height, opts.output ?? { w: project.width, h: project.height }), fps: opts.fps ?? project.fps ?? 30, signal: opts.signal })
+        await reverseRange(src, path.join(dir, out), timing.reversed, { size: reversedSize(a?.width, a?.height, opts.output ?? { w: project.width, h: project.height }), fps: opts.fps ?? project.fps ?? 30, toneMap: sdr[1], signal: opts.signal })
         reversed.set(it.id, out)
         files.push(out)
       }
