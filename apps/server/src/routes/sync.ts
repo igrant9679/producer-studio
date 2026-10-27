@@ -67,6 +67,7 @@ systemRoutes.get('/', async (c) => {
     ai: { provider: provider.id, available: s.available, detail: s.detail, model: s.model },
     capabilities: capabilities(),
     ...(cfg.mode === 'cloud' ? { storage: storageHealth() } : {}),
+    limits: { uploadBytes: cfg.maxUploadBytes },
   }
   // desktop: sync state (account, cloud URL) only for the signed-in local session
   if (cfg.mode === 'desktop' && c.get('user')) {

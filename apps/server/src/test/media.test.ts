@@ -120,3 +120,11 @@ describe('Download buttons (APP-11)', () => {
     expect(downloadName(undefined, 'image/png')).toBe('download.png')
   })
 })
+
+describe('upload limit (QA-10)', () => {
+  it('/api/system states the limit uploads are held to', async () => {
+    const sys = await client.json('GET', '/api/system')
+    expect(sys.body.limits).toEqual({ uploadBytes: ctx().config.maxUploadBytes })
+    expect(sys.body.limits.uploadBytes).toBe(4096 * 1024 * 1024)
+  })
+})

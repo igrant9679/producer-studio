@@ -1,4 +1,4 @@
-import type { AssetRecord, DiagramType, ProduceCapabilities, SceneVisual, ScriptScene, TemplateSummary, VisualKind } from '@producer/core'
+import { PRODUCE_LIMITS, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -27,11 +27,12 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, mediaUrl } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toastError } from '../../lib/toast'
 import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } from '../components/VoiceCard'
+import { sysFetch, useIsDesktop, useSystem } from '../system'
 import { Modal, Popover, Progress, Spinner, Thumb, useAsync, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes, formatDuration, formatTime, ssGet } from '../util'
 import { DIAGRAM_INFO, VISUAL_KIND_INFO, defaultVisual, diagramFromText, diagramToText, withPrompt } from './sceneVisuals'
@@ -39,12 +40,12 @@ import { takeProducerHandoff } from './handoff'
 import {
   briefTitleFromPrompt,
   canAdvance,
+  canShowStep,
   draftKey,
   IDEA_LENGTHS,
   initialState,
   insertScene,
   isIdea,
-  maxReachableStep,
   moveScene,
   narrationSeconds,
   newScene,
@@ -55,6 +56,7 @@ import {
   staleBriefFields,
   stateFromProject,
   STEPS,
+  stepFromSearch,
   storageKey,
   TONES,
   unsavedDraft,
@@ -85,13 +87,11 @@ const ORDER: StepId[] = STEPS.map((s) => s.id)
 
 function Stepper({ s, onJump }: { s: WizardState; onJump: (id: StepId) => void }) {
   const cur = ORDER.indexOf(s.step)
-  const max = maxReachableStep(s)
-  const running = s.run.status === 'running'
   return (
     <ol className="ps-stepper" aria-label="Steps">
       {STEPS.map((st, i) => {
         const done = i < cur || (st.id === 'assemble' && s.run.status === 'done' && s.run.phase === 'assemble')
-        const reachable = !running && i <= max && st.id !== 'generate' && !(st.id === 'assemble' && !s.scenes.length)
+        const reachable = canShowStep(s, st.id)
         return (
           <li key={st.id} className={clsx(i === cur && 'on', done && 'done')}>
             <button disabled={!reachable || i === cur} onClick={() => onJump(st.id)} aria-current={i === cur ? 'step' : undefined}>
@@ -168,6 +168,8 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
   const [lib, setLib] = useState(false)
   const pick = useFilePicker('video/*', true, (files) => void uploadToWizard(workspaceId, files))
   const locked = !!s.projectId && s.transcribed.length > 0
+  // the server's own limit (MAX_UPLOAD_MB), not a guess
+  const maxUpload = useSystem((st) => st.info?.limits?.uploadBytes)
   return (
     <>
       <div className="ps-wz-intro">
@@ -190,7 +192,7 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
       >
         <div className="ps-drop-icon"><Upload size={26} /></div>
         <strong>Drop video files here</strong>
-        <span className="muted">MP4, MOV or WebM · up to a few GB each</span>
+        <span className="muted">MP4, MOV or WebM{maxUpload ? ` · up to ${formatBytes(maxUpload).replace('.0 ', ' ')} each` : ''}</span>
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn primary" onClick={pick}><Upload size={15} /> Choose files</button>
           <button className="btn" onClick={() => setLib(true)}><Library size={15} /> From library</button>
@@ -269,12 +271,12 @@ function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
         id="ps-idea"
         className="input"
         rows={7}
-        maxLength={20000}
+        maxLength={PRODUCE_LIMITS.ideaChars}
         value={b.idea ?? ''}
         onChange={(e) => set({ idea: e.target.value })}
         placeholder="e.g. Show new customers how onboarding works in three steps, and why it saves them a week. Friendly, for small-business owners."
       />
-      <div className="muted" style={{ fontSize: '0.7187rem', marginTop: 4, textAlign: 'right' }}>{(b.idea ?? '').length.toLocaleString()} / 20,000 characters</div>
+      <div className="muted" style={{ fontSize: '0.7187rem', marginTop: 4, textAlign: 'right' }}>{(b.idea ?? '').length.toLocaleString()} / {PRODUCE_LIMITS.ideaChars.toLocaleString()} characters</div>
       <span className="label" style={{ marginTop: 10 }}>Length</span>
       <div className="row" style={{ flexWrap: 'wrap', gap: 6 }} role="radiogroup" aria-label="Length">
         {IDEA_LENGTHS.map((sec) => (
@@ -715,7 +717,7 @@ function SceneCard({ scene, index, total, s, kinds, caps, onChange, onMove, onDe
         <label className="label" htmlFor={`hl-${scene.id}`}>On-screen headline</label>
         <input id={`hl-${scene.id}`} className="input" value={scene.headline} onChange={(e) => onChange({ headline: e.target.value })} placeholder="Short title shown on screen" />
         <label className="label" htmlFor={`nar-${scene.id}`} style={{ marginTop: 12 }}>Narration</label>
-        <textarea id={`nar-${scene.id}`} className={clsx('input ps-narration', busy && 'streaming')} rows={3} value={scene.narration} onChange={(e) => onChange({ narration: e.target.value })} readOnly={busy} placeholder="What the narrator says during this scene" />
+        <textarea id={`nar-${scene.id}`} className={clsx('input ps-narration', busy && 'streaming')} rows={3} maxLength={PRODUCE_LIMITS.narrationChars} value={scene.narration} onChange={(e) => onChange({ narration: e.target.value })} readOnly={busy} placeholder="What the narrator says during this scene" />
         <div className="ps-scene-stats">
           <span>{sceneWords(scene.narration)} words</span>
           <span>≈ {formatDuration(secs)} spoken</span>
@@ -745,7 +747,7 @@ function SceneCard({ scene, index, total, s, kinds, caps, onChange, onMove, onDe
               <button className="btn ghost sm icon" onClick={() => onChange({ footage: scene.footage.filter((_, j) => j !== i) })} aria-label="Remove footage window"><X size={13} /></button>
             </div>
           ))}
-          {ready.length > 0 && (
+          {ready.length > 0 && scene.footage.length < PRODUCE_LIMITS.footagePerScene && (
             <button
               className="ps-win-add"
               onClick={() => {
@@ -838,7 +840,7 @@ function ReviewStep({ s, onRewrite }: { s: WizardState; onRewrite: () => void })
               onChange={(p) => patch((st) => ({ scenes: updateScene(st.scenes, sc.id, p) }))}
               onMove={(to) => set(moveScene(s.scenes, i, to))}
               onDelete={() => set(removeScene(s.scenes, sc.id))}
-              onAddAfter={() => set(insertScene(s.scenes, i + 1, newScene(sc.footage[sc.footage.length - 1]?.assetId ?? firstAsset, sc, idea)))}
+              onAddAfter={() => s.scenes.length < PRODUCE_LIMITS.scenes && set(insertScene(s.scenes, i + 1, newScene(sc.footage[sc.footage.length - 1]?.assetId ?? firstAsset, sc, idea)))}
               dragProps={{
                 draggable: true,
                 onDragStart: (e) => {
@@ -867,8 +869,8 @@ function ReviewStep({ s, onRewrite }: { s: WizardState; onRewrite: () => void })
           </div>
         ))}
       </div>
-      <button className="ps-add-scene" onClick={() => set(insertScene(s.scenes, s.scenes.length, newScene(firstAsset, s.scenes[s.scenes.length - 1], idea)))}>
-        <Plus size={16} /> Add scene
+      <button className="ps-add-scene" disabled={s.scenes.length >= PRODUCE_LIMITS.scenes} onClick={() => set(insertScene(s.scenes, s.scenes.length, newScene(firstAsset, s.scenes[s.scenes.length - 1], idea)))}>
+        <Plus size={16} /> {s.scenes.length >= PRODUCE_LIMITS.scenes ? `At most ${PRODUCE_LIMITS.scenes} scenes in a video` : 'Add scene'}
       </button>
     </div>
   )
@@ -1023,6 +1025,27 @@ function SpaceMismatch({ s }: { s: WizardState }) {
   )
 }
 
+/** Said on entry, not after steps 1 and 2: this space has no AI (its own key or the server's) to write the script. */
+function AiUnavailable({ ai, workspaceId }: { ai: SystemInfo['ai']; workspaceId: string }) {
+  const desktop = useIsDesktop()
+  const ws = useSession((st) => st.workspaces.find((w) => w.id === workspaceId))
+  const owner = desktop || ws?.role === 'owner'
+  return (
+    <div className="ps-alert ps-ai-missing" role="alert">
+      <AlertTriangle size={15} style={{ flex: 'none', marginTop: 2 }} />
+      <div style={{ flex: 1 }}>
+        <strong>Producer AI can’t write a script here yet: no AI is set up{ws && !desktop ? ` for ${ws.name}` : ''}.</strong> {ai.detail}
+        <div style={{ marginTop: 4 }}>
+          {owner
+            ? 'Add an AI key in Settings → AI. Recordings and the brief you add meanwhile are kept.'
+            : `Only an owner of ${ws?.name ?? 'this space'} can set up AI: ask them to add a key in Settings → AI.`}
+        </div>
+      </div>
+      <Link className="btn sm" to="/settings#ai">Settings → AI</Link>
+    </div>
+  )
+}
+
 // ---------------- page ----------------
 export default function ProducerWizard() {
   usePageTitle('Producer AI')
@@ -1039,6 +1062,48 @@ export default function ProducerWizard() {
   const [confirmReset, setConfirmReset] = useState(false)
   const [confirmRegen, setConfirmRegen] = useState(false)
   const templates = useAsync(() => (workspaceId ? api.templates(workspaceId) : Promise.resolve([] as TemplateSummary[])), [workspaceId])
+  // checked on entry: the video's space's own AI key, or else the server's (a failed check doesn't block anything)
+  const sys = useAsync(() => (workspaceId ? sysFetch<SystemInfo>('GET', `/system?workspaceId=${encodeURIComponent(workspaceId)}`) : Promise.resolve(undefined)), [workspaceId])
+  const noAi = sys.data && !sys.data.ai.available ? sys.data.ai : undefined
+
+  // The step is in the URL (?step=), so the browser's Back goes back a step instead of leaving the wizard. Moves made
+  // here add a history entry; the wizard moving on its own (a script finished, a saved video loaded) replaces it.
+  const [search, setSearch] = useSearchParams()
+  const urlStep = stepFromSearch(search)
+  const seenStep = useRef(urlStep)
+  const setUrlStep = (step: StepId, replaceEntry: boolean) =>
+    setSearch(
+      (p) => {
+        const n = new URLSearchParams(p)
+        if (step === 'upload') n.delete('step')
+        else n.set('step', step)
+        return n
+      },
+      { replace: replaceEntry },
+    )
+  const go = (step: StepId) => {
+    patch({ step })
+    if (step !== urlStep) setUrlStep(step, false)
+  }
+  useEffect(() => {
+    if (seenStep.current === urlStep) return
+    // Back or Forward: show that step when it can be shown now, else put the URL back
+    const cur = useWizard.getState().s
+    seenStep.current = urlStep
+    if (urlStep === cur.step) return
+    if (canShowStep(cur, urlStep)) patch({ step: urlStep })
+    else {
+      seenStep.current = cur.step
+      setUrlStep(cur.step, true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlStep])
+  useEffect(() => {
+    if (seenStep.current === s.step) return
+    seenStep.current = s.step
+    setUrlStep(s.step, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.step])
 
   // Load / resume wizard state for this URL.
   useEffect(() => {
@@ -1106,7 +1171,8 @@ export default function ProducerWizard() {
   const adv = useMemo(() => canAdvance(s), [s])
   const idx = ORDER.indexOf(s.step)
 
-  const onProjectCreated = (id: string) => navigate(`/producer/${id}`, { replace: true })
+  // the new project's address keeps the step, so it isn't read as Back to the first one
+  const onProjectCreated = (id: string) => navigate(`/producer/${id}?step=${useWizard.getState().s.step}`, { replace: true })
   const generate = () => workspaceId && void runGenerate(workspaceId, onProjectCreated)
   const assemble = (opts: { replace?: boolean; intoCopy?: boolean } = {}) => void runAssemble({ ...opts, onProject: onProjectCreated })
   const rewrite = () => {
@@ -1115,19 +1181,25 @@ export default function ProducerWizard() {
     generate()
   }
 
+  const scripted = s.scenes.length > 0 && (isIdea(s) || readyAssetIds(s).every((id) => s.transcribed.includes(id)))
+  // writing the script is the step that needs the AI
+  const needsWriter = s.step === 'brief' && !scripted && !!noAi
+
   function next() {
     if (!adv.ok) return
-    if (s.step === 'upload') patch((st) => ({ step: 'brief', brief: isIdea(st) && !st.brief.title.trim() ? { ...st.brief, title: briefTitleFromPrompt(st.brief.idea ?? '') } : st.brief }))
-    else if (s.step === 'brief') {
+    if (s.step === 'upload') {
+      if (isIdea(s) && !s.brief.title.trim()) patch((st) => ({ brief: { ...st.brief, title: briefTitleFromPrompt(st.brief.idea ?? '') } }))
+      go('brief')
+    } else if (s.step === 'brief') {
       // Script already exists and nothing new to transcribe → go straight to review.
-      if (s.scenes.length && (isIdea(s) || readyAssetIds(s).every((id) => s.transcribed.includes(id)))) patch({ step: 'review' })
-      else {
-        patch({ step: 'generate' })
+      if (scripted) go('review')
+      else if (!needsWriter) {
+        go('generate')
         generate()
       }
-    } else if (s.step === 'generate') patch({ step: 'review' })
+    } else if (s.step === 'generate') go('review')
     else if (s.step === 'review') {
-      patch({ step: 'assemble' })
+      go('assemble')
       assemble()
     }
   }
@@ -1135,7 +1207,7 @@ export default function ProducerWizard() {
     if (s.run.status === 'running') return
     const prev: Partial<Record<StepId, StepId>> = { brief: 'upload', generate: 'brief', review: 'brief', assemble: 'review' }
     const p = prev[s.step]
-    if (p) patch({ step: p })
+    if (p) go(p)
   }
 
   if (loading) {
@@ -1156,7 +1228,6 @@ export default function ProducerWizard() {
   }
   if (!workspaceId) return null
 
-  const scripted = s.scenes.length > 0 && (isIdea(s) || readyAssetIds(s).every((id) => s.transcribed.includes(id)))
   const primaryLabel = s.step === 'upload' ? 'Continue to brief' : s.step === 'brief' ? (scripted ? 'Back to script' : 'Write the script') : s.step === 'review' ? 'Assemble video' : null
 
   return (
@@ -1193,7 +1264,8 @@ export default function ProducerWizard() {
         )}
       </div>
       <SpaceMismatch s={s} />
-      <Stepper s={s} onJump={(id) => patch({ step: id })} />
+      {noAi && <AiUnavailable ai={noAi} workspaceId={workspaceId} />}
+      <Stepper s={s} onJump={go} />
 
       <div className="ps-wz-card">
         {s.step === 'upload' && <StartStep s={s} workspaceId={workspaceId} />}
@@ -1212,7 +1284,11 @@ export default function ProducerWizard() {
               <span />
             )}
             <span className="spacer" />
-            {!adv.ok && adv.reason && primaryLabel && <span className="muted" style={{ fontSize: '0.7812rem' }}>{adv.reason}</span>}
+            {!adv.ok && adv.reason && primaryLabel ? (
+              <span className="muted" style={{ fontSize: '0.7812rem' }}>{adv.reason}</span>
+            ) : needsWriter ? (
+              <span className="muted" style={{ fontSize: '0.7812rem' }}>Needs AI: see above</span>
+            ) : null}
             {s.step === 'review' &&
               (confirmRegen ? (
                 <span className="row" style={{ gap: 6 }}>
@@ -1228,7 +1304,7 @@ export default function ProducerWizard() {
                 </button>
               ))}
             {primaryLabel && (
-              <button className="btn primary" disabled={!adv.ok} onClick={next}>
+              <button className="btn primary" disabled={!adv.ok || needsWriter} onClick={next}>
                 {primaryLabel} <ArrowRight size={15} />
               </button>
             )}
