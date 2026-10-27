@@ -9,6 +9,7 @@ import { log } from '../log'
 import { type AssetRow, assetPrefix, loadAsset, localSource, tmpDir, updateAsset } from '../services/assets'
 import { ffmpeg, ffmpegProgress, runOk } from './proc'
 import { describeStorageError } from '../services/storage-health'
+import { isStorageError } from '../storage/errors'
 
 export interface ProbeResult {
   kind: 'video' | 'audio' | 'image'
@@ -137,15 +138,14 @@ export async function analyseAudio(file: string, signal?: AbortSignal): Promise<
  * internals. Keep the cause, drop the paths, say what to do.
  */
 export function friendlyProcessingError(err: unknown): string {
-  const e = err as { name?: string; Code?: string; $metadata?: { httpStatusCode?: number }; message?: string }
-  if (e && typeof e === 'object' && ('$metadata' in e || e.Code)) return describeStorageError(err)
+  if (isStorageError(err)) return describeStorageError(err)
   const msg = err instanceof Error ? err.message : String(err)
   if (/moov atom not found/i.test(msg))
     return "This file is incomplete or damaged: its video index (the 'moov atom') is missing, which usually means the recording or upload was cut off. Export it again and upload the new file."
   if (/Invalid data found when processing input|could not find codec parameters|Unknown format/i.test(msg))
     return "This file isn't a video, audio or image format the server can read. Convert it to MP4 (or MP3, PNG, JPG) and upload it again."
   if (/ENOENT|no such file/i.test(msg)) return "The uploaded file couldn't be found in storage. Upload it again."
-  if (/ENOSPC/i.test(msg)) return 'The server ran out of disk space while processing this clip. Retry in a while.'
+  if (/ENOSPC|No space left on device/i.test(msg)) return 'The server ran out of disk space while processing this clip. Retry in a while.'
   const clean = msg
     .replace(/[A-Za-z]:\\[^\s:|]+/g, '…')
     .replace(/(?:\/[\w.@-]+){2,}/g, '…')
