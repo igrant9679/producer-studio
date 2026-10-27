@@ -1,12 +1,19 @@
-// The timeline: grabbing narrow clips, fades inside their clip, moving a clip with its linked audio (EDT-36).
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { addAsset, addItem, createProject, createVideoItem, findItem, mainTrack, separateAudio, type Asset, type Project } from '@producer/core'
+// The timeline by keyboard (EDT-37); grabbing narrow clips, fades inside their clip, moving a clip with its linked
+// audio (EDT-36).
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { addAsset, addItem, createAudioItem, createProject, createVideoItem, findItem, mainTrack, separateAudio, type Asset, type Project } from '@producer/core'
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { useShortcuts } from '../shortcuts'
 import { useEditor } from '../store'
 import { Timeline } from '../Timeline'
 import { shortDuration } from '../timelineMath'
 
 const S = () => useEditor.getState()
+
+function Shortcuts() {
+  useShortcuts()
+  return null
+}
 
 const video = (id: string, duration = 10): Asset => ({ id, kind: 'video', name: `${id}.mp4`, src: `/api/media/${id}/source`, duration, width: 1920, height: 1080, hasAudio: true })
 
@@ -49,6 +56,79 @@ function drag(el: Element, dx: number) {
   fireEvent.pointerMove(window, { clientX: 500 + dx, clientY: 50 })
   fireEvent.pointerUp(window, { clientX: 500 + dx, clientY: 50 })
 }
+
+describe('the timeline by keyboard (EDT-37)', () => {
+  function withMusic(): Project {
+    let p = twoClips()
+    p = addAsset(p, { id: 'm', kind: 'audio', name: 'm.mp3', src: '/api/media/m/source', duration: 60 })
+    p = addItem(p, createAudioItem(p.assets.m, 2, { duration: 4, name: 'Music' }))
+    return addItem(p, createAudioItem(p.assets.m, 8, { duration: 4, name: 'Outro' }))
+  }
+  const cells = () => screen.getAllByRole('gridcell')
+  const focused = () => document.activeElement as HTMLElement
+
+  it('is one Tab stop: a grid of tracks whose clips have names', () => {
+    load(withMusic())
+    show()
+    expect(screen.getByRole('grid', { name: 'Timeline' })).toBeTruthy()
+    expect(screen.getAllByRole('row')).toHaveLength(2)
+    expect(cells().filter((c) => c.tabIndex === 0)).toHaveLength(1)
+    expect(screen.getByRole('gridcell', { name: /^Music: audio clip at 2\.0s, 4\.0s long/ })).toBeTruthy()
+  })
+
+  it('arrows move between clips and tracks, selecting as they go', () => {
+    load(withMusic())
+    show()
+    const [music, outro] = S().project.tracks.find((t) => t.kind === 'audio')!.items
+    const first = cells().find((c) => c.tabIndex === 0)!
+    act(() => first.focus())
+    fireEvent.keyDown(focused(), { key: 'ArrowRight' })
+    expect(S().selection).toEqual([findItem(S().project, first.dataset.item!)!.track.items[1].id])
+    expect(focused().dataset.item).toBe(S().selection[0])
+    // down from the second video (10-20 s) to the audio clip nearest in time: Outro (8-12 s)
+    fireEvent.keyDown(focused(), { key: 'ArrowDown' })
+    expect(S().selection).toEqual([outro.id])
+    expect(focused().dataset.item).toBe(outro.id)
+    fireEvent.keyDown(focused(), { key: 'ArrowLeft' })
+    expect(focused().dataset.item).toBe(music.id)
+  })
+
+  it('Alt+arrows move the clip, [ and ] trim it to the playhead, Delete removes it and keeps focus in the timeline', () => {
+    load(withMusic())
+    show()
+    const [music, outro] = S().project.tracks.find((t) => t.kind === 'audio')!.items
+    S().select([music.id])
+    const cell = () => document.querySelector(`[data-item="${music.id}"]`) as HTMLElement
+    act(() => cell().focus())
+    fireEvent.keyDown(cell(), { key: 'ArrowRight', altKey: true })
+    expect(findItem(S().project, music.id)!.item.start).toBeCloseTo(2 + 1 / 30, 4)
+    fireEvent.keyDown(cell(), { key: 'ArrowLeft', altKey: true, shiftKey: true })
+    expect(findItem(S().project, music.id)!.item.start).toBeCloseTo(1 + 1 / 30, 4)
+    act(() => S().setPlayhead(2))
+    fireEvent.keyDown(cell(), { key: '[' })
+    expect(findItem(S().project, music.id)!.item.start).toBeCloseTo(2, 4)
+    act(() => S().setPlayhead(4))
+    fireEvent.keyDown(cell(), { key: ']' })
+    expect(findItem(S().project, music.id)!.item.duration).toBeCloseTo(2, 4)
+    fireEvent.keyDown(cell(), { key: 'Delete' })
+    expect(findItem(S().project, music.id)).toBeNull()
+    expect(focused().dataset.item).toBe(outro.id)
+  })
+
+  it('Shift+F10 opens the clip menu; Space still plays', () => {
+    load(withMusic())
+    show()
+    const first = cells().find((c) => c.tabIndex === 0)!
+    act(() => first.focus())
+    fireEvent.keyDown(first, { key: 'F10', shiftKey: true })
+    expect(document.querySelector('.tl-ctx')).not.toBeNull()
+    // the editor's own shortcuts still answer on a focused clip
+    render(<Shortcuts />)
+    fireEvent.keyDown(first, { key: ' ' })
+    expect(S().playing).toBe(true)
+    act(() => S().setPlaying(false))
+  })
+})
 
 describe('small timeline fixes (EDT-36)', () => {
   beforeEach(() => load(twoClips()))

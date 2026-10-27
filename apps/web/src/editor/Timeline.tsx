@@ -104,6 +104,21 @@ interface Ctx {
   time: number
 }
 
+interface View {
+  x0: number
+  x1: number
+}
+
+/** What a clip calls back into the timeline with; one object for the timeline's whole life. */
+interface ClipEvents {
+  pointerDown: (e: React.PointerEvent, item: Item) => void
+  trimDown: (e: React.PointerEvent, item: Item, edge: 'start' | 'end') => void
+  contextMenu: (e: React.MouseEvent, item?: Item) => void
+  key: (e: React.KeyboardEvent, item: Item) => void
+  scrub: (e: React.PointerEvent) => void
+  transition: (itemId: string, x: number, y: number) => void
+}
+
 interface TransPop {
   itemId: string
   x: number
@@ -165,10 +180,29 @@ export function Timeline() {
   )
 }
 
+/** Clips are drawn in chunks of this many pixels around the view, so scrolling re-renders rarely. */
+const VIEW_CHUNK = 1000
+
+/** The part of the content (px) worth drawing: the view and about half a view either side, in whole chunks. */
+function viewWindow(scrollLeft: number, viewW: number): View {
+  const w = Math.max(viewW, 1200)
+  return { x0: Math.max(0, Math.floor((scrollLeft - w / 2) / VIEW_CHUNK) * VIEW_CHUNK), x1: Math.ceil((scrollLeft + w * 1.5) / VIEW_CHUNK) * VIEW_CHUNK }
+}
+
+/** The clip that holds the timeline's one Tab stop: the first selected clip, else the first clip of the top row. */
+function tabStopOf(p: Project, selection: string[]): string | undefined {
+  for (const id of selection) if (findItem(p, id)) return id
+  for (let i = p.tracks.length - 1; i >= 0; i--) if (p.tracks[i].items.length) return p.tracks[i].items[0].id
+  return undefined
+}
+
+/** A clip asked to take focus once it has rendered (keyboard moves between clips and tracks). */
+let pendingFocus: string | null = null
+
 function TimelineBody() {
   const project = useEditor((s) => s.project)
   const zoom = useEditor((s) => s.zoom)
-  const selection = useEditor((s) => s.selection)
+  const tabStop = useEditor((s) => tabStopOf(s.project, s.selection))
   const scrollRef = useRef<HTMLDivElement>(null)
   const rowsRef = useRef<HTMLDivElement>(null)
   const [viewW, setViewW] = useState(900)
@@ -184,7 +218,7 @@ function TimelineBody() {
   const { rows, height: rowsH } = useMemo(() => layoutRows(project, compact), [project, compact])
   const duration = projectDuration(project)
   const contentW = Math.max(viewW - HEADER_W, (duration + 12) * zoom)
-  const selSet = useMemo(() => new Set(selection), [selection])
+  const [view, setView] = useState<View>(() => viewWindow(0, viewW))
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -194,6 +228,14 @@ function TimelineBody() {
     setViewW(el.clientWidth)
     return () => ro.disconnect()
   }, [])
+
+  // only the clips in and near the view are drawn
+  const updateView = useCallback(() => {
+    const el = scrollRef.current
+    const next = viewWindow(el?.scrollLeft ?? 0, (el?.clientWidth ?? viewW) - HEADER_W)
+    setView((v) => (v.x0 === next.x0 && v.x1 === next.x1 ? v : next))
+  }, [viewW])
+  useLayoutEffect(updateView, [updateView, zoom])
 
   // initial fit
   const fitted = useRef(false)
@@ -308,12 +350,14 @@ function TimelineBody() {
   }
 
   // ---------- clip move ----------
-  const onClipPointerDown = (e: React.PointerEvent, item: Item, row: Row) => {
+  const onClipPointerDown = (e: React.PointerEvent, item: Item) => {
     if (e.button !== 0) return
     e.stopPropagation()
     setCtx(null)
     setTrans(null)
     const s = useEditor.getState()
+    const track = findItem(s.project, item.id)?.track
+    if (!track) return
     if (e.ctrlKey || e.metaKey) {
       s.select(s.selection.includes(item.id) ? s.selection.filter((x) => x !== item.id) : [...s.selection, item.id])
       return
@@ -321,15 +365,15 @@ function TimelineBody() {
     if (e.shiftKey && s.selection.length) {
       // range on the same track from the last selected item
       const last = findItem(s.project, s.selection[s.selection.length - 1])
-      if (last && last.track.id === row.track.id) {
-        const a = Math.min(last.index, row.track.items.findIndex((i) => i.id === item.id))
-        const b = Math.max(last.index, row.track.items.findIndex((i) => i.id === item.id))
-        s.select([...new Set([...s.selection, ...row.track.items.slice(a, b + 1).map((i) => i.id)])])
+      if (last && last.track.id === track.id) {
+        const a = Math.min(last.index, track.items.findIndex((i) => i.id === item.id))
+        const b = Math.max(last.index, track.items.findIndex((i) => i.id === item.id))
+        s.select([...new Set([...s.selection, ...track.items.slice(a, b + 1).map((i) => i.id)])])
       } else s.select([...new Set([...s.selection, item.id])])
       return
     }
     if (!s.selection.includes(item.id)) s.select([item.id])
-    if (row.track.locked || item.locked) return
+    if (track.locked || item.locked) return
     const ids = useEditor.getState().selection.filter((id) => {
       const f = findItem(s.project, id)
       return f && !f.track.locked && !f.item.locked
@@ -455,6 +499,96 @@ function TimelineBody() {
     setCtx({ x: e.clientX, y: e.clientY, itemId: item?.id, time: Math.max(0, x / zoom) })
   }
 
+  // ---------- keyboard (a focused clip) ----------
+  const onClipKey = (e: React.KeyboardEvent, item: Item) => {
+    const s = useEditor.getState()
+    const p = s.project
+    const f = findItem(p, item.id)
+    if (!f || e.ctrlKey || e.metaKey) return
+    const k = e.key
+    const done = () => {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    const goTo = (id: string | undefined) => {
+      if (!id) return
+      pendingFocus = id
+      s.select([id])
+    }
+    // rows run top to bottom, from the last track to the first
+    const order = () => layoutRows(p, isCompact()).rows.map((r) => r.track)
+    const up = k === 'ArrowUp'
+    if ((k === 'ArrowLeft' || k === 'ArrowRight') && !e.altKey) {
+      done()
+      goTo(f.track.items[f.index + (k === 'ArrowLeft' ? -1 : 1)]?.id)
+    } else if ((k === 'ArrowUp' || k === 'ArrowDown') && !e.altKey) {
+      done()
+      const rows = order()
+      const mid = item.start + item.duration / 2
+      const dist = (i: Item) => Math.abs(i.start + i.duration / 2 - mid)
+      for (let r = rows.findIndex((t) => t.id === f.track.id) + (up ? -1 : 1); r >= 0 && r < rows.length; r += up ? -1 : 1) {
+        if (!rows[r].items.length) continue
+        goTo(rows[r].items.reduce((a, b) => (dist(b) < dist(a) ? b : a)).id)
+        break
+      }
+    } else if ((k === 'ArrowLeft' || k === 'ArrowRight') && e.altKey) {
+      // a frame (Shift: a second) earlier or later
+      done()
+      const step = (e.shiftKey ? 1 : 1 / p.fps) * (k === 'ArrowLeft' ? -1 : 1)
+      pendingFocus = item.id
+      s.commit(moveItem(p, item.id, { start: Math.max(0, item.start + step) }), 'Move clip', { coalesce: `kmove:${item.id}` })
+    } else if ((k === 'ArrowUp' || k === 'ArrowDown') && e.altKey) {
+      done()
+      const rows = order()
+      const to = rows[rows.findIndex((t) => t.id === f.track.id) + (up ? -1 : 1)]
+      if (to && acceptsItem(to.kind, item.type) && !to.locked) {
+        pendingFocus = item.id
+        s.commit(moveItem(p, item.id, { start: item.start, trackId: to.id }), 'Move clip')
+      }
+    } else if (k === '[' || k === ']') {
+      // trim the start or end to the playhead
+      done()
+      if (s.playhead > item.start && s.playhead < itemEnd(item)) {
+        pendingFocus = item.id
+        s.commit(trimItem(p, item.id, k === '[' ? 'start' : 'end', s.playhead), 'Trim')
+      }
+    } else if (k === 'Enter') {
+      done()
+      s.select([item.id])
+    } else if (k === 'ContextMenu' || (e.shiftKey && k === 'F10')) {
+      done()
+      if (!s.selection.includes(item.id)) s.select([item.id])
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      setTrans(null)
+      setCtx({ x: r.left + 8, y: r.bottom, itemId: item.id, time: item.start })
+    } else if (k === 'Delete' || k === 'Backspace') {
+      done()
+      const next = f.track.items[f.index + 1] ?? f.track.items[f.index - 1]
+      if (!s.selection.includes(item.id)) s.select([item.id])
+      A.remove(e.shiftKey)
+      // focus stays in the timeline, on the clip beside the one removed
+      if (next && findItem(useEditor.getState().project, next.id)) goTo(next.id)
+    }
+  }
+
+  // handlers the clips keep across renders (they read the latest state when called)
+  const live = useRef({ onClipPointerDown, onTrimDown, onContextMenu, onClipKey, startScrub })
+  live.current = { onClipPointerDown, onTrimDown, onContextMenu, onClipKey, startScrub }
+  const clipEvents = useMemo<ClipEvents>(
+    () => ({
+      pointerDown: (e, item) => live.current.onClipPointerDown(e, item),
+      trimDown: (e, item, edge) => live.current.onTrimDown(e, item, edge),
+      contextMenu: (e, item) => live.current.onContextMenu(e, item),
+      key: (e, item) => live.current.onClipKey(e, item),
+      scrub: (e) => live.current.startScrub(e),
+      transition: (itemId, x, y) => {
+        setCtx(null)
+        setTrans({ itemId, x, y })
+      },
+    }),
+    [],
+  )
+
   // ---------- drops from panels ----------
   const onDragOver = (e: React.DragEvent) => {
     const p = dragPayload()
@@ -504,18 +638,26 @@ function TimelineBody() {
   return (
     <>
       <TimelineToolbar viewW={viewW} />
-      <div className="tl-scroll" ref={scrollRef} onWheel={onWheel}>
+      <div className="tl-scroll" ref={scrollRef} onWheel={onWheel} onScroll={updateView}>
         <div className="tl-inner" style={{ width: HEADER_W + contentW }}>
           <div className="tl-ruler-row" style={{ height: RULER_H }}>
             <div className="tl-corner">
               <span className="eyebrow">Tracks</span>
               <span className="muted" style={{ fontSize: '0.6875rem' }}>{project.tracks.length}</span>
             </div>
-            <Ruler width={contentW} zoom={zoom} fps={project.fps} duration={duration} onPointerDown={startScrub} />
+            <Ruler width={contentW} zoom={zoom} fps={project.fps} duration={duration} onPointerDown={clipEvents.scrub} />
           </div>
+          <p id="tl-keys" className="ed-sr">
+            Arrow keys move between clips and tracks. Alt with the arrows moves the clip (Shift: by a second), [ and ] trim it to the playhead, Delete removes it, Shift F10 opens its menu.
+          </p>
           <div
             className="tl-rows"
             ref={rowsRef}
+            role="grid"
+            aria-label="Timeline"
+            aria-multiselectable="true"
+            aria-rowcount={rows.length}
+            aria-describedby="tl-keys"
             style={{ height: rowsH + 64 }}
             onPointerDown={onRowsPointerDown}
             onContextMenu={(e) => onContextMenu(e)}
@@ -523,21 +665,19 @@ function TimelineBody() {
             onDragLeave={() => setDropHint(null)}
             onDrop={onDrop}
           >
-            {rows.map((row) => (
+            {rows.map((row, i) => (
               <TrackRow
                 key={row.track.id}
-                row={row}
+                track={row.track}
+                top={row.top}
+                height={row.height}
+                index={i + 1}
                 zoom={zoom}
                 contentW={contentW}
-                selSet={selSet}
-                drag={drag}
-                onClipPointerDown={onClipPointerDown}
-                onTrimDown={onTrimDown}
-                onContextMenu={onContextMenu}
-                onTransition={(itemId, x, y) => {
-                  setCtx(null)
-                  setTrans({ itemId, x, y })
-                }}
+                view={view}
+                dragIds={drag?.ids}
+                tabStop={tabStop}
+                events={clipEvents}
               />
             ))}
             {!project.tracks.some((t) => t.items.length) && (
@@ -762,49 +902,55 @@ function PlayheadLine() {
 // ---------- tracks & clips ----------
 
 interface TrackRowProps {
-  row: Row
+  track: Track
+  top: number
+  height: number
+  /** 1-based row number, top to bottom. */
+  index: number
   zoom: number
   contentW: number
-  selSet: Set<string>
-  drag: MoveDrag | null
-  onClipPointerDown: (e: React.PointerEvent, item: Item, row: Row) => void
-  onTrimDown: (e: React.PointerEvent, item: Item, edge: 'start' | 'end') => void
-  onContextMenu: (e: React.MouseEvent, item?: Item) => void
-  onTransition: (itemId: string, x: number, y: number) => void
+  view: View
+  dragIds?: string[]
+  tabStop?: string
+  events: ClipEvents
 }
 
-function TrackRow({ row, zoom, contentW, selSet, drag, onClipPointerDown, onTrimDown, onContextMenu, onTransition }: TrackRowProps) {
-  const t = row.track
-  const project = useEditor((s) => s.project)
+/** One track. Only the clips in and near the view are drawn; a clip re-renders only when it changed. */
+const TrackRow = memo(function TrackRow({ track: t, top, height, index, zoom, contentW, view, dragIds, tabStop, events }: TrackRowProps) {
   const visual = t.kind === 'video' || t.kind === 'overlay'
   return (
-    <div className={clsx('tl-row', t.main && 'main', t.locked && 'locked', t.hidden && 'hidden')} style={{ top: row.top, height: row.height }}>
+    <div className={clsx('tl-row', t.main && 'main', t.locked && 'locked', t.hidden && 'hidden')} style={{ top, height }} role="row" aria-rowindex={index}>
       <TrackHeader track={t} />
-      <div className="tl-lane" style={{ width: contentW }}>
+      <div className="tl-lane" style={{ width: contentW }} role="presentation">
         {t.items.map((it, i) => {
+          const a = it.start * zoom
+          const b = itemEnd(it) * zoom
+          const dragging = !!dragIds?.includes(it.id)
+          if ((b < view.x0 || a > view.x1) && it.id !== tabStop && !dragging) return null
           const next = t.items[i + 1]
           const adjacent = visual && next && Math.abs(next.start - itemEnd(it)) < 0.05 && it.type !== 'audio' && it.type !== 'caption'
           return (
             <ClipView
               key={it.id}
               item={it}
-              track={t}
-              project={project}
+              trackKind={t.kind}
+              trackLocked={!!t.locked}
+              trackMain={!!t.main}
               zoom={zoom}
-              height={row.height}
-              selected={selSet.has(it.id)}
-              dragging={!!drag?.ids.includes(it.id)}
-              onPointerDown={(e) => onClipPointerDown(e, it, row)}
-              onTrimDown={(e, edge) => onTrimDown(e, it, edge)}
-              onContextMenu={(e) => onContextMenu(e, it)}
-              cut={adjacent ? (e: React.MouseEvent) => onTransition(it.id, e.clientX, e.clientY) : undefined}
+              height={height}
+              dragging={dragging}
+              tabStop={tabStop === it.id}
+              adjacent={!!adjacent}
+              visFrom={Math.max(0, view.x0 - a)}
+              visTo={Math.max(0, Math.min(b, view.x1) - a)}
+              events={events}
             />
           )
         })}
       </div>
     </div>
   )
-}
+})
 
 function TrackIcon({ track }: { track: Track }) {
   const s = 14
@@ -815,15 +961,16 @@ function TrackIcon({ track }: { track: Track }) {
   return <Film size={s} />
 }
 
-function TrackHeader({ track }: { track: Track }) {
-  const project = useEditor((s) => s.project)
-  const commit = useEditor((s) => s.commit)
+const TrackHeader = memo(function TrackHeader({ track }: { track: Track }) {
   const [editing, setEditing] = useState(false)
-  const up = (patch: Partial<Track>, label: string) => commit(updateTrack(project, track.id, patch), label)
+  const up = (patch: Partial<Track>, label: string) => {
+    const s = useEditor.getState()
+    s.commit(updateTrack(s.project, track.id, patch), label)
+  }
   const visual = track.kind !== 'audio'
   const audible = track.kind === 'audio' || track.kind === 'video' || track.kind === 'overlay'
   return (
-    <div className="tl-head" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="tl-head" role="rowheader" aria-label={`${track.name}${track.main ? ' (main)' : ''}`} onPointerDown={(e) => e.stopPropagation()}>
       <span className="tl-kind" style={{ color: kindColor(track) }}>
         <TrackIcon track={track} />
       </span>
@@ -849,25 +996,25 @@ function TrackHeader({ track }: { track: Track }) {
       )}
       <div className="tl-head-btns">
         {visual && (
-          <button title={track.hidden ? 'Show track' : 'Hide track'} className={clsx(track.hidden && 'off')} onClick={() => up({ hidden: !track.hidden }, track.hidden ? 'Show track' : 'Hide track')}>
+          <button title={track.hidden ? 'Show track' : 'Hide track'} aria-label={`Hide ${track.name}`} aria-pressed={!!track.hidden} className={clsx(track.hidden && 'off')} onClick={() => up({ hidden: !track.hidden }, track.hidden ? 'Show track' : 'Hide track')}>
             {track.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
           </button>
         )}
         {audible && (
-          <button title={track.muted ? 'Unmute track' : 'Mute track'} className={clsx(track.muted && 'off')} onClick={() => up({ muted: !track.muted }, track.muted ? 'Unmute track' : 'Mute track')}>
+          <button title={track.muted ? 'Unmute track' : 'Mute track'} aria-label={`Mute ${track.name}`} aria-pressed={!!track.muted} className={clsx(track.muted && 'off')} onClick={() => up({ muted: !track.muted }, track.muted ? 'Unmute track' : 'Mute track')}>
             {track.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
           </button>
         )}
-        <button title={track.locked ? 'Unlock track' : 'Lock track'} className={clsx(track.locked && 'off')} onClick={() => up({ locked: !track.locked }, track.locked ? 'Unlock track' : 'Lock track')}>
+        <button title={track.locked ? 'Unlock track' : 'Lock track'} aria-label={`Lock ${track.name}`} aria-pressed={!!track.locked} className={clsx(track.locked && 'off')} onClick={() => up({ locked: !track.locked }, track.locked ? 'Unlock track' : 'Lock track')}>
           {track.locked ? <Lock size={13} /> : <Unlock size={13} />}
         </button>
         {!track.main && (
           <button
             title="Delete track"
+            aria-label={`Delete ${track.name}`}
             onClick={() => {
-              const p = structuredClone(project)
-              p.tracks = p.tracks.filter((t) => t.id !== track.id)
-              commit(p, 'Delete track')
+              const s = useEditor.getState()
+              s.commit({ ...s.project, tracks: s.project.tracks.filter((t) => t.id !== track.id) }, 'Delete track')
             }}
           >
             <Trash2 size={13} />
@@ -876,29 +1023,45 @@ function TrackHeader({ track }: { track: Track }) {
       </div>
     </div>
   )
-}
+})
 
 interface ClipProps {
   item: Item
-  track: Track
-  project: Project
+  trackKind: Track['kind']
+  trackLocked: boolean
+  trackMain: boolean
   zoom: number
   height: number
-  selected: boolean
   dragging: boolean
-  onPointerDown: (e: React.PointerEvent) => void
-  onTrimDown: (e: React.PointerEvent, edge: 'start' | 'end') => void
-  onContextMenu: (e: React.MouseEvent) => void
-  cut?: (e: React.MouseEvent) => void
+  /** Holds the timeline's Tab stop. */
+  tabStop: boolean
+  /** Touches the next clip: offers the transition button. */
+  adjacent: boolean
+  /** The part of the clip (px from its left edge) near the view: waveforms and filmstrips draw only that. */
+  visFrom: number
+  visTo: number
+  events: ClipEvents
 }
 
-const ClipView = memo(function ClipView({ item, track, project, zoom, height, selected, dragging, onPointerDown, onTrimDown, onContextMenu, cut }: ClipProps) {
+const TYPE_NAME: Record<Item['type'], string> = { video: 'Video', image: 'Image', audio: 'Audio', text: 'Text', caption: 'Caption', shape: 'Shape' }
+
+const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMain, zoom, height, dragging, tabStop, adjacent, visFrom, visTo, events }: ClipProps) {
+  const selected = useEditor((s) => s.selection.includes(item.id))
+  const asset = useEditor((s) => ('assetId' in item ? s.project.assets[item.assetId] : undefined))
+  const ref = useRef<HTMLDivElement>(null)
+  // moved to by keyboard: take focus once drawn (also after moving to another track)
+  useLayoutEffect(() => {
+    if (tabStop && pendingFocus === item.id) {
+      pendingFocus = null
+      ref.current?.focus()
+    }
+  })
   const left = item.start * zoom
   const width = Math.max(2, item.duration * zoom)
   // the trim edges never cover a narrow clip: its middle stays free to grab and move (none under 10 px)
   const grip = width >= 24 ? 8 : width >= 10 ? Math.max(2, Math.floor((width - 6) / 2)) : 0
-  const asset = 'assetId' in item ? project.assets[item.assetId] : undefined
-  const color = kindColor(track, item)
+  const locked = trackLocked || !!item.locked
+  const color = kindColor({ kind: trackKind } as Track, item)
   const [dropOn, setDropOn] = useState(false)
   const label =
     item.type === 'text' ? item.text : item.type === 'caption' ? item.text : item.name ?? asset?.name ?? item.type
@@ -952,20 +1115,27 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
   return (
     <>
       <div
-        className={clsx('tl-clip', `t-${item.type}`, selected && 'sel', dragging && 'dragging', dropOn && 'drop', (track.locked || item.locked) && 'locked', muted && 'muted')}
+        ref={ref}
+        className={clsx('tl-clip', `t-${item.type}`, selected && 'sel', dragging && 'dragging', dropOn && 'drop', locked && 'locked', muted && 'muted')}
         data-item={item.id}
+        data-tl-clip
+        role="gridcell"
+        tabIndex={tabStop ? 0 : -1}
+        aria-selected={selected}
+        aria-label={`${label}: ${TYPE_NAME[item.type].toLowerCase()} clip at ${shortDuration(item.start)}, ${shortDuration(item.duration)} long${locked ? ', locked' : ''}`}
         style={{ left, width, height: height - 2, ['--clip' as string]: color }}
-        onPointerDown={onPointerDown}
-        onContextMenu={onContextMenu}
+        onPointerDown={(e) => events.pointerDown(e, item)}
+        onContextMenu={(e) => events.contextMenu(e, item)}
+        onKeyDown={(e) => events.key(e, item)}
         onDragOver={onDragOver}
         onDragLeave={() => setDropOn(false)}
         onDrop={onDrop}
         title={`${label} · ${shortDuration(item.duration)}`}
       >
-        {item.type === 'video' && asset && <Filmstrip asset={asset} item={item} width={width} height={height - 4} zoom={zoom} />}
+        {item.type === 'video' && asset && <Filmstrip asset={asset} item={item} width={width} height={height - 4} zoom={zoom} visFrom={visFrom} visTo={visTo} />}
         {item.type === 'image' && asset && <div className="tl-thumbs" style={{ backgroundImage: `url("${thumbUrl(asset)}")` }} />}
-        {item.type === 'audio' && asset && <Waveform asset={asset} item={item} width={width} height={height - 6} />}
-        {item.type === 'video' && asset?.waveform && !muted && track.main && <Waveform asset={asset} item={item} width={width} height={16} mini />}
+        {item.type === 'audio' && asset && <Waveform asset={asset} item={item} width={width} height={height - 6} visFrom={visFrom} visTo={visTo} />}
+        {item.type === 'video' && asset?.waveform && !muted && trackMain && <Waveform asset={asset} item={item} width={width} height={16} visFrom={visFrom} visTo={visTo} mini />}
         <div className="tl-clip-label">
           <Icon size={11} />
           <span className="nm">{label}</span>
@@ -980,6 +1150,7 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
         {kfTimes.map((t) => (
           <button
             key={t}
+            tabIndex={-1}
             className="tl-kfdot"
             style={{ left: t * zoom }}
             title={`Keyframe at ${t.toFixed(2)}s`}
@@ -992,15 +1163,16 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
             <Diamond size={8} fill="currentColor" />
           </button>
         ))}
-        {!track.locked && !item.locked && grip > 0 && (
+        {!locked && grip > 0 && (
           <>
-            <div className="tl-trim l" style={grip < 8 ? { width: grip } : undefined} onPointerDown={(e) => onTrimDown(e, 'start')} />
-            <div className="tl-trim r" style={grip < 8 ? { width: grip } : undefined} onPointerDown={(e) => onTrimDown(e, 'end')} />
+            <div className="tl-trim l" style={grip < 8 ? { width: grip } : undefined} onPointerDown={(e) => events.trimDown(e, item, 'start')} />
+            <div className="tl-trim r" style={grip < 8 ? { width: grip } : undefined} onPointerDown={(e) => events.trimDown(e, item, 'end')} />
           </>
         )}
       </div>
-      {cut && (
+      {adjacent && (
         <button
+          tabIndex={-1}
           className={clsx('tl-trans', tr && 'on')}
           style={{ left: left + width, width: tr ? Math.max(18, tr.duration * zoom) : 18, top: Math.round((height - 20) / 2) }}
           title={tr ? `${TRANSITIONS.find((x) => x.id === tr.type)?.name ?? tr.type} · ${tr.duration.toFixed(1)}s — click to edit` : 'Add transition'}
@@ -1008,7 +1180,7 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
           onClick={(e) => {
             e.stopPropagation()
             if (!tr) A.setTransition(item.id, 'crossfade', 0.6)
-            cut(e)
+            events.transition(item.id, e.clientX, e.clientY)
           }}
           onDragOver={(e) => {
             if (dragPayload()?.kind === 'transition') {
@@ -1031,19 +1203,21 @@ const ClipView = memo(function ClipView({ item, track, project, zoom, height, se
   )
 })
 
-function Filmstrip({ asset, item, width, height, zoom }: { asset: Asset; item: VideoItem; width: number; height: number; zoom: number }) {
+function Filmstrip({ asset, item, width, height, zoom, visFrom, visTo }: { asset: Asset; item: VideoItem; width: number; height: number; zoom: number; visFrom: number; visTo: number }) {
   const strip = filmstripUrl(asset)
   const fs = asset.filmstrip
   const aspect = fs ? fs.frameWidth / fs.frameHeight : (asset.width ?? 16) / (asset.height ?? 9)
   const tileW = Math.max(12, height * aspect)
-  const n = Math.min(300, Math.ceil(width / tileW))
+  // the tiles near the view, however long the clip (all of them used to stop after 300)
+  const first = Math.max(0, Math.floor(visFrom / tileW))
+  const last = Math.min(Math.ceil(width / tileW), Math.ceil(visTo / tileW), first + 400)
   if (!strip || !fs) {
     const th = thumbUrl(asset)
     return <div className="tl-thumbs" style={{ backgroundImage: th ? `url("${th}")` : undefined }} />
   }
   const dur = asset.duration ?? 1
   const tiles = []
-  for (let i = 0; i < n; i++) {
+  for (let i = first; i < last; i++) {
     const local = ((i + 0.5) * tileW) / zoom
     const src = item.freezeAt ?? (item.reverse ? item.in + (item.duration - local) * item.speed : item.in + local * item.speed)
     const idx = Math.max(0, Math.min(fs.frames - 1, Math.floor((src / dur) * fs.frames)))
@@ -1058,25 +1232,28 @@ function Filmstrip({ asset, item, width, height, zoom }: { asset: Asset; item: V
   return <div className="tl-film">{tiles}</div>
 }
 
-function Waveform({ asset, item, width, height, mini }: { asset: Asset; item: VideoItem | Item; width: number; height: number; mini?: boolean }) {
+function Waveform({ asset, item, width, height, visFrom, visTo, mini }: { asset: Asset; item: VideoItem | Item; width: number; height: number; visFrom: number; visTo: number; mini?: boolean }) {
   const it = item as VideoItem
+  // bars 3 px apart across the part near the view (wider apart only if that part is huge), the whole clip long
+  const step = Math.max(3, (visTo - visFrom) / 2000)
   // a long clip carries a shortened waveform; zoomed in past it, the full one is fetched
-  const peaks = useWaveformPeaks(asset, (3 / (width || 1)) * it.duration * it.speed)
+  const peaks = useWaveformPeaks(asset, (step / (width || 1)) * it.duration * it.speed)
   const path = useMemo(() => {
     if (!peaks) return ''
-    const bars = Math.min(2000, Math.floor(width / 3))
     const vol = Math.min(1.6, Math.max(0.15, it.volume ?? 1))
+    const bw = Math.max(2, step - 1)
     let d = ''
-    for (let j = 0; j < bars; j++) {
-      const t0 = it.in + ((j * 3) / (width || 1)) * it.duration * it.speed
-      const t1 = it.in + (((j + 1) * 3) / (width || 1)) * it.duration * it.speed
+    for (let j = Math.floor(visFrom / step), end = Math.min(width, visTo) / step; j < end; j++) {
+      const x = j * step
+      const t0 = it.in + (x / (width || 1)) * it.duration * it.speed
+      const t1 = it.in + ((x + step) / (width || 1)) * it.duration * it.speed
       const m = peakBetween(peaks, t0, t1)
       const h = Math.max(1, m * vol * (height - 2) * (mini ? 1 : 0.92))
       const y = mini ? height - h : (height - h) / 2
-      d += `M${j * 3} ${y.toFixed(1)}h2v${h.toFixed(1)}h-2z`
+      d += `M${+x.toFixed(1)} ${y.toFixed(1)}h${+bw.toFixed(1)}v${h.toFixed(1)}h-${+bw.toFixed(1)}z`
     }
     return d
-  }, [peaks, width, height, it.in, it.duration, it.speed, it.volume, mini])
+  }, [peaks, width, height, step, visFrom, visTo, it.in, it.duration, it.speed, it.volume, mini])
   if (!path) return null
   return (
     <svg className={clsx('tl-wave', mini && 'mini')} width={width} height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">

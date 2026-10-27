@@ -320,6 +320,9 @@
 .ai-input:focus-within { border-color: var(--cyan); box-shadow: 0 0 0 3px var(--cyan-soft); }
 .ai-input textarea { flex: 1; background: transparent; border: 0; outline: none; resize: none; font-size: 0.7812rem; line-height: 1.45; max-height: 120px; }
 
+/* read by screen readers only */
+.ed-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
 /* ---------------- canvas ---------------- */
 .cv-wrap {
   flex: 1; min-width: 0; position: relative; overflow: hidden; display: grid; place-items: center; outline: none;
