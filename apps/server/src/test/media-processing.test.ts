@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { ctx } from '../context'
 import { inlineContext } from '../jobs/worker'
 import * as proc from '../media/proc'
-import { exifOrientation, processAsset } from '../media/process'
+import { exifOrientation, processAsset, sdrStillArgs } from '../media/process'
 import { type AssetRow, createAssetFromFile, loadAsset } from '../services/assets'
 import { setup, signup } from './helpers'
 
@@ -182,5 +182,44 @@ describe('browser recordings (PIP-17)', () => {
     const row = await processFile(clip, 'audio/webm', 'audio')
     expect(row.meta.duration).toBeGreaterThan(1.9)
     expect(row.meta.duration).toBeLessThan(2.1)
+  })
+})
+
+/** The average colour of a picture's first frame, as 8-bit RGB. */
+async function rgbOf(file: string): Promise<[number, number, number]> {
+  const out = path.join(dir, `px-${Math.random().toString(36).slice(2)}.rgb`)
+  await ffmpeg(['-i', file, '-frames:v', '1', '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', out])
+  const [r, g, b] = fs.readFileSync(out)
+  return [r, g, b]
+}
+
+describe('iPhone HDR footage (PIP-13)', () => {
+  for (const [label, trc] of [
+    ['HLG', 'arib-std-b67'],
+    ['PQ', 'smpte2084'],
+  ] as const) {
+    it(`${label}: the proxy, thumbnail, filmstrip and freeze frames are tone-mapped, not washed out`, async () => {
+      // a red frame encoded the way an iPhone records: 10-bit BT.2020 with an HDR transfer
+      const clip = await make(`hdr-${label}.mp4`, [
+        '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=1',
+        '-vf', `format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt2020:t=${trc}:m=bt2020nc:r=tv,format=yuv420p10le`,
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-color_primaries', 'bt2020', '-color_trc', trc, '-colorspace', 'bt2020nc',
+      ])
+      const row = await processFile(clip, 'video/mp4')
+      for (const file of [stored(row.thumbKey), stored(row.filmstripKey), stored(row.proxyKey)]) {
+        const [r, g] = await rgbOf(file)
+        // read as SDR, the 10-bit values come out a greyish brown (about 130, 65, 45)
+        expect(g).toBeLessThan(35)
+        expect(r).toBeGreaterThan(4 * g + 60)
+      }
+      expect((await streamsOf(stored(row.proxyKey))).find((s) => s.codec_type === 'video')?.color_transfer).toBe('bt709')
+      // the export's freeze-frame stills take the same filters
+      expect((await sdrStillArgs(clip)).join(' ')).toMatch(/-vf .*tonemap/)
+    })
+  }
+
+  it('SDR footage is left as it is', async () => {
+    const clip = await make('sdr.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=1', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p'])
+    expect(await sdrStillArgs(clip)).toEqual([])
   })
 })

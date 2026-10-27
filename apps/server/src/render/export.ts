@@ -12,7 +12,7 @@ import { HttpError } from '../http'
 import { newId } from '../ids'
 import type { JobContext } from '../jobs/worker'
 import { log } from '../log'
-import { probe } from '../media/process'
+import { probe, sdrStillArgs } from '../media/process'
 import { ffmpeg, run } from '../media/proc'
 import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAsset } from '../services/assets'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
@@ -112,8 +112,9 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
       if (it.freezeAt !== undefined) {
         const out = `stills/${it.id}.png`
         fs.mkdirSync(path.join(dir, 'stills'), { recursive: true })
-        await ffmpeg(['-ss', String(Math.max(0, it.freezeAt)), '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
-        if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        const sdr = await sdrStillArgs(src, opts.signal) // an HDR clip's still is tone-mapped like its proxy
+        await ffmpeg(['-ss', String(Math.max(0, it.freezeAt)), '-i', src, ...sdr, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, ...sdr, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
         freeze.set(it.id, out)
         files.push(out)
       } else if (it.reverse) {
