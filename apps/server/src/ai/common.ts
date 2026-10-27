@@ -7,7 +7,15 @@ import { extractJson } from './cli/schema'
 
 // ---------------- redaction ----------------
 
-const KEY_PATTERNS = [/sk-ant-[A-Za-z0-9_-]{6,}/g, /sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_*-]{8,}/g, /AIza[0-9A-Za-z_-]{10,}/g, /\b(?:key|api[_-]?key)=[^&\s"']+/gi]
+const KEY_PATTERNS = [
+  /sk-ant-[A-Za-z0-9_-]{6,}/g,
+  /sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_*-]{8,}/g,
+  /AIza[0-9A-Za-z_-]{10,}/g,
+  // Google's newer "authentication keys" (AI Studio now issues only these): AQ. then a long token. Not documented, so
+  // match generously but only at a word start (never "FAQ."), and don't swallow a sentence's closing full stop.
+  /\bAQ\.[A-Za-z0-9_-][A-Za-z0-9_.-]{18,}[A-Za-z0-9_-]/g,
+  /\b(?:key|api[_-]?key)=[^&\s"']+/gi,
+]
 
 /** Remove anything that looks like an API key from a message before it is logged or returned. */
 export function redact(text: string): string {

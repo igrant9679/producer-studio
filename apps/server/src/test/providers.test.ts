@@ -416,6 +416,15 @@ describe('schema adaptation and helpers', () => {
     expect(redact('bad key sk-proj-abcdefghijklmnop and AIzaSyA1234567890abcdefgh and sk-ant-api03-xyzxyzxyz')).toBe('bad key [redacted] and [redacted] and [redacted]')
   })
 
+  it("redacts Google's newer AQ. keys too, and leaves ordinary text alone", () => {
+    const aq = 'AQ.Ab8RN6Ix_TESTKEY-0123456789abcdefGHIJ.klmnop_qrstuv'
+    expect(redact(`API key not valid: ${aq}. Please pass a valid API key.`)).toBe('API key not valid: [redacted]. Please pass a valid API key.')
+    expect(redact(`keys ${aq}, AIzaSyA1234567890abcdefgh and sk-proj-abcdefghijklmnop`)).toBe('keys [redacted], [redacted] and [redacted]')
+    expect(redact('{"error":{"message":"bad key","key":"' + aq + '"}}')).not.toContain('Ab8RN6Ix')
+    for (const plain of ['See the FAQ.', 'Read FAQ.section-two-onwards for details', 'Status AQ. ok', 'AQ.short', 'Quota exceeded for model gemini-3.1-flash-image.'])
+      expect(redact(plain)).toBe(plain)
+  })
+
   it('model filters and defaults', () => {
     expect(filterOpenAiModels(['gpt-5.5-2026-03-01', 'gpt-5.5', 'o4-mini', 'whisper-1', 'omni-moderation-latest', 'gpt-4o-audio-preview'])).toEqual(['gpt-5.5', 'gpt-5.5-2026-03-01', 'o4-mini'])
     expect(pickDefaultModel('anthropic', ['claude-sonnet-4-5', 'claude-opus-5'])).toBe('claude-opus-5')
