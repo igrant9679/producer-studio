@@ -22,7 +22,8 @@ export class CancelledError extends Error {
 }
 
 export interface JobContext {
-  job: Pick<JobRow, 'id' | 'kind' | 'workspaceId' | 'userId' | 'projectId' | 'input'>
+  /** `lockedBy`: the worker holding a claimed job (absent inline): a handler finishing the job itself must still hold it. */
+  job: Pick<JobRow, 'id' | 'kind' | 'workspaceId' | 'userId' | 'projectId' | 'input'> & { lockedBy?: string | null }
   signal: AbortSignal
   /** Report progress 0..1 (or -1 indeterminate) with an optional message; throttled. */
   progress(p: number, message?: string): void

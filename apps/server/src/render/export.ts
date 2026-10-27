@@ -322,15 +322,15 @@ export function targetSize(w: number, h: number, resolution: ExportRequest['reso
 const MIME: Record<ExportRequest['format'], string> = { mp4: 'video/mp4', webm: 'video/webm', gif: 'image/gif' }
 
 /**
- * Record the export and finish its job in one transaction, unless the job was cancelled meanwhile: a cancel that
- * arrives after this finds the job done, one before it leaves no export.
+ * Record the export and finish its job in one transaction, unless the job was cancelled meanwhile (or another worker
+ * took it over): a cancel that arrives after this finds the job done, one before it leaves no export.
  */
-async function saveExport(jobId: string, values: typeof exportsTable.$inferInsert, result: ExportResult) {
+async function saveExport(jobId: string, lockedBy: string | null | undefined, values: typeof exportsTable.$inferInsert, result: ExportResult) {
   const job = await ctx().db.transaction(async (tx) => {
     const [done] = await tx
       .update(jobs)
       .set({ status: 'done', progress: 1, message: 'Done', result: result as never, updatedAt: Date.now(), lockedBy: null })
-      .where(and(eq(jobs.id, jobId), eq(jobs.status, 'running'), eq(jobs.cancelRequested, false)))
+      .where(and(eq(jobs.id, jobId), eq(jobs.status, 'running'), eq(jobs.cancelRequested, false), lockedBy ? eq(jobs.lockedBy, lockedBy) : undefined))
       .returning()
     if (!done) throw new CancelledError()
     await tx.insert(exportsTable).values(values)
@@ -404,6 +404,7 @@ export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: 
       const result: ExportResult = { exportId, url: `/api/media/${assetRow.id}/source`, sizeBytes, duration }
       await saveExport(
         jc.job.id,
+        jc.job.lockedBy,
         { id: exportId, projectId: row.id, workspaceId: row.workspaceId, assetId: assetRow.id, jobId: jc.job.id, name, resolution: input.resolution, fps: input.fps, format: input.format, sizeBytes, duration, createdBy: jc.job.userId, createdAt: Date.now() },
         result,
       )

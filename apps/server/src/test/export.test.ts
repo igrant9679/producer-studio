@@ -257,4 +257,16 @@ describe('saving an export (PIP-28, PIP-2)', () => {
     expect(await exportsOf(id)).toEqual([])
     expect(await renders()).toBe(before)
   })
+
+  it('a worker whose export another worker took over saves nothing and leaves the job to it', async () => {
+    const before = await renders()
+    const { id, jc, off } = await start()
+    // stale recovery requeued it and a second worker claimed it while this one was still rendering
+    const takenOver = () => ctx().db.update(jobs).set({ lockedBy: 'other-worker' }).where(eq(jobs.id, id))
+    await expect(exportRender(jc, steps(takenOver))).rejects.toThrow(/Cancelled/)
+    off()
+    expect(await exportsOf(id)).toEqual([])
+    expect(await renders()).toBe(before)
+    expect(await getJob(id)).toMatchObject({ status: 'running', lockedBy: 'other-worker' })
+  })
 })
