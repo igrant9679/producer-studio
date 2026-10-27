@@ -65,11 +65,17 @@ export function attachUpgrades(server: import('node:http').Server, port: number)
   void import('./voicestudio/wsproxy').then((m) => m.attachDictationProxy(server, port))
 }
 
-export function stopDesktopServices() {
+/**
+ * Stop the desktop's own services, giving VoiceStudio its time to save and exit (its own stop takes at most about 6 s),
+ * but never more than `boundMs`: shutdown waits for this before it closes the database.
+ */
+export async function stopDesktopServices(boundMs = 7000): Promise<void> {
   syncEngine.stop()
   void import('./voicestudio/batch').then((b) => b.stopBatchWatcher())
   // VoiceStudio also exits on its own when our stdin pipe to it closes (OMNIVOICE_DESKTOP_CONTAINED)
-  void voiceStudio.stop().catch(() => undefined)
+  let timer: NodeJS.Timeout | undefined
+  await Promise.race([voiceStudio.stop().catch(() => undefined), new Promise<void>((r) => (timer = setTimeout(r, boundMs)))])
+  clearTimeout(timer)
 }
 
 function remoteAddress(c: Context): string {
