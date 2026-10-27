@@ -42,7 +42,7 @@ const untilStopped =
     )
 
 async function clip(status: 'processing' | 'ready', m: AssetMeta = {}) {
-  const id = `as_rt_${++n}`
+  const id = `as_rt_${Date.now().toString(36)}${++n}`
   const now = Date.now()
   await ctx().db.insert(assets).values({ id, workspaceId: WS, kind: 'audio', name: `${id}.wav`, mime: 'audio/wav', status, origin: 'tts', meta: m, sourceKey: `ws/${WS}/assets/${id}/source.wav`, createdBy: USER, createdAt: now, updatedAt: now })
   return id
@@ -75,7 +75,8 @@ describe('time limits (PIP-2)', () => {
     const done = await ended(job.id)
     expect(done.status).toBe('error')
     expect(done.error).toMatch(/The voiceover ran longer than its \d+ seconds limit and was stopped/)
-    expect(runningJobIds()).not.toContain(job.id)
+    // the handler never returns, but its slot is freed
+    await waitFor(async () => !runningJobIds().includes(job.id))
     expect(await assetRow(voice)).toMatchObject({ status: 'error', error: done.error })
   })
 
@@ -86,7 +87,7 @@ describe('time limits (PIP-2)', () => {
       jc.progress(0.1, 'Transcribing')
       return untilStopped(seen)(jc)
     })
-    const job = await enqueue('ai.transcribe', { assetId: 'as_none' }, meta())
+    const job = await enqueue('ai.transcribe', { assetId: await clip('ready') }, meta())
     const done = await ended(job.id)
     expect(done).toMatchObject({ status: 'error', error: expect.stringMatching(/The transcription made no progress for \d+ seconds and was stopped/) })
     expect(seen.aborted).toBe(true)
@@ -135,7 +136,7 @@ describe('quick jobs have their own lane (PIP-18)', () => {
     const e1 = await enqueue('export.render', {}, meta())
     const e2 = await enqueue('export.render', {}, meta())
     await runningHere(e1.id)
-    const quick = await enqueue('ai.transcribe', { assetId: 'as_x' }, meta())
+    const quick = await enqueue('ai.transcribe', { assetId: await clip('ready') }, meta())
     expect((await ended(quick.id)).status).toBe('done')
     expect((await getJob(e2.id))!.status).toBe('queued')
     const { cancelJob } = await import('../jobs/queue')
@@ -157,7 +158,7 @@ describe('job errors people see (PIP-33 / QA-13)', () => {
       registerHandler('ai.transcribe', async () => {
         throw new Error(message)
       })
-      const j = await enqueue('ai.transcribe', { assetId: 'as_x' }, meta())
+      const j = await enqueue('ai.transcribe', { assetId: await clip('ready') }, meta())
       await ended(j.id)
       const shown = (await client.json('GET', `/api/jobs/${j.id}`)).body
       expect(shown.status).toBe('error')
@@ -167,6 +168,69 @@ describe('job errors people see (PIP-33 / QA-13)', () => {
     // processing errors read like the clip's
     const { publicJobError } = await import('../jobs/errors')
     expect(publicJobError('asset.process', new Error(raw[0]))).toMatch(/isn't a video, audio or image format/)
+  })
+})
+
+describe('deleting a space or a clip stops its jobs (SEC-8)', () => {
+  /** Runs until stopped, then writes one more file to storage (an encoder still flushing) before it ends. */
+  const lateWriter =
+    (key: string, seen: { aborted?: boolean }): Handler =>
+    (jc) =>
+      new Promise((_r, reject) =>
+        jc.signal.addEventListener('abort', async () => {
+          seen.aborted = true
+          await ctx().storage.put(key, Buffer.from('late'))
+          reject(new CancelledError())
+        }),
+      )
+
+  it('deleting a space stops its running job at once, and what the job wrote afterwards is swept', async () => {
+    const space = (await client.json('POST', '/api/workspaces', { name: 'Doomed' })).body
+    const seen: { aborted?: boolean } = {}
+    const late = `ws/${space.id}/renders/late.mp4`
+    registerHandler('export.render', lateWriter(late, seen))
+    const j = await enqueue('export.render', {}, { workspaceId: space.id, userId: USER })
+    await runningHere(j.id)
+    expect((await client.json('DELETE', `/api/workspaces/${space.id}`)).status).toBe(200)
+    await waitFor(async () => seen.aborted)
+    expect(await getJob(j.id)).toBeNull()
+    await waitFor(async () => !runningJobIds().includes(j.id))
+    await waitFor(async () => (await ctx().storage.stat(late)) === null)
+  })
+
+  it('a job whose row was deleted elsewhere stops at its next heartbeat, quietly', async () => {
+    const seen: { aborted?: boolean } = {}
+    registerHandler('export.render', untilStopped(seen))
+    const j = await enqueue('export.render', {}, meta())
+    await runningHere(j.id)
+    await ctx().db.delete(jobs).where(eq(jobs.id, j.id))
+    await waitFor(async () => seen.aborted)
+    await waitFor(async () => !runningJobIds().includes(j.id))
+    expect(await getJob(j.id)).toBeNull()
+  })
+
+  it('deleting a clip cancels its transcription, and what it wrote afterwards is swept', async () => {
+    const id = await clip('ready')
+    const seen: { aborted?: boolean } = {}
+    const late = `ws/${WS}/assets/${id}/transcript.json`
+    registerHandler('ai.transcribe', lateWriter(late, seen))
+    const j = await enqueue('ai.transcribe', { assetId: id }, meta())
+    await runningHere(j.id)
+    expect((await client.json('DELETE', `/api/assets/${id}`)).status).toBe(200)
+    await waitFor(async () => seen.aborted)
+    expect(await getJob(j.id)).toMatchObject({ status: 'cancelled', error: 'The clip was deleted' })
+    await waitFor(async () => (await ctx().storage.stat(late)) === null)
+  })
+
+  it('a clip deleted without its route (a desktop applying a cloud delete) stops its processing too', async () => {
+    const id = await clip('ready')
+    const seen: { aborted?: boolean } = {}
+    registerHandler('ai.transcribe', untilStopped(seen))
+    const j = await enqueue('ai.transcribe', { assetId: id }, meta())
+    await runningHere(j.id)
+    await ctx().db.delete(assets).where(eq(assets.id, id))
+    await waitFor(async () => seen.aborted)
+    expect(await getJob(j.id)).toMatchObject({ status: 'cancelled', error: 'The clip was deleted' })
   })
 })
 
@@ -204,7 +268,7 @@ describe('stale recovery and lost locks (PIP-8)', () => {
     const now = Date.now()
     const [j] = await ctx()
       .db.insert(jobs)
-      .values({ id: `j_rt_${++n}`, kind: 'export.render', status: 'running', input: {}, ...meta(), attempts: 1, lockedBy: 'w_busy', lockedAt: now - 10 * 60_000, createdAt: now, updatedAt: now })
+      .values({ id: `j_rt_${Date.now().toString(36)}${++n}`, kind: 'export.render', status: 'running', input: {}, ...meta(), attempts: 1, lockedBy: 'w_busy', lockedAt: now - 10 * 60_000, createdAt: now, updatedAt: now })
       .returning()
     const seenStale = (await getJob(j.id)) as JobRow
     // the worker heartbeats before recovery gets to its update

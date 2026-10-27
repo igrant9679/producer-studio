@@ -14,9 +14,11 @@ import { setup, signup } from './helpers'
 let WS = ''
 let USER = ''
 let n = 0
+// unique per run: a real Postgres (TEST_DATABASE_URL) keeps rows between runs
+const RUN = Date.now().toString(36)
 
 async function asset(status: 'uploading' | 'processing' | 'ready', updatedAt: number, origin = 'upload', meta: AssetMeta = {}) {
-  const id = `as_rec_${++n}`
+  const id = `as_rec_${RUN}${++n}`
   await ctx().db.insert(assets).values({
     id,
     workspaceId: WS,

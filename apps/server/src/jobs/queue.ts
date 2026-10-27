@@ -99,25 +99,39 @@ export async function failJob(id: string, error: string, status: 'error' | 'canc
 }
 
 /** Cancel: queued jobs end immediately; running ones are flagged and the worker aborts them. */
-export async function cancelJob(id: string): Promise<JobRow | null> {
+export async function cancelJob(id: string, error = 'Cancelled by user'): Promise<JobRow | null> {
   const now = Date.now()
   const rows = await ctx()
     .db.update(jobs)
-    .set({ status: 'cancelled', cancelRequested: true, message: 'Cancelled', error: 'Cancelled by user', updatedAt: now, lockedBy: null })
+    .set({ status: 'cancelled', cancelRequested: true, message: 'Cancelled', error, updatedAt: now, lockedBy: null })
     .where(and(eq(jobs.id, id), sql`${jobs.status} IN ('queued', 'running')`))
     .returning()
   const row = rows[0] ?? (await getJob(id))
   if (rows[0]) {
     emitJob(rows[0])
-    cancelHooks.forEach((h) => h(id))
+    cancelHooks.forEach((h) => h(id, 'cancelled'))
     // a queued asset.process job never runs its own error path: its clip would stay "processing" for good
     await failAssetOfJob(rows[0], ASSET_ERRORS.cancelled)
   }
   return row
 }
 
-const cancelHooks = new Set<(id: string) => void>()
-export function onCancel(fn: (id: string) => void) {
+/** Clip deleted: its processing and transcription jobs (queued or running) stop; nothing is left to work on. */
+export async function cancelJobsOfAsset(assetId: string): Promise<void> {
+  const open = await ctx()
+    .db.select({ id: jobs.id })
+    .from(jobs)
+    .where(and(sql`${jobs.input}->>'assetId' = ${assetId}`, sql`${jobs.status} IN ('queued', 'running')`, sql`${jobs.kind} IN ('asset.process', 'ai.transcribe')`))
+  for (const j of open) await cancelJob(j.id, 'The clip was deleted')
+}
+
+/** Job rows were deleted with their workspace: a worker in this process stops them now (others at their next heartbeat). */
+export function jobsDeleted(ids: string[]) {
+  for (const id of ids) cancelHooks.forEach((h) => h(id, 'gone'))
+}
+
+const cancelHooks = new Set<(id: string, why: 'cancelled' | 'gone') => void>()
+export function onCancel(fn: (id: string, why: 'cancelled' | 'gone') => void) {
   cancelHooks.add(fn)
   return () => cancelHooks.delete(fn)
 }

@@ -7,6 +7,7 @@ import { ctx } from '../context'
 import { brandKits, exportsTable, invites, jobs, memberships, projects, shareLinks, users, workspaces } from '../db/schema'
 import { HttpError, body, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { newId, randomToken } from '../ids'
+import { jobsDeleted } from '../jobs/queue'
 
 export async function createWorkspace(userId: string, name: string, personal = false): Promise<Workspace> {
   const id = newId('ws')
@@ -49,8 +50,10 @@ export async function renameWorkspace(userId: string, id: string, name: string):
 
 /**
  * Permanently delete a workspace (owner; not a personal space). Projects, assets, memberships, invites, brand kit
- * and AI settings/keys cascade; jobs, exports and share links have no FK so they go explicitly (a running job sees
- * its row gone and stops). Membership deletes write tombstones so members' desktops drop the space too.
+ * and AI settings/keys cascade; jobs, exports and share links have no FK so they go explicitly. A running job is
+ * stopped (here at once, on another worker at its next heartbeat, when it finds its row gone), and whatever it
+ * writes to storage after this is swept when it ends. Membership deletes write tombstones so members' desktops drop
+ * the space too.
  */
 export async function deleteWorkspace(userId: string, id: string): Promise<void> {
   await requireRole(userId, id, 'owner')
@@ -58,12 +61,14 @@ export async function deleteWorkspace(userId: string, id: string): Promise<void>
   const ws = (await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]
   if (!ws) throw notFound()
   if (ws.personal) throw new HttpError(409, 'conflict', 'Personal spaces can’t be deleted')
-  await db.transaction(async (tx) => {
+  const removed = await db.transaction(async (tx) => {
     await tx.delete(shareLinks).where(inArray(shareLinks.projectId, tx.select({ id: projects.id }).from(projects).where(eq(projects.workspaceId, id))))
     await tx.delete(exportsTable).where(eq(exportsTable.workspaceId, id))
-    await tx.delete(jobs).where(eq(jobs.workspaceId, id))
+    const gone = await tx.delete(jobs).where(eq(jobs.workspaceId, id)).returning({ id: jobs.id })
     await tx.delete(workspaces).where(eq(workspaces.id, id))
+    return gone
   })
+  jobsDeleted(removed.map((j) => j.id))
   await ctx().storage.deletePrefix(`ws/${id}/`).catch(() => undefined)
   ctx().bus.publish(id, 'workspace', { id, deleted: true }, { id, inline: { id, deleted: true } })
 }

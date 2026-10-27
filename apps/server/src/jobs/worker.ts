@@ -5,12 +5,13 @@
 import { and, eq, inArray } from 'drizzle-orm'
 import type { JobKind } from '@producer/core'
 import { ctx } from '../context'
-import { jobs } from '../db/schema'
+import { assets, jobs, workspaces } from '../db/schema'
 import { log } from '../log'
 import { failAssetOfJob, reconcileAssets } from '../services/asset-recovery'
+import { assetPrefix } from '../services/assets'
 import { pruneOldRows } from '../services/retention'
 import { publicJobError } from './errors'
-import { type JobRow, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, requeueForShutdown, updateProgress } from './queue'
+import { type JobRow, cancelJob, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, requeueForShutdown, updateProgress } from './queue'
 
 export class CancelledError extends Error {
   constructor() {
@@ -183,15 +184,25 @@ async function runJob(job: JobRow, workerId: string) {
   const limitTimer = setTimeout(() => stop(job.id, { kind: 'limit', message: `${what} ran longer than its ${span(limit)} limit and was stopped. Try again.` }), limit)
   limitTimer.unref()
   const h = handlers.get(job.kind as JobKind)
+  let work: Promise<unknown> = Promise.resolve()
+  let settled = false
+  let outcome: StopReason['kind'] | 'done' | 'error' = 'error'
   try {
     if (!h) throw new Error(`No handler for job kind ${job.kind}`)
     const jc = makeContext(entry, workerId)
-    const result = await untilStopped(Promise.resolve().then(() => h(jc)), ac.signal)
+    work = Promise.resolve().then(() => h(jc))
+    void work.then(
+      () => (settled = true),
+      () => (settled = true),
+    )
+    const result = await untilStopped(work, ac.signal)
     jc.check()
     await finishJob(job.id, result ?? null, workerId)
+    outcome = 'done'
     log.info('job done', { jobId: job.id, kind: job.kind, ms: Date.now() - entry.startedAt })
   } catch (err) {
     const why = ac.signal.aborted ? stopReason(ac.signal) : err instanceof CancelledError ? ({ kind: 'cancelled' } as const) : undefined
+    outcome = why?.kind ?? 'error'
     if (why?.kind === 'shutdown') log.info('job requeued for after the restart', { jobId: job.id, kind: job.kind })
     else if (why?.kind === 'lost') log.warn('job taken over by another worker; dropped here', { jobId: job.id, kind: job.kind })
     else if (why?.kind === 'gone') log.info('job dropped: its rows were deleted', { jobId: job.id, kind: job.kind })
@@ -210,7 +221,30 @@ async function runJob(job: JobRow, workerId: string) {
     clearTimeout(limitTimer)
     running.delete(job.id)
     wakeNow()
+    // a job stopped because its clip or space was deleted may have written files since: sweep now, and again when
+    // a handler that outlived the grace period finally ends
+    if (outcome !== 'done' && outcome !== 'shutdown' && outcome !== 'lost') {
+      const sweep = () => void sweepOrphans(job).catch((err) => log.warn('sweeping storage of a deleted clip or space failed', { err, jobId: job.id }))
+      if (settled) sweep()
+      else {
+        sweep()
+        void work.then(sweep, sweep)
+      }
+    }
   }
+}
+
+/** Delete what a job left in storage for a workspace or clip that no longer exists. */
+export async function sweepOrphans(job: Pick<JobRow, 'id' | 'workspaceId' | 'input'>) {
+  const db = ctx().db
+  const s = ctx().storage
+  const jobRow = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, job.id)).limit(1)
+  const ws = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, job.workspaceId)).limit(1)
+  // the space was deleted (its jobs go with it)
+  if (!ws.length && !jobRow.length) return s.deletePrefix(`ws/${job.workspaceId}/`)
+  const assetId = (job.input as { assetId?: unknown } | null)?.assetId
+  if (typeof assetId === 'string' && /^[\w-]+$/.test(assetId) && !(await db.select({ id: assets.id }).from(assets).where(eq(assets.id, assetId)).limit(1)).length)
+    await s.deletePrefix(`${assetPrefix(job.workspaceId, assetId)}/`)
 }
 
 /** Heartbeat our jobs, and drop the ones that were cancelled, taken over by another worker, or deleted. */
@@ -234,6 +268,15 @@ async function heartbeat(workerId: string) {
     else if (r.cancel || r.status === 'cancelled') stop(id, { kind: 'cancelled' })
     else if (r.status !== 'running' || r.lockedBy !== workerId) stop(id, { kind: 'lost' })
   }
+  // a clip deleted some other way (a desktop applying a delete from the cloud) stops its processing too
+  const clipOf = new Map<string, string>()
+  for (const [id, r] of running) {
+    const assetId = (r.job.input as { assetId?: unknown } | null)?.assetId
+    if ((r.job.kind === 'asset.process' || r.job.kind === 'ai.transcribe') && typeof assetId === 'string' && !r.ac.signal.aborted) clipOf.set(id, assetId)
+  }
+  if (!clipOf.size) return
+  const present = new Set((await ctx().db.select({ id: assets.id }).from(assets).where(inArray(assets.id, [...new Set(clipOf.values())]))).map((a) => a.id))
+  for (const [id, assetId] of clipOf) if (!present.has(assetId)) await cancelJob(id, 'The clip was deleted')
 }
 
 /**
@@ -259,7 +302,7 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
   let wakeResolve: (() => void) | undefined
   wakeNow = () => wakeResolve?.()
   onWake(() => wakeResolve?.())
-  const offCancel = onCancel((id) => stop(id, { kind: 'cancelled' }))
+  const offCancel = onCancel((id, why) => stop(id, { kind: why }))
 
   const loop = async () => {
     if (ctx().database.driver === 'pglite') await recoverStale(0).catch(() => 0) // single process: anything "running" is from a previous run

@@ -10,7 +10,7 @@ import { assets } from '../db/schema'
 import { assetRecord } from '../dto'
 import { HttpError, body, invalid, requireRole } from '../http'
 import { newId } from '../ids'
-import { enqueue } from '../jobs/queue'
+import { cancelJobsOfAsset, enqueue } from '../jobs/queue'
 import { assertVariant, serveObject, type Variant } from '../media/serve'
 import { type AssetRow, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset, uploadMime } from '../services/assets'
 import { UploadTooLargeError } from '../storage'
@@ -196,6 +196,8 @@ assetRoutes.delete('/:id', async (c) => {
   const u = requireUser(c)
   const row = await loadAsset(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'editor')
+  // its processing and transcription stop first; whatever they write after this is swept when they end
+  await cancelJobsOfAsset(row.id)
   await ctx().db.delete(assets).where(eq(assets.id, row.id))
   await ctx().storage.deletePrefix(assetPrefix(row.workspaceId, row.id) + '/').catch(() => undefined)
   return c.json({ ok: true })
