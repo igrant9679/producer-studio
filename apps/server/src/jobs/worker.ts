@@ -1,11 +1,13 @@
 // Worker loop: claims jobs up to WORKER_CONCURRENCY, runs handlers with an AbortSignal (cancellation kills
-// child processes), heartbeats, recovers stale locks, pushes throttled progress over the event bus.
+// child processes), heartbeats, recovers stale locks, pushes throttled progress over the event bus. Every job
+// ends: one that runs past its kind's time limit or goes quiet for too long is stopped with a reason, and one that
+// another worker took over, or whose rows were deleted, is dropped here.
 import { and, eq, inArray } from 'drizzle-orm'
 import type { JobKind } from '@producer/core'
 import { ctx } from '../context'
 import { jobs } from '../db/schema'
 import { log } from '../log'
-import { reconcileAssets } from '../services/asset-recovery'
+import { failAssetOfJob, reconcileAssets } from '../services/asset-recovery'
 import { pruneOldRows } from '../services/retention'
 import { type JobRow, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, updateProgress } from './queue'
 
@@ -52,16 +54,75 @@ export function inlineContext(job: JobContext['job'], signal: AbortSignal = new 
   }
 }
 
-const running = new Map<string, AbortController>()
+/** Why the worker stopped a job from outside its handler (the abort reason on its signal). */
+export type StopReason =
+  | { kind: 'cancelled' }
+  /** Ran past its time limit, or reported no progress for too long: ends as an error with `message`. */
+  | { kind: 'limit'; message: string }
+  /** Stale recovery gave it to another worker: that worker finishes it, this one writes nothing. */
+  | { kind: 'lost' }
+  /** Its job row is gone (the workspace was deleted): nothing left to report to. */
+  | { kind: 'gone' }
+
+export function stopReason(signal: AbortSignal): StopReason | undefined {
+  const r = signal.aborted ? (signal.reason as StopReason | undefined) : undefined
+  return r && typeof r === 'object' && 'kind' in r ? r : signal.aborted ? { kind: 'cancelled' } : undefined
+}
+
+/** The worker's reason for stopping this job when it ran too long (shown on the job and its clip), if that's why. */
+export function limitMessage(signal: AbortSignal): string | undefined {
+  const r = stopReason(signal)
+  return r?.kind === 'limit' ? r.message : undefined
+}
+
+const WHAT: Partial<Record<JobKind, string>> = {
+  'export.render': 'The export',
+  'asset.process': 'Processing this clip',
+  'ai.transcribe': 'The transcription',
+  'ai.tts': 'The voiceover',
+  'ai.produce.script': 'Producer AI',
+  'ai.produce.assemble': 'Producer AI',
+  'voicestudio.install': 'Installing VoiceStudio',
+}
+
+/** The longest a job of this kind may run: renders long, processing medium, voice short. */
+export function maxRunMs(kind: string): number {
+  const l = ctx().config.jobLimits
+  if (kind === 'export.render' || kind === 'ai.produce.assemble' || kind === 'voicestudio.install') return l.renderMs
+  if (kind === 'ai.tts') return l.voiceMs
+  return l.processingMs
+}
+
+const span = (ms: number) => (ms >= 120 * 60_000 && ms % 3600_000 === 0 ? `${ms / 3600_000} hours` : ms >= 60_000 ? `${Math.round(ms / 60_000)} minutes` : `${Math.round(ms / 1000)} seconds`)
+
+/** After a stop, how long the handler gets to wind down (its processes get SIGTERM, then SIGKILL at 3 s) before its slot is freed anyway. */
+const STOP_GRACE_MS = 10_000
+
+interface Running {
+  ac: AbortController
+  job: JobRow
+  startedAt: number
+  /** Last progress report: the no-progress watchdog's clock. */
+  lastProgress: number
+}
+
+const running = new Map<string, Running>()
 let stopped = false
 let started = false
 let wakeNow: () => void = () => undefined
+let graceMs = STOP_GRACE_MS
 
 export function runningJobIds() {
   return [...running.keys()]
 }
 
-function makeContext(job: JobRow, ac: AbortController): JobContext {
+function stop(id: string, reason: StopReason) {
+  const r = running.get(id)
+  if (r && !r.ac.signal.aborted) r.ac.abort(reason)
+}
+
+function makeContext(entry: Running, workerId: string): JobContext {
+  const { job, ac } = entry
   let last = 0
   let pending: { p: number; m?: string } | undefined
   let timer: NodeJS.Timeout | undefined
@@ -71,12 +132,13 @@ function makeContext(job: JobRow, ac: AbortController): JobContext {
     const { p, m } = pending
     pending = undefined
     last = Date.now()
-    void updateProgress(job.id, p, m).catch((err) => log.warn('progress update failed', { err, jobId: job.id }))
+    void updateProgress(job.id, p, m, workerId).catch((err) => log.warn('progress update failed', { err, jobId: job.id }))
   }
   return {
     job,
     signal: ac.signal,
     progress(p, m) {
+      entry.lastProgress = Date.now()
       pending = { p: Math.round(p * 1000) / 1000, m: m ?? pending?.m }
       const wait = 300 - (Date.now() - last)
       if (wait <= 0) flush()
@@ -88,39 +150,95 @@ function makeContext(job: JobRow, ac: AbortController): JobContext {
   }
 }
 
-async function runJob(job: JobRow) {
-  const ac = new AbortController()
-  running.set(job.id, ac)
-  const started = Date.now()
+/** The handler's outcome; or, once the job is stopped, CancelledError after the grace period if the handler hangs on. */
+function untilStopped<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let t: NodeJS.Timeout | undefined
+    const onAbort = () => {
+      t = setTimeout(() => reject(new CancelledError()), graceMs)
+      t.unref()
+    }
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+    work.then(resolve, reject).finally(() => {
+      clearTimeout(t)
+      signal.removeEventListener('abort', onAbort)
+    })
+  })
+}
+
+async function runJob(job: JobRow, workerId: string) {
+  const entry: Running = { ac: new AbortController(), job, startedAt: Date.now(), lastProgress: Date.now() }
+  const { ac } = entry
+  running.set(job.id, entry)
   log.info('job start', { jobId: job.id, kind: job.kind })
+  const limit = maxRunMs(job.kind)
+  const what = WHAT[job.kind as JobKind] ?? 'This job'
+  const limitTimer = setTimeout(() => stop(job.id, { kind: 'limit', message: `${what} ran longer than its ${span(limit)} limit and was stopped. Try again.` }), limit)
+  limitTimer.unref()
   const h = handlers.get(job.kind as JobKind)
   try {
     if (!h) throw new Error(`No handler for job kind ${job.kind}`)
-    const jc = makeContext(job, ac)
-    const result = await h(jc)
+    const jc = makeContext(entry, workerId)
+    const result = await untilStopped(Promise.resolve().then(() => h(jc)), ac.signal)
     jc.check()
-    await finishJob(job.id, result ?? null)
-    log.info('job done', { jobId: job.id, kind: job.kind, ms: Date.now() - started })
+    await finishJob(job.id, result ?? null, workerId)
+    log.info('job done', { jobId: job.id, kind: job.kind, ms: Date.now() - entry.startedAt })
   } catch (err) {
-    const cancelled = ac.signal.aborted || err instanceof CancelledError
-    const message = err instanceof Error ? err.message : String(err)
-    if (!cancelled) log.error('job failed', { jobId: job.id, kind: job.kind, err })
-    await failJob(job.id, cancelled ? 'Cancelled' : message, cancelled ? 'cancelled' : 'error').catch(() => undefined)
+    const why = ac.signal.aborted ? stopReason(ac.signal) : err instanceof CancelledError ? ({ kind: 'cancelled' } as const) : undefined
+    if (why?.kind === 'lost') log.warn('job taken over by another worker; dropped here', { jobId: job.id, kind: job.kind })
+    else if (why?.kind === 'gone') log.info('job dropped: its rows were deleted', { jobId: job.id, kind: job.kind })
+    else if (why?.kind === 'limit') {
+      log.warn('job stopped', { jobId: job.id, kind: job.kind, reason: why.message })
+      await failJob(job.id, why.message, 'error', workerId).catch(() => undefined)
+      // the clips it was making will never finish either
+      await failAssetOfJob(job, why.message)
+    } else if (why?.kind === 'cancelled') await failJob(job.id, 'Cancelled', 'cancelled', workerId).catch(() => undefined)
+    else {
+      const message = err instanceof Error ? err.message : String(err)
+      log.error('job failed', { jobId: job.id, kind: job.kind, err })
+      await failJob(job.id, message, 'error', workerId).catch(() => undefined)
+    }
   } finally {
+    clearTimeout(limitTimer)
     running.delete(job.id)
     wakeNow()
   }
 }
 
-export function startWorker(opts: { concurrency: number }) {
+/** Heartbeat our jobs, and drop the ones that were cancelled, taken over by another worker, or deleted. */
+async function heartbeat(workerId: string) {
+  const now = Date.now()
+  const stallMs = ctx().config.jobLimits.stallMs
+  for (const [id, r] of running) {
+    if (now - r.lastProgress > stallMs) {
+      const what = WHAT[r.job.kind as JobKind] ?? 'This job'
+      stop(id, { kind: 'limit', message: `${what} made no progress for ${span(stallMs)} and was stopped. Try again.` })
+    }
+  }
+  const ids = runningJobIds()
+  if (!ids.length) return
+  await ctx().db.update(jobs).set({ lockedAt: now }).where(and(inArray(jobs.id, ids), eq(jobs.status, 'running'), eq(jobs.lockedBy, workerId)))
+  const rows = await ctx().db.select({ id: jobs.id, status: jobs.status, cancel: jobs.cancelRequested, lockedBy: jobs.lockedBy }).from(jobs).where(inArray(jobs.id, ids))
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  for (const id of ids) {
+    const r = byId.get(id)
+    if (!r) stop(id, { kind: 'gone' })
+    else if (r.cancel || r.status === 'cancelled') stop(id, { kind: 'cancelled' })
+    else if (r.status !== 'running' || r.lockedBy !== workerId) stop(id, { kind: 'lost' })
+  }
+}
+
+export function startWorker(opts: { concurrency: number; heartbeatMs?: number; graceMs?: number }) {
   if (started) return
   started = true
   stopped = false
+  graceMs = opts.graceMs ?? STOP_GRACE_MS
   const workerId = ctx().instanceId
   let wakeResolve: (() => void) | undefined
   wakeNow = () => wakeResolve?.()
   onWake(() => wakeResolve?.())
-  onCancel((id) => running.get(id)?.abort())
+  const offCancel = onCancel((id) => stop(id, { kind: 'cancelled' }))
 
   const loop = async () => {
     if (ctx().database.driver === 'pglite') await recoverStale(0).catch(() => 0) // single process: anything "running" is from a previous run
@@ -129,7 +247,7 @@ export function startWorker(opts: { concurrency: number }) {
         while (running.size < opts.concurrency && !stopped) {
           const job = await claimNext(workerId)
           if (!job) break
-          void runJob(job)
+          void runJob(job, workerId)
         }
       } catch (err) {
         log.error('claim failed', { err })
@@ -146,18 +264,8 @@ export function startWorker(opts: { concurrency: number }) {
   }
   void loop()
 
-  // heartbeat + cross-process cancellation
-  const hb = setInterval(async () => {
-    const ids = runningJobIds()
-    if (!ids.length) return
-    try {
-      await ctx().db.update(jobs).set({ lockedAt: Date.now() }).where(and(inArray(jobs.id, ids), eq(jobs.status, 'running')))
-      const rows = await ctx().db.select({ id: jobs.id, status: jobs.status, cancel: jobs.cancelRequested }).from(jobs).where(inArray(jobs.id, ids))
-      for (const r of rows) if (r.cancel || r.status === 'cancelled') running.get(r.id)?.abort()
-    } catch (err) {
-      log.warn('heartbeat failed', { err })
-    }
-  }, 5000)
+  // heartbeat, the no-progress watchdog and cross-process cancellation
+  const hb = setInterval(() => void heartbeat(workerId).catch((err) => log.warn('heartbeat failed', { err })), opts.heartbeatMs ?? 5000)
   const rec = setInterval(() => void recoverStale(90_000, workerId).catch(() => 0), 30_000)
   // clips that can no longer finish (abandoned uploads, dead or cancelled processing) are marked failed
   const sweep = () => void reconcileAssets().catch((err) => log.warn('asset reconcile failed', { err }))
@@ -175,13 +283,14 @@ export function startWorker(opts: { concurrency: number }) {
   pruning.unref()
   stopWorkerFn = () => {
     stopped = true
+    offCancel()
     clearInterval(hb)
     clearInterval(rec)
     clearTimeout(first)
     clearInterval(recon)
     clearTimeout(firstPrune)
     clearInterval(pruning)
-    for (const ac of running.values()) ac.abort()
+    for (const r of running.values()) r.ac.abort()
   }
   log.info('worker started', { workerId, concurrency: opts.concurrency })
 }

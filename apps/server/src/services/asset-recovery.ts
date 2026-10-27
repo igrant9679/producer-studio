@@ -11,6 +11,8 @@
 // proxy encode is legitimately quiet, so there is no "quiet for N minutes" rule: an upload whose one-hour ticket
 // has long expired, a processing clip whose latest asset.process job has ended after the clip last changed, or a
 // clip made inside another job (its `meta.jobId`: Producer AI voices and visuals, voiceovers) once that job ended.
+// A job that hangs instead of ending is the worker's to stop (a time limit per kind and a no-progress watchdog,
+// jobs/worker.ts); it then fails its clips with the reason.
 import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import { ctx } from '../context'
 import { assets, jobs } from '../db/schema'
@@ -31,7 +33,7 @@ export const ASSET_ERRORS = {
 }
 
 /** Set an asset to error only if it is still in one of `from` (never overwrite a clip that finished). */
-async function failAsset(id: string, from: Array<'uploading' | 'processing'>, error: string): Promise<boolean> {
+export async function failAsset(id: string, from: Array<'uploading' | 'processing' | 'error'>, error: string): Promise<boolean> {
   const [row] = await ctx()
     .db.update(assets)
     .set({ status: 'error', error: error.slice(0, 500), updatedAt: Date.now() })

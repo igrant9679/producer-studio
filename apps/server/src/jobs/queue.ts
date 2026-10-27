@@ -46,14 +46,15 @@ function wakeWorkers() {
   wake?.()
 }
 
-/** Atomically claim the oldest queued job. */
-export async function claimNext(workerId: string): Promise<JobRow | null> {
+/** Atomically claim the oldest queued job (of `kinds`, when given). */
+export async function claimNext(workerId: string, kinds?: readonly JobKind[]): Promise<JobRow | null> {
   const now = Date.now()
+  const only = kinds ? sql`AND kind IN (${sql.join(kinds.map((k) => sql`${k}`), sql`, `)})` : sql``
   const rows = await ctx()
     .db.update(jobs)
     .set({ status: 'running', lockedBy: workerId, lockedAt: now, updatedAt: now, attempts: sql`${jobs.attempts} + 1`, message: 'Starting' })
     // voice.relay jobs are claimed by the owning desktop over /api/voice/relay/claim, never by a local worker
-    .where(eq(jobs.id, sql`(SELECT id FROM jobs WHERE status = 'queued' AND kind <> 'voice.relay' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)`))
+    .where(eq(jobs.id, sql`(SELECT id FROM jobs WHERE status = 'queued' AND kind <> 'voice.relay' ${only} ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)`))
     .returning()
   return rows[0] ?? null
 }
@@ -62,31 +63,34 @@ export async function getJob(id: string): Promise<JobRow | null> {
   return (await ctx().db.select().from(jobs).where(eq(jobs.id, id)).limit(1))[0] ?? null
 }
 
-export async function updateProgress(id: string, progress: number, message?: string): Promise<JobRow | null> {
+/** Running, and (when given) still held by `lockedBy`: a worker that lost its lock writes nothing more. */
+const runningBy = (id: string, lockedBy?: string) => and(eq(jobs.id, id), eq(jobs.status, 'running'), lockedBy ? eq(jobs.lockedBy, lockedBy) : undefined)
+
+export async function updateProgress(id: string, progress: number, message?: string, lockedBy?: string): Promise<JobRow | null> {
   const rows = await ctx()
     .db.update(jobs)
     .set({ progress, ...(message !== undefined ? { message } : {}), updatedAt: Date.now(), lockedAt: Date.now() })
-    .where(and(eq(jobs.id, id), eq(jobs.status, 'running')))
+    .where(runningBy(id, lockedBy))
     .returning()
   if (rows[0]) emitJob(rows[0])
   return rows[0] ?? null
 }
 
-export async function finishJob(id: string, result: unknown): Promise<JobRow | null> {
+export async function finishJob(id: string, result: unknown, lockedBy?: string): Promise<JobRow | null> {
   const rows = await ctx()
     .db.update(jobs)
     .set({ status: 'done', progress: 1, message: 'Done', result: result as never, updatedAt: Date.now(), lockedBy: null })
-    .where(and(eq(jobs.id, id), eq(jobs.status, 'running')))
+    .where(runningBy(id, lockedBy))
     .returning()
   if (rows[0]) emitJob(rows[0])
   return rows[0] ?? null
 }
 
-export async function failJob(id: string, error: string, status: 'error' | 'cancelled' = 'error'): Promise<JobRow | null> {
+export async function failJob(id: string, error: string, status: 'error' | 'cancelled' = 'error', lockedBy?: string): Promise<JobRow | null> {
   const rows = await ctx()
     .db.update(jobs)
     .set({ status, error: error.slice(0, 4000), message: status === 'cancelled' ? 'Cancelled' : 'Failed', updatedAt: Date.now(), lockedBy: null })
-    .where(and(eq(jobs.id, id), eq(jobs.status, 'running')))
+    .where(runningBy(id, lockedBy))
     .returning()
   if (rows[0]) emitJob(rows[0])
   return rows[0] ?? null
@@ -116,6 +120,26 @@ export function onCancel(fn: (id: string) => void) {
   return () => cancelHooks.delete(fn)
 }
 
+export const WORKER_GAVE_UP = 'Worker stopped responding'
+
+/**
+ * Requeue one stale running job (or error it after 3 attempts), only if it's still exactly as it was seen: a
+ * worker that heartbeat meanwhile keeps its job, and two recoveries never both requeue it.
+ */
+export async function recoverJob(j: JobRow): Promise<boolean> {
+  const giveUp = j.attempts >= 3
+  const rows = await ctx()
+    .db.update(jobs)
+    .set(giveUp ? { status: 'error', error: WORKER_GAVE_UP, message: 'Failed', lockedBy: null, updatedAt: Date.now() } : { status: 'queued', lockedBy: null, lockedAt: null, message: 'Requeued', updatedAt: Date.now() })
+    .where(and(eq(jobs.id, j.id), eq(jobs.status, 'running'), sql`${jobs.lockedBy} IS NOT DISTINCT FROM ${j.lockedBy}`, sql`${jobs.lockedAt} IS NOT DISTINCT FROM ${j.lockedAt}`))
+    .returning()
+  if (!rows[0]) return false
+  emitJob(rows[0])
+  // giving up on the job must not leave its clip "processing" forever
+  if (giveUp) await failAssetOfJob(rows[0], ASSET_ERRORS.workerGaveUp)
+  return true
+}
+
 /** Requeue running jobs whose worker stopped heartbeating (or error them after 3 attempts). */
 export async function recoverStale(staleMs: number, exceptWorker?: string): Promise<number> {
   const cutoff = Date.now() - staleMs
@@ -126,18 +150,7 @@ export async function recoverStale(staleMs: number, exceptWorker?: string): Prom
   let n = 0
   for (const j of stale) {
     if (exceptWorker && j.lockedBy === exceptWorker) continue
-    const giveUp = j.attempts >= 3
-    const rows = await ctx()
-      .db.update(jobs)
-      .set(giveUp ? { status: 'error', error: 'Worker stopped responding', lockedBy: null, updatedAt: Date.now() } : { status: 'queued', lockedBy: null, lockedAt: null, message: 'Requeued', updatedAt: Date.now() })
-      .where(and(eq(jobs.id, j.id), eq(jobs.status, 'running')))
-      .returning()
-    if (rows[0]) {
-      emitJob(rows[0])
-      // giving up on the job must not leave its clip "processing" forever
-      if (giveUp) await failAssetOfJob(rows[0], ASSET_ERRORS.workerGaveUp)
-      n++
-    }
+    if (await recoverJob(j)) n++
   }
   return n
 }

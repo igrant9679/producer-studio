@@ -34,6 +34,10 @@ export interface Config {
   publicUrl?: string
   maxUploadBytes: number
   workerConcurrency: number
+  /** Slots only quick jobs (processing, voiceovers, transcription) may use, on top of workerConcurrency. */
+  quickJobConcurrency: number
+  /** How long one job may run before it's stopped with a reason, by kind of work; and how long it may go without progress. */
+  jobLimits: { renderMs: number; processingMs: number; voiceMs: number; stallMs: number }
   s3?: { bucket: string; endpoint?: string; region: string; accessKeyId?: string; secretAccessKey?: string; forcePathStyle: boolean }
   ffmpegPath: string
   ffprobePath: string
@@ -151,6 +155,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicUrl: env.PUBLIC_URL || undefined,
     maxUploadBytes: envInt(env, 'MAX_UPLOAD_MB', 4096, 1) * 1024 * 1024,
     workerConcurrency: envInt(env, 'WORKER_CONCURRENCY', 2, 1),
+    quickJobConcurrency: envInt(env, 'QUICK_JOB_CONCURRENCY', 1),
+    jobLimits: {
+      renderMs: envInt(env, 'JOB_MAX_MINUTES_RENDER', 180, 1) * 60_000,
+      processingMs: envInt(env, 'JOB_MAX_MINUTES_PROCESSING', 120, 1) * 60_000,
+      voiceMs: envInt(env, 'JOB_MAX_MINUTES_VOICE', 30, 1) * 60_000,
+      stallMs: envInt(env, 'JOB_STALL_MINUTES', 20, 1) * 60_000,
+    },
     s3,
     ffmpegPath: env.FFMPEG_PATH || ffmpegStatic || 'ffmpeg',
     ffprobePath: env.FFPROBE_PATH || ffprobeStatic || 'ffprobe',

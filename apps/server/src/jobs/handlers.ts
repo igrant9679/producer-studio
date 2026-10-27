@@ -4,7 +4,8 @@ import { synthesizeToAsset, transcribeAsset } from '../ai/speech'
 import { processAsset } from '../media/process'
 import { assetRecord } from '../dto'
 import { exportRender } from '../render/export'
-import { registerHandler } from './worker'
+import { failAsset } from '../services/asset-recovery'
+import { limitMessage, registerHandler } from './worker'
 
 let done = false
 
@@ -13,8 +14,15 @@ export function registerHandlers() {
   done = true
   registerHandler('asset.process', async (jc) => {
     const { assetId } = jc.job.input as { assetId: string }
-    const row = await processAsset(assetId, jc)
-    return { asset: assetRecord(row) }
+    try {
+      const row = await processAsset(assetId, jc)
+      return { asset: assetRecord(row) }
+    } catch (err) {
+      // stopped for running too long: the clip says so, not "cancelled"
+      const why = limitMessage(jc.signal)
+      if (why) await failAsset(assetId, ['processing', 'error'], why).catch(() => undefined)
+      throw err
+    }
   })
   registerHandler('ai.transcribe', async (jc) => {
     const { assetId, language } = jc.job.input as { assetId: string; language?: string }
