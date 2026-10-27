@@ -47,8 +47,12 @@ export interface Asset {
   /** Storage key of a filmstrip sprite (horizontal strip of thumbnails) and its frame count. */
   filmstrip?: { src: string; frames: number; frameWidth: number; frameHeight: number }
   thumbnail?: string
-  /** Peak amplitudes 0..1, ~50 per second. */
+  /** Peak amplitudes 0..1, `waveformRate` per second (at most ~4,000 of them for a long clip). */
   waveform?: number[]
+  /** Peaks per second of `waveform`; absent means 50. */
+  waveformRate?: number
+  /** The full waveform (one byte per peak, 0..255, 50 per second) when `waveform` is a shortened copy. */
+  waveformSrc?: string
   transcript?: Transcript
   /** Detected pauses (start/end seconds) used by "remove silences". */
   silences?: Array<{ start: number; end: number }>

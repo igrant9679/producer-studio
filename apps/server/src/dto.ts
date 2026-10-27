@@ -1,8 +1,9 @@
 // Row -> API DTO mappers (shapes from packages/core/src/api.ts).
 import type { Asset, AssetRecord, AssetStatus, ExportRecord, Job, JobKind, JobStatus, ProjectSummary, User } from '@producer/core'
-import type { assets, exportsTable, jobs, projects, users } from './db/schema'
+import type { AssetMeta, assets, exportsTable, jobs, projects, users } from './db/schema'
+import { WAVEFORM_RATE, inlineWaveform } from './media/waveform'
 
-export const mediaPath = (assetId: string, variant: 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio') => `/api/media/${encodeURIComponent(assetId)}/${variant}`
+export const mediaPath = (assetId: string, variant: 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' | 'waveform') => `/api/media/${encodeURIComponent(assetId)}/${variant}`
 
 export function userDto(u: typeof users.$inferSelect): User {
   return { id: u.id, email: u.email, name: u.name, avatarColor: u.avatarColor, createdAt: u.createdAt }
@@ -26,6 +27,19 @@ export function projectSummary(p: typeof projects.$inferSelect): ProjectSummary 
   }
 }
 
+/**
+ * The waveform a clip record carries: at most ~4,000 peaks, and where to fetch all of them when there are more. A clip
+ * processed before the full waveform became a file still holds every peak in its metadata: it is shortened here and
+ * the waveform route serves the rest from the metadata.
+ */
+function waveformDoc(id: string, m: AssetMeta): Pick<Asset, 'waveform' | 'waveformRate' | 'waveformSrc'> {
+  if (!m.waveform) return {}
+  if (m.waveformFull) return { waveform: m.waveform, waveformRate: m.waveformRate, waveformSrc: mediaPath(id, 'waveform') }
+  const short = inlineWaveform(m.waveform, m.waveformRate ?? WAVEFORM_RATE)
+  if (short.peaks === m.waveform) return { waveform: m.waveform, ...(m.waveformRate ? { waveformRate: m.waveformRate } : {}) }
+  return { waveform: short.peaks, waveformRate: short.rate, waveformSrc: mediaPath(id, 'waveform') }
+}
+
 /** Core Asset as embedded in project docs. URLs are the auth-checked media routes. */
 export function assetDoc(a: typeof assets.$inferSelect): Asset {
   const m = a.meta ?? {}
@@ -45,7 +59,7 @@ export function assetDoc(a: typeof assets.$inferSelect): Asset {
     sizeBytes: a.size,
     filmstrip: a.filmstripKey && m.filmstrip ? { src: mediaPath(a.id, 'filmstrip'), ...m.filmstrip } : undefined,
     thumbnail: a.thumbKey ? mediaPath(a.id, 'thumb') : undefined,
-    waveform: m.waveform,
+    ...waveformDoc(a.id, m),
     transcript: m.transcript,
     silences: m.silences,
     createdAt: a.createdAt,

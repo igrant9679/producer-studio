@@ -8,6 +8,7 @@ import type { Context } from 'hono'
 import { ctx } from '../context'
 import type { AssetRow } from '../services/assets'
 import { log } from '../log'
+import { waveformKey } from '../media/process'
 import type { Variant } from '../media/serve'
 import { CloudError } from './cloud'
 import { syncRow, syncRows } from './db'
@@ -22,6 +23,7 @@ export function variantForKey(row: AssetRow, key: string): Variant | null {
   if (key === row.thumbKey) return 'thumb'
   if (key === row.filmstripKey) return 'filmstrip'
   if (key === row.audioKey) return 'audio'
+  if (row.meta?.waveformFull && key === waveformKey(row)) return 'waveform'
   return null
 }
 

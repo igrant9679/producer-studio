@@ -11,7 +11,9 @@ import { assetRecord } from '../dto'
 import { HttpError, body, invalid, requireRole } from '../http'
 import { newId } from '../ids'
 import { enqueue } from '../jobs/queue'
+import { waveformKey } from '../media/process'
 import { assertVariant, serveObject, type Variant } from '../media/serve'
+import { waveformBytes } from '../media/waveform'
 import { type AssetRow, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset, uploadMime } from '../services/assets'
 import { UploadTooLargeError } from '../storage'
 import { abortUpload } from '../services/asset-recovery'
@@ -218,6 +220,8 @@ export function variantTarget(row: AssetRow, variant: Variant): { key: string; c
       return row.filmstripKey ? { key: row.filmstripKey, contentType: 'image/jpeg' } : null
     case 'audio':
       return row.audioKey ? { key: row.audioKey, contentType: 'audio/mp4' } : { key: row.sourceKey, contentType: row.mime }
+    case 'waveform':
+      return row.meta?.waveformFull ? { key: waveformKey(row), contentType: 'application/octet-stream' } : null
   }
 }
 
@@ -227,7 +231,12 @@ mediaRoutes.on(['GET', 'HEAD'], '/:assetId/:variant', async (c) => {
   const u = requireUser(c)
   const row = await loadAsset(c.req.param('assetId'))
   await requireRole(u.id, row.workspaceId, 'viewer')
-  const target = variantTarget(row, assertVariant(c.req.param('variant')))
+  const variant = assertVariant(c.req.param('variant'))
+  const target = variantTarget(row, variant)
+  if (variant === 'waveform' && !target && row.meta?.waveform?.length) {
+    // a clip processed before the full waveform became a file: every peak is still in its metadata
+    return c.body(new Uint8Array(waveformBytes(row.meta.waveform)), 200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'private, max-age=3600' })
+  }
   if (!target || (row.status === 'uploading' && target.key === row.sourceKey)) throw new HttpError(404, 'not_found', 'This media variant is not available yet')
   if (ctx().config.mode === 'desktop') {
     // cloud media on a desktop replica: fetched on first use (202 while downloading)
@@ -235,5 +244,6 @@ mediaRoutes.on(['GET', 'HEAD'], '/:assetId/:variant', async (c) => {
     const r = await desktopMediaResponse(c, row, target.key)
     if (r) return r
   }
-  return serveObject(c, target)
+  // the editor fetch()es the waveform: through this server, not a redirect to a bucket that may not allow CORS
+  return serveObject(c, target, variant === 'waveform' ? { redirect: false } : {})
 })

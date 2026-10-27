@@ -708,6 +708,9 @@ export class SyncEngine {
       hasAudio: a.hasAudio,
       filmstrip: a.filmstrip ? { frames: a.filmstrip.frames, frameWidth: a.filmstrip.frameWidth, frameHeight: a.filmstrip.frameHeight } : undefined,
       waveform: a.waveform,
+      // a long clip's record carries a shortened waveform; the full one is fetched from the cloud when zoomed into
+      waveformRate: a.waveformRate,
+      waveformFull: a.waveformSrc ? true : undefined,
       transcript: a.transcript,
       silences: a.silences,
     }

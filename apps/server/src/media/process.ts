@@ -10,6 +10,10 @@ import { type AssetRow, assetPrefix, loadAsset, localSource, tmpDir, updateAsset
 import { ffmpeg, ffmpegProgress, runOk } from './proc'
 import { describeStorageError } from '../services/storage-health'
 import { isStorageError } from '../storage/errors'
+import { WAVEFORM_RATE, inlineWaveform, waveformBytes } from './waveform'
+
+/** Where a clip's full waveform is stored (when its record carries a shortened one). */
+export const waveformKey = (row: Pick<AssetRow, 'workspaceId' | 'id'>) => `${assetPrefix(row.workspaceId, row.id)}/waveform.bin`
 
 export interface ProbeResult {
   kind: 'video' | 'audio' | 'image'
@@ -370,6 +374,18 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       await storage.putFile(key, file, mime)
       return key
     }
+    // a long recording's waveform is a file; the clip keeps ~4,000 peaks (see media/waveform.ts)
+    const keepWaveform = async (peaks: number[]) => {
+      const short = inlineWaveform(peaks)
+      meta.waveform = short.peaks
+      meta.waveformRate = short.rate
+      meta.waveformFull = short.peaks !== peaks
+      if (meta.waveformFull) {
+        const bin = path.join(work, 'waveform.bin')
+        fs.writeFileSync(bin, waveformBytes(peaks))
+        await put(bin, 'waveform.bin', 'application/octet-stream')
+      }
+    }
     if (info.kind === 'video') {
       // a recording whose header has no length (browser / Loom WebM): measure it, or nothing can size the clip
       if (!meta.duration) meta.duration = await measureDuration(src, info, jc.signal)
@@ -409,7 +425,7 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
         // two passes over the sound: report how far each has got (an hour-long recording takes minutes)
         jc.progress(0.1, 'Waveform')
         const a = await analyseAudio(src, jc.signal, (s) => dur > 0 && jc.progress(0.1 + Math.min(1, s / dur) * 0.08, 'Waveform'))
-        meta.waveform = a.waveform
+        await keepWaveform(a.waveform)
         meta.silences = a.silences
         jc.progress(0.18, 'Extracting audio')
         const m4a = path.join(work, 'audio.m4a')
@@ -446,9 +462,9 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
     } else if (info.kind === 'audio') {
       jc.progress(0.2, 'Waveform')
       const a = await analyseAudio(src, jc.signal, (s) => meta.duration && jc.progress(0.2 + Math.min(1, s / meta.duration) * 0.75, 'Waveform'))
-      meta.waveform = a.waveform
+      await keepWaveform(a.waveform)
       meta.silences = a.silences
-      if (!meta.duration) meta.duration = Math.round((a.waveform.length / 50) * 1000) / 1000
+      if (!meta.duration) meta.duration = Math.round((a.waveform.length / WAVEFORM_RATE) * 1000) / 1000
       if (!browserPlaysAudio(info)) {
         // AIFF, WMA, AMR…: the server reads them, browsers don't. The editor plays this AAC copy (the audio variant)
         jc.progress(0.95, 'Converting audio')

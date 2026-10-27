@@ -7,7 +7,7 @@ import { log } from '../log'
 import { SVG_MIME, isMediaMime } from '../services/assets'
 import { describeStorageError } from '../services/storage-health'
 
-export type Variant = 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio'
+export type Variant = 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' | 'waveform'
 
 export interface ServeTarget {
   key: string
@@ -114,6 +114,6 @@ export async function serveObject(c: Context, t: ServeTarget, opts: { cache?: st
 }
 
 export function assertVariant(v: string): Variant {
-  if (!['source', 'proxy', 'thumb', 'filmstrip', 'audio'].includes(v)) throw new HttpError(400, 'invalid', `Unknown media variant "${v}"`)
+  if (!['source', 'proxy', 'thumb', 'filmstrip', 'audio', 'waveform'].includes(v)) throw new HttpError(400, 'invalid', `Unknown media variant "${v}"`)
   return v as Variant
 }

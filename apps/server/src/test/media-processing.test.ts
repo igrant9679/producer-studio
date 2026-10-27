@@ -10,14 +10,17 @@ import { inlineContext } from '../jobs/worker'
 import * as proc from '../media/proc'
 import { exifOrientation, processAsset, renderMediaKey, sdrStillArgs } from '../media/process'
 import { variantTarget } from '../routes/assets'
-import { assetDoc } from '../dto'
+import { assetDoc, assetRecord } from '../dto'
+import { assets } from '../db/schema'
+import { eq } from 'drizzle-orm'
 import { type AssetRow, createAssetFromFile, loadAsset } from '../services/assets'
-import { setup, signup } from './helpers'
+import { type Client, setup, signup } from './helpers'
 
 const { ffmpeg, runOk } = proc
 let workspaceId = ''
 let userId = ''
 let dir = ''
+let client: Client
 
 const jc = () => inlineContext({ id: 'proc-test', kind: 'asset.process', workspaceId, userId, projectId: null, input: {} })
 
@@ -82,6 +85,7 @@ function withOrientation(jpeg: string, out: string, orientation: number, bigEndi
 beforeAll(async () => {
   const t = await setup()
   const u = await signup(t.app, 'Processor')
+  client = u.client
   workspaceId = u.workspaceId
   userId = (await u.client.json('GET', '/api/auth/me')).body.user.id
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-proc-'))
@@ -266,5 +270,55 @@ describe('formats browsers cannot play (PIP-24)', () => {
       expect(assetDoc(row).proxySrc).toBeUndefined()
       expect(renderMediaKey(row)).toBe(row.sourceKey)
     }
+  })
+})
+
+describe('waveforms of long recordings (PIP-14)', () => {
+  const getWaveform = async (id: string) => {
+    const res = await client.req('GET', `/api/media/${id}/waveform`)
+    return { status: res.status, bytes: new Uint8Array(await res.arrayBuffer()) }
+  }
+
+  it('the clip keeps about 4,000 peaks; the full waveform is a file the editor can fetch', async () => {
+    // 10 minutes: 30,000 peaks at 50 a second
+    const file = await make('lecture.wav', ['-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=8000', '-t', '600', '-ac', '1'])
+    const row = await processFile(file, 'audio/wav', 'audio')
+    expect(row.meta.duration).toBeCloseTo(600, 0)
+    expect(row.meta.waveform!.length).toBeLessThanOrEqual(4000)
+    expect(row.meta.waveform!.length).toBeGreaterThan(3000)
+    expect(row.meta.waveformRate).toBeCloseTo(row.meta.waveform!.length / 600, 1)
+    const doc = assetDoc(row)
+    expect(doc.waveformSrc).toBe(`/api/media/${row.id}/waveform`)
+    // the record that rides in projects, job results and live updates stays small
+    expect(JSON.stringify(assetRecord(row)).length).toBeLessThan(40_000)
+    const full = await getWaveform(row.id)
+    expect(full.status).toBe(200)
+    expect(full.bytes.length).toBeGreaterThanOrEqual(29_990)
+    // lavfi's sine is at 1/8 of full scale
+    expect(Math.max(...full.bytes.subarray(1000, 2000))).toBe(32)
+  })
+
+  it('a short clip keeps its whole waveform inline, as before', async () => {
+    const row = await processFile(await make('short.wav', ['-f', 'lavfi', '-i', 'sine=frequency=220', '-t', '3']), 'audio/wav', 'audio')
+    expect(row.meta.waveform!.length).toBe(150)
+    expect(assetDoc(row)).toMatchObject({ waveformRate: 50 })
+    expect(assetDoc(row).waveformSrc).toBeUndefined()
+  })
+
+  it('a clip processed before keeps working: its record is shortened, and the full waveform comes from its metadata', async () => {
+    const row = await processFile(await make('older.wav', ['-f', 'lavfi', '-i', 'sine=frequency=220', '-t', '3']), 'audio/wav', 'audio')
+    // fixture: an hour-long clip from before, with every peak in its metadata
+    const peaks = Array.from({ length: 180_000 }, (_, i) => (i % 2 === 0 ? 1 : 0.1))
+    await ctx().db.update(assets).set({ meta: { ...row.meta, duration: 3600, waveform: peaks, waveformRate: undefined, waveformFull: undefined } }).where(eq(assets.id, row.id))
+    const old = await loadAsset(row.id)
+    const doc = assetDoc(old)
+    expect(doc.waveform!.length).toBeLessThanOrEqual(4000)
+    expect(doc.waveformRate).toBeCloseTo(doc.waveform!.length / 3600, 2)
+    expect(doc.waveform!.every((p) => p === 1)).toBe(true) // each window's loudest
+    expect(doc.waveformSrc).toBe(`/api/media/${row.id}/waveform`)
+    const full = await getWaveform(row.id)
+    expect(full.status).toBe(200)
+    expect(full.bytes.length).toBe(180_000)
+    expect([full.bytes[0], full.bytes[1]]).toEqual([255, 26])
   })
 })

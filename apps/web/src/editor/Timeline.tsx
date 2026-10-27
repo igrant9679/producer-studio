@@ -63,6 +63,7 @@ import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
 import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
+import { peakBetween, useWaveformPeaks } from './waveform'
 import {
   HEADER_W,
   RULER_H,
@@ -1049,25 +1050,24 @@ function Filmstrip({ asset, item, width, height, zoom }: { asset: Asset; item: V
 }
 
 function Waveform({ asset, item, width, height, mini }: { asset: Asset; item: VideoItem | Item; width: number; height: number; mini?: boolean }) {
-  const wf = asset.waveform
   const it = item as VideoItem
+  // a long clip carries a shortened waveform; zoomed in past it, the full one is fetched
+  const peaks = useWaveformPeaks(asset, (3 / (width || 1)) * it.duration * it.speed)
   const path = useMemo(() => {
-    if (!wf?.length) return ''
+    if (!peaks) return ''
     const bars = Math.min(2000, Math.floor(width / 3))
-    const perSec = 50
     const vol = Math.min(1.6, Math.max(0.15, it.volume ?? 1))
     let d = ''
     for (let j = 0; j < bars; j++) {
       const t0 = it.in + ((j * 3) / (width || 1)) * it.duration * it.speed
       const t1 = it.in + (((j + 1) * 3) / (width || 1)) * it.duration * it.speed
-      let m = 0
-      for (let k = Math.floor(t0 * perSec); k <= Math.floor(t1 * perSec) && k < wf.length; k++) m = Math.max(m, wf[k] ?? 0)
+      const m = peakBetween(peaks, t0, t1)
       const h = Math.max(1, m * vol * (height - 2) * (mini ? 1 : 0.92))
       const y = mini ? height - h : (height - h) / 2
       d += `M${j * 3} ${y.toFixed(1)}h2v${h.toFixed(1)}h-2z`
     }
     return d
-  }, [wf, width, height, it.in, it.duration, it.speed, it.volume, mini])
+  }, [peaks, width, height, it.in, it.duration, it.speed, it.volume, mini])
   if (!path) return null
   return (
     <svg className={clsx('tl-wave', mini && 'mini')} width={width} height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">

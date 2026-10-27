@@ -122,7 +122,7 @@ export async function postStream(path: string, body: unknown, onEvent: (event: s
   }
 }
 
-export const mediaUrl = (assetId: string, variant: 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' = 'source') => `/api/media/${encodeURIComponent(assetId)}/${variant}`
+export const mediaUrl = (assetId: string, variant: 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' | 'waveform' = 'source') => `/api/media/${encodeURIComponent(assetId)}/${variant}`
 
 /** Why a PUT to storage was refused, in words — S3 answers with an XML <Code> (e.g. InvalidAccessKeyId). */
 function storageRefusal(xhr: XMLHttpRequest): string {
