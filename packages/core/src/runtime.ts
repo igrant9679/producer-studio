@@ -21,12 +21,15 @@ interface LayerEl {
   overlay: HTMLDivElement
   bg?: HTMLDivElement
   bgMedia?: HTMLVideoElement | HTMLImageElement
+  /** Export: the still shown over the video (and its blurred background) until the file starts. */
+  hold?: { until: number; still: HTMLImageElement; bgStill?: HTMLImageElement }
   kind: FrameLayer['type']
   lastText?: string
   lastStyle?: string
 }
 
 const LAYER_BASE = 'position:absolute;transform-origin:50% 50%;will-change:transform,opacity;'
+const MEDIA_FILL = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;display:block'
 
 export class StageRenderer {
   readonly root: HTMLElement
@@ -80,7 +83,7 @@ export class StageRenderer {
     const seen = new Set<string>()
     for (const layer of frame.layers) {
       seen.add(layer.itemId)
-      this.drawLayer(layer)
+      this.drawLayer(layer, t)
     }
     for (const [id, el] of this.layers) {
       if (!seen.has(id)) {
@@ -122,7 +125,7 @@ export class StageRenderer {
     if (wrap) {
       content = (wrap.querySelector('[data-ps-content]') as HTMLElement) ?? wrap
       bg = (this.root.querySelector(`[data-ps-bg="${layer.itemId}"]`) as HTMLDivElement | null) ?? undefined
-      bgMedia = (bg?.querySelector('video,img') as HTMLVideoElement | HTMLImageElement | null) ?? undefined
+      bgMedia = (bg?.querySelector('video,img:not([data-ps-hold])') as HTMLVideoElement | HTMLImageElement | null) ?? undefined
     } else {
       wrap = document.createElement('div')
       wrap.dataset.psLayer = layer.itemId
@@ -156,10 +159,12 @@ export class StageRenderer {
       wrap.appendChild(overlay)
     }
     if (content instanceof HTMLVideoElement || content instanceof HTMLImageElement) {
-      content.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;display:block'
+      content.style.cssText = MEDIA_FILL
       content.draggable = false
     }
     const el: LayerEl = { wrap, content, overlay, bg, bgMedia, kind: layer.type }
+    const still = wrap.querySelector('img[data-ps-hold]') as HTMLImageElement | null
+    if (still) el.hold = { until: Number(still.dataset.psHold), still, bgStill: (bg?.querySelector('img[data-ps-hold]') as HTMLImageElement | null) ?? undefined }
     this.layers.set(layer.itemId, el)
     return el
   }
@@ -199,7 +204,7 @@ export class StageRenderer {
     }
   }
 
-  private drawLayer(layer: FrameLayer) {
+  private drawLayer(layer: FrameLayer, t: number) {
     const el = this.layers.get(layer.itemId) ?? this.createLayer(layer)
     const w = el.wrap
     const auto = layer.box.height <= 0
@@ -221,6 +226,19 @@ export class StageRenderer {
         const c = layer.crop
         media.style.setProperty('object-view-box', `inset(${c.top * 100}% ${c.right * 100}% ${c.bottom * 100}% ${c.left * 100}%)`)
       } else media.style.removeProperty('object-view-box')
+      if (el.hold) {
+        // before the file starts there is no footage to pre-roll: show the frame the preview holds
+        const on = t < el.hold.until
+        const { still, bgStill } = el.hold
+        still.style.cssText = MEDIA_FILL
+        still.style.display = on ? 'block' : 'none'
+        const box = media.style.getPropertyValue('object-view-box')
+        if (box) still.style.setProperty('object-view-box', box)
+        if (bgStill) {
+          bgStill.style.cssText = el.bgMedia?.style.cssText || MEDIA_FILL
+          bgStill.style.display = on && layer.background?.type === 'blur' ? 'block' : 'none'
+        }
+      }
       if (layer.type === 'video' && this.opts.mode === 'preview') this.syncVideo(media as HTMLVideoElement, layer.mediaTime ?? 0, layer.itemId)
     } else if (layer.text) {
       const styleKey = JSON.stringify(layer.text.style)
@@ -305,4 +323,46 @@ export function exportWindow(p: Project, trackIdx: number, itemIdx: number): { s
   const next = track.items[itemIdx + 1]
   if (tr && next && Math.abs(next.start - end) < 0.05) end += Math.min(tr.duration / 2, it.duration / 2, next.duration / 2)
   return { start: Math.max(0, start), end }
+}
+
+export interface ExportVideoTiming {
+  /** The export window (see exportWindow). */
+  start: number
+  end: number
+  /** When the file starts playing, and where in it (source seconds; 0 for a reversed copy). */
+  from: number
+  mediaStart: number
+  /**
+   * Before `from` the source has no footage to pre-roll into the transition: like the preview, the picture holds the
+   * frame at source `at` until then.
+   */
+  hold?: { until: number; at: number }
+  /** A reversed clip plays a server-made copy of source `from`..`to`, run backwards. */
+  reversed?: { from: number; to: number }
+}
+
+/**
+ * How a video item's file covers its export window so every frame shows what the preview shows: the pre-roll into
+ * an incoming transition plays only footage the source has before the clip's first frame (after it, for a reversed
+ * clip), then a held frame covers the rest.
+ */
+export function exportVideoTiming(p: Project, trackIdx: number, itemIdx: number): ExportVideoTiming {
+  const it = p.tracks[trackIdx].items[itemIdx] as VideoItem
+  const win = exportWindow(p, trackIdx, itemIdx)
+  const dur = p.assets[it.assetId]?.duration
+  const known = dur !== undefined && Number.isFinite(dur) && dur > 0
+  const pre = it.start - win.start
+  const post = win.end - itemEnd(it)
+  const span = it.duration * it.speed
+  // footage before the clip's first frame: the source before its in-point, or after its range when reversed
+  const before = it.reverse ? (known ? Math.max(0, dur - (it.in + span)) : 0) : it.in
+  const lead = Math.min(pre, before / it.speed)
+  const from = it.start - lead
+  const out: ExportVideoTiming = { start: win.start, end: win.end, from, mediaStart: it.reverse ? 0 : Math.max(0, it.in - lead * it.speed) }
+  if (it.reverse) out.reversed = { from: Math.max(0, it.in - post * it.speed), to: it.in + span + lead * it.speed }
+  if (from - win.start > 1e-3) {
+    const at = it.reverse ? it.in + span + pre * it.speed : it.in - pre * it.speed
+    out.hold = { until: from, at: Math.min(Math.max(0, at), known ? dur : Infinity) }
+  }
+  return out
 }

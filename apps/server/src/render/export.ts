@@ -1,16 +1,18 @@
 // export.render: compile the project to a HyperFrames composition, lint, render, scale, store as an asset.
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
+import os from 'node:os'
 import path from 'node:path'
 import { and, eq, inArray } from 'drizzle-orm'
-import { EXPORT_RESOLUTIONS, compileToHyperFrames, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
+import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
 import { childEnv } from '../child-env'
 import { REPO_ROOT } from '../config'
 import { ctx } from '../context'
-import { assets, exportsTable } from '../db/schema'
+import { assets, exportsTable, jobs } from '../db/schema'
 import { HttpError } from '../http'
 import { newId } from '../ids'
-import type { JobContext } from '../jobs/worker'
+import { emitJob } from '../jobs/queue'
+import { CancelledError, type JobContext } from '../jobs/worker'
 import { log } from '../log'
 import { probe } from '../media/process'
 import { ffmpeg, run } from '../media/proc'
@@ -59,6 +61,53 @@ function assetIdsUsed(p: Project): string[] {
   return [...ids]
 }
 
+/**
+ * Size for a reversed copy: the source scaled down until it just covers the output frame (the largest a fitted clip
+ * is drawn), never up. Even dimensions; undefined when the source size isn't known (it is then kept).
+ */
+export function reversedSize(srcW: number | undefined, srcH: number | undefined, output: { w: number; h: number }): { w: number; h: number } | undefined {
+  if (!srcW || !srcH) return undefined
+  const s = Math.min(1, Math.max(output.w / srcW, output.h / srcH))
+  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
+  return { w: even(srcW * s), h: even(srcH * s) }
+}
+
+/** Frames reversed at a time: ffmpeg's reverse filter keeps every decoded frame of its input in memory. */
+const REVERSE_CHUNK_FRAMES = 60
+
+/**
+ * Write source `range` of `src`, played backwards, to `out`: reversed a couple of seconds at a time (last chunk
+ * first) at the output size and frame rate, then joined, so memory stays at one chunk whatever the clip's length or
+ * resolution. The copy is silent (reversed clips are, in the preview too).
+ */
+export async function reverseRange(src: string, out: string, range: { from: number; to: number }, opts: { size?: { w: number; h: number }; fps: number; signal?: AbortSignal }) {
+  const parts = `${out}.parts`
+  fs.mkdirSync(parts, { recursive: true })
+  const fps = Math.min(120, Math.max(1, opts.fps))
+  const chunk = Math.max(0.25, REVERSE_CHUNK_FRAMES / fps)
+  const len = Math.max(1 / fps, range.to - range.from)
+  const n = Math.max(1, Math.ceil(len / chunk - 1e-6))
+  // never upscale (a draft reverses the smaller proxy)
+  const vf = `${opts.size ? `scale='min(iw,${opts.size.w})':-2,` : ''}fps=${fps},reverse`
+  const list: string[] = []
+  try {
+    for (let i = n - 1; i >= 0; i--) {
+      const start = range.from + i * chunk
+      const part = path.join(parts, `${n - 1 - i}.mp4`)
+      const t = Math.min(chunk, range.from + len - start)
+      await ffmpeg(['-ss', String(round3(start)), '-t', String(round3(t)), '-i', src, '-vf', vf, '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', part], { signal: opts.signal })
+      list.push(`file '${part.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`)
+    }
+    const listFile = path.join(parts, 'list.txt')
+    fs.writeFileSync(listFile, list.join('\n') + '\n')
+    await ffmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-movflags', '+faststart', out], { signal: opts.signal })
+  } finally {
+    fs.rmSync(parts, { recursive: true, force: true })
+  }
+}
+
+const round3 = (n: number) => Math.round(n * 1000) / 1000
+
 export interface PreparedRender {
   dir: string
   index: string
@@ -71,7 +120,12 @@ export interface PreparedRender {
  * Write everything the composition needs into `dir`: media (hardlinked/copied or downloaded), freeze-frame stills,
  * reversed clips, runtime.js, gsap.min.js, font files, and index.html.
  */
-export async function prepareRenderDir(project: Project, workspaceId: string, dir: string, opts: { useProxy?: boolean; signal?: AbortSignal; progress?: (f: number, m: string) => void; output?: { w: number; h: number } } = {}): Promise<PreparedRender> {
+export async function prepareRenderDir(
+  project: Project,
+  workspaceId: string,
+  dir: string,
+  opts: { useProxy?: boolean; signal?: AbortSignal; progress?: (f: number, m: string) => void; output?: { w: number; h: number }; fps?: number } = {},
+): Promise<PreparedRender> {
   fs.mkdirSync(path.join(dir, 'assets'), { recursive: true })
   const files: string[] = []
   const ids = assetIdsUsed(project)
@@ -101,14 +155,25 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
     files.push(`assets/${name}`)
   }
   fs.rmSync(path.join(dir, '.dl'), { recursive: true, force: true })
-  // freeze-frame stills and reversed clips
+  // freeze-frame stills, reversed clips and the frames clips hold before their files start
   const freeze = new Map<string, string>()
   const reversed = new Map<string, string>()
-  for (const t of project.tracks)
-    for (const it of t.items) {
+  const holds = new Map<string, string>()
+  for (let ti = 0; ti < project.tracks.length; ti++)
+    for (let ii = 0; ii < project.tracks[ti].items.length; ii++) {
+      const it = project.tracks[ti].items[ii]
       if (it.type !== 'video') continue
       const src = localFiles.get(it.assetId)
       if (!src) continue
+      const timing = exportVideoTiming(project, ti, ii)
+      if (it.freezeAt === undefined && timing.hold) {
+        const out = `stills/${it.id}-hold.png`
+        fs.mkdirSync(path.join(dir, 'stills'), { recursive: true })
+        await ffmpeg(['-ss', String(timing.hold.at), '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        holds.set(it.id, out)
+        files.push(out)
+      }
       if (it.freezeAt !== undefined) {
         const out = `stills/${it.id}.png`
         fs.mkdirSync(path.join(dir, 'stills'), { recursive: true })
@@ -116,11 +181,10 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
         if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
         freeze.set(it.id, out)
         files.push(out)
-      } else if (it.reverse) {
+      } else if (it.reverse && timing.reversed) {
         const out = `reversed/${it.id}.mp4`
-        fs.mkdirSync(path.join(dir, 'reversed'), { recursive: true })
-        const span = it.duration * it.speed
-        await ffmpeg(['-ss', String(it.in), '-t', String(span), '-i', src, '-vf', 'reverse', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', path.join(dir, out)], { signal: opts.signal })
+        const a = project.assets[it.assetId]
+        await reverseRange(src, path.join(dir, out), timing.reversed, { size: reversedSize(a?.width, a?.height, opts.output ?? { w: project.width, h: project.height }), fps: opts.fps ?? project.fps ?? 30, signal: opts.signal })
         reversed.set(it.id, out)
         files.push(out)
       }
@@ -134,6 +198,7 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
     assetPath: (id) => rel.get(id) ?? '',
     freezeFramePath: (id) => freeze.get(id),
     reversedPath: (id) => reversed.get(id),
+    holdFramePath: (id) => holds.get(id),
     runtimePath: 'runtime.js',
     gsapPath: 'gsap.min.js',
     fontFaceCss: fonts.css,
@@ -192,11 +257,43 @@ export function parseRenderProgress(chunk: string): number | undefined {
   return last === undefined ? undefined : Math.min(1, Math.max(0, last))
 }
 
-export async function renderComposition(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: ExportRequest['format']; signal?: AbortSignal; progress?: (f: number) => void }) {
+/** Memory the server may use: the container's limit when it has one, else the machine's. */
+export function systemMemoryMb(): number {
+  const total = os.totalmem() / 2 ** 20
+  for (const f of ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes']) {
+    try {
+      const n = Number(fs.readFileSync(f, 'utf8').trim())
+      if (Number.isFinite(n) && n > 0 && n < 2 ** 60) return Math.min(total, n / 2 ** 20)
+    } catch {
+      /* not limited, or not Linux */
+    }
+  }
+  return total
+}
+
+/**
+ * Chrome workers for one render. HyperFrames on its own sizes them for the whole machine (half its memory at 1.5 GB
+ * each, all but two cores) on every render, so exports running side by side each take all of it; this gives each
+ * of the `concurrency` job slots its share, and one worker per 30 frames at most, as HyperFrames does.
+ */
+export function renderWorkers(o: { memoryMb: number; cpus: number; concurrency: number; frames: number }): number {
+  const share = Math.max(1, o.concurrency)
+  const byMemory = Math.floor((o.memoryMb * 0.5) / 1536 / share)
+  const byCpu = Math.floor(Math.max(1, o.cpus - 2) / share)
+  return Math.max(1, Math.min(byMemory, byCpu, Math.floor(o.frames / 30), 24))
+}
+
+export function renderArgs(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: ExportRequest['format']; workers?: number }): string[] {
   const args = [hyperframesCli(), 'render', dir, '-o', out, '-q', QUALITY[opts.quality], '--fps', String(opts.fps)]
   if (opts.format !== 'mp4') args.push('--format', opts.format)
+  if (opts.workers) args.push('--workers', String(opts.workers))
   const pt = ctx().config.hyperframesProtocolTimeout
   if (pt) args.push('--protocol-timeout', pt)
+  return args
+}
+
+export async function renderComposition(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: ExportRequest['format']; workers?: number; signal?: AbortSignal; progress?: (f: number) => void }) {
+  const args = renderArgs(dir, out, opts)
   let buf = ''
   const r = await run(process.execPath, args, {
     cwd: dir,
@@ -224,7 +321,31 @@ export function targetSize(w: number, h: number, resolution: ExportRequest['reso
 
 const MIME: Record<ExportRequest['format'], string> = { mp4: 'video/mp4', webm: 'video/webm', gif: 'image/gif' }
 
-export async function exportRender(jc: JobContext): Promise<ExportResult> {
+/**
+ * Record the export and finish its job in one transaction, unless the job was cancelled meanwhile: a cancel that
+ * arrives after this finds the job done, one before it leaves no export.
+ */
+async function saveExport(jobId: string, values: typeof exportsTable.$inferInsert, result: ExportResult) {
+  const job = await ctx().db.transaction(async (tx) => {
+    const [done] = await tx
+      .update(jobs)
+      .set({ status: 'done', progress: 1, message: 'Done', result: result as never, updatedAt: Date.now(), lockedBy: null })
+      .where(and(eq(jobs.id, jobId), eq(jobs.status, 'running'), eq(jobs.cancelRequested, false)))
+      .returning()
+    if (!done) throw new CancelledError()
+    await tx.insert(exportsTable).values(values)
+    return done
+  })
+  emitJob(job)
+}
+
+/** The render steps (tests stand in for Chrome). */
+export interface RenderSteps {
+  lint: typeof lintComposition
+  render: typeof renderComposition
+}
+
+export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: lintComposition, render: renderComposition }): Promise<ExportResult> {
   const input = jc.job.input as unknown as ExportRequest & { projectId: string }
   const row = await loadProjectRow(input.projectId)
   const project = await hydrateAssets(row.doc, row.workspaceId)
@@ -236,16 +357,17 @@ export async function exportRender(jc: JobContext): Promise<ExportResult> {
     // Render natively at the requested size: the stage is scaled inside the composition so text, shapes and
     // captions are drawn at full resolution and source footage keeps its detail (no post-render upscale).
     const tgt = targetSize(project.width, project.height, input.resolution)
-    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: input.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt })
+    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: input.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt, fps: input.fps })
     jc.check()
     jc.progress(0.09, 'Checking composition')
-    const lint = await lintComposition(dir, jc.signal)
+    const lint = await steps.lint(dir, jc.signal)
     if (lint.errors.length) throw new Error(`Composition lint failed: ${lint.errors.slice(0, 5).join('; ')}`)
     jc.check()
     const ext = input.format
     const raw = path.join(dir, `render.${ext}`)
     jc.progress(0.1, 'Rendering')
-    await renderComposition(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
+    const workers = renderWorkers({ memoryMb: systemMemoryMb(), cpus: os.cpus().length, concurrency: ctx().config.workerConcurrency, frames: Math.ceil(prep.duration * input.fps) })
+    await steps.render(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
     jc.check()
     const final = raw
     jc.progress(0.97, 'Saving export')
@@ -261,26 +383,41 @@ export async function exportRender(jc: JobContext): Promise<ExportResult> {
       kind: input.format === 'gif' ? 'image' : 'video',
       origin: 'render',
       status: 'ready',
-      meta: { duration: info?.duration ?? prep.duration, width: info?.width ?? tgt.w, height: info?.height ?? tgt.h, fps: info?.fps ?? input.fps, hasAudio: info?.hasAudio },
+      // the job that made it, like voiceovers and Producer AI clips record theirs
+      meta: { duration: info?.duration ?? prep.duration, width: info?.width ?? tgt.w, height: info?.height ?? tgt.h, fps: info?.fps ?? input.fps, hasAudio: info?.hasAudio, jobId: jc.job.id },
     })
-    // cheap thumbnail for the library
     try {
-      const thumb = path.join(dir, 'thumb.jpg')
-      await ffmpeg(['-ss', String(Math.min(1, (info?.duration ?? 1) / 2)), '-i', final, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
-      const key = `${assetPrefix(row.workspaceId, assetRow.id)}/thumb.jpg`
-      await ctx().storage.putFile(key, thumb, 'image/jpeg')
-      await updateAsset(assetRow.id, { thumbKey: key })
+      // cheap thumbnail for the library
+      try {
+        const thumb = path.join(dir, 'thumb.jpg')
+        await ffmpeg(['-ss', String(Math.min(1, (info?.duration ?? 1) / 2)), '-i', final, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
+        const key = `${assetPrefix(row.workspaceId, assetRow.id)}/thumb.jpg`
+        await ctx().storage.putFile(key, thumb, 'image/jpeg')
+        await updateAsset(assetRow.id, { thumbKey: key })
+      } catch (err) {
+        log.warn('export thumbnail failed', { err })
+      }
+      jc.check()
+      const exportId = newId('ex')
+      const sizeBytes = assetRow.size
+      const duration = info?.duration ?? prep.duration
+      const result: ExportResult = { exportId, url: `/api/media/${assetRow.id}/source`, sizeBytes, duration }
+      await saveExport(
+        jc.job.id,
+        { id: exportId, projectId: row.id, workspaceId: row.workspaceId, assetId: assetRow.id, jobId: jc.job.id, name, resolution: input.resolution, fps: input.fps, format: input.format, sizeBytes, duration, createdBy: jc.job.userId, createdAt: Date.now() },
+        result,
+      )
+      jc.progress(1, 'Export ready')
+      return result
     } catch (err) {
-      log.warn('export thumbnail failed', { err })
+      // cancelled (or failed) after the file was stored: no export, and no video left in the library without one
+      await ctx()
+        .db.delete(assets)
+        .where(eq(assets.id, assetRow.id))
+        .catch((e) => log.warn('could not remove an unsaved export', { assetId: assetRow.id, err: e }))
+      await ctx().storage.deletePrefix(assetPrefix(row.workspaceId, assetRow.id) + '/').catch(() => undefined)
+      throw err
     }
-    const exportId = newId('ex')
-    const sizeBytes = assetRow.size
-    const duration = info?.duration ?? prep.duration
-    await ctx()
-      .db.insert(exportsTable)
-      .values({ id: exportId, projectId: row.id, workspaceId: row.workspaceId, assetId: assetRow.id, jobId: jc.job.id, name, resolution: input.resolution, fps: input.fps, format: input.format, sizeBytes, duration, createdBy: jc.job.userId, createdAt: Date.now() })
-    jc.progress(1, 'Export ready')
-    return { exportId, url: `/api/media/${assetRow.id}/source`, sizeBytes, duration }
   } finally {
     if (process.env.KEEP_RENDERS !== '1') fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => undefined)
   }

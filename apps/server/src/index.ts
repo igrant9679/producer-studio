@@ -41,7 +41,11 @@ if (config.role === 'all' || config.role === 'api') {
   h.get('/api/health', (x) => x.json({ ok: true, role: 'worker' }))
   server = serve({ fetch: h.fetch, port: config.port })
 }
-if (config.role === 'all' || config.role === 'worker') startWorker({ concurrency: config.workerConcurrency })
+if (config.role === 'all' || config.role === 'worker') {
+  startWorker({ concurrency: config.workerConcurrency })
+  // a fresh server fetches the voice model now, not during someone's first voiceover
+  void tts.prepare()
+}
 // cloud only: a desktop's local disk needs no watching, and its cloud media has its own error paths
 if (config.mode === 'cloud') startStorageMonitor()
 if (desktop) await desktop.startDesktopServices()

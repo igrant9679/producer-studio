@@ -12,6 +12,7 @@ import {
   cutSourceRanges,
   deleteItems,
   evaluate,
+  exportVideoTiming,
   findItem,
   freezeFrame,
   generateCaptions,
@@ -634,6 +635,56 @@ describe('export pre-roll into a transition (EDT-3)', () => {
     // the reversed copy starts at the end of the clip's source range and runs backwards
     const v = expectMatchesPreview(p, b, (f) => clip.in + clip.duration * clip.speed - f)
     expect(v.start).toBe(10)
+  })
+
+  it('holds the first frame for the part of the pre-roll the source has no footage for (PIP-5 / EDT-3)', () => {
+    const holdOpts = { ...opts, holdFramePath: (id: string) => `stills/${id}-hold.png` }
+    const at = (p: Project, id: string) => {
+      const track = mainTrack(p)!
+      return exportVideoTiming(p, p.tracks.indexOf(track), track.items.findIndex((i) => i.id === id))
+    }
+    // a clip from its source beginning: the preview shows source 0 for the whole 0.5 s pre-roll
+    const start = crossfadeInto({})
+    expect(at(start.p, start.b).hold).toEqual({ until: 10, at: 0 })
+    for (const t of [9.6, 9.8, 9.99]) expect(evaluate(start.p, t).layers.find((l) => l.itemId === start.b)!.mediaTime).toBe(0)
+    expect(compileToHyperFrames(start.p, holdOpts)).toContain(`<img data-ps-hold="10" src="stills/${start.b}-hold.png"`)
+    // 0.2 s of footage before the in-point: that much plays, the 0.3 s before it hold source 0
+    const short = crossfadeInto({ in: 0.2, duration: 5 })
+    expect(at(short.p, short.b)).toMatchObject({ from: 9.8, mediaStart: 0, hold: { until: 9.8, at: 0 } })
+    // enough footage: no hold
+    const long = crossfadeInto({ in: 2, duration: 4 })
+    expect(at(long.p, long.b).hold).toBeUndefined()
+    expect(compileToHyperFrames(long.p, holdOpts)).not.toContain('data-ps-hold')
+    // a reversed clip that ends at its source's end holds the last frame
+    const rev = crossfadeInto({ reverse: true })
+    expect(at(rev.p, rev.b).hold).toEqual({ until: 10, at: 6 })
+  })
+
+  it("pads a reversed clip's copy with the footage after its range, so it pre-rolls like the preview (PIP-5)", () => {
+    const { p, b } = crossfadeInto({ reverse: true, duration: 4 })
+    const track = mainTrack(p)!
+    const t = exportVideoTiming(p, p.tracks.indexOf(track), 1)
+    // 2 s of source after the 0..4 range: 0.5 s of it runs backwards into the crossfade
+    expect(t).toMatchObject({ from: 9.5, mediaStart: 0, reversed: { from: 0, to: 4.5 } })
+    expect(t.hold).toBeUndefined()
+    const v = expectMatchesPreview(p, b, (f) => t.reversed!.to - f)
+    expect(v.start).toBe(9.5)
+  })
+})
+
+describe('reversed clips are silent in preview and export (PIP-34)', () => {
+  it('plays no sound for a reversed clip, with or without its reversed copy', () => {
+    const p0 = twoClips()
+    const [a, b] = mainTrack(p0)!.items
+    const p = updateItem<VideoItem>(p0, a.id, { reverse: true })
+    for (const t of [0.5, 5, 9.5]) expect(evaluate(p, t).audio.map((x) => x.itemId)).not.toContain(a.id)
+    expect(evaluate(p, b.start + 1).audio.map((x) => x.itemId)).toContain(b.id)
+    const base = { assetPath: (id: string) => `assets/${id}.mp4`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '' }
+    for (const o of [base, { ...base, reversedPath: (id: string) => `reversed/${id}.mp4` }]) {
+      const html = compileToHyperFrames(p, o)
+      expect(html).not.toContain(`id="a-${a.id}"`)
+      expect(html).toContain(`id="a-${b.id}"`)
+    }
   })
 })
 

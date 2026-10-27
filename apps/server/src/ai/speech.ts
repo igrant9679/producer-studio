@@ -60,7 +60,8 @@ export async function synthesizeToAsset(input: TtsInput, jc: Step): Promise<{ as
     const speed = Math.min(2, Math.max(0.5, input.speed ?? 1))
     jc.progress(0.05, 'Generating voice')
     const out = path.join(work, 'voice.wav')
-    const r = await tts.synthesize(input.text, out, { voice, speed, signal: jc.signal })
+    // a fresh server may still be fetching the voice model: the job shows its download
+    const r = await tts.synthesize(input.text, out, { voice, speed, signal: jc.signal, progress: (f, m) => jc.progress(0.05 + 0.6 * f, m) })
     jc.check()
     const name = input.name || `Voiceover · ${input.text.replace(/\s+/g, ' ').slice(0, 40)}${input.text.length > 40 ? '…' : ''}`
     const created = await createAssetFromFile({

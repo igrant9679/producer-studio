@@ -1,30 +1,50 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { beforeAll, describe, expect, it } from 'vitest'
-import { addAsset, addItem, createAudioItem, createProject, createTextItem, createVideoItem, generateCaptions, type Project } from '@producer/core'
+import { and, eq } from 'drizzle-orm'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { addAsset, addItem, createAudioItem, createProject, createTextItem, createVideoItem, exportVideoTiming, generateCaptions, mainTrack, type Project } from '@producer/core'
 import { buildProducerTimeline, syntheticTranscript } from '../ai/produce'
+import { ctx } from '../context'
+import { assets, exportsTable, jobs } from '../db/schema'
 import { assetDoc } from '../dto'
+import { cancelJob, claimNext, enqueue, getJob, onCancel } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
-import { processAsset } from '../media/process'
-import { lintComposition, parseRenderProgress, prepareRenderDir, targetSize } from '../render/export'
+import { probe, processAsset } from '../media/process'
+import { type RenderSteps, exportRender, lintComposition, parseRenderProgress, prepareRenderDir, renderArgs, renderWorkers, targetSize } from '../render/export'
 import { createAssetFromFile } from '../services/assets'
-import { setup, signup } from './helpers'
+import { type Client, setup, signup } from './helpers'
+
+// every ffmpeg call still runs; the spy shows how the reversed copies are made
+vi.mock('../media/proc', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../media/proc')>()
+  return { ...m, ffmpeg: vi.fn(m.ffmpeg) }
+})
 
 let workspaceId: string
 let userId: string
 let project: Project
 let videoId: string
 let freezeItemId: string
+let clipFile: string
+let client: Client
+
+/** One frame of `file` at `t`, as 64×36 grey bytes. */
+async function gray(file: string, t: number, dir: string): Promise<Buffer> {
+  const out = path.join(dir, `frame-${Math.random().toString(36).slice(2)}.gray`)
+  await ffmpeg(['-ss', String(t), '-i', file, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'gray', out])
+  return fs.readFileSync(out)
+}
 
 beforeAll(async () => {
   const t = await setup()
   const u = await signup(t.app)
+  client = u.client
   workspaceId = u.workspaceId
   userId = (await u.client.json('GET', '/api/auth/me')).body.user.id
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-exp-'))
-  const file = path.join(tmp, 'clip.mp4')
+  const file = (clipFile = path.join(tmp, 'clip.mp4'))
   await ffmpeg(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '3', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', file])
   const created = await createAssetFromFile({ workspaceId, userId, filePath: file, name: 'clip.mp4', mime: 'video/mp4', kind: 'video', origin: 'upload' })
   const row = await processAsset(created.id, inlineContext({ id: 't', kind: 'asset.process', workspaceId, userId, projectId: null, input: {} }))
@@ -67,9 +87,72 @@ describe('export compile', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
+  it('reverses a clip in short chunks at the output size, padded for its pre-roll (PIP-4, PIP-5)', async () => {
+    const a = project.assets[videoId]
+    let p = createProject({ name: 'Reverse', width: 1280, height: 720 })
+    p = addAsset(p, a)
+    p = addItem(p, createVideoItem(a, 0, { duration: 1.5, transitionOut: { type: 'crossfade', duration: 1 } }))
+    // source 0..2 backwards; the 1 s of source after it is there to pre-roll into the crossfade
+    p = addItem(p, createVideoItem(a, 1.5, { duration: 2, reverse: true }))
+    const track = mainTrack(p)!
+    const rev = track.items[1]
+    const timing = exportVideoTiming(p, p.tracks.indexOf(track), 1)
+    expect(timing.reversed).toEqual({ from: 0, to: 2.5 })
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-render-'))
+    vi.mocked(ffmpeg).mockClear()
+    await prepareRenderDir(p, workspaceId, dir, { output: { w: 320, h: 180 }, fps: 30 })
+    const copy = path.join(dir, 'reversed', `${rev.id}.mp4`)
+    const info = await probe(copy)
+    expect({ w: info.width, h: info.height }).toEqual({ w: 320, h: 180 })
+    expect(info.duration).toBeCloseTo(2.5, 1)
+    // each reverse holds at most 2 s of decoded frames, never the whole clip
+    const reverses = vi.mocked(ffmpeg).mock.calls.map((c) => c[0]).filter((args) => /reverse/.test(args[args.indexOf('-vf') + 1] ?? ''))
+    expect(reverses.length).toBeGreaterThan(1)
+    for (const args of reverses) expect(Number(args[args.indexOf('-t') + 1])).toBeLessThanOrEqual(2)
+    // the copy runs the source backwards from 2.5 s, across the chunk joins
+    const src = path.join(dir, 'assets', `${videoId}.mp4`)
+    const frame = (file: string, t: number) => gray(file, t, dir)
+    const diff = (x: Buffer, y: Buffer) => x.reduce((n, v, i) => n + Math.abs(v - y[i]), 0) / x.length
+    for (const k of [3, 30, 59, 61]) {
+      const f = (k + 0.5) / 30
+      const shown = await frame(copy, f)
+      const same = await frame(src, 2.5 - (k + 1) / 30 + 0.5 / 30)
+      const other = await frame(src, 2.5 - (k + 6) / 30 + 0.5 / 30)
+      expect(diff(shown, same)).toBeLessThan(diff(shown, other))
+    }
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('extracts the frame a clip holds before its file starts (PIP-5 / EDT-3)', async () => {
+    const a = project.assets[videoId]
+    let p = createProject({ name: 'Hold', width: 1280, height: 720 })
+    p = addAsset(p, a)
+    p = addItem(p, createVideoItem(a, 0, { duration: 2, transitionOut: { type: 'crossfade', duration: 1 } }))
+    p = addItem(p, createVideoItem(a, 2, { duration: 2 })) // from the source's first frame: nothing to pre-roll
+    const b = mainTrack(p)!.items[1]
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-render-'))
+    const prep = await prepareRenderDir(p, workspaceId, dir)
+    expect(fs.existsSync(path.join(dir, 'stills', `${b.id}-hold.png`))).toBe(true)
+    const html = fs.readFileSync(prep.index, 'utf8')
+    expect(html).toContain(`<img data-ps-hold="2" src="stills/${b.id}-hold.png"`)
+    const lint = await lintComposition(dir)
+    expect(lint.errors).toEqual([])
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
   it('refuses media from another workspace', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-render-'))
     await expect(prepareRenderDir(project, 'ws_other', dir)).rejects.toThrow(/not in this workspace/)
+  })
+
+  it('gives each export its share of the machine instead of all of it (PIP-19)', () => {
+    // 8 GB, 8 cores, two job slots: HyperFrames alone starts 2 Chrome workers per export, 4 for two at once
+    expect(renderWorkers({ memoryMb: 8192, cpus: 8, concurrency: 2, frames: 900 })).toBe(1)
+    expect(renderWorkers({ memoryMb: 32768, cpus: 16, concurrency: 2, frames: 900 })).toBe(5)
+    expect(renderWorkers({ memoryMb: 32768, cpus: 4, concurrency: 1, frames: 900 })).toBe(2)
+    expect(renderWorkers({ memoryMb: 32768, cpus: 16, concurrency: 1, frames: 45 })).toBe(1)
+    const args = renderArgs('dir', 'out.mp4', { fps: 30, quality: 'standard', format: 'mp4', workers: 3 })
+    expect(args.slice(args.indexOf('--workers'), args.indexOf('--workers') + 2)).toEqual(['--workers', '3'])
   })
 
   it('targetSize and progress parsing', () => {
@@ -110,5 +193,68 @@ describe('export compile', () => {
     expect(voiceTrack.items[1].start).toBeCloseTo(3 + 3.9 + 0.5, 3)
     expect(p.tracks.some((t) => t.kind === 'caption' && t.items.length > 0)).toBe(true)
     expect(p.background).toBe('#0b1830')
+  })
+})
+
+describe('saving an export (PIP-28, PIP-2)', () => {
+  let projectId: string
+  beforeAll(async () => {
+    const r = await client.json('POST', '/api/projects', { workspaceId, name: 'Save test', width: 1280, height: 720 })
+    projectId = r.body.project.id
+    let p = r.body.project as Project
+    p = addAsset(p, project.assets[videoId])
+    p = addItem(p, createVideoItem(project.assets[videoId], 0, { duration: 2 }))
+    expect((await client.json('PUT', `/api/projects/${projectId}`, { project: p, baseVersion: r.body.version })).status).toBe(200)
+  })
+
+  /** A claimed export job, cancelled the way the worker cancels its running jobs; `saving` runs as it starts saving. */
+  async function start(saving?: (id: string) => void) {
+    const job = await enqueue('export.render', { projectId, resolution: '720p', fps: 30, quality: 'draft', format: 'mp4' }, { workspaceId, userId, projectId })
+    const claimed = (await claimNext('test-worker'))!
+    expect(claimed.id).toBe(job.id)
+    const ac = new AbortController()
+    const off = onCancel((id) => id === job.id && ac.abort())
+    const jc = { ...inlineContext(claimed, ac.signal), progress: (_p: number, m?: string) => void (m === 'Saving export' && saving?.(job.id)) }
+    return { id: job.id, jc, off }
+  }
+  /** A copy of the clip stands in for Chrome's render; `after` runs once it is "done". */
+  const steps = (after?: () => Promise<unknown>): RenderSteps => ({
+    lint: async () => ({ errors: [], warnings: 0 }),
+    render: async (_dir, out) => {
+      fs.copyFileSync(clipFile, out)
+      await after?.()
+    },
+  })
+  const renders = async () => (await ctx().db.select().from(assets).where(and(eq(assets.workspaceId, workspaceId), eq(assets.origin, 'render')))).length
+  const exportsOf = (jobId: string) => ctx().db.select().from(exportsTable).where(eq(exportsTable.jobId, jobId))
+
+  it('records the job on the exported video and finishes the job with the export', async () => {
+    const { id, jc, off } = await start()
+    const r = await exportRender(jc, steps())
+    off()
+    const [video] = await ctx().db.select().from(assets).where(eq(assets.id, (await exportsOf(id))[0].assetId))
+    expect(video.meta).toMatchObject({ jobId: id })
+    expect(await getJob(id)).toMatchObject({ status: 'done', result: r })
+  })
+
+  it('a cancel after the render finishes leaves no export and no video', async () => {
+    const before = await renders()
+    const { id, jc, off } = await start((jobId) => void cancelJob(jobId))
+    await expect(exportRender(jc, steps())).rejects.toThrow(/Cancelled/)
+    off()
+    expect(await exportsOf(id)).toEqual([])
+    expect(await renders()).toBe(before)
+    expect((await getJob(id))!.status).toBe('cancelled')
+  })
+
+  it('a cancel this process has not heard about yet still leaves no export', async () => {
+    const before = await renders()
+    const { id, jc, off } = await start()
+    // another server process cancelled it: the row says so, the local signal doesn't (yet)
+    const cancelElsewhere = () => ctx().db.update(jobs).set({ status: 'cancelled', cancelRequested: true }).where(eq(jobs.id, id))
+    await expect(exportRender(jc, steps(cancelElsewhere))).rejects.toThrow(/Cancelled/)
+    off()
+    expect(await exportsOf(id)).toEqual([])
+    expect(await renders()).toBe(before)
   })
 })

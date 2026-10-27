@@ -1,8 +1,12 @@
 // Kokoro-82M narration worker. Long-lived child process: one JSON request per stdin line, one JSON reply per
 // stdout line. Keeps the model warm so repeated TTS calls don't pay the load cost.
-//   request:  {"id":"1","text":"Hello","voice":"af_heart","speed":1,"out":"/abs/file.wav"}
-//   reply:    {"id":"1","ok":true,"duration":1.23,"sampleRate":24000} | {"id":"1","ok":false,"error":"..."}
+//   request:  {"id":"1","text":"Hello","voice":"af_heart","speed":1,"out":"/abs/file.wav"} | {"id":"2","type":"warm"}
+//             {"type":"cancel","id":"1"}  (skip it if still queued, stop it between sentences if running)
+//   reply:    {"id":"1","ok":true,"duration":1.23,"sampleRate":24000} | {"id":"1","ok":false,"error":"...",
+//             "loadFailed"?:true,"cancelled"?:true}
+//   while the model loads: {"type":"progress","progress":0.42,"downloading":true}, then {"type":"ready"}
 // Env: KOKORO_CACHE — directory containing onnx-community/Kokoro-82M-v1.0-ONNX (used offline when present).
+//      KOKORO_REMOTE_HOST — where to download the model from when it isn't (default Hugging Face; a mirror).
 import { existsSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
@@ -12,6 +16,8 @@ const cache = process.env.KOKORO_CACHE || ''
 
 const send = (o) => process.stdout.write(JSON.stringify(o) + '\n')
 const logErr = (s) => process.stderr.write(`[tts] ${s}\n`)
+
+class LoadError extends Error {}
 
 let ttsPromise
 let Splitter
@@ -25,16 +31,40 @@ async function load() {
         env.cacheDir = cache
         env.localModelPath = cache.endsWith(path.sep) ? cache : cache + path.sep
       }
+      if (process.env.KOKORO_REMOTE_HOST) env.remoteHost = process.env.KOKORO_REMOTE_HOST
       env.allowLocalModels = true
       env.allowRemoteModels = !local
       const { KokoroTTS, TextSplitterStream } = await import('kokoro-js')
       Splitter = TextSplitterStream
       const t0 = Date.now()
       logErr(`loading Kokoro-82M (${local ? 'local' : 'download'})`)
-      const tts = await KokoroTTS.from_pretrained(MODEL, { dtype: 'q8', device: 'cpu' })
+      // overall progress across the model's files, sent whenever it moves by a percent
+      const files = new Map()
+      let sent = -1
+      const progress_callback = (p) => {
+        if (p?.status !== 'progress' || !p.file || !(p.total > 0)) return
+        files.set(p.file, { loaded: p.loaded ?? 0, total: p.total })
+        let loaded = 0
+        let total = 0
+        for (const f of files.values()) {
+          loaded += f.loaded
+          total += f.total
+        }
+        const pct = Math.floor((100 * loaded) / total)
+        if (pct !== sent) {
+          sent = pct
+          send({ type: 'progress', progress: pct / 100, downloading: !local })
+        }
+      }
+      const tts = await KokoroTTS.from_pretrained(MODEL, { dtype: 'q8', device: 'cpu', progress_callback })
       logErr(`model ready in ${Date.now() - t0} ms`)
+      send({ type: 'ready' })
       return tts
-    })()
+    })().catch((e) => {
+      // not cached: the next request tries again (a network blip must not break voice until a restart)
+      ttsPromise = undefined
+      throw new LoadError(String(e?.message || e))
+    })
   }
   return ttsPromise
 }
@@ -62,6 +92,9 @@ function writeWav(file, samples, sampleRate) {
   writeFileSync(file, buf)
 }
 
+const cancelled = new Set()
+class Cancelled extends Error {}
+
 async function synth(req) {
   const tts = await load()
   const text = String(req.text || '').trim()
@@ -75,6 +108,7 @@ async function synth(req) {
   splitter.push(text)
   splitter.close() // flush the final sentence; stream() alone waits forever for more input
   for await (const part of tts.stream(splitter, { voice, speed })) {
+    if (cancelled.has(req.id)) throw new Cancelled('Cancelled')
     chunks.push(part.audio.audio)
     sampleRate = part.audio.sampling_rate
   }
@@ -90,6 +124,8 @@ async function synth(req) {
   return { duration: out.length / sampleRate, sampleRate }
 }
 
+const failure = (id, e) => ({ id, ok: false, error: String(e?.stack || e), ...(e instanceof LoadError ? { loadFailed: true } : {}), ...(e instanceof Cancelled ? { cancelled: true } : {}) })
+
 // serialise requests: the ONNX session is not re-entrant
 let chain = Promise.resolve()
 const rl = createInterface({ input: process.stdin })
@@ -101,16 +137,20 @@ rl.on('line', (line) => {
   } catch {
     return send({ ok: false, error: 'bad json' })
   }
-  if (req.type === 'warm') {
-    chain = chain.then(() => load().then(() => send({ id: req.id, ok: true, warm: true }), (e) => send({ id: req.id, ok: false, error: String(e?.stack || e) })))
-    return
-  }
+  if (req.type === 'cancel') return void cancelled.add(req.id)
   chain = chain.then(async () => {
+    if (cancelled.delete(req.id)) return send({ id: req.id, ok: false, error: 'Cancelled', cancelled: true })
     try {
+      if (req.type === 'warm') {
+        await load()
+        return send({ id: req.id, ok: true, warm: true })
+      }
       const r = await synth(req)
       send({ id: req.id, ok: true, ...r })
     } catch (e) {
-      send({ id: req.id, ok: false, error: String(e?.stack || e) })
+      send(failure(req.id, e))
+    } finally {
+      cancelled.delete(req.id)
     }
   })
 })
