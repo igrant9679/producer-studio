@@ -1,6 +1,7 @@
 // export.render: compile the project to a HyperFrames composition, lint, render, scale, store as an asset.
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
+import os from 'node:os'
 import path from 'node:path'
 import { and, eq, inArray } from 'drizzle-orm'
 import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
@@ -255,11 +256,43 @@ export function parseRenderProgress(chunk: string): number | undefined {
   return last === undefined ? undefined : Math.min(1, Math.max(0, last))
 }
 
-export async function renderComposition(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: ExportRequest['format']; signal?: AbortSignal; progress?: (f: number) => void }) {
+/** Memory the server may use: the container's limit when it has one, else the machine's. */
+export function systemMemoryMb(): number {
+  const total = os.totalmem() / 2 ** 20
+  for (const f of ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes']) {
+    try {
+      const n = Number(fs.readFileSync(f, 'utf8').trim())
+      if (Number.isFinite(n) && n > 0 && n < 2 ** 60) return Math.min(total, n / 2 ** 20)
+    } catch {
+      /* not limited, or not Linux */
+    }
+  }
+  return total
+}
+
+/**
+ * Chrome workers for one render. HyperFrames on its own sizes them for the whole machine (half its memory at 1.5 GB
+ * each, all but two cores) on every render, so exports running side by side each take all of it; this gives each
+ * of the `concurrency` job slots its share, and one worker per 30 frames at most, as HyperFrames does.
+ */
+export function renderWorkers(o: { memoryMb: number; cpus: number; concurrency: number; frames: number }): number {
+  const share = Math.max(1, o.concurrency)
+  const byMemory = Math.floor((o.memoryMb * 0.5) / 1536 / share)
+  const byCpu = Math.floor(Math.max(1, o.cpus - 2) / share)
+  return Math.max(1, Math.min(byMemory, byCpu, Math.floor(o.frames / 30), 24))
+}
+
+export function renderArgs(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: ExportRequest['format']; workers?: number }): string[] {
   const args = [hyperframesCli(), 'render', dir, '-o', out, '-q', QUALITY[opts.quality], '--fps', String(opts.fps)]
   if (opts.format !== 'mp4') args.push('--format', opts.format)
+  if (opts.workers) args.push('--workers', String(opts.workers))
   const pt = ctx().config.hyperframesProtocolTimeout
   if (pt) args.push('--protocol-timeout', pt)
+  return args
+}
+
+export async function renderComposition(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: ExportRequest['format']; workers?: number; signal?: AbortSignal; progress?: (f: number) => void }) {
+  const args = renderArgs(dir, out, opts)
   let buf = ''
   const r = await run(process.execPath, args, {
     cwd: dir,
@@ -308,7 +341,8 @@ export async function exportRender(jc: JobContext): Promise<ExportResult> {
     const ext = input.format
     const raw = path.join(dir, `render.${ext}`)
     jc.progress(0.1, 'Rendering')
-    await renderComposition(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
+    const workers = renderWorkers({ memoryMb: systemMemoryMb(), cpus: os.cpus().length, concurrency: ctx().config.workerConcurrency, frames: Math.ceil(prep.duration * input.fps) })
+    await renderComposition(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
     jc.check()
     const final = raw
     jc.progress(0.97, 'Saving export')

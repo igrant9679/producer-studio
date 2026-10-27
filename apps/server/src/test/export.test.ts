@@ -8,7 +8,7 @@ import { assetDoc } from '../dto'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
 import { probe, processAsset } from '../media/process'
-import { lintComposition, parseRenderProgress, prepareRenderDir, targetSize } from '../render/export'
+import { lintComposition, parseRenderProgress, prepareRenderDir, renderArgs, renderWorkers, targetSize } from '../render/export'
 
 // every ffmpeg call still runs; the spy shows how the reversed copies are made
 vi.mock('../media/proc', async (importOriginal) => {
@@ -136,6 +136,16 @@ describe('export compile', () => {
   it('refuses media from another workspace', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-render-'))
     await expect(prepareRenderDir(project, 'ws_other', dir)).rejects.toThrow(/not in this workspace/)
+  })
+
+  it('gives each export its share of the machine instead of all of it (PIP-19)', () => {
+    // 8 GB, 8 cores, two job slots: HyperFrames alone starts 2 Chrome workers per export, 4 for two at once
+    expect(renderWorkers({ memoryMb: 8192, cpus: 8, concurrency: 2, frames: 900 })).toBe(1)
+    expect(renderWorkers({ memoryMb: 32768, cpus: 16, concurrency: 2, frames: 900 })).toBe(5)
+    expect(renderWorkers({ memoryMb: 32768, cpus: 4, concurrency: 1, frames: 900 })).toBe(2)
+    expect(renderWorkers({ memoryMb: 32768, cpus: 16, concurrency: 1, frames: 45 })).toBe(1)
+    const args = renderArgs('dir', 'out.mp4', { fps: 30, quality: 'standard', format: 'mp4', workers: 3 })
+    expect(args.slice(args.indexOf('--workers'), args.indexOf('--workers') + 2)).toEqual(['--workers', '3'])
   })
 
   it('targetSize and progress parsing', () => {
