@@ -109,6 +109,42 @@ describe('time limits (PIP-2)', () => {
   })
 })
 
+describe('quick jobs have their own lane (PIP-18)', () => {
+  it('counts slots: long jobs only take shared ones, quick jobs take theirs first', async () => {
+    const { claimable } = await import('../jobs/worker')
+    const exp = { kind: 'export.render' }
+    const proc = { kind: 'asset.process' }
+    expect(claimable([], 2, 1)).toBe('any')
+    expect(claimable([exp, exp], 2, 1)).toBe('quick')
+    expect(claimable([exp, exp, proc], 2, 1)).toBe('none')
+    expect(claimable([proc], 2, 1)).toBe('any')
+    expect(claimable([proc, proc], 2, 1)).toBe('any')
+    expect(claimable([proc, proc, proc], 2, 1)).toBe('none')
+    expect(claimable([proc, proc, exp], 2, 1)).toBe('none')
+    expect(claimable([exp], 1, 0)).toBe('none')
+  })
+
+  it('an upload is processed while long exports fill every shared slot', async () => {
+    stopWorker()
+    startWorker({ concurrency: 1, quickConcurrency: 1, heartbeatMs: 100, graceMs: 300 })
+    const seen: { aborted?: boolean } = {}
+    registerHandler('export.render', untilStopped(seen))
+    registerHandler('ai.transcribe', async () => ({ transcript: 'ok' }))
+    const e1 = await enqueue('export.render', {}, meta())
+    const e2 = await enqueue('export.render', {}, meta())
+    await runningHere(e1.id)
+    const quick = await enqueue('ai.transcribe', { assetId: 'as_x' }, meta())
+    expect((await ended(quick.id)).status).toBe('done')
+    expect((await getJob(e2.id))!.status).toBe('queued')
+    const { cancelJob } = await import('../jobs/queue')
+    await cancelJob(e2.id)
+    await cancelJob(e1.id)
+    await waitFor(async () => !runningJobIds().length)
+    stopWorker()
+    startWorker({ concurrency: 2, heartbeatMs: 100, graceMs: 300 })
+  })
+})
+
 describe('stale recovery and lost locks (PIP-8)', () => {
   it('recovery leaves a job alone if its worker heartbeat after it was seen as stale', async () => {
     // running on another worker (this one never claims it)

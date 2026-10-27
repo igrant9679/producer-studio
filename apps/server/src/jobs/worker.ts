@@ -1,4 +1,4 @@
-// Worker loop: claims jobs up to WORKER_CONCURRENCY, runs handlers with an AbortSignal (cancellation kills
+// Worker loop: claims jobs up to WORKER_CONCURRENCY (plus QUICK_JOB_CONCURRENCY slots for quick jobs), runs handlers with an AbortSignal (cancellation kills
 // child processes), heartbeats, recovers stale locks, pushes throttled progress over the event bus. Every job
 // ends: one that runs past its kind's time limit or goes quiet for too long is stopped with a reason, and one that
 // another worker took over, or whose rows were deleted, is dropped here.
@@ -85,6 +85,9 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'voicestudio.install': 'Installing VoiceStudio',
 }
 
+/** Short jobs people wait on in the editor: they get slots long exports can't take (QUICK_JOB_CONCURRENCY). */
+export const QUICK_KINDS: readonly JobKind[] = ['asset.process', 'ai.transcribe', 'ai.tts']
+
 /** The longest a job of this kind may run: renders long, processing medium, voice short. */
 export function maxRunMs(kind: string): number {
   const l = ctx().config.jobLimits
@@ -107,7 +110,6 @@ interface Running {
 }
 
 const running = new Map<string, Running>()
-let stopped = false
 let started = false
 let wakeNow: () => void = () => undefined
 let graceMs = STOP_GRACE_MS
@@ -229,11 +231,25 @@ async function heartbeat(workerId: string) {
   }
 }
 
-export function startWorker(opts: { concurrency: number; heartbeatMs?: number; graceMs?: number }) {
+/**
+ * Which jobs this worker may claim now. `concurrency` slots take any job; `quick` more take only quick ones, which
+ * also use a free shared slot first. Two long exports can't hold up processing for every new upload.
+ */
+export function claimable(jobsNow: Iterable<{ kind: string }>, concurrency: number, quick: number): 'any' | 'quick' | 'none' {
+  let nQuick = 0
+  let nLong = 0
+  for (const j of jobsNow) QUICK_KINDS.includes(j.kind as JobKind) ? nQuick++ : nLong++
+  if (nLong + Math.max(0, nQuick - quick) < concurrency) return 'any'
+  return nLong + nQuick < concurrency + quick ? 'quick' : 'none'
+}
+
+export function startWorker(opts: { concurrency: number; quickConcurrency?: number; heartbeatMs?: number; graceMs?: number }) {
   if (started) return
   started = true
-  stopped = false
+  // this start's own flag: a loop from an earlier start still sleeping must not carry on after a restart
+  const life = { stopped: false }
   graceMs = opts.graceMs ?? STOP_GRACE_MS
+  const quick = opts.quickConcurrency ?? ctx().config.quickJobConcurrency
   const workerId = ctx().instanceId
   let wakeResolve: (() => void) | undefined
   wakeNow = () => wakeResolve?.()
@@ -242,10 +258,12 @@ export function startWorker(opts: { concurrency: number; heartbeatMs?: number; g
 
   const loop = async () => {
     if (ctx().database.driver === 'pglite') await recoverStale(0).catch(() => 0) // single process: anything "running" is from a previous run
-    while (!stopped) {
+    while (!life.stopped) {
       try {
-        while (running.size < opts.concurrency && !stopped) {
-          const job = await claimNext(workerId)
+        while (!life.stopped) {
+          const room = claimable([...running.values()].map((r) => r.job), opts.concurrency, quick)
+          if (room === 'none') break
+          const job = await claimNext(workerId, room === 'quick' ? QUICK_KINDS : undefined)
           if (!job) break
           void runJob(job, workerId)
         }
@@ -282,7 +300,8 @@ export function startWorker(opts: { concurrency: number; heartbeatMs?: number; g
   firstPrune.unref()
   pruning.unref()
   stopWorkerFn = () => {
-    stopped = true
+    life.stopped = true
+    wakeResolve?.()
     offCancel()
     clearInterval(hb)
     clearInterval(rec)
@@ -292,7 +311,7 @@ export function startWorker(opts: { concurrency: number; heartbeatMs?: number; g
     clearInterval(pruning)
     for (const r of running.values()) r.ac.abort()
   }
-  log.info('worker started', { workerId, concurrency: opts.concurrency })
+  log.info('worker started', { workerId, concurrency: opts.concurrency, quick })
 }
 
 let stopWorkerFn: (() => void) | undefined
