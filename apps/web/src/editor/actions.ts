@@ -259,7 +259,7 @@ export function addAssetAt(asset: Asset, at: number, opts: { trackId?: string; o
 }
 
 export function addText(templateId: string, at = S().playhead, over: Partial<Item> = {}) {
-  const item = createTextItem(at, templateId, over as never)
+  const item = createTextItem(at, templateId, over as never, S().project)
   const p = addItem(S().project, item)
   S().commit(p, 'Add text', { selection: [item.id] })
   S().set({ activeRightTab: '', playing: false })

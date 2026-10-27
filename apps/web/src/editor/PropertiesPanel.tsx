@@ -775,7 +775,8 @@ export function CaptionStyleEditor({ track }: { track: Track }) {
               key={p.id}
               className={clsx(cs.preset === p.id && 'on')}
               onClick={() => {
-                const next = captionStyleFromPreset(p.id)
+                // sized for this canvas, like the style it replaces
+                const next = captionStyleFromPreset(p.id, useEditor.getState().project)
                 set({ ...next, position: cs.position }, `Caption style ${p.name}`)
               }}
             >

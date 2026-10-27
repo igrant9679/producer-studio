@@ -1,6 +1,7 @@
 // Pure editing operations. Every op takes a project and returns a NEW project (the input is never mutated),
 // so the editor can keep an undo stack of snapshots and the AI assistant can apply the same ops server-side.
 import { createAudioItem, createCaptionItem, createTrack } from './factory'
+import { captionStyleFromPreset, scaleTextStyle } from './presets'
 import type {
   AnimProp,
   Asset,
@@ -11,7 +12,6 @@ import type {
   Keyframe,
   Keyframes,
   Project,
-  TextStyle,
   Track,
   TrackKind,
   Transcript,
@@ -110,7 +110,8 @@ function overlaps(track: Track, start: number, end: number, ignore: Set<string>)
  * directly above `aboveIndex` (or on top of the visual stack).
  */
 export function insertTrack(p: Project, kind: TrackKind, aboveIndex?: number): Track {
-  const track = createTrack(kind)
+  // a new caption track's style is sized for this canvas
+  const track = createTrack(kind, kind === 'caption' ? { captionStyle: captionStyleFromPreset('clean', p) } : {})
   if (kind === 'audio') {
     const firstVisual = p.tracks.findIndex((t) => t.kind !== 'audio')
     p.tracks.splice(firstVisual < 0 ? p.tracks.length : firstVisual, 0, track)
@@ -644,24 +645,6 @@ export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2)
   if (track.main) packMain(p)
   else sortItems(track)
   return touch(p)
-}
-
-function scaleTextStyle(s: TextStyle, k: number, maxBox: number) {
-  const r = (v: number) => round(v * k, 2)
-  s.fontSize = r(s.fontSize)
-  s.letterSpacing = r(s.letterSpacing)
-  s.boxWidth = Math.round(Math.min(s.boxWidth * k, maxBox))
-  if (s.stroke) s.stroke.width = r(s.stroke.width)
-  if (s.background) {
-    s.background.radius = r(s.background.radius)
-    s.background.padding = r(s.background.padding)
-  }
-  if (s.shadow) {
-    s.shadow.blur = r(s.shadow.blur)
-    s.shadow.x = r(s.shadow.x)
-    s.shadow.y = r(s.shadow.y)
-  }
-  if (s.glow) s.glow.blur = r(s.glow.blur)
 }
 
 /**

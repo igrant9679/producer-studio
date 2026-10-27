@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addAsset,
   addItem,
+  captionStyleFromPreset,
   clone,
   createImageItem,
   createProject,
@@ -14,6 +15,7 @@ import {
   evaluate,
   findItem,
   freezeFrame,
+  importSrt,
   insertTrack,
   isEditable,
   itemEnd,
@@ -22,6 +24,7 @@ import {
   pasteItems,
   separateAudio,
   separateAudioRefusal,
+  setCanvasSize,
   setItemSpeed,
   setKeyframe,
   splitAt,
@@ -184,6 +187,36 @@ describe('separate audio (EDT-21)', () => {
     const right = mainTrack(p)!.items[1]
     expect(separateAudioRefusal(p, right.id)).toBe('separated')
     expect(separateAudioRefusal(p, 'vb')).toBeNull()
+  })
+})
+
+describe('text sized for the canvas (EDT-20)', () => {
+  const portrait = { width: 1080, height: 1920 }
+  const uhd = { width: 3840, height: 2160 }
+
+  it('a template on 9:16 keeps its box inside the frame, so long headings wrap instead of clipping', () => {
+    for (const tpl of ['heading', 'title-bold', 'lower-accent', 'social-highlight']) {
+      const t = createTextItem(0, tpl, {}, portrait)
+      expect(t.style.boxWidth).toBeLessThanOrEqual(972)
+    }
+    expect(createTextItem(0, 'heading', {}, portrait).style.fontSize).toBe(120)
+  })
+
+  it('on 4K new text is the same size relative to the frame as on 1080p', () => {
+    const hd = createTextItem(0, 'lower-third', {}, { width: 1920, height: 1080 })
+    const big = createTextItem(0, 'lower-third', {}, uhd)
+    expect(big.style.fontSize).toBe(hd.style.fontSize * 2)
+    expect(big.style.boxWidth).toBe(hd.style.boxWidth * 2)
+    expect(big.style.background!.padding).toBe(hd.style.background!.padding * 2)
+    // on the 1080p landscape canvas templates are authored for, nothing changes
+    expect(createTextItem(0, 'heading', {}, { width: 1920, height: 1080 }).style).toEqual(createTextItem(0, 'heading').style)
+  })
+
+  it('caption presets and new caption tracks are sized for the canvas too', () => {
+    expect(captionStyleFromPreset('clean', uhd).style.fontSize).toBe(112)
+    expect(captionStyleFromPreset('word-pop', portrait).style.boxWidth).toBe(972)
+    const p = importSrt(setCanvasSize(createProject(), 3840, 2160), '1\n00:00:00,000 --> 00:00:01,000\nHi\n')
+    expect(p.tracks.find((t) => t.kind === 'caption')!.captionStyle!.style.fontSize).toBe(112)
   })
 })
 

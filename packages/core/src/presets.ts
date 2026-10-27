@@ -7,6 +7,7 @@ import type {
   TextStyle,
   TransitionType,
 } from './types'
+import { round } from './util'
 
 export const NEUTRAL_ADJUST: ColorAdjust = {
   brightness: 0,
@@ -253,7 +254,39 @@ export const CAPTION_PRESETS: Array<{ id: string; name: string; caption: Omit<Ca
   },
 ]
 
-export function captionStyleFromPreset(id: string): CaptionStyle {
+/** A caption style from a preset, sized for `canvas` when given (see `textStyleFor`). */
+export function captionStyleFromPreset(id: string, canvas?: Canvas): CaptionStyle {
   const p = CAPTION_PRESETS.find((c) => c.id === id) ?? CAPTION_PRESETS[0]
-  return { preset: p.id, ...structuredClone(p.caption) }
+  return { preset: p.id, ...structuredClone(p.caption), style: textStyleFor(p.caption.style, canvas) }
+}
+
+type Canvas = { width: number; height: number }
+
+/** Scale a text style's pixel sizes by `k`, its box capped at `maxBox` px. Changes `s` in place. */
+export function scaleTextStyle(s: TextStyle, k: number, maxBox: number) {
+  const r = (v: number) => round(v * k, 2)
+  s.fontSize = r(s.fontSize)
+  s.letterSpacing = r(s.letterSpacing)
+  s.boxWidth = Math.round(Math.min(s.boxWidth * k, maxBox))
+  if (s.stroke) s.stroke.width = r(s.stroke.width)
+  if (s.background) {
+    s.background.radius = r(s.background.radius)
+    s.background.padding = r(s.background.padding)
+  }
+  if (s.shadow) {
+    s.shadow.blur = r(s.shadow.blur)
+    s.shadow.x = r(s.shadow.x)
+    s.shadow.y = r(s.shadow.y)
+  }
+  if (s.glow) s.glow.blur = r(s.glow.blur)
+}
+
+/**
+ * A copy of a text style authored for a 1080p landscape canvas, sized for `canvas`: pixel sizes scale with its shorter
+ * side and the box is at most 90% of its width, so a heading wraps inside a 9:16 frame and isn't half size on 4K.
+ */
+export function textStyleFor(style: TextStyle, canvas?: Canvas): TextStyle {
+  const s = structuredClone(style)
+  if (canvas) scaleTextStyle(s, Math.min(canvas.width, canvas.height) / 1080, Math.round(canvas.width * 0.9))
+  return s
 }

@@ -1,6 +1,6 @@
 // Edit actions and properties-panel edits from the phase 4 pass.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { addAsset, addItem, createProject, createTextItem, createVideoItem, findItem, mainTrack, setKeyframe, updateItem, type Asset, type Project, type VideoItem, type VisualItem } from '@producer/core'
+import { addAsset, addItem, createProject, createTextItem, createVideoItem, findItem, importSrt, mainTrack, setCanvasSize, setKeyframe, updateItem, type Asset, type Project, type TextItem, type VideoItem, type VisualItem } from '@producer/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useToasts } from '../../lib/toast'
 import * as A from '../actions'
@@ -74,6 +74,26 @@ describe('Speed tab (EDT-23)', () => {
     const v = findItem(S().project, 'v1')!.item as VideoItem
     expect(v).toMatchObject({ speed: 2, duration: 5, fadeOut: 1 })
     expect(v.keyframes.opacity!.map((k) => k.t)).toEqual([3])
+  })
+})
+
+describe('text and captions sized for the canvas (EDT-20)', () => {
+  it('new text on a 4K canvas is twice the 1080p size', () => {
+    load(setCanvasSize(project(), 3840, 2160))
+    const id = A.addText('heading', 0)
+    expect((findItem(S().project, id)!.item as TextItem).style.fontSize).toBe(240)
+  })
+
+  it('applying a caption preset keeps the canvas scaling', () => {
+    const p = importSrt(setCanvasSize(project(), 3840, 2160), '1\n00:00:00,000 --> 00:00:01,000\nHello\n')
+    load(p)
+    const cap = p.tracks.find((t) => t.kind === 'caption')!
+    S().select([cap.items[0].id])
+    render(<PropertiesPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /Boxed/ }))
+    const style = S().project.tracks.find((t) => t.kind === 'caption')!.captionStyle!
+    expect(style.preset).toBe('boxed')
+    expect(style.style.fontSize).toBe(100)
   })
 })
 

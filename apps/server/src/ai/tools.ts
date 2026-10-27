@@ -253,9 +253,8 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
     }
     case 'add_text': {
       const tpl = i.template ?? 'heading'
-      const item = createTextItem(i.start, tpl, { text: i.text, name: i.text.slice(0, 40), duration: i.duration })
+      const item = createTextItem(i.start, tpl, { text: i.text, name: i.text.slice(0, 40), duration: i.duration }, p)
       item.transform = { ...item.transform, x: i.x ?? 0, y: i.y ?? positionY(p, i.position) }
-      item.style = { ...item.style, boxWidth: Math.min(item.style.boxWidth, Math.round(p.width * 0.9)) }
       if (i.position === 'lower-third' && i.x === undefined) item.transform.x = p.width > p.height ? -p.width * 0.22 : 0
       const textTrack = p.tracks.find((t) => t.kind === 'text' && !t.items.some((x) => x.start < i.start + i.duration && itemEnd(x) > i.start))
       const next = addItem(p, item, textTrack?.id)
@@ -334,7 +333,7 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
       for (const aid of [...new Set(sources.map((x) => x.assetId))]) {
         if (!cur.assets[aid]?.transcript && cur.assets[aid]) cur = addAsset(cur, { ...cur.assets[aid], transcript: await env.transcribe(aid) })
       }
-      const style = i.preset ? captionStyleFromPreset(i.preset) : cur.tracks.find((t) => t.kind === 'caption')?.captionStyle
+      const style = i.preset ? captionStyleFromPreset(i.preset, cur) : cur.tracks.find((t) => t.kind === 'caption')?.captionStyle
       const next = generateCaptions(cur, { itemIds: i.itemIds, style })
       const n = next.tracks.find((t) => t.kind === 'caption')?.items.length ?? 0
       if (!n) throw new ToolError('No speech found to caption')
@@ -345,7 +344,7 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
     case 'set_caption_style': {
       const track = p.tracks.find((t) => t.kind === 'caption')
       if (!track) throw new ToolError('There is no caption track — call generate_captions first')
-      const base = i.preset ? captionStyleFromPreset(i.preset) : structuredClone(track.captionStyle ?? captionStyleFromPreset('clean'))
+      const base = i.preset ? captionStyleFromPreset(i.preset, p) : structuredClone(track.captionStyle ?? captionStyleFromPreset('clean', p))
       if (i.position !== undefined) base.position = i.position
       if (i.mode) base.mode = i.mode
       if (i.maxWordsPerLine) base.maxWordsPerLine = i.maxWordsPerLine
