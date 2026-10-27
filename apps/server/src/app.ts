@@ -1,7 +1,6 @@
 // Hono application: middleware, routes, JSON errors, SPA static serving.
 import fs from 'node:fs'
 import path from 'node:path'
-import { Readable } from 'node:stream'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { eq } from 'drizzle-orm'
@@ -27,26 +26,9 @@ import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
 import { storageHealth } from './services/storage-health'
 import { bodyLimitFor, cloudHeaders } from './security'
+import { serveStatic } from './static'
 
 const started = Date.now()
-
-const STATIC_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2',
-  '.woff': 'font/woff',
-  '.webp': 'image/webp',
-  '.map': 'application/json',
-  '.txt': 'text/plain; charset=utf-8',
-  '.wasm': 'application/wasm',
-}
 
 /** Postgres/PGlite unique_violation (23505), possibly wrapped by Drizzle as the error's `cause`. */
 function isUniqueViolation(err: unknown): boolean {
@@ -162,14 +144,7 @@ export function createApp() {
     // source maps stay on the build machine: they hold the app's full source
     if (path.extname(file) === '.map') return c.text('Not found', 404)
     if (!contained || !rel || !fs.existsSync(file) || !fs.statSync(file).isFile()) file = index
-    const ext = path.extname(file)
-    const immutable = file !== index && /[\\/]assets[\\/]/.test(file)
-    return new Response(Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream, {
-      headers: {
-        'Content-Type': STATIC_TYPES[ext] ?? 'application/octet-stream',
-        'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-      },
-    })
+    return serveStatic(file, index, c.req.header('accept-encoding'))
   })
 
   // Cross-process event rehydration (NOTIFY carries references only).
