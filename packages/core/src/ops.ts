@@ -665,11 +665,18 @@ export function setCanvasSize(p0: Project, width: number, height: number): Proje
     if (t.captionStyle) scaleTextStyle(t.captionStyle.style, k, maxBox)
     for (const it of t.items) {
       if (!('transform' in it)) continue
-      it.transform.x = round(it.transform.x * sx, 2)
-      it.transform.y = round(it.transform.y * sy, 2)
-      if (it.keyframes.x) it.keyframes.x = it.keyframes.x.map((kf) => ({ ...kf, value: round(kf.value * sx, 2) }))
-      if (it.keyframes.y) it.keyframes.y = it.keyframes.y.map((kf) => ({ ...kf, value: round(kf.value * sy, 2) }))
+      // a text box that was inside the old canvas stays inside the new one (a narrower aspect pushed wide ones off)
+      const half0 = it.type === 'text' ? (it.style.boxWidth * Math.abs(it.transform.scale)) / 2 : 0
       if (it.type === 'text') scaleTextStyle(it.style, k, maxBox)
+      const limit = it.type === 'text' ? Math.max(0, w / 2 - (it.style.boxWidth * Math.abs(it.transform.scale)) / 2) : Infinity
+      const toX = (x: number) => {
+        const nx = round(x * sx, 2)
+        return Math.abs(x) + half0 <= p.width / 2 + 0.5 && Math.abs(nx) > limit ? round(Math.sign(nx) * limit, 2) : nx
+      }
+      it.transform.x = toX(it.transform.x)
+      it.transform.y = round(it.transform.y * sy, 2)
+      if (it.keyframes.x) it.keyframes.x = it.keyframes.x.map((kf) => ({ ...kf, value: toX(kf.value) }))
+      if (it.keyframes.y) it.keyframes.y = it.keyframes.y.map((kf) => ({ ...kf, value: round(kf.value * sy, 2) }))
       if (it.type === 'shape') {
         it.width = round(it.width * k, 2)
         it.height = round(it.height * k, 2)

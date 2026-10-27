@@ -24,6 +24,7 @@ import {
   pasteItems,
   separateAudio,
   separateAudioRefusal,
+  setAspect,
   setCanvasSize,
   setItemSpeed,
   setKeyframe,
@@ -35,6 +36,7 @@ import {
   type Asset,
   type Item,
   type Project,
+  type TextItem,
   type Track,
   type VideoItem,
 } from './index'
@@ -217,6 +219,34 @@ describe('text sized for the canvas (EDT-20)', () => {
     expect(captionStyleFromPreset('word-pop', portrait).style.boxWidth).toBe(972)
     const p = importSrt(setCanvasSize(createProject(), 3840, 2160), '1\n00:00:00,000 --> 00:00:01,000\nHi\n')
     expect(p.tracks.find((t) => t.kind === 'caption')!.captionStyle!.style.fontSize).toBe(112)
+  })
+})
+
+describe('aspect changes keep text on the canvas (EDT-30)', () => {
+  const edges = (p: Project, id: string) => {
+    const t = item(p, id) as TextItem
+    const half = (t.style.boxWidth * t.transform.scale) / 2
+    return [p.width / 2 + t.transform.x - half, p.width / 2 + t.transform.x + half]
+  }
+
+  it('a wide text box that fitted 16:9 still fits after switching to 9:16', () => {
+    let p = addItem(createProject(), createTextItem(0, 'lower-third', { id: 'lt', transform: { x: -400, y: 300, scale: 1, rotation: 0 } }))
+    p = setKeyframe(p, 'lt', 'x', 1, 420)
+    const [l0, r0] = edges(p, 'lt')
+    expect(l0).toBeGreaterThanOrEqual(0)
+    expect(r0).toBeLessThanOrEqual(1920)
+    const q = setAspect(p, 1080, 1920)
+    const [l, r] = edges(q, 'lt')
+    expect(l).toBeGreaterThanOrEqual(0)
+    expect(r).toBeLessThanOrEqual(1080)
+    // its x keyframes too
+    const t = item(q, 'lt') as TextItem
+    for (const kf of t.keyframes.x!) expect(Math.abs(kf.value) + t.style.boxWidth / 2).toBeLessThanOrEqual(540)
+  })
+
+  it('text placed off the canvas on purpose (to slide in) keeps its place', () => {
+    const p = addItem(createProject(), createTextItem(0, 'heading', { id: 'off', transform: { x: -1800, y: 0, scale: 1, rotation: 0 } }))
+    expect((item(setAspect(p, 1080, 1920), 'off') as TextItem).transform.x).toBe(-1012.5)
   })
 })
 
