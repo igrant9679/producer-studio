@@ -260,7 +260,12 @@ syncRoutes.post('/projects/:id/delete', async (c) => {
   const conds = [eq(projects.id, id), eq(projects.version, b.baseVersion)]
   if (b.trashed) conds.push(isNotNull(projects.trashedAt))
   const gone = await ctx().db.delete(projects).where(and(...conds)).returning({ id: projects.id })
-  if (gone.length) return c.json({ ok: true })
+  if (gone.length) {
+    // open screens drop it, as for a delete on the web
+    const ev = { id, version: row.version, deleted: true }
+    ctx().bus.publish(row.workspaceId, 'project', ev, { id, inline: ev })
+    return c.json({ ok: true })
+  }
   const cur = await loadProjectRow(id)
   const edited = cur.version !== b.baseVersion
   throw new HttpError(409, 'conflict', edited ? 'The project was edited in the cloud since this computer last saw it' : 'The project was taken out of the trash in the cloud', {

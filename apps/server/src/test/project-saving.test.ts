@@ -23,6 +23,20 @@ function projectVersions(workspaceId: string, id: string): { versions: number[];
   return { versions, off }
 }
 
+describe('a delete from a desktop', () => {
+  it('tells open screens, like a delete on the web', async () => {
+    const { client, workspaceId } = await signup(t.app)
+    const { project, version } = (await client.json('POST', '/api/projects', { workspaceId, name: 'Gone' })).body
+    const seen: Array<{ id: string; deleted?: boolean }> = []
+    const off = ctx().bus.subscribe(workspaceId, (e) => {
+      if (e.event === 'project') seen.push(e.data as { id: string; deleted?: boolean })
+    })
+    expect((await client.json('POST', `/api/sync/projects/${project.id}/delete`, { baseVersion: version })).status).toBe(200)
+    off()
+    expect(seen).toContainEqual(expect.objectContaining({ id: project.id, deleted: true }))
+  })
+})
+
 describe('an editor save and the Producer AI draft', () => {
   it('keeps the stored draft when an editor with an older copy saves over a conflict', async () => {
     const { client, workspaceId } = await signup(t.app)
