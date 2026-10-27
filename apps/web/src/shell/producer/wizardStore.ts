@@ -153,7 +153,7 @@ export async function uploadToWizard(workspaceId: string, files: File[]) {
     items.map(async ({ file, localId }) => {
       try {
         const rec = await api.upload(workspaceId, file, (f) => patchAsset(localId, { progress: f }))
-        patchAsset(localId, { assetId: rec.asset.id, status: rec.status === 'ready' ? 'ready' : 'processing', progress: 1, duration: rec.asset.duration })
+        patchAsset(localId, { assetId: rec.asset.id, status: rec.status === 'ready' ? 'ready' : 'processing', progress: 1, duration: rec.asset.duration, hasAudio: rec.asset.hasAudio })
         if (rec.status !== 'ready') await waitAsset(localId, rec.asset.id)
       } catch (e) {
         patchAsset(localId, { status: 'error', error: errMsg(e) })
@@ -166,7 +166,7 @@ async function waitAsset(localId: string, assetId: string) {
   const { patchAsset } = scoped()
   try {
     const ready = await waitForAssetReady(assetId)
-    patchAsset(localId, { status: 'ready', duration: ready.asset.duration, name: ready.asset.name })
+    patchAsset(localId, { status: 'ready', duration: ready.asset.duration, hasAudio: ready.asset.hasAudio, name: ready.asset.name })
   } catch (e) {
     patchAsset(localId, { status: 'error', error: errMsg(e) })
   }
@@ -183,7 +183,7 @@ export function addLibraryAssets(recs: AssetRecord[], workspaceId?: string) {
     const have = new Set(s.assets.map((a) => a.assetId))
     const add = recs
       .filter((r) => !have.has(r.asset.id))
-      .map((r) => ({ localId: r.asset.id, assetId: r.asset.id, name: r.asset.name, size: r.asset.sizeBytes ?? 0, status: r.status === 'ready' ? ('ready' as const) : r.status === 'error' ? ('error' as const) : ('processing' as const), progress: 1, duration: r.asset.duration }))
+      .map((r) => ({ localId: r.asset.id, assetId: r.asset.id, name: r.asset.name, size: r.asset.sizeBytes ?? 0, status: r.status === 'ready' ? ('ready' as const) : r.status === 'error' ? ('error' as const) : ('processing' as const), progress: 1, duration: r.asset.duration, hasAudio: r.asset.hasAudio }))
     return { ...(s.workspaceId || !workspaceId ? {} : { workspaceId }), assets: [...s.assets, ...add] }
   })
   for (const r of recs) if (r.status !== 'ready' && r.status !== 'error') void waitAsset(r.asset.id, r.asset.id)
@@ -230,7 +230,10 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
     s = get()
     // from an idea there's nothing to transcribe: straight to the script
     const ids = isIdea(s) ? [] : readyAssetIds(s)
-    const todo = ids.filter((id) => !s.transcribed.includes(id))
+    // a recording with no sound is footage only: there's nothing to transcribe (the script step skips it too)
+    const silent = ids.filter((id) => !s.transcribed.includes(id) && s.assets.find((a) => a.assetId === id)?.hasAudio === false)
+    if (silent.length) patch((st) => ({ transcribed: [...st.transcribed, ...silent] }))
+    const todo = ids.filter((id) => !s.transcribed.includes(id) && !silent.includes(id))
     for (let i = 0; i < todo.length; i++) {
       if (signal.aborted) throw new DOMException('Cancelled', 'AbortError')
       const id = todo[i]

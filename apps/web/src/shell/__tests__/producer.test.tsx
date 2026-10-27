@@ -8,7 +8,7 @@ import { api, HttpError } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import ProducerWizard from '../producer/ProducerWizard'
 import { canAdvance, initialState, sanitizeForResume, staleBriefFields, wizardWorkspace, type WizardState } from '../producer/wizardLogic'
-import { addLibraryAssets, markDraftSaved, resumeDraft, runAssemble, uploadToWizard, useWizard } from '../producer/wizardStore'
+import { addLibraryAssets, markDraftSaved, resumeDraft, runAssemble, runGenerate, uploadToWizard, useWizard } from '../producer/wizardStore'
 
 // the first render of the whole wizard is slow on a cold module graph
 vi.setConfig({ testTimeout: 30_000 })
@@ -201,5 +201,19 @@ describe('re-assembling over edits asks first (APP-7)', () => {
     expect(screen.getByRole('button', { name: /Assemble into a copy/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Replace the timeline/ }))
     await waitFor(() => expect(assemble).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'p1', replace: true })))
+  })
+})
+
+describe('recordings with no sound (PIP-1)', () => {
+  it('are not sent for transcription; the script is still written from every recording', async () => {
+    const ready = (assetId: string, hasAudio?: boolean) => ({ localId: assetId, assetId, name: `${assetId}.mp4`, size: 1, status: 'ready' as const, progress: 1, hasAudio })
+    load(wizard({ step: 'upload', scenes: [], transcribed: [], assets: [ready('screen', false), ready('talk', true)] }))
+    const transcribe = vi.spyOn(api, 'transcribe').mockResolvedValue(job({ id: 'j_stt', kind: 'ai.transcribe' }))
+    const script = vi.spyOn(api, 'produceScript').mockResolvedValue(job({ id: 'j_script', kind: 'ai.produce.script' }))
+    vi.mocked(api.job).mockImplementation(async (id: string) => (id === 'j_script' ? job({ id, result: { script: { scenes: [scene('s01')] } } }) : job({ id })))
+    await runGenerate('ws_a')
+    expect(transcribe.mock.calls.map((c) => c[0])).toEqual(['talk'])
+    expect(script.mock.calls[0][0]).toMatchObject({ assetIds: ['screen', 'talk'] })
+    expect(st()).toMatchObject({ step: 'review', transcribed: expect.arrayContaining(['screen', 'talk']), run: { status: 'done' } })
   })
 })

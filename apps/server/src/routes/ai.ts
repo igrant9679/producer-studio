@@ -20,7 +20,7 @@ import { runAssistant } from '../ai/assistant'
 import { requireProvider } from '../ai/provider'
 import { ensureTranscript, synthesizeToAsset } from '../ai/speech'
 import { tts, validVoice } from '../ai/tts'
-import { whisperAvailable } from '../ai/whisper'
+import { whisperAvailable, whisperLanguage } from '../ai/whisper'
 import { enqueueRelay } from '../services/voice'
 import { generationCapabilities } from '../ai/generate'
 import { type AssembleJobInput, MAX_AI_CLIPS, allowedVisualKinds, editedSinceAssembly, saveOnLatest, timelineFingerprint } from '../ai/produce'
@@ -34,7 +34,11 @@ aiRoutes.post('/transcribe', async (c) => {
   const b = await body(c, z.object({ assetId: z.string().min(1), language: z.string().max(10).optional() }))
   const a = await loadAsset(b.assetId)
   await requireRole(u.id, a.workspaceId, 'editor')
-  if (!whisperAvailable()) throw new HttpError(503, 'server', 'Transcription is not configured on this server')
+  // a clip with no sound gets its empty transcript without whisper
+  if (a.meta?.hasAudio !== false) {
+    if (!whisperAvailable()) throw new HttpError(503, 'server', 'Transcription is not configured on this server')
+    whisperLanguage(b.language) // a language the model can't hear is refused now, not in the job
+  }
   await assertQueueRoom(a.workspaceId)
   const j = await enqueue('ai.transcribe', b, { workspaceId: a.workspaceId, userId: u.id, projectId: a.projectId, message: `Transcribing ${a.name}` })
   return c.json(jobDto(j))

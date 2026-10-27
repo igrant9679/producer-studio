@@ -6,7 +6,7 @@ import { assetRecord } from '../dto'
 import type { JobContext } from '../jobs/worker'
 import { processAsset } from '../media/process'
 import { type AssetRow, createAssetFromFile, loadAsset, localSource, mergeAssetMeta, tmpDir } from '../services/assets'
-import { transcribeFile } from './whisper'
+import { silentTranscript, transcribeFile } from './whisper'
 import { tts, validVoice } from './tts'
 import { synthesizeProfileToAsset } from '../services/voice'
 
@@ -15,6 +15,13 @@ type Step = Pick<JobContext, 'signal' | 'progress' | 'check'>
 export async function transcribeAsset(assetId: string, language: string | undefined, jc: Step): Promise<{ asset: AssetRow; transcript: Transcript }> {
   const row = await loadAsset(assetId)
   if (row.kind === 'image') throw new Error('Images have no speech to transcribe')
+  if (row.meta?.hasAudio === false) {
+    // processing found no sound track (a screen recording without a microphone): nothing to hear
+    const transcript = silentTranscript(language)
+    const asset = await mergeAssetMeta(assetId, { transcript })
+    jc.progress(1, 'No sound to transcribe')
+    return { asset, transcript }
+  }
   const work = tmpDir(`stt-${assetId}`)
   try {
     jc.progress(0.02, 'Extracting audio')

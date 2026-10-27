@@ -20,6 +20,8 @@ export interface WizardAsset {
   status: 'uploading' | 'processing' | 'ready' | 'error'
   progress: number
   duration?: number
+  /** false: no sound track (a screen recording without a microphone): nothing to transcribe. */
+  hasAudio?: boolean
   error?: string
 }
 
@@ -258,7 +260,7 @@ export function stateFromProject(res: ProjectDocResponse): WizardState {
   for (const a of Object.values(project.assets ?? {})) if (a.kind === 'video' && !ids.size) ids.add(a.id)
   const assets: WizardAsset[] = [...ids].map((id) => {
     const a = project.assets?.[id]
-    return { localId: id, assetId: id, name: a?.name ?? 'Recording', size: a?.sizeBytes ?? 0, status: 'ready', progress: 1, duration: a?.duration }
+    return { localId: id, assetId: id, name: a?.name ?? 'Recording', size: a?.sizeBytes ?? 0, status: 'ready', progress: 1, duration: a?.duration, hasAudio: a?.hasAudio }
   })
   const brief: Brief = ai.brief ?? { ...defaultBrief(), title: summary.name }
   const status = ai.status
