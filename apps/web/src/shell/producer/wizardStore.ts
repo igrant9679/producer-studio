@@ -4,6 +4,7 @@
 import type { AssetRecord, Job } from '@producer/core'
 import { create } from 'zustand'
 import { api, HttpError, waitForJob } from '../../lib/api'
+import { onUserReset } from '../../lib/session'
 import { useJobs, waitForAssetReady } from '../stores'
 import { aspectFor, ssSet } from '../util'
 import { draftKey, isIdea, readyAssetIds, storageKey, type WizardAsset, type WizardState, initialState } from './wizardLogic'
@@ -25,6 +26,9 @@ export const useWizard = create<WizardStore>((set) => ({
 
 // Bumped whenever a different wizard session is loaded, so stale async work can't write into it.
 let epoch = 0
+
+// a wizard in progress belongs to whoever started it (lib/session clears the ps.producer.* copies)
+onUserReset(() => useWizard.getState().replace(initialState()))
 
 useWizard.subscribe((st, prev) => {
   if (st.s === prev.s) return

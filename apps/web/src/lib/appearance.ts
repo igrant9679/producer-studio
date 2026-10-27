@@ -10,7 +10,7 @@
 import { DEFAULT_PREFERENCES, TEXT_SCALE, normalizePreferences, type PreferencesResponse, type ThemePreference, type UserPreferences } from '@producer/core'
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { api } from './api'
-import { useSession } from './session'
+import { beforeSignOut, onUserReset, useSession } from './session'
 import { toast } from './toast'
 
 export const STORAGE_KEY = 'ps.appearance'
@@ -213,6 +213,18 @@ export function applyServer(res: PreferencesResponse) {
   useAppearance.setState({ prefs: normalizePreferences(res.preferences), changedAt: res.updatedAt, dirty: false })
   commit()
 }
+
+// A change not yet saved goes to the account it was made in, before that person signs out; whatever is still
+// unsaved after that stays on this device only, so it never lands in the next person's account.
+beforeSignOut(() => saveNow())
+onUserReset(() => {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = undefined
+  if (useAppearance.getState().dirty) {
+    useAppearance.setState({ dirty: false })
+    commit()
+  }
+})
 
 // ---------------- bootstrap ----------------
 let started = false

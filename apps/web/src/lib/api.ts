@@ -47,6 +47,18 @@ export class HttpError extends Error {
   }
 }
 
+let onUnauthorized: (() => void) | undefined
+
+/** lib/session listens here: a 401 may mean the session ended. */
+export function setUnauthorizedHandler(fn: (() => void) | undefined) {
+  onUnauthorized = fn
+}
+
+/** Call after any /api response: a 401 outside sign-in itself has the session checked (it may have expired). */
+export function noteStatus(path: string, status: number) {
+  if (status === 401 && !path.startsWith('/auth/')) onUnauthorized?.()
+}
+
 async function req<T>(method: string, path: string, body?: unknown, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
@@ -55,6 +67,7 @@ async function req<T>(method: string, path: string, body?: unknown, init: Reques
     body: body !== undefined ? JSON.stringify(body) : undefined,
     ...init,
   })
+  noteStatus(path, res.status)
   if (!res.ok) {
     let err: ApiError = { error: res.statusText }
     try {
@@ -84,6 +97,7 @@ export async function postStream(path: string, body: unknown, onEvent: (event: s
     body: JSON.stringify(body),
     signal,
   })
+  noteStatus(path, res.status)
   if (!res.ok || !res.body) {
     let err: ApiError = { error: res.statusText }
     try {

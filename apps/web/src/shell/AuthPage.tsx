@@ -47,6 +47,7 @@ function authErrorMessage(err: unknown, mode: 'login' | 'signup'): string {
 
 export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
   const status = useSession((s) => s.status)
+  const signedOutReason = useSession((s) => s.signedOutReason)
   const login = useSession((s) => s.login)
   const signup = useSession((s) => s.signup)
   const [params] = useSearchParams()
@@ -121,6 +122,11 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
           {serverError && (
             <div className="ps-alert" role="alert" style={{ marginBottom: 16 }}>
               {serverError}
+            </div>
+          )}
+          {!serverError && signedOutReason && mode === 'login' && (
+            <div className="ps-alert info" role="status" style={{ marginBottom: 16 }}>
+              {signedOutReason === 'expired' ? 'Your session ended. Sign in again to pick up where you left off.' : 'You signed out in another tab.'}
             </div>
           )}
 
