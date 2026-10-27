@@ -29,6 +29,8 @@ export interface EditorState {
   demo: boolean
   projectId: string
   workspaceId?: string
+  /** Counts loads: answers that arrive after another project (or the same one again) was opened are dropped. */
+  session: number
   project: Project
   /** Server version of the last saved document. */
   version: number
@@ -102,6 +104,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   loaded: false,
   demo: false,
   projectId: '',
+  session: 0,
   project: emptyProject(),
   version: 0,
   history: { past: [], future: [] },
@@ -134,6 +137,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       projectId,
       demo,
       workspaceId,
+      session: get().session + 1,
       history: { past: [], future: [] },
       lastCommit: null,
       selection: [],

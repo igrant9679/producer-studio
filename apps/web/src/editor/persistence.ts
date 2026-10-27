@@ -9,20 +9,25 @@ import { useEditor } from './store'
 
 export const AUTOSAVE_MS = 1200
 
+let loading = 0
+
 export async function loadInto(projectId: string, demo: boolean) {
+  const ticket = ++loading
   if (demo) {
     const project = loadDemoProject()
     useEditor.getState().load({ project, version: 0, projectId: 'demo', demo: true })
     return
   }
   const res = await api.project(projectId)
+  // another project was opened while this one was on its way
+  if (ticket !== loading) return
   useEditor.getState().load({ project: res.project, version: res.version, projectId, demo: false, workspaceId: res.summary.workspaceId })
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined
 let inflight: Promise<void> | null = null
-/** Highest server version announced over SSE while a save of ours was in flight. */
-let pendingRemote: number | null = null
+/** Highest server version announced over SSE while a save of ours was in flight, and the visit it was for. */
+let pendingRemote: { session: number; version: number } | null = null
 
 async function saveNow(force = false): Promise<void> {
   const s = useEditor.getState()
@@ -35,15 +40,19 @@ async function saveNow(force = false): Promise<void> {
   if (s.saveState === 'conflict' && !force) return
   if (s.saveState === 'saved' && !force) return
   const project = s.project
+  const session = s.session
   const base = force && s.conflictVersion !== undefined ? s.conflictVersion : s.version
   useEditor.setState({ saveState: 'saving' })
   try {
     const r = await api.saveProject(s.projectId, project, base)
     const now = useEditor.getState()
+    // another project, or this one again, was opened meanwhile: its own load and live updates are what count
+    if (now.session !== session) return
     const changed = now.project !== project
     useEditor.setState({ version: r.version, conflictVersion: undefined, conflictProject: undefined, saveState: changed ? 'dirty' : 'saved' })
     if (changed) schedule()
   } catch (e) {
+    if (useEditor.getState().session !== session) return
     if (e instanceof HttpError && e.status === 409) {
       const d = (e.body.details ?? {}) as { version?: number; project?: Project }
       useEditor.setState({ saveState: 'conflict', conflictVersion: d.version, conflictProject: d.project })
@@ -71,9 +80,10 @@ export async function flush(force = false): Promise<void> {
     inflight = null
     // an SSE event arrived mid-save: if it announced a version newer than the one we just wrote, handle it now
     if (pendingRemote !== null) {
-      const v = pendingRemote
+      const { session, version } = pendingRemote
       pendingRemote = null
-      void onProjectEvent({ id: useEditor.getState().projectId, version: v })
+      const s = useEditor.getState()
+      if (s.session === session) void onProjectEvent({ id: s.projectId, version })
     }
   })
   return inflight
@@ -102,7 +112,7 @@ export async function reloadTheirs() {
   const s = useEditor.getState()
   if (s.conflictProject && s.conflictVersion !== undefined) return adoptServerDoc(s.conflictProject, s.conflictVersion)
   const res = await api.project(s.projectId)
-  adoptServerDoc(res.project, res.version)
+  if (useEditor.getState().session === s.session) adoptServerDoc(res.project, res.version)
 }
 
 /** Conflict: overwrite the server copy with the local document. */
@@ -111,6 +121,7 @@ export async function overwriteServer() {
   if (s.conflictVersion === undefined) {
     // conflict detected over SSE without a version in hand: fetch it
     const res = await api.project(s.projectId).catch(() => null)
+    if (useEditor.getState().session !== s.session) return
     if (res) useEditor.setState({ conflictVersion: res.version })
   }
   await flush(true)
@@ -128,7 +139,7 @@ export async function keepBoth(): Promise<string> {
   const doc: Project = { ...s.project, id: created.project.id, name }
   await api.saveProject(created.project.id, doc, created.version)
   // leave the original untouched: don't let the unmount flush retry our conflicting save
-  useEditor.setState({ saveState: 'saved', conflictVersion: undefined, conflictProject: undefined })
+  if (useEditor.getState().session === s.session) useEditor.setState({ saveState: 'saved', conflictVersion: undefined, conflictProject: undefined })
   return created.project.id
 }
 
@@ -142,12 +153,13 @@ export async function onProjectEvent(ev: { id: string; version: number }) {
   if (s.demo || !s.loaded || ev.id !== s.projectId || ev.version <= s.version) return
   if (inflight) {
     // probably our own save echoing back; decide once it resolves
-    pendingRemote = Math.max(pendingRemote ?? 0, ev.version)
+    pendingRemote = { session: s.session, version: Math.max(pendingRemote?.session === s.session ? pendingRemote.version : 0, ev.version) }
     return
   }
   if (s.saveState === 'saved') {
     try {
       const res = await api.project(s.projectId)
+      if (useEditor.getState().session !== s.session) return
       // edits may have started while fetching
       if (useEditor.getState().saveState === 'saved' && res.version > useEditor.getState().version) adoptServerDoc(res.project, res.version)
       else if (res.version > useEditor.getState().version) useEditor.setState({ saveState: 'conflict', conflictVersion: res.version, conflictProject: res.project })
