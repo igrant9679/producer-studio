@@ -1,5 +1,5 @@
 // Project persistence helpers shared by routes and jobs (save with optimistic concurrency, hydrate assets).
-import { and, eq, inArray, isNotNull } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import { projectDuration, uid, type Project } from '@producer/core'
 import { ctx } from '../context'
@@ -101,10 +101,11 @@ export async function saveProjectDoc(id: string, doc: Project, baseVersion?: num
   const now = Date.now()
   const thumbnail = await deriveThumbnail(p, row.workspaceId)
   const cond = baseVersion === undefined ? eq(projects.id, id) : and(eq(projects.id, id), eq(projects.version, baseVersion))
-  const nextVersion = (baseVersion ?? row.version) + 1
+  // unconditional saves bump the stored version, not the one read above, so two writes never share a version
+  const version = baseVersion === undefined ? sql`${projects.version} + 1` : baseVersion + 1
   const updated = await ctx()
     .db.update(projects)
-    .set({ doc: { ...p, updatedAt: now }, version: baseVersion === undefined ? row.version + 1 : nextVersion, ...derived(p), thumbnail, updatedAt: now })
+    .set({ doc: { ...p, updatedAt: now }, version, ...derived(p), thumbnail, updatedAt: now })
     .where(cond)
     .returning()
   if (!updated.length) {

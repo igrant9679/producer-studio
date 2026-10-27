@@ -25,12 +25,12 @@ export function TopBar() {
   const [draft, setDraft] = useState(name)
   useEffect(() => setDraft(name), [name])
 
+  // an ordinary edit: the autosave carries the name with the document's base version, so it can't race itself
   const rename = () => {
     const v = draft.trim() || 'Untitled project'
     if (v === name) return setDraft(v)
     const s = useEditor.getState()
     s.commit(updateProject(s.project, { name: v }), 'Rename project')
-    if (!s.demo) void api.patchProject(s.projectId, { name: v }).catch(() => undefined)
   }
 
   const share = async () => {

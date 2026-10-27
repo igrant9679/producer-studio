@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { and, desc, eq, isNotNull, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import * as z from 'zod/v4'
 import { createProject, uid, type Project, type ProjectDocResponse } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
@@ -127,17 +128,19 @@ projectRoutes.patch('/:id', async (c) => {
   const row = await loadProjectRow(id)
   await requireRole(u.id, row.workspaceId, 'editor')
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), trashed: z.boolean().optional(), isTemplate: z.boolean().optional() }))
-  const set: Partial<typeof projects.$inferInsert> = { updatedAt: Date.now() }
+  const now = Date.now()
+  const set: PgUpdateSetSource<typeof projects> = { updatedAt: now }
   if (b.name !== undefined) {
+    // one statement on the stored row: a save landing after our read is kept, and its version is never reused
     set.name = b.name
-    set.doc = { ...row.doc, name: b.name }
-    set.version = row.version + 1
+    set.doc = sql`jsonb_set(jsonb_set(${projects.doc}, '{name}', to_jsonb(${b.name}::text)), '{updatedAt}', to_jsonb(${now}::bigint))`
+    set.version = sql`${projects.version} + 1`
   }
-  if (b.trashed !== undefined) set.trashedAt = b.trashed ? Date.now() : null
+  if (b.trashed !== undefined) set.trashedAt = b.trashed ? now : null
   if (b.isTemplate !== undefined) set.isTemplate = b.isTemplate
   const [updated] = await ctx().db.update(projects).set(set).where(eq(projects.id, id)).returning()
-  if (set.version) ctx().bus.publish(updated.workspaceId, 'project', { id, version: updated.version }, { id, inline: { id, version: updated.version } })
-  return c.json(projectSummary(updated))
+  if (b.name !== undefined) ctx().bus.publish(updated.workspaceId, 'project', { id, version: updated.version }, { id, inline: { id, version: updated.version } })
+  return c.json({ ...projectSummary(updated), version: updated.version })
 })
 
 projectRoutes.post('/:id/duplicate', async (c) => {
