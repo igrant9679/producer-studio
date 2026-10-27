@@ -18,6 +18,7 @@ import {
   mainTrack,
   moveItem,
   separateAudio,
+  separateAudioRefusal,
   setKeyframe,
   splitAt,
   splitItem,
@@ -153,6 +154,32 @@ describe('trim below zero (EDT-35)', () => {
     // the frame at the old start (source 8 at time 5) is still at time 5
     expect((item(r, 'late') as VideoItem).in).toBe(3)
     expect(item(r, 'late').duration).toBe(7)
+  })
+})
+
+describe('separate audio (EDT-21)', () => {
+  it('refuses a clip whose audio is already separated, so no second copy plays on top', () => {
+    const p = separateAudio(twoClips(), 'va')
+    expect(separateAudioRefusal(p, 'va')).toBe('separated')
+    expect(separateAudio(p, 'va')).toBe(p)
+    expect(p.tracks.filter((t) => t.kind === 'audio').flatMap((t) => t.items)).toHaveLength(1)
+  })
+
+  it('refuses a freeze frame and a reversed clip, which play no sound', () => {
+    const frozen = freezeFrame(twoClips(), 'va', 4)
+    const hold = mainTrack(frozen)!.items.find((i) => (i as VideoItem).freezeAt !== undefined)!
+    expect(separateAudio(frozen, hold.id)).toBe(frozen)
+    expect(separateAudioRefusal(frozen, hold.id)).toBe('freeze')
+    const reversed = updateItem<VideoItem>(twoClips(), 'va', { reverse: true })
+    expect(separateAudio(reversed, 'va')).toBe(reversed)
+  })
+
+  it('still separates the right half of a split clip whose left half was separated', () => {
+    const p = splitItem(separateAudio(twoClips(), 'va'), 'va', 4).project
+    // the split cut the linked audio too, so both halves already have theirs
+    const right = mainTrack(p)!.items[1]
+    expect(separateAudioRefusal(p, right.id)).toBe('separated')
+    expect(separateAudioRefusal(p, 'vb')).toBeNull()
   })
 })
 

@@ -20,6 +20,7 @@ import {
   projectDuration,
   sampleKeyframes,
   separateAudio,
+  separateAudioRefusal,
   setKeyframe,
   splitAt,
   updateItem,
@@ -120,8 +121,15 @@ export function separate() {
   if (!editableIds(vids.map((v) => v.id)).length) return
   let p = S().project
   for (const v of vids) p = separateAudio(p, v.id)
-  if (p === S().project) return toast('This clip has no audio to separate')
+  if (p === S().project) return toast(SEPARATE_REFUSED[separateAudioRefusal(p, vids[0].id) ?? ''] ?? SEPARATE_REFUSED['no-audio'])
   S().commit(p, 'Separate audio')
+}
+
+const SEPARATE_REFUSED: Record<string, string> = {
+  'no-audio': 'This clip has no audio to separate',
+  freeze: 'A freeze frame has no sound to separate',
+  reversed: 'A reversed clip plays silent, so there is no sound to separate',
+  separated: "This clip's audio is already on its own track",
 }
 
 /**

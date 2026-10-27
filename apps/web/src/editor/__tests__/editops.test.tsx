@@ -26,6 +26,18 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
+describe('separate audio (EDT-21)', () => {
+  it('a second Separate says the audio is already separated and adds nothing', () => {
+    S().select(['v1'])
+    A.separate()
+    const once = S().project
+    expect(once.tracks.filter((t) => t.kind === 'audio')).toHaveLength(1)
+    A.separate()
+    expect(S().project).toBe(once)
+    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("This clip's audio is already on its own track")
+  })
+})
+
 describe('context-menu actions (EDT-33)', () => {
   it('Freeze frame acts on the clip right-clicked, not the one under the playhead', () => {
     S().select(['v1'])

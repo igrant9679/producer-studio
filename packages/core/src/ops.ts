@@ -535,13 +535,27 @@ export function removeKeyframe(p0: Project, itemId: string, prop: AnimProp, loca
   return touch(p)
 }
 
+/** Why a clip's audio can't be separated, or null when it can. */
+export function separateAudioRefusal(p: Project, itemId: string): 'locked' | 'not-video' | 'no-audio' | 'freeze' | 'reversed' | 'separated' | null {
+  const f = findItem(p, itemId)
+  if (!f || f.item.type !== 'video') return 'not-video'
+  if (!editable(f)) return 'locked'
+  const v = f.item
+  const asset = p.assets[v.assetId]
+  if (!asset || asset.hasAudio === false) return 'no-audio'
+  // a freeze frame and a reversed clip play no sound (a freeze used to get 2 s of unrelated audio)
+  if (v.freezeAt !== undefined) return 'freeze'
+  if (v.reverse) return 'reversed'
+  // separating again would add a second copy playing on top of the first
+  if (v.linkId && p.tracks.some((t) => t.items.some((i) => i.type === 'audio' && i.linkId === v.linkId))) return 'separated'
+  return null
+}
+
 /** Detach a video's audio onto an audio track as a linked item; mutes the video. */
 export function separateAudio(p0: Project, itemId: string): Project {
-  const f = findItem(p0, itemId)
-  if (!editable(f) || f.item.type !== 'video') return p0
-  const v = f.item
+  if (separateAudioRefusal(p0, itemId)) return p0
+  const v = findItem(p0, itemId)!.item as VideoItem
   const asset = p0.assets[v.assetId]
-  if (!asset || asset.hasAudio === false) return p0
   const linkId = v.linkId ?? uid('l')
   const audio = createAudioItem(asset, v.start, { in: v.in, speed: v.speed, duration: v.duration, volume: v.volume, fadeIn: v.fadeIn, fadeOut: v.fadeOut, linkId, name: `${v.name ?? asset.name} audio` })
   let p = updateItem<VideoItem>(p0, itemId, { muted: true, linkId })
