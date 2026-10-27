@@ -244,6 +244,24 @@ function mediaSpan(p: Project, it: Item): { in: number; speed: number; max: numb
   return { in: it.in, speed: it.speed, max }
 }
 
+/** A reversed clip plays its source range backwards: its first frame is the end of the range, its last is `in`. */
+function isReversed(it: Item): boolean {
+  return it.type === 'video' && !!it.reverse && it.freezeAt === undefined
+}
+
+/** Source time a video/audio item shows at timeline time t. */
+function sourceAt(it: VideoItem | AudioItem, t: number): number {
+  if (it.type === 'video' && it.freezeAt !== undefined) return it.freezeAt
+  const local = (t - it.start) * it.speed
+  return isReversed(it) ? it.in + it.duration * it.speed - local : it.in + local
+}
+
+/** Timeline time at which a video/audio item shows source time `src`. */
+function timeAt(it: VideoItem | AudioItem, src: number): number {
+  const local = isReversed(it) ? it.in + it.duration * it.speed - src : src - it.in
+  return it.start + local / it.speed
+}
+
 /**
  * Trim an edge to timeline time `t`. Media items can't be extended past their source bounds.
  * Main-track trims ripple (the track re-packs).
@@ -255,14 +273,22 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
   const it = f.item
   const minDur = 1 / p.fps
   const span = mediaSpan(p, it)
+  const frozen = it.type === 'video' && it.freezeAt !== undefined
   if (edge === 'end') {
     let dur = Math.max(minDur, t - it.start)
-    if (span && (it.type === 'video' ? !(it as VideoItem).freezeAt : true)) dur = Math.min(dur, (span.max - span.in) / span.speed)
+    if (span && isReversed(it)) {
+      // the end of a reversed clip is the start of its range: trimming it moves `in`, extending needs source before it
+      dur = Math.min(dur, it.duration + span.in / span.speed)
+      ;(it as VideoItem).in = round(Math.max(0, span.in + (it.duration - dur) * span.speed), 4)
+    } else if (span && !frozen) dur = Math.min(dur, (span.max - span.in) / span.speed)
     it.duration = round(dur, 4)
   } else {
     const end = itemEnd(it)
     let start = Math.min(t, end - minDur)
-    if (span) {
+    if (span && isReversed(it)) {
+      // the start of a reversed clip is the end of its range: `in` stays, extending needs source after the range
+      start = Math.max(start, it.start - (span.max - span.in - it.duration * span.speed) / span.speed)
+    } else if (span) {
       // moving the start later advances `in`; earlier needs source headroom
       const deltaSrc = (start - it.start) * span.speed
       const newIn = span.in + deltaSrc
@@ -334,13 +360,16 @@ function cutAt(p: Project, track: Track, index: number, t: number): Item | null 
   const local = t - it.start
   if (local <= 1 / p.fps || local >= it.duration - 1 / p.fps) return null
   const right = clone(it)
+  const rest = it.duration - local
   right.id = uid(it.id.split('_')[0] || 'i')
   right.start = round(t, 4)
-  right.duration = round(it.duration - local, 4)
+  right.duration = round(rest, 4)
   it.duration = round(local, 4)
   if (it.type === 'video' || it.type === 'audio') {
     const r = right as VideoItem | AudioItem
-    if (!(it.type === 'video' && it.freezeAt !== undefined)) r.in = round(it.in + local * it.speed, 4)
+    // a reversed clip shows the later part of its range first, so the left piece takes that part
+    if (isReversed(it)) (it as VideoItem).in = round(it.in + rest * it.speed, 4)
+    else if (!(it.type === 'video' && it.freezeAt !== undefined)) r.in = round(it.in + local * it.speed, 4)
     r.fadeIn = 0
     ;(it as VideoItem | AudioItem).fadeOut = 0
   }
@@ -483,7 +512,7 @@ export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2)
   const f = findItem(p0, itemId)
   if (!f || f.item.type !== 'video') return p0
   const v = f.item
-  const srcTime = v.in + (t - v.start) * v.speed
+  const srcTime = sourceAt(v, t)
   const { project: split, rightId } = splitItem(p0, itemId, t)
   const p = clone(split)
   // the held picture has no sound, so it is linked to nothing
@@ -597,6 +626,8 @@ export function itemWords(p: Project, itemId: string): Array<TranscriptWord & { 
   const f = findItem(p, itemId)
   if (!f || (f.item.type !== 'video' && f.item.type !== 'audio')) return []
   const it = f.item
+  // a freeze frame holds one picture and plays no sound
+  if (it.type === 'video' && it.freezeAt !== undefined) return []
   const tr = p.assets[it.assetId]?.transcript
   if (!tr) return []
   const srcEnd = it.in + it.duration * it.speed
@@ -604,9 +635,11 @@ export function itemWords(p: Project, itemId: string): Array<TranscriptWord & { 
   for (const seg of tr.segments)
     for (const w of seg.words) {
       if (w.end <= it.in || w.start >= srcEnd) continue
-      out.push({ w: w.w, srcStart: w.start, srcEnd: w.end, start: round(it.start + (w.start - it.in) / it.speed, 4), end: round(it.start + (w.end - it.in) / it.speed, 4) })
+      const a = timeAt(it, w.start)
+      const b = timeAt(it, w.end)
+      out.push({ w: w.w, srcStart: w.start, srcEnd: w.end, start: round(Math.min(a, b), 4), end: round(Math.max(a, b), 4) })
     }
-  return out
+  return isReversed(it) ? out.reverse() : out
 }
 
 /**
@@ -616,6 +649,8 @@ export function itemWords(p: Project, itemId: string): Array<TranscriptWord & { 
 export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ start: number; end: number }>): Project {
   const f = findItem(p0, itemId)
   if (!f || (f.item.type !== 'video' && f.item.type !== 'audio')) return p0
+  // a freeze frame has no source range to cut (pause removal used to cut pieces out of it)
+  if (f.item.type === 'video' && f.item.freezeAt !== undefined) return p0
   const it0 = f.item
   const trackId = f.track.id
   const sorted = [...ranges].filter((r) => r.end - r.start > 0.01).sort((a, b) => b.start - a.start) // right to left keeps earlier times valid
@@ -629,8 +664,10 @@ export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ sta
     })
     if (!pieceId) continue
     const piece = findItem(p, pieceId)!.item as VideoItem | AudioItem
-    const tStart = Math.max(piece.start, piece.start + (r.start - piece.in) / piece.speed)
-    const tEnd = Math.min(itemEnd(piece), piece.start + (r.end - piece.in) / piece.speed)
+    // a reversed piece shows the range's end first
+    const at = [timeAt(piece, r.start), timeAt(piece, r.end)]
+    const tStart = Math.max(piece.start, Math.min(...at))
+    const tEnd = Math.min(itemEnd(piece), Math.max(...at))
     let midId = pieceId
     const a = splitItem(p, pieceId, tStart)
     if (a.rightId) {

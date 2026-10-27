@@ -493,4 +493,88 @@ describe('keyframed animation survives splits and trims (EDT-7)', () => {
     for (const t of times) expect(opacityAt(q, t)).toBeCloseTo(opacityAt(p, t), 6)
   })
 })
+describe('reversed clips (EDT-14)', () => {
+  const frameAt = (p: Project, t: number, trackId = mainTrack(p)!.id) => evaluate(p, t).layers.find((l) => l.trackId === trackId)!.mediaTime!
+  const times = [0, 0.5, 1, 2, 3.9, 4, 4.1, 5, 7, 7.9, 8.5, 9.5]
+  function reversed() {
+    const p = twoClips()
+    const id = mainTrack(p)!.items[0].id
+    return { p: updateItem<VideoItem>(p, id, { reverse: true }), id }
+  }
+
+  it('show the same footage after a split', () => {
+    const { p, id } = reversed()
+    const { project: q, rightId } = splitItem(p, id, 4)
+    for (const t of times) expect(frameAt(q, t)).toBeCloseTo(frameAt(p, t), 6)
+    expect((findItem(q, id)!.item as VideoItem).in).toBe(6) // the left piece plays the later part of the source
+    expect((findItem(q, rightId!)!.item as VideoItem).in).toBe(0)
+  })
+
+  it('show the same footage after trimming either end', () => {
+    const { p, id } = reversed()
+    const end = trimItem(p, id, 'end', 8)
+    for (const t of times.filter((t) => t < 8)) expect(frameAt(end, t)).toBeCloseTo(frameAt(p, t), 6)
+    const start = trimItem(p, id, 'start', 2)
+    for (const t of times.filter((t) => t >= 2)) expect(frameAt(start, t - 2)).toBeCloseTo(frameAt(p, t), 6)
+  })
+
+  it('extend only as far as the source reaches', () => {
+    let p = createProject()
+    p = addAsset(p, asset('a'))
+    p = addItem(p, createVideoItem(p.assets.a, 0))
+    // plays source 0..8 backwards from 5 s: 2 s of source left after the range, none before it
+    const v = createVideoItem(p.assets.a, 5, { reverse: true, duration: 8 })
+    p = addItem(p, v, 'nope')
+    const track = findItem(p, v.id)!.track.id
+    const earlier = trimItem(p, v.id, 'start', 0)
+    expect(findItem(earlier, v.id)!.item).toMatchObject({ start: 3, duration: 10, in: 0 })
+    for (const t of [5, 6, 9, 12.5]) expect(frameAt(earlier, t, track)).toBeCloseTo(frameAt(p, t, track), 6)
+    const later = trimItem(earlier, v.id, 'end', 30)
+    expect(findItem(later, v.id)!.item.duration).toBe(10)
+  })
+})
+
+describe('freeze frames and reversed clips in the transcript (EDT-17)', () => {
+  function frozen() {
+    const p0 = twoClips()
+    const p = freezeFrame(p0, mainTrack(p0)!.items[0].id, 3, 2)
+    return { p, freeze: mainTrack(p)!.items.find((i) => i.type === 'video' && i.freezeAt !== undefined)! }
+  }
+
+  it('a freeze frame has no words and gets no captions', () => {
+    const { p, freeze } = frozen()
+    expect(itemWords(p, freeze.id)).toEqual([])
+    const caps = generateCaptions(p).tracks.find((t) => t.kind === 'caption')!.items
+    expect(caps.filter((c) => c.start < 5 && itemEnd(c) > 3).map((c) => (c as CaptionItem).text)).toEqual([])
+  })
+
+  it('removing pauses leaves a freeze frame whole', () => {
+    const { p, freeze } = frozen()
+    const q = removeSilences(p, freeze.id)
+    expect(findItem(q, freeze.id)!.item.duration).toBe(2)
+    expect(projectDuration(q)).toBe(projectDuration(p))
+  })
+
+  it("puts a reversed clip's words where they are on screen", () => {
+    const p0 = twoClips()
+    const id = mainTrack(p0)!.items[0].id
+    const p = updateItem<VideoItem>(p0, id, { reverse: true })
+    const hello = itemWords(p, id).find((w) => w.w === 'hello')!
+    expect([hello.start, hello.end]).toEqual([9.4, 9.8])
+    const shown = evaluate(p, (hello.start + hello.end) / 2).layers[0].mediaTime!
+    expect(shown).toBeGreaterThan(0.2)
+    expect(shown).toBeLessThan(0.6)
+  })
+
+  it('cutting a word from a reversed clip removes the footage of that word', () => {
+    const p0 = twoClips()
+    const id = mainTrack(p0)!.items[0].id
+    const p = cutSourceRanges(updateItem<VideoItem>(p0, id, { reverse: true }), id, [{ start: 1.1, end: 1.5 }])
+    expect(projectDuration(p)).toBeCloseTo(16 - 0.4, 3)
+    const frame = (t: number) => evaluate(p, t).layers[0].mediaTime!
+    for (let t = 0; t < 9.6; t += 0.01) expect(frame(t) <= 1.1 + 1e-3 || frame(t) >= 1.5 - 1e-3).toBe(true)
+    // still backwards from the end, jumping from 1.5 straight to 1.1
+    for (const [t, m] of [[0.5, 9.5], [4, 6], [8.4, 1.6], [8.6, 1.0], [9.5, 0.1]]) expect(frame(t)).toBeCloseTo(m, 3)
+  })
+})
 
