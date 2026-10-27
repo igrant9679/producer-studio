@@ -34,6 +34,19 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('what sync kept safe', () => {
+  it('shows each notice until dismissed', async () => {
+    const message = '“Shared cut” was deleted here, but edited in the cloud since. The cloud version was kept and is back in your projects; delete it again if you still want it gone.'
+    const dismiss = vi.spyOn(systemApi, 'syncNotice').mockResolvedValueOnce(status({ notices: [] }))
+    show(status({ notices: [{ id: 'n_1', message, at: Date.now() }] }))
+    expect(screen.getByText('Kept safe')).toBeTruthy()
+    expect(screen.getByText(message)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Got it/ }))
+    await waitFor(() => expect(dismiss).toHaveBeenCalledWith('n_1', 'dismiss'))
+    await waitFor(() => expect(screen.queryByText(message)).toBeNull())
+  })
+})
+
 describe('items that keep failing to sync', () => {
   it('are counted in the summary until skipped', () => {
     expect(syncSummary(status({ failures: [failure()] }))).toEqual({ label: '1 not synced', tone: 'warn' })

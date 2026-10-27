@@ -26,7 +26,7 @@ import { log } from '../log'
 import { assetPrefix, extFor, hashObject } from '../services/assets'
 import { derived, hydrateAssets, insertProject } from '../services/projects'
 import { CloudClient, CloudError, normalizeCloudUrl } from './cloud'
-import { type FailureKind, clearFailure, clearSync, deleteSync, failureKey, failureMap, kvGet, kvSet, putSync, rawQuery, recordFailure, setFailure, syncRow, syncRows, type SyncRow } from './db'
+import { type FailureKind, addNotice, clearFailure, clearSync, deleteSync, failureKey, failureMap, kvGet, kvSet, listNotices, putSync, rawQuery, recordFailure, removeNotice, setFailure, syncRow, syncRows, type SyncRow } from './db'
 import { adoptCloudIdentity, localUserId } from './identity'
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
 import { prefetchAllMedia } from './media'
@@ -139,8 +139,15 @@ export class SyncEngine {
       pending: await this.pendingCount(rows, failures),
       conflicts: names.map((n) => ({ projectId: n.id, name: n.name, localVersion: n.version, cloudVersion: conflicted.find((c) => c.id === n.id)!.conflictVersion! })),
       failures: [...failures.values()],
+      notices: await listNotices(),
       ...(this.error ? { error: this.error } : {}),
     }
+  }
+
+  async dismissNotice(id: string): Promise<SyncStatus> {
+    if (!(await removeNotice(id))) throw new HttpError(404, 'not_found', 'That notice is gone')
+    void this.emit()
+    return this.status()
   }
 
   private async pendingCount(rows?: Map<string, SyncRow>, failures?: Map<string, SyncFailure>): Promise<number> {
@@ -577,7 +584,11 @@ export class SyncEngine {
   private async applyProject(sp: SyncProject) {
     const id = sp.project.id
     const s = await syncRow('project', id)
-    if (s?.cloudVersion != null && sp.version <= s.cloudVersion) return // already applied (or our own push)
+    if (s?.cloudVersion != null && sp.version <= s.cloudVersion) {
+      // already applied (or our own push); trash, restore and template changes don't bump the version
+      if (sp.version === s.cloudVersion) await this.applyProjectFlags(sp, s)
+      return
+    }
     if (s?.conflictVersion != null && sp.version <= s.conflictVersion) return
     const local = (await ctx().db.select().from(projects).where(eq(projects.id, id)).limit(1))[0]
     if (local && isDirty(local, s)) {
@@ -586,6 +597,28 @@ export class SyncEngine {
       return
     }
     if (!(await this.writeCloudProject(sp, local))) await putSync('project', id, { conflictVersion: sp.version })
+  }
+
+  /** Same document, new trash/template flags in the cloud: take each one unless it was toggled here since the last sync. */
+  private async applyProjectFlags(sp: SyncProject, s: SyncRow) {
+    const { trashed, isTemplate } = sp.summary
+    if (s.cloudTrashed === trashed && s.cloudTemplate === isTemplate) return
+    const local = (await ctx().db.select().from(projects).where(eq(projects.id, sp.project.id)).limit(1))[0]
+    if (!local) return // deleted here: the delete push decides
+    const set: Partial<ProjectRow> = {}
+    const localTrashed = local.trashedAt != null
+    if (localTrashed === (s.cloudTrashed ?? localTrashed) && localTrashed !== trashed) set.trashedAt = trashed ? Date.now() : null
+    if (local.isTemplate === (s.cloudTemplate ?? local.isTemplate) && local.isTemplate !== isTemplate) set.isTemplate = isTemplate
+    if (Object.keys(set).length) {
+      this.suppress++
+      try {
+        await ctx().db.update(projects).set(set).where(eq(projects.id, local.id))
+        ctx().bus.publish(local.workspaceId, 'project', { id: local.id, version: local.version })
+      } finally {
+        this.suppress--
+      }
+    }
+    await putSync('project', local.id, { cloudTrashed: trashed, cloudTemplate: isTemplate })
   }
 
   private async applyBrand(workspaceId: string, doc: BrandKitDoc) {
@@ -651,25 +684,50 @@ export class SyncEngine {
 
   private async pushDelete(c: CloudClient, kind: 'project' | 'asset' | 'voice', id: string) {
     const s = await syncRow(kind, id)
+    if (kind === 'project' && s?.cloudVersion != null) return this.pushProjectDelete(c, id, s)
     if (kind === 'voice') {
       if (s?.cloudVersion != null) {
         await c.json('DELETE', `/api/voice/profiles/${encodeURIComponent(id)}`).catch((err) => {
           if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
         })
       }
-    } else if (s && (kind === 'project' ? s.cloudVersion != null : s.uploaded)) {
-      try {
-        if (kind === 'project') {
-          await c.json('PATCH', `/api/projects/${encodeURIComponent(id)}`, { trashed: true }).catch((e) => {
-            if (!(e instanceof CloudError && e.status === 404)) throw e
-          })
-          await c.json('DELETE', `/api/projects/${encodeURIComponent(id)}`)
-        } else await c.json('DELETE', `/api/assets/${encodeURIComponent(id)}`)
-      } catch (err) {
+    } else if (s?.uploaded) {
+      await c.json('DELETE', `/api/assets/${encodeURIComponent(id)}`).catch((err) => {
         if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
-      }
+      })
     }
     if (s) await deleteSync(kind, id)
+  }
+
+  /**
+   * A project deleted here goes in the cloud only while the cloud copy is the one this computer last saw. Edited or
+   * taken out of the trash since (or no longer ours to delete): the cloud copy is kept, comes back here, and we say so.
+   */
+  private async pushProjectDelete(c: CloudClient, id: string, s: SyncRow) {
+    try {
+      await c.json('POST', `/api/sync/projects/${encodeURIComponent(id)}/delete`, { baseVersion: s.cloudVersion, trashed: s.cloudTrashed ?? undefined })
+      await deleteSync('project', id)
+    } catch (err) {
+      // gone already
+      if (err instanceof CloudError && err.status === 404) return deleteSync('project', id)
+      if (!(err instanceof CloudError && (err.status === 409 || err.status === 403))) throw err
+      const reason = err.status === 403 ? 'forbidden' : (err.body?.details as { reason?: string } | undefined)?.reason
+      const remote = await c.json<ProjectDocResponse>('GET', `/api/projects/${encodeURIComponent(id)}`).catch((e) => {
+        if (e instanceof CloudError && e.status === 404) return null
+        throw e
+      })
+      await deleteSync('project', id)
+      if (!remote || !(await this.writeCloudProject(remote, undefined))) return
+      const name = remote.summary.name
+      await addNotice(
+        reason === 'restored'
+          ? `“${name}” was taken out of the trash in the cloud after it was deleted here, so it wasn’t deleted. It’s back in your projects.`
+          : reason === 'forbidden'
+            ? `“${name}” couldn’t be deleted: you can no longer delete projects in that space. It’s back in your projects.`
+            : `“${name}” was deleted here, but edited in the cloud since. The cloud version was kept and is back in your projects; delete it again if you still want it gone.`,
+      )
+      log.info('desktop: kept a project deleted here', { projectId: id, reason })
+    }
   }
 
   private async pushAssets(c: CloudClient) {

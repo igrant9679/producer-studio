@@ -274,6 +274,7 @@
 .ps-conflict-name { margin-bottom: 8px; }
 .ps-conflict-name strong { display: block; font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ps-conflict-name span { font-size: 0.7188rem; color: var(--text-3); }
+.ps-notice-text { font-size: 0.75rem; line-height: 1.4; margin-bottom: 8px; color: var(--text-2); }
 .ps-sync-badge { position: absolute; top: 8px; right: 8px; z-index: 2; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--media-scrim); backdrop-filter: blur(4px); color: #3ddc97; }
 .ps-sync-badge.local { color: rgba(255, 255, 255, 0.8); }
 .ps-sync-badge.conflict { color: #0c0e14; background: #ffc24d; }

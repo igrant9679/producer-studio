@@ -1,7 +1,7 @@
 // Mode-aware chrome: Desktop badge, AI provider chip and the desktop sync indicator/popover.
 import type { SyncStatus } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, Cloud, CloudOff, Copy, HardDrive, RefreshCw, Settings, Sparkles } from 'lucide-react'
+import { AlertTriangle, Check, Cloud, CloudOff, Copy, HardDrive, RefreshCw, Settings, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast, toastError } from '../lib/toast'
@@ -135,6 +135,22 @@ export function SyncIndicator() {
                     </button>
                     <button className="btn sm" disabled={!!busy} onClick={() => run(`${c.projectId}:b`, () => systemApi.resolve(c.projectId, 'keep-both'), 'Kept both — the cloud copy was duplicated')} title="Keep both as separate projects">
                       {busy === `${c.projectId}:b` ? <Spinner size={12} /> : <Copy size={12} />} Both
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(sync.notices?.length ?? 0) > 0 && (
+            <div className="ps-conflicts">
+              <div className="ps-menu-label">Kept safe</div>
+              {sync.notices!.map((n) => (
+                <div key={n.id} className="ps-conflict">
+                  <div className="ps-notice-text">{n.message}</div>
+                  <div className="row" style={{ gap: 4 }}>
+                    <button className="btn ghost sm" disabled={!!busy} onClick={() => run(`${n.id}:d`, () => systemApi.syncNotice(n.id, 'dismiss'))}>
+                      {busy === `${n.id}:d` ? <Spinner size={12} /> : <Check size={12} />} Got it
                     </button>
                   </div>
                 </div>

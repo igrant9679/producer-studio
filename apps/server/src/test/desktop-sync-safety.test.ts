@@ -110,6 +110,89 @@ describe('an interrupted upload is sent again (DSK-1)', () => {
   })
 })
 
+describe('trash, restore and template changes made on the web reach the desktop (DSK-3)', () => {
+  beforeAll(linkA)
+  const local = async (id: string) => (await desk.json('GET', `/api/projects/${id}`)).body.summary
+
+  it('applies the cloud’s flag changes even though the version is unchanged', async () => {
+    const id = (await A.http.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Flags' })).body.summary.id
+    await sync()
+    await A.http.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    await sync()
+    expect((await local(id)).trashed).toBe(true)
+    await A.http.json('PATCH', `/api/projects/${id}`, { trashed: false })
+    await A.http.json('PATCH', `/api/projects/${id}`, { isTemplate: true })
+    const st = await sync()
+    expect(await local(id)).toMatchObject({ trashed: false, isTemplate: true })
+    expect(st.pending).toBe(0)
+    // a toggle made here since the last sync stays ours and is pushed
+    await desk.json('PATCH', `/api/projects/${id}`, { isTemplate: false })
+    await A.http.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    await sync()
+    expect(await local(id)).toMatchObject({ trashed: true, isTemplate: false })
+    expect((await A.http.json('GET', `/api/projects/${id}`)).body.summary).toMatchObject({ trashed: true, isTemplate: false })
+  })
+
+  it('emptying the trash here never deletes a project someone restored in the cloud', async () => {
+    const id = (await A.http.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Rescued' })).body.summary.id
+    await sync()
+    await desk.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    await sync()
+    expect((await A.http.json('GET', `/api/projects/${id}`)).body.summary.trashed).toBe(true)
+    // restored on the web; this computer empties its trash before it hears about it
+    await A.http.json('PATCH', `/api/projects/${id}`, { trashed: false })
+    expect((await desk.json('DELETE', `/api/projects/${id}`)).status).toBe(200)
+    const st = await sync()
+    const cloudCopy = await A.http.json('GET', `/api/projects/${id}`)
+    expect(cloudCopy.status).toBe(200)
+    expect(cloudCopy.body.summary.trashed).toBe(false)
+    // and it's back here, out of the trash, with a notice that says why
+    expect(await local(id)).toMatchObject({ name: 'Rescued', trashed: false })
+    expect(st.notices?.find((n) => n.message.includes('Rescued'))?.message).toMatch(/taken out of the trash in the cloud/)
+  })
+})
+
+describe('a delete made offline never destroys a newer cloud edit (DSK-4)', () => {
+  beforeAll(linkA)
+
+  it('keeps the cloud edit, brings it back here and says so', async () => {
+    const id = (await A.http.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Shared cut' })).body.summary.id
+    await sync()
+    // offline: trashed and deleted here, while a colleague edits it in the cloud
+    await desk.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    expect((await desk.json('DELETE', `/api/projects/${id}`)).status).toBe(200)
+    await editDoc(A.http, id, (p) => (p.name = 'Shared cut, colleague’s edit'))
+    const st = await sync()
+    const cloudCopy = await A.http.json('GET', `/api/projects/${id}`)
+    expect(cloudCopy.status).toBe(200)
+    expect(cloudCopy.body.summary).toMatchObject({ name: 'Shared cut, colleague’s edit', trashed: false })
+    expect((await desk.json('GET', `/api/projects/${id}`)).body.summary.name).toBe('Shared cut, colleague’s edit')
+    const notice = st.notices?.find((n) => n.message.includes('Shared cut, colleague’s edit'))
+    expect(notice?.message).toMatch(/deleted here, but edited in the cloud/)
+    expect(st.pending).toBe(0)
+
+    const r = await desk.json<SyncStatus>('POST', `/api/sync/notices/${notice!.id}`, { action: 'dismiss' })
+    expect(r.status).toBe(200)
+    expect(r.body.notices?.some((n) => n.id === notice!.id)).toBe(false)
+    // deleting it again, now that this computer has seen the edit, goes through
+    await desk.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    await desk.json('DELETE', `/api/projects/${id}`)
+    await sync()
+    expect((await A.http.json('GET', `/api/projects/${id}`)).status).toBe(404)
+  })
+
+  it('the cloud refuses a stale delete in one step', async () => {
+    const id = (await A.http.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Guarded' })).body.summary.id
+    await editDoc(A.http, id, (p) => (p.name = 'Guarded v2'))
+    const stale = await A.http.json('POST', `/api/sync/projects/${id}/delete`, { baseVersion: 1 })
+    expect(stale.status).toBe(409)
+    expect(stale.body.details).toMatchObject({ reason: 'edited', version: 2, trashed: false })
+    expect((await A.http.json('POST', `/api/sync/projects/${id}/delete`, { baseVersion: 2, trashed: true })).body.details).toMatchObject({ reason: 'restored' })
+    expect((await A.http.json('POST', `/api/sync/projects/${id}/delete`, { baseVersion: 2 })).body).toEqual({ ok: true })
+    expect((await A.http.json('POST', `/api/sync/projects/${id}/delete`, { baseVersion: 2 })).status).toBe(404)
+  })
+})
+
 describe('one item that keeps failing never blocks the rest (DSK-5)', () => {
   beforeAll(linkA)
 

@@ -10,8 +10,9 @@
 //   desktop_sync_failures — items whose push keeps failing (the rest of the cycle carries on): the reason, attempts,
 //                 when to try again, and whether the person chose Skip (stays on this computer until Retry).
 import { sql } from 'drizzle-orm'
-import type { SyncFailure } from '@producer/core'
+import type { SyncFailure, SyncNotice } from '@producer/core'
 import { ctx } from '../context'
+import { newId } from '../ids'
 
 export const DESKTOP_DDL = `
 CREATE TABLE IF NOT EXISTS desktop_kv (key text PRIMARY KEY, value jsonb NOT NULL);
@@ -191,6 +192,26 @@ export async function setFailure(kind: FailureKind, id: string, patch: { skipped
     UPDATE desktop_sync_failures SET skipped = ${patch.skipped}, next_at = ${patch.skipped ? null : 0}
     WHERE kind = ${kind} AND id = ${id} RETURNING id`)
   return rows.length > 0
+}
+
+// ---------------- notices ----------------
+// What sync did to keep someone's work safe, kept (newest 50) until dismissed.
+
+export async function listNotices(): Promise<SyncNotice[]> {
+  return (await kvGet<SyncNotice[]>('notices')) ?? []
+}
+
+export async function addNotice(message: string, extra: Partial<Pick<SyncNotice, 'action'>> = {}): Promise<SyncNotice> {
+  const n: SyncNotice = { id: newId('n'), message, at: Date.now(), ...extra }
+  await kvSet('notices', [...(await listNotices()), n].slice(-50))
+  return n
+}
+
+export async function removeNotice(id: string): Promise<SyncNotice | undefined> {
+  const all = await listNotices()
+  const hit = all.find((n) => n.id === id)
+  if (hit) await kvSet('notices', all.filter((n) => n.id !== id))
+  return hit
 }
 
 export { query as rawQuery }

@@ -36,6 +36,8 @@ export const systemApi = {
   resolve: (projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both') => sysFetch<SyncStatus>('POST', `/projects/${encodeURIComponent(projectId)}/sync`, { mode }),
   /** An item that keeps failing to sync: try again now, or skip it (it stays on this computer). */
   syncFailure: (f: Pick<SyncFailure, 'kind' | 'id'>, action: 'retry' | 'skip') => sysFetch<SyncStatus>('POST', `/sync/failures/${f.kind}/${encodeURIComponent(f.id)}`, { action }),
+  /** What sync did to keep work safe: dismiss it, or take the one thing it offers. */
+  syncNotice: (id: string, action: 'dismiss' | 'apply') => sysFetch<SyncStatus>('POST', `/sync/notices/${encodeURIComponent(id)}`, { action }),
   devices: () => sysFetch<Device[]>('GET', '/devices'),
   revokeDevice: (id: string) => sysFetch<{ ok: true }>('DELETE', `/devices/${encodeURIComponent(id)}`),
   // bring-your-own-key AI providers (desktop ignores workspaceId)

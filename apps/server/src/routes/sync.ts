@@ -2,20 +2,20 @@
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { Hono } from 'hono'
-import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNotNull } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { Device, SyncChanges, SystemInfo } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { assets, brandKits, devices, memberships, projects, tombstones, voiceProfiles, workspaces } from '../db/schema'
 import { assetRecord, projectSummary } from '../dto'
-import { HttpError, body, memberRole, notFound, unauthorized } from '../http'
+import { HttpError, body, memberRole, notFound, requireRole, unauthorized } from '../http'
 import { newId, randomToken, sha256 } from '../ids'
 import { limitDevices } from '../limits'
 import { getProvider } from '../ai/provider'
 import { builtinProvider, invalidateBuiltin } from '../ai/resolve'
 import { whisperAvailable } from '../ai/whisper'
-import { hydrateAssets } from '../services/projects'
+import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { checkCredentials } from './auth'
 import { listWorkspaces } from './workspaces'
 import { voiceProfileDto } from './voice'
@@ -193,4 +193,28 @@ syncRoutes.get('/changes', async (c) => {
   const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? 100) || 100))
   if (!Number.isFinite(since)) throw new HttpError(400, 'invalid', 'since must be a number')
   return c.json(await changesSince(u.id, since, limit))
+})
+
+/**
+ * A replica pushes a delete made on it. It goes through only while the cloud copy is still the version that replica
+ * last saw (and still in the trash, if it saw it there), in one statement, so an edit or a restore made since is never
+ * destroyed: 409 with details {reason: 'edited' | 'restored', version, trashed}. 404 when it's already gone.
+ */
+syncRoutes.post('/projects/:id/delete', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  const b = await body(c, z.object({ baseVersion: z.number().int(), trashed: z.boolean().optional() }))
+  const row = await loadProjectRow(id)
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const conds = [eq(projects.id, id), eq(projects.version, b.baseVersion)]
+  if (b.trashed) conds.push(isNotNull(projects.trashedAt))
+  const gone = await ctx().db.delete(projects).where(and(...conds)).returning({ id: projects.id })
+  if (gone.length) return c.json({ ok: true })
+  const cur = await loadProjectRow(id)
+  const edited = cur.version !== b.baseVersion
+  throw new HttpError(409, 'conflict', edited ? 'The project was edited in the cloud since this computer last saw it' : 'The project was taken out of the trash in the cloud', {
+    reason: edited ? 'edited' : 'restored',
+    version: cur.version,
+    trashed: cur.trashedAt != null,
+  })
 })
