@@ -22,6 +22,7 @@ import {
   mainTrack,
   moveItem,
   pasteItems,
+  resetTransform,
   separateAudio,
   separateAudioRefusal,
   setAspect,
@@ -247,6 +248,16 @@ describe('aspect changes keep text on the canvas (EDT-30)', () => {
   it('text placed off the canvas on purpose (to slide in) keeps its place', () => {
     const p = addItem(createProject(), createTextItem(0, 'heading', { id: 'off', transform: { x: -1800, y: 0, scale: 1, rotation: 0 } }))
     expect((item(setAspect(p, 1080, 1920), 'off') as TextItem).transform.x).toBe(-1012.5)
+  })
+})
+
+describe('reset transform (EDT-31)', () => {
+  it('clears position, scale and rotation and their keyframes, and keeps opacity and volume keyframes', () => {
+    let p = updateItem<VideoItem>(twoClips(), 'va', { transform: { x: 30, y: 40, scale: 2, rotation: 15, flipX: true } })
+    for (const [prop, v] of [['x', 9], ['scale', 1.2], ['rotation', 30], ['opacity', 0.5], ['volume', 0.4]] as const) p = setKeyframe(p, 'va', prop, 1, v)
+    const v = item(resetTransform(p, 'va'), 'va') as VideoItem
+    expect(v.transform).toEqual({ x: 0, y: 0, scale: 1, rotation: 0 })
+    expect(Object.keys(v.keyframes).sort()).toEqual(['opacity', 'volume'])
   })
 })
 

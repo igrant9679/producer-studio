@@ -17,6 +17,7 @@ import type {
   Transcript,
   TranscriptWord,
   VideoItem,
+  VisualItem,
 } from './types'
 import { EPS, round, uid } from './util'
 
@@ -261,6 +262,15 @@ export function setItemSpeed(p0: Project, itemId: string, speed: number): Projec
     if (it.phase) patch.phase = { offset: round(it.phase.offset * k, 4), length: round(it.phase.length * k, 4) }
   }
   return updateItem<VideoItem>(p0, itemId, patch)
+}
+
+/** Position, scale and rotation back to neutral (flips too), with their keyframes; opacity and volume keyframes stay. */
+export function resetTransform(p0: Project, itemId: string): Project {
+  const f = findItem(p0, itemId)
+  if (!f || !('transform' in f.item)) return p0
+  const moves = new Set<string>(['x', 'y', 'scale', 'rotation'])
+  const keyframes = Object.fromEntries(Object.entries(f.item.keyframes ?? {}).filter(([k]) => !moves.has(k))) as Keyframes
+  return updateItem<VisualItem>(p0, itemId, { transform: { x: 0, y: 0, scale: 1, rotation: 0 }, keyframes })
 }
 
 export function updateTrack(p0: Project, trackId: string, patch: Partial<Track>): Project {

@@ -97,6 +97,44 @@ describe('text and captions sized for the canvas (EDT-20)', () => {
   })
 })
 
+describe('properties panel resets (EDT-31, EDT-32)', () => {
+  const basicTab = (p: Project) => {
+    load(p)
+    S().select(['v1'])
+    S().set({ activeRightTab: 'basic' })
+    render(<PropertiesPanel />)
+  }
+  const rangeFor = (label: string) => screen.getAllByText(label).map((el) => el.closest('.ed-field')?.querySelector('input[type="range"]')).find(Boolean) as HTMLInputElement
+
+  it('Reset transform clears position, scale and rotation keyframes but keeps opacity and volume ones', () => {
+    let p = updateItem<VideoItem>(project(), 'v1', { transform: { x: 50, y: 20, scale: 1.4, rotation: 10 } })
+    p = setKeyframe(setKeyframe(setKeyframe(p, 'v1', 'x', 1, 200), 'v1', 'opacity', 2, 0.4), 'v1', 'volume', 3, 0.5)
+    basicTab(p)
+    fireEvent.click(screen.getByTitle('Reset transform'))
+    const v = findItem(S().project, 'v1')!.item as VideoItem
+    expect(v.transform).toEqual({ x: 0, y: 0, scale: 1, rotation: 0 })
+    expect(Object.keys(v.keyframes).sort()).toEqual(['opacity', 'volume'])
+  })
+
+  it('double-clicking the opacity or scale slider resets it to 100%, not 0', () => {
+    basicTab(updateItem<VideoItem>(project(), 'v1', { opacity: 0.3, transform: { x: 0, y: 0, scale: 2, rotation: 0 } }))
+    fireEvent.doubleClick(rangeFor('Opacity'))
+    fireEvent.doubleClick(rangeFor('Scale'))
+    const v = findItem(S().project, 'v1')!.item as VideoItem
+    expect(v.opacity).toBe(1)
+    expect(v.transform.scale).toBe(1)
+  })
+
+  it('and the volume slider too', () => {
+    load(updateItem<VideoItem>(project(), 'v1', { volume: 0.2 }))
+    S().select(['v1'])
+    S().set({ activeRightTab: 'audio' })
+    render(<PropertiesPanel />)
+    fireEvent.doubleClick(rangeFor('Volume'))
+    expect((findItem(S().project, 'v1')!.item as VideoItem).volume).toBe(1)
+  })
+})
+
 describe('context-menu actions (EDT-33)', () => {
   it('Freeze frame acts on the clip right-clicked, not the one under the playhead', () => {
     S().select(['v1'])

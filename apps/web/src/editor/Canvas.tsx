@@ -1,7 +1,7 @@
 // Centre canvas: StageRenderer preview + selection overlay (move / scale / rotate / text width), centre-line
 // snapping, inline text editing, floating object toolbar, hand/zoom, drop target for media.
 import type { FrameLayer, ImageItem, Item, TextItem, VideoItem, VisualItem } from '@producer/core'
-import { StageRenderer, editable, evaluate, findItem, textCss, updateItem, updateTrack } from '@producer/core'
+import { StageRenderer, editable, evaluate, findItem, resetTransform, textCss, updateItem, updateTrack } from '@producer/core'
 import clsx from 'clsx'
 import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
@@ -586,8 +586,7 @@ function ObjectToolbar({ geo, margin, boxH }: { geo: Geo; margin: number; boxH: 
             icon={<RotateCcw size={14} />}
             label="Reset transform"
             onClick={() => {
-              const v = item as VisualItem
-              commit(updateItem<VisualItem>(project, v.id, { transform: { x: 0, y: 0, scale: 1, rotation: 0 }, keyframes: { ...v.keyframes, x: undefined, y: undefined, scale: undefined, rotation: undefined } }), 'Reset transform')
+              commit(resetTransform(project, item.id), 'Reset transform')
               setMore(false)
             }}
           />

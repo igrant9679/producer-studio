@@ -19,6 +19,7 @@ import {
   projectDuration,
   presetCanvasSize,
   rechunkCaptions,
+  resetTransform,
   setAspect,
   setCanvasSize,
   setItemSpeed,
@@ -271,6 +272,7 @@ function PropSlider({ item, prop, label, min, max, step, pct, suffix }: { item: 
       step={step}
       suffix={suffix ?? (pct ? '%' : undefined)}
       display={pct ? { to: (v) => v * 100, from: (v) => v / 100, step: 1 } : undefined}
+      neutral={prop === 'opacity' || prop === 'volume' || prop === 'scale' ? 1 : 0}
       onChange={(v) => {
         const s = useEditor.getState()
         s.commit(A.writeProp(s.project, item.id, prop, v), label, { coalesce: `${prop}:${item.id}` })
@@ -289,7 +291,7 @@ function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
       <Section
         title="Transform"
         right={
-          <button className="ed-mini" title="Reset transform" onClick={() => up<VisualItem>(item, { transform: { x: 0, y: 0, scale: 1, rotation: 0 }, keyframes: {} }, 'Reset transform')}>
+          <button className="ed-mini" title="Reset transform" onClick={() => useEditor.getState().commit(resetTransform(useEditor.getState().project, item.id), 'Reset transform')}>
             <RotateCcw size={12} />
           </button>
         }
@@ -552,7 +554,7 @@ function SpeedTab({ item }: { item: VideoItem | AudioItem }) {
           <p className="ed-note">This is a freeze-frame segment; speed doesn't apply.</p>
         ) : (
           <>
-            <Slider label="Speed" value={item.speed} min={0.25} max={4} step={0.05} suffix="×" onChange={setSpeed} />
+            <Slider label="Speed" value={item.speed} min={0.25} max={4} step={0.05} suffix="×" neutral={1} onChange={setSpeed} />
             <div className="ed-chiprow">
               {[0.5, 1, 1.5, 2, 3].map((s) => (
                 <button key={s} className={clsx('chip', Math.abs(item.speed - s) < 0.001 && 'active')} onClick={() => setSpeed(s)}>{s}×</button>
