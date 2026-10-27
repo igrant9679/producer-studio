@@ -192,11 +192,12 @@ desktopRoutes.post('/sync/failures/:kind/:id', async (c) => {
   return c.json(b.action === 'retry' ? await syncEngine.retryFailure(kind.data, id) : await syncEngine.skipFailure(kind.data, id))
 })
 
-/** Something sync did to keep work safe: dismiss it. */
+/** Something sync did to keep work safe: dismiss it, or take the one thing it offers. */
 desktopRoutes.post('/sync/notices/:id', async (c) => {
   requireUser(c)
-  await body(c, z.object({ action: z.literal('dismiss') }))
-  return c.json(await syncEngine.dismissNotice(c.req.param('id')))
+  const b = await body(c, z.object({ action: z.enum(['dismiss', 'apply']) }))
+  const id = c.req.param('id')
+  return c.json(b.action === 'apply' ? await syncEngine.applyNotice(id) : await syncEngine.dismissNotice(id))
 })
 
 desktopRoutes.post('/projects/:id/sync', async (c) => {

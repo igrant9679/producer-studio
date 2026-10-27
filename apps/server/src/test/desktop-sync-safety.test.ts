@@ -78,6 +78,53 @@ async function withDroppedRequests<T>(hit: (method: string, url: string) => bool
   }
 }
 
+// must run first: it links this computer for the first time
+describe('the first link keeps what was made before it (DSK-2)', () => {
+  const brand = (name: string) => ({ name, colors: ['#112233'], fonts: { headline: 'Inter', body: 'Inter' } })
+
+  it('moves voices and brand kits with their space; a cloud kit is kept and ours is set aside', async () => {
+    const { ctx } = await import('../context')
+    const { voiceProfiles } = await import('../db/schema')
+    const me = (await desk.json('GET', '/api/auth/me')).body
+    expect(me.workspaces).toHaveLength(1)
+    const personal = me.workspaces[0].id
+    const studio = (await desk.json('POST', '/api/workspaces', { name: 'Studio' })).body.id
+    expect((await desk.json('PUT', `/api/workspaces/${personal}/brand`, brand('Made here'))).status).toBe(200)
+    expect((await desk.json('PUT', `/api/workspaces/${studio}/brand`, brand('Studio brand'))).status).toBe(200)
+    expect((await A.http.json('PUT', `/api/workspaces/${A.workspaceId}/brand`, brand('Cloud brand'))).status).toBe(200)
+    // cloned voices (the rows a VoiceStudio clone leaves; the engine isn't running in this test)
+    const now = Date.now()
+    const consent = { statement: 'This is my own voice and I consent to cloning it.', attestedBy: me.user.id, attestedAt: now, speaker: 'me' }
+    const voice = (id: string, workspaceId: string, vs: string) => ({ id, workspaceId, name: `Voice ${id}`, kind: 'clone', engine: 'omnivoice', consent, vsProfileId: vs, createdBy: me.user.id, createdAt: now, updatedAt: now })
+    await ctx().db.insert(voiceProfiles).values([voice('vp_mine01', personal, 'p1'), voice('vp_studio1', studio, 'p2')])
+
+    await linkA()
+    const cloudStudio = (await A.http.json('GET', '/api/workspaces')).body.find((w: { name: string }) => w.name === 'Studio').id
+    // the voices moved with their spaces, here and in the cloud, consent and all
+    const deskVoices = async (ws: string) => (await desk.json('GET', `/api/voice/profiles?workspaceId=${ws}`)).body.map((v: { id: string }) => v.id)
+    expect(await deskVoices(A.workspaceId)).toEqual(['vp_mine01'])
+    expect(await deskVoices(cloudStudio)).toEqual(['vp_studio1'])
+    const inCloud = (await A.http.json('GET', `/api/voice/profiles?workspaceId=${A.workspaceId}`)).body
+    expect(inCloud.find((v: { id: string }) => v.id === 'vp_mine01')).toMatchObject({ consent: { statement: consent.statement, speaker: 'me' } })
+    expect((await A.http.json('GET', `/api/voice/profiles?workspaceId=${cloudStudio}`)).body.map((v: { id: string }) => v.id)).toEqual(['vp_studio1'])
+    // the new cloud space had no kit: ours moved there
+    expect((await A.http.json('GET', `/api/workspaces/${cloudStudio}/brand`)).body.name).toBe('Studio brand')
+    expect((await desk.json('GET', `/api/workspaces/${cloudStudio}/brand`)).body.name).toBe('Studio brand')
+    // the cloud personal space had one: it stays, ours is set aside and can be brought back
+    expect((await A.http.json('GET', `/api/workspaces/${A.workspaceId}/brand`)).body.name).toBe('Cloud brand')
+    expect((await desk.json('GET', `/api/workspaces/${A.workspaceId}/brand`)).body.name).toBe('Cloud brand')
+    const st = (await desk.json<SyncStatus>('GET', '/api/sync/status')).body
+    const notice = st.notices?.find((n) => n.message.includes('Made here'))
+    expect(notice).toMatchObject({ action: expect.any(String) })
+    const applied = await desk.json<SyncStatus>('POST', `/api/sync/notices/${notice!.id}`, { action: 'apply' })
+    expect(applied.status).toBe(200)
+    expect(applied.body.notices?.some((n) => n.id === notice!.id)).toBe(false)
+    expect((await desk.json('GET', `/api/workspaces/${A.workspaceId}/brand`)).body.name).toBe('Made here')
+    await sync()
+    expect((await A.http.json('GET', `/api/workspaces/${A.workspaceId}/brand`)).body.name).toBe('Made here')
+  })
+})
+
 describe('an interrupted upload is sent again (DSK-1)', () => {
   beforeAll(linkA)
 

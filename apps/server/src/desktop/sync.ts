@@ -49,6 +49,8 @@ function cloudHasFile(rec: { status: AssetRecord['status']; sha256?: string }, l
   return !rec.sha256 || !localSha || rec.sha256 === localSha
 }
 
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
 /** What a failed delete is called in the sync menu (the item itself is gone from this computer). */
 const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted here', voice: 'A voice deleted here' } as const
 
@@ -139,13 +141,32 @@ export class SyncEngine {
       pending: await this.pendingCount(rows, failures),
       conflicts: names.map((n) => ({ projectId: n.id, name: n.name, localVersion: n.version, cloudVersion: conflicted.find((c) => c.id === n.id)!.conflictVersion! })),
       failures: [...failures.values()],
-      notices: await listNotices(),
+      notices: (await listNotices()).map(({ data: _data, ...n }) => n),
       ...(this.error ? { error: this.error } : {}),
     }
   }
 
   async dismissNotice(id: string): Promise<SyncStatus> {
     if (!(await removeNotice(id))) throw new HttpError(404, 'not_found', 'That notice is gone')
+    void this.emit()
+    return this.status()
+  }
+
+  /** Take the one thing a notice offers (bring back a brand kit set aside at link time), then drop the notice. */
+  async applyNotice(id: string): Promise<SyncStatus> {
+    const n = (await listNotices()).find((x) => x.id === id)
+    if (!n) throw new HttpError(404, 'not_found', 'That notice is gone')
+    if (n.data?.kind !== 'brand') throw new HttpError(400, 'invalid', 'This notice has nothing to apply')
+    const { workspaceId, doc } = n.data
+    if (!(await ctx().db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)).length) throw new HttpError(404, 'not_found', 'That space is no longer on this computer')
+    const now = Date.now()
+    // a local edit like any other: pushed on the next cycle
+    await ctx()
+      .db.insert(brandKits)
+      .values({ workspaceId, doc, updatedAt: now })
+      .onConflictDoUpdate({ target: brandKits.workspaceId, set: { doc, updatedAt: now } })
+    await removeNotice(id)
+    if (getSettings().autoSync) this.schedule(500)
     void this.emit()
     return this.status()
   }
@@ -369,20 +390,38 @@ export class SyncEngine {
     await kvSet('cloudWorkspaces', [...new Set([...((await kvGet<string[]>('cloudWorkspaces')) ?? []), ...list.map((w) => w.id)])])
   }
 
-  /** Move everything in a local workspace into another (same ids for projects/assets; storage keys unchanged). */
+  /**
+   * Move everything in a local workspace into another (same ids for projects/assets/voices; storage keys unchanged).
+   * Its brand kit moves too when the target has none here; the first pull then decides against the cloud's (prelinkBrand).
+   */
   private async rehomeWorkspace(from: string, to: string) {
-    await ctx().db.transaction(async (tx) => {
-      for (const t of ['projects', 'assets', 'jobs', 'exports']) await tx.execute(sql.raw(`UPDATE ${t} SET workspace_id = '${to.replace(/'/g, "''")}' WHERE workspace_id = '${from.replace(/'/g, "''")}'`))
+    const db = ctx().db
+    const kit = (await db.select().from(brandKits).where(eq(brandKits.workspaceId, from)).limit(1))[0]
+    const target = (await db.select().from(brandKits).where(eq(brandKits.workspaceId, to)).limit(1))[0]
+    await db.transaction(async (tx) => {
+      for (const t of ['projects', 'assets', 'jobs', 'exports', 'voice_profiles']) await tx.execute(sql.raw(`UPDATE ${t} SET workspace_id = '${to.replace(/'/g, "''")}' WHERE workspace_id = '${from.replace(/'/g, "''")}'`))
+      if (kit && !target) await tx.execute(sql`UPDATE brand_kits SET workspace_id = ${to} WHERE workspace_id = ${from}`)
       await tx.execute(sql`DELETE FROM brand_kits WHERE workspace_id = ${from}`)
       await tx.execute(sql`DELETE FROM memberships WHERE workspace_id = ${from}`)
       await tx.execute(sql`DELETE FROM workspaces WHERE id = ${from}`)
     })
+    if (kit && !target) await kvSet('prelinkBrand', [...((await kvGet<string[]>('prelinkBrand')) ?? []), to])
+    else if (kit && !sameJson(kit.doc, target!.doc)) await this.setAsideBrand(to, kit.doc)
     log.info('desktop: merged local workspace', { from, to })
+  }
+
+  /** Two brand kits for one space: the cloud's stays, ours is kept in a notice that can bring it back. */
+  private async setAsideBrand(workspaceId: string, doc: BrandKitDoc) {
+    const ws = (await ctx().db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1))[0]
+    await addNotice(`The brand kit “${doc.name}” made on this computer before linking wasn’t used, because “${ws?.name ?? 'this space'}” already has one in the cloud. It was kept aside.`, {
+      action: 'Use this computer’s kit',
+      data: { kind: 'brand', workspaceId, doc },
+    })
   }
 
   private async mergeLocalWorkspaces(c: CloudClient, cloudList: Workspace[]) {
     const me = await localUserId()
-    const cloudIds = new Set(cloudList.map((w) => w.id))
+    const skip = new Set(cloudList.map((w) => w.id))
     const personal = cloudList.find((w) => w.personal) ?? cloudList[0]
     const local = await ctx()
       .db.select({ id: workspaces.id, name: workspaces.name, personal: workspaces.personal })
@@ -390,7 +429,7 @@ export class SyncEngine {
       .innerJoin(memberships, eq(memberships.workspaceId, workspaces.id))
       .where(eq(memberships.userId, me))
     for (const w of local) {
-      if (cloudIds.has(w.id)) continue
+      if (skip.has(w.id)) continue
       if (w.personal && personal) await this.rehomeWorkspace(w.id, personal.id)
       else {
         const created = await c.json<Workspace>('POST', '/api/workspaces', { name: w.name })
@@ -626,6 +665,12 @@ export class SyncEngine {
     const cur = (await ctx().db.select().from(brandKits).where(eq(brandKits.workspaceId, workspaceId)).limit(1))[0]
     // local edits since the last sync win until pushed
     if (cur && s?.localVersion != null && cur.updatedAt !== s.localVersion) return
+    const prelink = (await kvGet<string[]>('prelinkBrand')) ?? []
+    if (prelink.includes(workspaceId)) {
+      // a kit made here before linking meets the cloud's: the cloud's stays, ours is set aside
+      await kvSet('prelinkBrand', prelink.filter((w) => w !== workspaceId))
+      if (cur && !sameJson(cur.doc, doc)) await this.setAsideBrand(workspaceId, cur.doc)
+    }
     const now = Date.now()
     await ctx()
       .db.insert(brandKits)
@@ -867,6 +912,12 @@ export class SyncEngine {
         }
         await putSync('brand', b.workspaceId, { localVersion: b.updatedAt })
       })
+    }
+    // kits made before linking whose space had none in the cloud (nothing came in the full first pull) are pushed now
+    const prelink = (await kvGet<string[]>('prelinkBrand')) ?? []
+    if (prelink.length) {
+      const pushed = new Set([...(await syncRows('brand')).keys()])
+      await kvSet('prelinkBrand', prelink.filter((w) => !pushed.has(w)))
     }
   }
 

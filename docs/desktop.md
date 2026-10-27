@@ -105,7 +105,9 @@ installed from Voice Studio → Engine into `%LOCALAPPDATA%\Producer Studio\Voic
 ## Sync behaviour (summary)
 
 See `apps/server/src/desktop/sync.ts`. Link adopts the cloud identity, mirrors workspaces with the same ids and merges
-local-only workspaces (personal → cloud personal; others are created in the cloud). Pull never overwrites a dirty local
+local-only workspaces (personal → cloud personal; others are created in the cloud). Merging moves voice profiles (with
+their consent records) and the brand kit with the space; when the cloud space already has a brand kit, the cloud's stays
+and this computer's is kept aside in a notice with "Use this computer's kit". Pull never overwrites a dirty local
 project; cloud-advanced + local-dirty ⇒ conflict, as does a 409 on push. Resolve: keep-local (force-push over the latest
 cloud version), keep-cloud, keep-both (local copy becomes "… (conflicted copy)"). Assets: local uploads are pushed with
 the same id + sha256 and count as uploaded only once the cloud holds the file with that hash (an upload cut short gets a

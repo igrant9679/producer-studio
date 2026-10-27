@@ -45,6 +45,13 @@ describe('what sync kept safe', () => {
     await waitFor(() => expect(dismiss).toHaveBeenCalledWith('n_1', 'dismiss'))
     await waitFor(() => expect(screen.queryByText(message)).toBeNull())
   })
+
+  it('offers the one thing a notice can do', async () => {
+    const apply = vi.spyOn(systemApi, 'syncNotice').mockResolvedValueOnce(status({ notices: [] }))
+    show(status({ notices: [{ id: 'n_2', message: 'The brand kit “Mine” made on this computer before linking wasn’t used.', at: Date.now(), action: 'Use this computer’s kit' }] }))
+    fireEvent.click(screen.getByRole('button', { name: /Use this computer’s kit/ }))
+    await waitFor(() => expect(apply).toHaveBeenCalledWith('n_2', 'apply'))
+  })
 })
 
 describe('items that keep failing to sync', () => {

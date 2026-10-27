@@ -149,6 +149,11 @@ export function SyncIndicator() {
                 <div key={n.id} className="ps-conflict">
                   <div className="ps-notice-text">{n.message}</div>
                   <div className="row" style={{ gap: 4 }}>
+                    {n.action && (
+                      <button className="btn sm" disabled={!!busy} onClick={() => run(`${n.id}:a`, () => systemApi.syncNotice(n.id, 'apply'), 'Done — it syncs next')}>
+                        {busy === `${n.id}:a` ? <Spinner size={12} /> : <RefreshCw size={12} />} {n.action}
+                      </button>
+                    )}
                     <button className="btn ghost sm" disabled={!!busy} onClick={() => run(`${n.id}:d`, () => systemApi.syncNotice(n.id, 'dismiss'))}>
                       {busy === `${n.id}:d` ? <Spinner size={12} /> : <Check size={12} />} Got it
                     </button>
