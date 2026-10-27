@@ -89,13 +89,13 @@ describe('Review edits are saved to the project (APP-5)', () => {
     load(wizard())
     useWizard.getState().patch((s) => ({ scenes: [{ ...s.scenes[0], narration: 'Edited on the Review step.' }, s.scenes[1]] }))
     expect(st().draft?.state).toBe('pending')
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(1300)
     expect(save).toHaveBeenCalledTimes(1)
     expect(save.mock.calls[0][0]).toMatchObject({ projectId: 'p1', brief: { title: 'Spring tour' }, scenes: [{ narration: 'Edited on the Review step.' }, { id: 's02' }] })
     expect(st().draft?.state).toBe('saved')
     // nothing new: nothing sent
     useWizard.getState().patch((s) => ({ scenes: [...s.scenes] }))
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(1300)
     expect(save).toHaveBeenCalledTimes(1)
   })
 
@@ -104,7 +104,7 @@ describe('Review edits are saved to the project (APP-5)', () => {
     const save = vi.mocked(api.saveProducerDraft).mockRejectedValueOnce(new HttpError(500, { error: 'Database unavailable' }))
     load(wizard())
     useWizard.getState().patch((s) => ({ brief: { ...s.brief, title: 'Renamed' } }))
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(1300)
     expect(st().draft).toEqual({ state: 'error', error: 'Database unavailable' })
     vi.useRealTimers()
     show()
@@ -118,7 +118,7 @@ describe('Review edits are saved to the project (APP-5)', () => {
     vi.useFakeTimers()
     load(wizard({ run: { status: 'running', phase: 'assemble' } }))
     useWizard.getState().patch((s) => ({ scenes: [{ ...s.scenes[0], narration: 'x' }] }))
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(1300)
     expect(api.saveProducerDraft).not.toHaveBeenCalled()
   })
 

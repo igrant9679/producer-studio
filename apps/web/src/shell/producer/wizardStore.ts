@@ -77,7 +77,8 @@ export function markDraftSaved(s: WizardState) {
   if (s.projectId) savedDrafts.set(s.projectId, draftKey(s))
 }
 
-function scheduleDraftSave(ms = 800) {
+// the editor autosaves on the same beat
+function scheduleDraftSave(ms = 1200) {
   clearTimeout(draftTimer)
   draftTimer = setTimeout(() => void saveDraft(), ms)
 }
