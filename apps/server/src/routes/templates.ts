@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { Hono } from 'hono'
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { projectDuration, type Project, type TemplateSummary } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
@@ -8,6 +8,7 @@ import { projects } from '../db/schema'
 import { mediaPath } from '../dto'
 import { notFound, requireRole } from '../http'
 import { getLook, loadLooks, starterProject } from '../services/looks'
+import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 
 export const templateRoutes = new Hono<AppEnv>()
 
@@ -28,32 +29,39 @@ function aspectOf(w: number, h: number): string {
   return known.reduce((best, k) => (Math.abs(k[1] - r) < Math.abs(best[1] - r) ? k : best), known[0])[0]
 }
 
+function builtInSummary(l: ReturnType<typeof loadLooks>[number]): TemplateSummary {
+  const p = starterProject(l)
+  return {
+    id: `tpl:${l.id}`,
+    name: l.name,
+    category: l.category,
+    aspect: l.aspect,
+    duration: projectDuration(p),
+    thumbnailUrl: l.previewPath ? `/api/templates/tpl:${l.id}/preview` : undefined,
+    previewUrl: undefined,
+    builtIn: true,
+    ...counts(p),
+  }
+}
+
 templateRoutes.get('/', async (c) => {
   const u = requireUser(c)
-  const out: TemplateSummary[] = loadLooks().map((l) => {
-    const p = starterProject(l)
-    return {
-      id: `tpl:${l.id}`,
-      name: l.name,
-      category: l.category,
-      aspect: l.aspect,
-      duration: projectDuration(p),
-      thumbnailUrl: l.previewPath ? `/api/templates/tpl:${l.id}/preview` : undefined,
-      previewUrl: undefined,
-      builtIn: true,
-      ...counts(p),
-    }
-  })
+  const { limit, after } = pageQuery(c)
+  // the built-in looks come first, on the first page; the workspace's templates are paged after them
+  const out: TemplateSummary[] = after ? [] : loadLooks().map(builtInSummary)
   const workspaceId = c.req.query('workspaceId')
+  let nextCursor: string | undefined
   if (workspaceId) {
     await requireRole(u.id, workspaceId, 'viewer')
     const rows = await ctx()
       .db.select()
       .from(projects)
-      .where(and(eq(projects.workspaceId, workspaceId), eq(projects.isTemplate, true), isNull(projects.trashedAt)))
-      .orderBy(desc(projects.updatedAt))
-      .limit(200)
-    for (const r of rows)
+      .where(and(eq(projects.workspaceId, workspaceId), eq(projects.isTemplate, true), isNull(projects.trashedAt), afterCursor(projects.updatedAt, projects.id, after)))
+      .orderBy(...pageOrder(projects.updatedAt, projects.id))
+      .limit(limit + 1)
+    const page = toPage(rows, limit, (r) => [r.updatedAt, r.id], (r) => r)
+    nextCursor = page.nextCursor
+    for (const r of page.items)
       out.push({
         id: r.id,
         name: r.name,
@@ -65,7 +73,7 @@ templateRoutes.get('/', async (c) => {
         ...counts(r.doc),
       })
   }
-  return c.json(out)
+  return c.json({ items: out, ...(nextCursor ? { nextCursor } : {}) })
 })
 
 // Built-in look preview image (from the producer-pipeline skill). Public: contains no user data.

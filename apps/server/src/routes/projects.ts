@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import * as z from 'zod/v4'
 import { createProject, uid, type Project, type ProjectDocResponse } from '@producer/core'
@@ -10,6 +10,7 @@ import { projectSummary } from '../dto'
 import { HttpError, body, invalid, notFound, requireRole } from '../http'
 import { getLook, starterProject } from '../services/looks'
 import { hydrateAssets, insertProject, loadProjectRow, saveProjectDoc, validateProject, withFreshIds } from '../services/projects'
+import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 import { getBrand } from './workspaces'
 
 export const projectRoutes = new Hono<AppEnv>()
@@ -27,9 +28,12 @@ projectRoutes.get('/', async (c) => {
   await requireRole(u.id, workspaceId, 'viewer')
   const trashed = c.req.query('trashed') === '1'
   const templates = c.req.query('templates')
+  const { limit, after } = pageQuery(c)
   const conds = [eq(projects.workspaceId, workspaceId), trashed ? isNotNull(projects.trashedAt) : isNull(projects.trashedAt)]
   if (templates === '1') conds.push(eq(projects.isTemplate, true))
   else if (templates === '0') conds.push(eq(projects.isTemplate, false))
+  const from = afterCursor(projects.updatedAt, projects.id, after)
+  if (from) conds.push(from)
   const rows = await ctx()
     .db.select({
       id: projects.id,
@@ -50,9 +54,9 @@ projectRoutes.get('/', async (c) => {
     })
     .from(projects)
     .where(and(...conds))
-    .orderBy(desc(projects.updatedAt))
-    .limit(500)
-  return c.json(rows.map((r) => projectSummary({ ...r, doc: undefined as never })))
+    .orderBy(...pageOrder(projects.updatedAt, projects.id))
+    .limit(limit + 1)
+  return c.json(toPage(rows, limit, (r) => [r.updatedAt, r.id], (r) => projectSummary({ ...r, doc: undefined as never })))
 })
 
 export const ID_RE = /^[A-Za-z0-9_-]{6,80}$/

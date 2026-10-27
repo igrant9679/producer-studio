@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { Hono } from 'hono'
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { UploadTicket } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
@@ -18,6 +18,7 @@ import { type AssetRow, assetPrefix, emitAsset, extFor, hashObject, kindFromMime
 import { UploadTooLargeError } from '../storage'
 import { abortUpload } from '../services/asset-recovery'
 import { assertProjectInWorkspace } from '../services/projects'
+import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 
 export const uploadRoutes = new Hono<AppEnv>()
 
@@ -173,10 +174,19 @@ assetRoutes.get('/', async (c) => {
   if (!workspaceId) throw invalid('workspaceId is required')
   await requireRole(u.id, workspaceId, 'viewer')
   const kind = c.req.query('kind')
+  const { limit, after } = pageQuery(c)
   const conds = [eq(assets.workspaceId, workspaceId)]
   if (kind) conds.push(eq(assets.kind, kind))
-  const rows = await ctx().db.select().from(assets).where(and(...conds)).orderBy(desc(assets.createdAt)).limit(1000)
-  return c.json(rows.map(assetRecord))
+  const from = afterCursor(assets.createdAt, assets.id, after)
+  if (from) conds.push(from)
+  const rows = await ctx()
+    .db.select()
+    .from(assets)
+    .where(and(...conds))
+    .orderBy(...pageOrder(assets.createdAt, assets.id))
+    .limit(limit + 1)
+  // light records: a list of clips never carries their transcripts (GET /api/assets/:id does)
+  return c.json(toPage(rows, limit, (r) => [r.createdAt, r.id], (r) => assetRecord(r, { light: true })))
 })
 
 assetRoutes.get('/:id', async (c) => {

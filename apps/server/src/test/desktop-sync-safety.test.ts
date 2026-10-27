@@ -407,7 +407,7 @@ describe('linking a different account never uploads the previous account’s spa
     expect(st.state).toBe('idle')
     // nothing of the first account reached the second
     expect((await B.http.json('GET', '/api/workspaces')).body.map((w: { id: string }) => w.id)).toEqual([B.workspaceId])
-    expect((await B.http.json('GET', `/api/projects?workspaceId=${B.workspaceId}`)).body).toEqual([])
+    expect((await B.http.json('GET', `/api/projects?workspaceId=${B.workspaceId}`)).body.items).toEqual([])
     // still here, untouched, and the person is told
     expect((await desk.json('GET', `/api/projects/${pid}`)).body.summary.name).toBe('Colleague cut, my edit')
     expect(st.notices?.find((n) => n.message.includes('Team A'))?.message).toContain(A.email)

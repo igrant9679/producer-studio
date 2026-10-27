@@ -12,7 +12,8 @@ import { newId } from '../ids'
 export type AssetRow = typeof assets.$inferSelect
 
 export function emitAsset(a: AssetRow) {
-  ctx().bus.publish(a.workspaceId, 'asset', assetRecord(a), { id: a.id })
+  // a light record: every open screen gets each change, so no transcript rides along (GET /api/assets/:id has it)
+  ctx().bus.publish(a.workspaceId, 'asset', assetRecord(a, { light: true }), { id: a.id })
 }
 
 export async function loadAsset(id: string): Promise<AssetRow> {

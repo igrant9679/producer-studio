@@ -155,9 +155,9 @@ describe('link, pull, push', () => {
     const me = await desk.json('GET', '/api/auth/me')
     expect(me.body.user).toMatchObject({ id: cloudUserId, email, name: 'Dana Desk' })
     expect(me.body.workspaces.map((w: { id: string }) => w.id)).toEqual([cloudWs])
-    const deskList = (await desk.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.map((p: { id: string }) => p.id)
+    const deskList = (await desk.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.items.map((p: { id: string }) => p.id)
     expect(deskList).toEqual(expect.arrayContaining([localOnly, cloudA]))
-    const cloudList = (await cloudHttp.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.map((p: { id: string }) => p.id)
+    const cloudList = (await cloudHttp.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.items.map((p: { id: string }) => p.id)
     expect(cloudList).toEqual(expect.arrayContaining([localOnly, cloudA]))
     // the device token is stored encrypted, never in plain text
     const { kvGet } = await import('../desktop/db')
@@ -209,9 +209,9 @@ describe('link, pull, push', () => {
     r = await desk.json<SyncStatus>('POST', `/api/projects/${cloudA}/sync`, { mode: 'keep-both' })
     expect(r.body.conflicts).toEqual([])
     expect((await desk.json('GET', `/api/projects/${cloudA}`)).body.summary.name).toBe('cloud 3')
-    const copies = (await cloudHttp.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.filter((p: { name: string }) => p.name === 'desk 3 (conflicted copy)')
+    const copies = (await cloudHttp.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.items.filter((p: { name: string }) => p.name === 'desk 3 (conflicted copy)')
     expect(copies).toHaveLength(1)
-    const deskCopies = (await desk.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.filter((p: { name: string }) => p.name === 'desk 3 (conflicted copy)')
+    const deskCopies = (await desk.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.items.filter((p: { name: string }) => p.name === 'desk 3 (conflicted copy)')
     expect(deskCopies.map((p: { id: string }) => p.id)).toEqual([copies[0].id])
     expect((await sync()).pending).toBe(0)
   })
@@ -469,7 +469,7 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
     // the two import jobs finish into dub assets
     const end = Date.now() + 30_000
     for (;;) {
-      const vids = (await desk.json('GET', `/api/assets?workspaceId=${cloudWs}&kind=video`)).body.filter((a: { origin: string; asset: { name: string } }) => a.origin === 'dub' && a.asset.name.startsWith('clip'))
+      const vids = (await desk.json('GET', `/api/assets?workspaceId=${cloudWs}&kind=video`)).body.items.filter((a: { origin: string; asset: { name: string } }) => a.origin === 'dub' && a.asset.name.startsWith('clip'))
       if (vids.length === 2 && vids.every((a: { status: string }) => a.status === 'ready')) {
         expect(vids.map((a: { asset: { name: string } }) => a.asset.name).sort()).toEqual(['clip — es', 'clip — fr'])
         break
@@ -480,7 +480,7 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
   })
 
   it('sends a library clip into the gallery (extracted audio, extra form fields passed through)', async () => {
-    const lib = (await desk.json('GET', `/api/assets?workspaceId=${cloudWs}&kind=audio`)).body as Array<{ asset: { id: string } }>
+    const lib = (await desk.json('GET', `/api/assets?workspaceId=${cloudWs}&kind=audio`)).body.items as Array<{ asset: { id: string } }>
     const before = fake.requests.length
     const r = await desk.json('POST', `/api/voicestudio/asset-to/gallery?assetId=${lib[0].asset.id}&name=Interview&category=import`)
     expect(r.body).toMatchObject({ name: 'Interview', duration: 2 })
@@ -539,10 +539,10 @@ describe('deletes & unlink', () => {
     await sync()
     expect((await desk.json('GET', `/api/projects/${id}`)).status).toBe(404)
 
-    const before = (await desk.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.length
+    const before = (await desk.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.items.length
     const un = await desk.json<SyncStatus>('POST', '/api/sync/unlink')
     expect(un.body).toMatchObject({ linked: false, state: 'unlinked' })
-    expect((await desk.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.length).toBe(before)
+    expect((await desk.json('GET', `/api/projects?workspaceId=${cloudWs}`)).body.items.length).toBe(before)
     // the device token was revoked in the cloud
     expect((await cloudHttp.json('GET', '/api/devices')).body).toEqual([])
   })

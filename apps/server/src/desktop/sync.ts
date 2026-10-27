@@ -657,7 +657,7 @@ export class SyncEngine {
     let since = Math.max(0, cursor - ((await kvGet<boolean>('safeCursor')) ? 0 : LOOKBACK))
     // where the next pull starts: below the first change the cloud said may still be committing
     let hold: number | undefined
-    for (let page = 0; page < 1000; page++) {
+    for (;;) {
       let ch: SyncChanges
       try {
         ch = await c.json<SyncChanges>('GET', `/api/sync/changes?since=${since}&limit=${PAGE}&maxBytes=${this.pageBytes}`, undefined, IDLE_MS)
@@ -686,7 +686,8 @@ export class SyncEngine {
       }
       // what was applied above `hold` is delivered again next time (applying twice is harmless)
       await kvSet('cursor', hold ?? cursor)
-      if (!ch.more) break
+      // every page there is (a cloud that says "more" without moving on is a broken one: stop there)
+      if (!ch.more || ch.cursor <= since) break
       since = ch.cursor
     }
   }
