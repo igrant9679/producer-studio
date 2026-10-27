@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { and, desc, eq, isNotNull, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import * as z from 'zod/v4'
 import { createProject, uid, type Project, type ProjectDocResponse } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
@@ -12,6 +13,12 @@ import { hydrateAssets, insertProject, loadProjectRow, saveProjectDoc, validateP
 import { getBrand } from './workspaces'
 
 export const projectRoutes = new Hono<AppEnv>()
+
+/** Tell open screens (home, library, editors, desktops) that a project was made, changed, trashed or deleted. */
+function announce(row: { id: string; workspaceId: string; version: number }, deleted = false) {
+  const data = deleted ? { id: row.id, version: row.version, deleted: true } : { id: row.id, version: row.version }
+  ctx().bus.publish(row.workspaceId, 'project', data, { id: row.id, inline: data })
+}
 
 projectRoutes.get('/', async (c) => {
   const u = requireUser(c)
@@ -97,6 +104,7 @@ projectRoutes.post('/', async (c) => {
     doc = createProject({ id, name: b.name || 'Untitled project', width: b.width, height: b.height, fps: b.fps })
   }
   const row = await insertProject({ workspaceId: b.workspaceId, userId: u.id, doc, kind: b.kind })
+  announce(row)
   const res: ProjectDocResponse = { summary: projectSummary(row), project: row.doc, version: row.version }
   return c.json(res)
 })
@@ -127,17 +135,20 @@ projectRoutes.patch('/:id', async (c) => {
   const row = await loadProjectRow(id)
   await requireRole(u.id, row.workspaceId, 'editor')
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), trashed: z.boolean().optional(), isTemplate: z.boolean().optional() }))
-  const set: Partial<typeof projects.$inferInsert> = { updatedAt: Date.now() }
+  const now = Date.now()
+  const set: PgUpdateSetSource<typeof projects> = { updatedAt: now }
   if (b.name !== undefined) {
+    // one statement on the stored row: a save landing after our read is kept, and its version is never reused
     set.name = b.name
-    set.doc = { ...row.doc, name: b.name }
-    set.version = row.version + 1
+    set.doc = sql`jsonb_set(jsonb_set(${projects.doc}, '{name}', to_jsonb(${b.name}::text)), '{updatedAt}', to_jsonb(${now}::bigint))`
+    set.version = sql`${projects.version} + 1`
   }
-  if (b.trashed !== undefined) set.trashedAt = b.trashed ? Date.now() : null
+  if (b.trashed !== undefined) set.trashedAt = b.trashed ? now : null
   if (b.isTemplate !== undefined) set.isTemplate = b.isTemplate
   const [updated] = await ctx().db.update(projects).set(set).where(eq(projects.id, id)).returning()
-  if (set.version) ctx().bus.publish(updated.workspaceId, 'project', { id, version: updated.version }, { id, inline: { id, version: updated.version } })
-  return c.json(projectSummary(updated))
+  // trash, restore and template changes keep the version but still change what other screens list
+  announce(updated)
+  return c.json({ ...projectSummary(updated), version: updated.version })
 })
 
 projectRoutes.post('/:id/duplicate', async (c) => {
@@ -147,6 +158,7 @@ projectRoutes.post('/:id/duplicate', async (c) => {
   const doc = withFreshIds(row.doc, uid('p'))
   doc.name = `${row.name} copy`
   const copy = await insertProject({ workspaceId: row.workspaceId, userId: u.id, doc, kind: row.kind })
+  announce(copy)
   return c.json(projectSummary(copy))
 })
 
@@ -156,5 +168,6 @@ projectRoutes.delete('/:id', async (c) => {
   await requireRole(u.id, row.workspaceId, 'editor')
   if (row.trashedAt == null) throw new HttpError(409, 'conflict', 'Move the project to the trash before deleting it')
   await ctx().db.delete(projects).where(eq(projects.id, row.id))
+  announce(row, true)
   return c.json({ ok: true })
 })

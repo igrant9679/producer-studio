@@ -11,7 +11,7 @@ import { toast, toastError } from '../lib/toast'
 import * as A from './actions'
 import { Menu, MenuItem } from './controls'
 import { flush } from './persistence'
-import { redoLabel, undoLabel, useEditor } from './store'
+import { PROJECT_NAME_MAX, redoLabel, undoLabel, useEditor } from './store'
 
 export function TopBar() {
   const nav = useNavigate()
@@ -25,12 +25,12 @@ export function TopBar() {
   const [draft, setDraft] = useState(name)
   useEffect(() => setDraft(name), [name])
 
+  // an ordinary edit: the autosave carries the name with the document's base version, so it can't race itself
   const rename = () => {
-    const v = draft.trim() || 'Untitled project'
+    const v = draft.trim().slice(0, PROJECT_NAME_MAX) || 'Untitled project'
     if (v === name) return setDraft(v)
     const s = useEditor.getState()
     s.commit(updateProject(s.project, { name: v }), 'Rename project')
-    if (!s.demo) void api.patchProject(s.projectId, { name: v }).catch(() => undefined)
   }
 
   const share = async () => {
@@ -68,6 +68,7 @@ export function TopBar() {
             }
           }}
           spellCheck={false}
+          maxLength={PROJECT_NAME_MAX}
           aria-label="Project name"
         />
         <SaveStatus demo={demo} />
@@ -109,13 +110,18 @@ export function TopBar() {
 
 function SaveStatus({ demo }: { demo: boolean }) {
   const st = useEditor((s) => s.saveState)
+  const why = useEditor((s) => s.saveError?.message)
   if (st === 'conflict')
     return (
       <span className="ed-save conflict"><TriangleAlert size={13} /> Conflict</span>
     )
+  if (st === 'error')
+    return (
+      <span className="ed-save conflict" title={why}><TriangleAlert size={13} /> Not saved</span>
+    )
   if (st === 'offline')
     return (
-      <span className="ed-save offline" title="Changes are kept locally and will retry"><CloudOff size={13} /> Offline</span>
+      <span className="ed-save offline" title="Can’t reach the server. Your changes are kept in this tab and saving retries every few seconds."><CloudOff size={13} /> Offline</span>
     )
   if (st === 'saving' || st === 'dirty')
     return (
@@ -123,6 +129,28 @@ function SaveStatus({ demo }: { demo: boolean }) {
     )
   return (
     <span className="ed-save saved" title={demo ? 'Saved in this browser' : 'All changes saved'}><Check size={13} /> {demo ? 'Saved locally' : 'Saved'}</span>
+  )
+}
+
+/**
+ * A save the server refused: why, and the way out. "Sign in again" opens sign-in in another tab so this one keeps
+ * the edits; coming back here saves them.
+ */
+export function SaveErrorBanner() {
+  const err = useEditor((s) => (s.saveState === 'error' ? s.saveError : undefined))
+  if (!err) return null
+  return (
+    <div className="ed-banner" role="alert">
+      <TriangleAlert size={15} />
+      <span>{err.message}</span>
+      <div className="spacer" />
+      {err.status === 401 && (
+        <button className="btn sm primary" onClick={() => window.open('/login', '_blank')} title="Opens sign-in in a new tab; this tab keeps your changes">
+          Sign in again
+        </button>
+      )}
+      <button className="btn sm" onClick={() => void flush()}>Try again</button>
+    </div>
   )
 }
 

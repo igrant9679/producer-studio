@@ -23,9 +23,11 @@ interface LibState {
   loaded: boolean
   /** Live processing progress per clip, from asset.process job events. */
   progress: Record<string, { p: number; message: string }>
+  /** Bumped when someone saves the space's brand kit: the Brand panel loads it again. */
+  brandRev: number
 }
 
-export const useLibrary = create<LibState>(() => ({ records: [], loading: false, uploads: [], loaded: false, progress: {} }))
+export const useLibrary = create<LibState>(() => ({ records: [], loading: false, uploads: [], loaded: false, progress: {}, brandRev: 0 }))
 
 function trackJob(j: Job) {
   if (j.kind !== 'asset.process' || !j.assetId) return
@@ -42,13 +44,8 @@ function upsertRecord(r: AssetRecord) {
   useLibrary.setState({
     uploads: useLibrary.getState().uploads.map((u) => (u.assetId === r.asset.id ? { ...u, status: r.status === 'uploading' ? 'processing' : r.status, error: r.error } : u)),
   })
-  // refresh metadata of assets already used in the project (waveform, filmstrip, transcript arrive later)
-  const s = useEditor.getState()
-  if (r.status === 'ready' && s.project.assets[r.asset.id]) {
-    const p = structuredClone(s.project)
-    p.assets[r.asset.id] = { ...p.assets[r.asset.id], ...r.asset }
-    s.replaceSilently(p)
-  }
+  // refresh metadata of assets the project uses (waveform, filmstrip, transcript arrive later), outside undo history
+  if (r.status === 'ready') useEditor.getState().updateMedia(r.asset)
 }
 
 export async function loadLibrary(workspaceId: string) {
@@ -63,10 +60,15 @@ export async function loadLibrary(workspaceId: string) {
   }
 }
 
-/** One SSE connection per workspace: asset status for the library + `project` saves for the open project. */
+/** A `workspace` live update; `brand` when the brand kit was saved. */
+function onWorkspace(w: { id: string; deleted: boolean; brand?: boolean }) {
+  if (w.brand) useLibrary.setState({ brandRev: useLibrary.getState().brandRev + 1 })
+}
+
+/** One SSE connection per workspace: asset status for the library, `project` saves for the open project, brand kit saves. */
 export function subscribeWorkspace(workspaceId: string, onProject: (p: { id: string; version: number }) => void): () => void {
   try {
-    return subscribeEvents(workspaceId, { asset: upsertRecord, project: onProject, job: trackJob })
+    return subscribeEvents(workspaceId, { asset: upsertRecord, project: onProject, job: trackJob, workspace: onWorkspace })
   } catch {
     return () => undefined
   }

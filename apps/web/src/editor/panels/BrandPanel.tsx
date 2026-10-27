@@ -7,6 +7,7 @@ import { api } from '../../lib/api'
 import { toast } from '../../lib/toast'
 import * as A from '../actions'
 import { useEditor } from '../store'
+import { useLibrary } from '../uploads'
 
 const DEMO_BRAND: BrandKitDoc = {
   name: 'Producer Studio (sample)',
@@ -22,6 +23,8 @@ export function BrandPanel() {
   const project = useEditor((s) => s.project)
   const [brand, setBrand] = useState<BrandKitDoc | null>(demo ? DEMO_BRAND : null)
   const [loading, setLoading] = useState(!demo)
+  // saved elsewhere (the Brand kit page, a teammate): load it again
+  const brandRev = useLibrary((s) => s.brandRev)
 
   useEffect(() => {
     if (demo || !workspaceId) {
@@ -37,7 +40,7 @@ export function BrandPanel() {
     return () => {
       alive = false
     }
-  }, [demo, workspaceId, projectBrand])
+  }, [demo, workspaceId, projectBrand, brandRev])
 
   const sel = A.selectedItems(project, selection)
   const texts = sel.filter((i): i is TextItem => i.type === 'text')

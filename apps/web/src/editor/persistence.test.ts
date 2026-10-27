@@ -1,5 +1,5 @@
 import { createProject, updateProject } from '@producer/core'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
   project: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock('../lib/api', () => {
 })
 
 import { HttpError } from '../lib/api'
-import { flush, keepBoth, onProjectEvent, overwriteServer, reloadTheirs } from './persistence'
+import { flush, keepBoth, loadInto, onProjectEvent, overwriteServer, reloadTheirs } from './persistence'
 import { useEditor } from './store'
 
 const S = () => useEditor.getState()
@@ -94,5 +94,134 @@ describe('save + sync', () => {
     await onProjectEvent({ id: 'p1', version: 3 })
     expect(api.project).not.toHaveBeenCalled()
     expect(S().saveState).toBe('saved')
+  })
+})
+
+describe('a save the server refuses', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('shows the real reason and stops pretending to retry', async () => {
+    vi.useFakeTimers()
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    api.saveProject.mockRejectedValueOnce(new HttpError(400, { error: 'Invalid project: name: Too big: expected string to have <=200 characters', code: 'invalid' }))
+    await flush()
+    expect(S().saveState).toBe('error')
+    expect(S().saveError).toMatchObject({ status: 400 })
+    expect(S().saveError?.message).toContain('expected string to have <=200 characters')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(api.saveProject).toHaveBeenCalledTimes(1)
+  })
+
+  it('an expired session is told apart, and saving resumes once signed in', async () => {
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    api.saveProject.mockRejectedValueOnce(new HttpError(401, { error: 'Not signed in', code: 'unauthorized' }))
+    await flush()
+    expect(S()).toMatchObject({ saveState: 'error', saveError: { status: 401 } })
+    api.saveProject.mockResolvedValueOnce({ version: 4, updatedAt: 1 })
+    await flush()
+    expect(S()).toMatchObject({ saveState: 'saved', version: 4, saveError: undefined })
+  })
+
+  it('a network failure is still "offline" and retries on its own', async () => {
+    vi.useFakeTimers()
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    api.saveProject.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    api.saveProject.mockResolvedValueOnce({ version: 4, updatedAt: 1 })
+    await flush()
+    expect(S().saveState).toBe('offline')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(api.saveProject).toHaveBeenCalledTimes(2)
+    expect(S().saveState).toBe('saved')
+  })
+})
+
+/** A promise the test settles by hand, standing in for a slow request. */
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+const openSecond = (version = 10) => S().load({ project: createProject({ id: 'p2', name: 'second' }), version, projectId: 'p2', demo: false, workspaceId: 'w1' })
+
+describe('answers for a project that is no longer open', () => {
+  it('a slow save of the previous project leaves the next one alone', async () => {
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    const slow = deferred<{ version: number; updatedAt: number }>()
+    api.saveProject.mockReturnValueOnce(slow.promise)
+    const saving = flush()
+    openSecond()
+    slow.resolve({ version: 4, updatedAt: 1 })
+    await saving
+    expect(S()).toMatchObject({ projectId: 'p2', version: 10, saveState: 'saved' })
+    expect(S().project.name).toBe('second')
+  })
+
+  it("a 409 for the previous project neither raises a conflict here nor offers its content as 'theirs'", async () => {
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    const slow = deferred<{ version: number; updatedAt: number }>()
+    api.saveProject.mockReturnValueOnce(slow.promise)
+    const saving = flush()
+    openSecond()
+    slow.reject(new HttpError(409, { error: 'conflict', details: { version: 7, project: doc('first, elsewhere') } }))
+    await saving
+    expect(S().saveState).toBe('saved')
+    expect(S().conflictProject).toBeUndefined()
+    api.project.mockResolvedValueOnce({ project: createProject({ id: 'p2', name: 'second' }), version: 10, summary: { workspaceId: 'w1' } })
+    await reloadTheirs()
+    expect(S().project.name).toBe('second')
+  })
+
+  it('reopening the same project drops the earlier visit’s save result', async () => {
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    const slow = deferred<{ version: number; updatedAt: number }>()
+    api.saveProject.mockReturnValueOnce(slow.promise)
+    const saving = flush()
+    S().load({ project: doc('mine'), version: 3, projectId: 'p1', demo: false, workspaceId: 'w1' })
+    slow.resolve({ version: 4, updatedAt: 1 })
+    await saving
+    // the reloaded document is version 3's; claiming 4 would let the next save overwrite the edit unseen
+    expect(S().version).toBe(3)
+  })
+
+  it('a live update that arrived during the old save is not replayed against the new project', async () => {
+    S().commit(updateProject(S().project, { name: 'edited' }), 'Rename')
+    const slow = deferred<{ version: number; updatedAt: number }>()
+    api.saveProject.mockReturnValueOnce(slow.promise)
+    const saving = flush()
+    await onProjectEvent({ id: 'p1', version: 20 })
+    openSecond()
+    slow.resolve({ version: 4, updatedAt: 1 })
+    await saving
+    await new Promise((r) => setTimeout(r, 0))
+    expect(api.project).not.toHaveBeenCalled()
+    expect(S()).toMatchObject({ projectId: 'p2', version: 10, saveState: 'saved' })
+  })
+
+  it('a fetch started by a live update for the previous project is dropped', async () => {
+    const slow = deferred<unknown>()
+    api.project.mockReturnValueOnce(slow.promise)
+    const handling = onProjectEvent({ id: 'p1', version: 5 })
+    openSecond(2)
+    slow.resolve({ project: doc('remote first'), version: 5, summary: { workspaceId: 'w1' } })
+    await handling
+    expect(S()).toMatchObject({ projectId: 'p2', version: 2, saveState: 'saved' })
+    expect(S().project.name).toBe('second')
+  })
+
+  it('the project opened last wins when two loads overlap', async () => {
+    const first = deferred<unknown>()
+    api.project.mockReturnValueOnce(first.promise)
+    api.project.mockResolvedValueOnce({ project: createProject({ id: 'p2', name: 'second' }), version: 10, summary: { workspaceId: 'w1' } })
+    const a = loadInto('p1', false)
+    await loadInto('p2', false)
+    first.resolve({ project: doc('first'), version: 3, summary: { workspaceId: 'w1' } })
+    await a
+    expect(S().projectId).toBe('p2')
+    expect(S().project.name).toBe('second')
   })
 })

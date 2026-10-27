@@ -1,6 +1,7 @@
 // Loading, autosave and multi-replica sync. Server projects: debounce 1.2 s -> PUT with baseVersion;
-// 409 -> conflict banner (reload theirs / overwrite / keep both). SSE `project` events from other clients or the
-// desktop sync engine reload silently when there are no local edits. Demo: localStorage, no network.
+// 409 -> conflict banner (reload theirs / overwrite / keep both); other 4xx -> "Not saved" with the server's reason;
+// unreachable -> offline, retried every 5 s. SSE `project` events from other clients or the desktop sync engine
+// reload silently when there are no local edits. Demo: localStorage, no network.
 import type { Project } from '@producer/core'
 import { projectDuration } from '@producer/core'
 import { HttpError, api } from '../lib/api'
@@ -9,20 +10,25 @@ import { useEditor } from './store'
 
 export const AUTOSAVE_MS = 1200
 
+let loading = 0
+
 export async function loadInto(projectId: string, demo: boolean) {
+  const ticket = ++loading
   if (demo) {
     const project = loadDemoProject()
     useEditor.getState().load({ project, version: 0, projectId: 'demo', demo: true })
     return
   }
   const res = await api.project(projectId)
+  // another project was opened while this one was on its way
+  if (ticket !== loading) return
   useEditor.getState().load({ project: res.project, version: res.version, projectId, demo: false, workspaceId: res.summary.workspaceId })
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined
 let inflight: Promise<void> | null = null
-/** Highest server version announced over SSE while a save of ours was in flight. */
-let pendingRemote: number | null = null
+/** Highest server version announced over SSE while a save of ours was in flight, and the visit it was for. */
+let pendingRemote: { session: number; version: number } | null = null
 
 async function saveNow(force = false): Promise<void> {
   const s = useEditor.getState()
@@ -35,27 +41,41 @@ async function saveNow(force = false): Promise<void> {
   if (s.saveState === 'conflict' && !force) return
   if (s.saveState === 'saved' && !force) return
   const project = s.project
+  const session = s.session
   const base = force && s.conflictVersion !== undefined ? s.conflictVersion : s.version
   useEditor.setState({ saveState: 'saving' })
   try {
     const r = await api.saveProject(s.projectId, project, base)
     const now = useEditor.getState()
+    // another project, or this one again, was opened meanwhile: its own load and live updates are what count
+    if (now.session !== session) return
     const changed = now.project !== project
-    useEditor.setState({ version: r.version, conflictVersion: undefined, conflictProject: undefined, saveState: changed ? 'dirty' : 'saved' })
+    useEditor.setState({ version: r.version, conflictVersion: undefined, conflictProject: undefined, saveError: undefined, saveState: changed ? 'dirty' : 'saved' })
     if (changed) schedule()
   } catch (e) {
+    if (useEditor.getState().session !== session) return
     if (e instanceof HttpError && e.status === 409) {
       const d = (e.body.details ?? {}) as { version?: number; project?: Project }
       useEditor.setState({ saveState: 'conflict', conflictVersion: d.version, conflictProject: d.project })
-    } else if (e instanceof HttpError && e.status < 500 && e.status !== 408) {
-      // a request the server rejects (401/403/413…) won't succeed on retry
-      useEditor.setState({ saveState: 'offline' })
+    } else if (e instanceof HttpError && e.status < 500 && e.status !== 408 && e.status !== 429) {
+      // refused (signed out, no access, invalid, too large): the same request won't succeed on retry, so say why.
+      // The next edit, "Try again" or coming back to the tab tries again.
+      useEditor.setState({ saveState: 'error', saveError: { status: e.status, message: refusalMessage(e) } })
     } else {
       useEditor.setState({ saveState: 'offline' })
       clearTimeout(timer)
       timer = setTimeout(() => void flush(), 5000)
     }
   }
+}
+
+/** A refused save in words. */
+function refusalMessage(e: HttpError): string {
+  if (e.status === 401) return 'You were signed out, so your changes aren’t being saved. Sign in again and they’ll save from here.'
+  if (e.status === 403) return 'You can no longer edit this project (your role in this space may have changed). Your changes are only in this tab.'
+  if (e.status === 404) return 'This project no longer exists on the server. Your changes are only in this tab.'
+  if (e.status === 413) return 'This project is too large to save. Remove some captions, clips or tracks and try again.'
+  return `The server refused this version: ${e.message}`
 }
 
 function schedule() {
@@ -71,12 +91,31 @@ export async function flush(force = false): Promise<void> {
     inflight = null
     // an SSE event arrived mid-save: if it announced a version newer than the one we just wrote, handle it now
     if (pendingRemote !== null) {
-      const v = pendingRemote
+      const { session, version } = pendingRemote
       pendingRemote = null
-      void onProjectEvent({ id: useEditor.getState().projectId, version: v })
+      const s = useEditor.getState()
+      if (s.session === session) void onProjectEvent({ id: s.projectId, version })
     }
   })
   return inflight
+}
+
+/**
+ * Save what's on screen and wait for it (export renders the server's copy). Returns null once the server has it,
+ * otherwise why it doesn't.
+ */
+export async function saveForExport(): Promise<string | null> {
+  // edits made while a save is out leave it 'dirty': go round again
+  for (let i = 0; i < 3 && useEditor.getState().saveState !== 'saved'; i++) {
+    await flush()
+    if (useEditor.getState().saveState !== 'dirty') break
+  }
+  const s = useEditor.getState()
+  if (s.saveState === 'saved') return null
+  if (s.saveState === 'conflict') return 'This project was also changed somewhere else, so your version isn’t saved yet. Resolve the conflict (the banner at the top), then export.'
+  if (s.saveState === 'error') return `${s.saveError?.message ?? 'The server refused your latest changes.'} Export renders the saved version, so it waits until they’re saved.`
+  if (s.saveState === 'offline') return 'Can’t reach the server, so your latest changes aren’t saved yet. Export renders the saved version: try again once you’re back online.'
+  return 'Your latest changes are still saving. Try again in a moment.'
 }
 
 /** Swap in a server document, keeping the playhead and whatever selection still exists. */
@@ -87,6 +126,7 @@ function adoptServerDoc(project: Project, version: number) {
     project,
     version,
     saveState: 'saved',
+    saveError: undefined,
     conflictVersion: undefined,
     conflictProject: undefined,
     history: { past: [], future: [] },
@@ -102,7 +142,7 @@ export async function reloadTheirs() {
   const s = useEditor.getState()
   if (s.conflictProject && s.conflictVersion !== undefined) return adoptServerDoc(s.conflictProject, s.conflictVersion)
   const res = await api.project(s.projectId)
-  adoptServerDoc(res.project, res.version)
+  if (useEditor.getState().session === s.session) adoptServerDoc(res.project, res.version)
 }
 
 /** Conflict: overwrite the server copy with the local document. */
@@ -111,6 +151,7 @@ export async function overwriteServer() {
   if (s.conflictVersion === undefined) {
     // conflict detected over SSE without a version in hand: fetch it
     const res = await api.project(s.projectId).catch(() => null)
+    if (useEditor.getState().session !== s.session) return
     if (res) useEditor.setState({ conflictVersion: res.version })
   }
   await flush(true)
@@ -128,7 +169,7 @@ export async function keepBoth(): Promise<string> {
   const doc: Project = { ...s.project, id: created.project.id, name }
   await api.saveProject(created.project.id, doc, created.version)
   // leave the original untouched: don't let the unmount flush retry our conflicting save
-  useEditor.setState({ saveState: 'saved', conflictVersion: undefined, conflictProject: undefined })
+  if (useEditor.getState().session === s.session) useEditor.setState({ saveState: 'saved', conflictVersion: undefined, conflictProject: undefined })
   return created.project.id
 }
 
@@ -142,12 +183,13 @@ export async function onProjectEvent(ev: { id: string; version: number }) {
   if (s.demo || !s.loaded || ev.id !== s.projectId || ev.version <= s.version) return
   if (inflight) {
     // probably our own save echoing back; decide once it resolves
-    pendingRemote = Math.max(pendingRemote ?? 0, ev.version)
+    pendingRemote = { session: s.session, version: Math.max(pendingRemote?.session === s.session ? pendingRemote.version : 0, ev.version) }
     return
   }
   if (s.saveState === 'saved') {
     try {
       const res = await api.project(s.projectId)
+      if (useEditor.getState().session !== s.session) return
       // edits may have started while fetching
       if (useEditor.getState().saveState === 'saved' && res.version > useEditor.getState().version) adoptServerDoc(res.project, res.version)
       else if (res.version > useEditor.getState().version) useEditor.setState({ saveState: 'conflict', conflictVersion: res.version, conflictProject: res.project })
@@ -170,15 +212,21 @@ export function startAutosave(): () => void {
       if (st.loaded) saveDemoProject(st.project)
       return
     }
-    if (st.saveState === 'dirty' || st.saveState === 'saving' || st.saveState === 'offline' || st.saveState === 'conflict') {
+    if (st.saveState !== 'saved') {
       e.preventDefault()
       e.returnValue = ''
     }
   }
+  // back from signing in (or fixing access) in another tab: try the refused save again
+  const onFocus = () => {
+    if (useEditor.getState().saveState === 'error') void flush()
+  }
   window.addEventListener('beforeunload', beforeUnload)
+  window.addEventListener('focus', onFocus)
   return () => {
     unsub()
     clearTimeout(timer)
     window.removeEventListener('beforeunload', beforeUnload)
+    window.removeEventListener('focus', onFocus)
   }
 }

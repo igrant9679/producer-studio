@@ -1,9 +1,11 @@
 // Editor state. Every edit goes through `commit(next, label)` which pushes the previous document onto the undo
 // stack. Rapid edits that share a `coalesce` key (slider drags, trims, canvas drags) collapse into one entry.
-import type { Item, Project } from '@producer/core'
+// Media records from the server go through `updateMedia` and are never undone.
+import type { Asset, Item, Project } from '@producer/core'
 import { create } from 'zustand'
 
-export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict'
+/** `offline`: the server couldn't be reached (retries on its own). `error`: the server refused the save (see saveError). */
+export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'error'
 export type LeftTab = 'media' | 'audio' | 'text' | 'captions' | 'transcript' | 'effects' | 'transitions' | 'filters' | 'brand' | 'ai'
 export type CanvasTool = 'select' | 'hand'
 
@@ -14,6 +16,8 @@ export interface HistoryEntry {
 }
 
 export const HISTORY_CAP = 200
+/** The longest project name the server accepts. */
+export const PROJECT_NAME_MAX = 200
 /** Commits with the same coalesce key within this window merge into one undo entry. */
 export const COALESCE_MS = 1200
 
@@ -29,7 +33,11 @@ export interface EditorState {
   demo: boolean
   projectId: string
   workspaceId?: string
+  /** Counts loads: answers that arrive after another project (or the same one again) was opened are dropped. */
+  session: number
   project: Project
+  /** Freshest media records that arrived during this visit, including clips the current document no longer has. */
+  media: Record<string, Asset>
   /** Server version of the last saved document. */
   version: number
   history: { past: HistoryEntry[]; future: HistoryEntry[] }
@@ -46,6 +54,8 @@ export interface EditorState {
   leftCollapsed: boolean
   rightCollapsed: boolean
   saveState: SaveState
+  /** Why the last save was refused (HTTP status and a sentence for the person), while saveState is 'error'. */
+  saveError?: { status: number; message: string }
   /** On a 409 (or a newer server version while we have unsaved edits): the other replica's version/doc. */
   conflictVersion?: number
   conflictProject?: Project
@@ -64,8 +74,13 @@ export interface EditorState {
   commit: (next: Project, label: string, opts?: CommitOptions) => void
   /** Ends any open coalescing run (call on pointerup). */
   endCoalesce: () => void
-  /** Replace the project without an undo entry (e.g. asset metadata arriving from the server). */
+  /** Replace the project without an undo entry. */
   replaceSilently: (next: Project) => void
+  /**
+   * A media record (duration, proxy, waveform, transcript…) arrived from the server. It goes into the project
+   * without an undo entry and stays out of history: undo and redo keep the freshest record of every clip.
+   */
+  updateMedia: (asset: Pick<Asset, 'id'> & Partial<Asset>) => void
   undo: () => void
   redo: () => void
   select: (ids: string[]) => void
@@ -98,11 +113,29 @@ function existingIds(p: Project): Set<string> {
   return s
 }
 
+function findInHistory(s: EditorState, assetId: string): Asset | undefined {
+  // newest step first
+  for (const e of [...s.history.past, ...s.history.future].reverse()) if (e.project.assets[assetId]) return e.project.assets[assetId]
+  return undefined
+}
+
+/** `target` (an undo or redo step) with each media record swapped for the freshest one: records aren't history. */
+function withFreshMedia(target: Project, s: EditorState): Project {
+  let assets: Project['assets'] | undefined
+  for (const id of Object.keys(target.assets)) {
+    const fresh = s.project.assets[id] ?? s.media[id]
+    if (fresh && fresh !== target.assets[id]) (assets ??= { ...target.assets })[id] = fresh
+  }
+  return assets ? { ...target, assets } : target
+}
+
 export const useEditor = create<EditorState>((set, get) => ({
   loaded: false,
   demo: false,
   projectId: '',
+  session: 0,
   project: emptyProject(),
+  media: {},
   version: 0,
   history: { past: [], future: [] },
   lastCommit: null,
@@ -134,12 +167,15 @@ export const useEditor = create<EditorState>((set, get) => ({
       projectId,
       demo,
       workspaceId,
+      session: get().session + 1,
+      media: {},
       history: { past: [], future: [] },
       lastCommit: null,
       selection: [],
       playhead: 0,
       playing: false,
       saveState: 'saved',
+      saveError: undefined,
       conflictVersion: undefined,
       conflictProject: undefined,
     }),
@@ -178,13 +214,26 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   replaceSilently: (next) => set({ project: next, saveState: get().saveState === 'conflict' ? 'conflict' : 'dirty' }),
 
+  updateMedia: (asset) => {
+    const s = get()
+    const id = asset.id
+    const inDoc = !!s.project.assets[id]
+    // only clips this visit knows (the document, or a step of its history); not the whole workspace library
+    const known = inDoc || !!s.media[id] || [...s.history.past, ...s.history.future].some((e) => e.project.assets[id])
+    if (!known) return
+    const record = { ...(s.project.assets[id] ?? s.media[id] ?? findInHistory(s, id)), ...asset } as Asset
+    const media = { ...s.media, [id]: record }
+    if (!inDoc) return set({ media })
+    set({ media, project: { ...s.project, assets: { ...s.project.assets, [id]: record } }, saveState: s.saveState === 'conflict' ? 'conflict' : 'dirty' })
+  },
+
   undo: () => {
     const s = get()
     const prev = s.history.past[s.history.past.length - 1]
     if (!prev) return
     const ids = existingIds(prev.project)
     set({
-      project: prev.project,
+      project: withFreshMedia(prev.project, s),
       history: { past: s.history.past.slice(0, -1), future: [{ project: s.project, label: prev.label, selection: s.selection }, ...s.history.future] },
       lastCommit: null,
       selection: prev.selection.filter((id) => ids.has(id)),
@@ -199,7 +248,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (!next) return
     const ids = existingIds(next.project)
     set({
-      project: next.project,
+      project: withFreshMedia(next.project, s),
       history: { past: [...s.history.past, { project: s.project, label: next.label, selection: s.selection }], future: s.history.future.slice(1) },
       lastCommit: null,
       selection: next.selection.filter((id) => ids.has(id)),

@@ -255,6 +255,9 @@ workspaceRoutes.put('/:id/brand', async (c) => {
     .db.insert(brandKits)
     .values({ workspaceId: id, doc, updatedAt: now })
     .onConflictDoUpdate({ target: brandKits.workspaceId, set: { doc, updatedAt: now } })
+  // open Brand kit pages and editors reload it
+  const ev = { id, deleted: false, brand: true }
+  ctx().bus.publish(id, 'workspace', ev, { id, inline: ev })
   return c.json(doc)
 })
 

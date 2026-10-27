@@ -16,7 +16,7 @@ import { PropertiesPanel } from './PropertiesPanel'
 import { useShortcuts } from './shortcuts'
 import { useEditor, type LeftTab } from './store'
 import { Timeline } from './Timeline'
-import { TopBar } from './TopBar'
+import { SaveErrorBanner, TopBar } from './TopBar'
 import { loadLibrary, subscribeWorkspace, uploadFiles } from './uploads'
 
 export function EditorPage({ demo = false }: { demo?: boolean }) {
@@ -162,6 +162,7 @@ function EditorShell() {
       <TopBar />
       <StorageBanner />
       {saveState === 'conflict' && <ConflictBanner />}
+      <SaveErrorBanner />
       <div className="ed-body">
         <LeftRail />
         <AssetPanel />

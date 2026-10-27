@@ -2,12 +2,12 @@
 import type { ExportRecord, ExportRequest, ExportResult, Job } from '@producer/core'
 import { EXPORT_FPS, EXPORT_RESOLUTIONS, projectDuration } from '@producer/core'
 import clsx from 'clsx'
-import { Check, Copy, Download, Film, Loader2, X } from 'lucide-react'
+import { Check, Copy, Download, Film, Loader2, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import { Field, Segmented } from './controls'
-import { flush } from './persistence'
+import { saveForExport } from './persistence'
 import { useEditor } from './store'
 import { timecode } from './timelineMath'
 
@@ -41,6 +41,9 @@ export function ExportDialog() {
   const [running, setRunning] = useState(false)
   const [prev, setPrev] = useState<ExportRecord[]>([])
   const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  /** Why the export didn't start (the latest changes couldn't be saved). */
+  const [blocked, setBlocked] = useState<string | null>(null)
   const duration = projectDuration(project)
   const short = Math.min(project.width, project.height)
   const scale = (EXPORT_RESOLUTIONS.find((r) => r.id === resolution)?.short ?? 1080) / short
@@ -63,8 +66,17 @@ export function ExportDialog() {
     setRunning(true)
     setResult(null)
     setShareUrl(null)
+    setJob(null)
+    setBlocked(null)
     try {
-      await flush()
+      // the render reads the saved project: never let it render an older version than the one on screen
+      setSaving(true)
+      const why = await saveForExport()
+      setSaving(false)
+      if (why) {
+        setBlocked(why)
+        return
+      }
       const j = await api.exportProject(projectId, { resolution, fps, quality, format, name })
       setJob(j)
       const done = await waitForJob<ExportResult>(j.id, setJob)
@@ -73,6 +85,7 @@ export function ExportDialog() {
     } catch (e) {
       toastError(e)
     } finally {
+      setSaving(false)
       setRunning(false)
     }
   }
@@ -118,13 +131,19 @@ export function ExportDialog() {
               <span>≈ {estMb < 1 ? '<1' : estMb.toFixed(0)} MB</span>
             </div>
             {demo && <p className="ed-note">Exports render on the server. Sign in to export this edit.</p>}
+            {!demo && <p className="ed-note">Export saves your latest changes first and renders exactly what’s on screen.</p>}
+            {blocked && (
+              <p className="ed-note ed-note-warn" role="alert">
+                <TriangleAlert size={13} /> Not exported: {blocked}
+              </p>
+            )}
           </div>
           <div className="ed-export-side">
             {running || job ? (
               <div className="ed-export-prog">
                 <div className="row">
                   {result ? <Check size={16} color="var(--green)" /> : <Loader2 size={16} className="spin" />}
-                  <b>{result ? 'Export ready' : job?.message || 'Queued…'}</b>
+                  <b>{result ? 'Export ready' : job?.message || (saving ? 'Saving your latest changes…' : 'Queued…')}</b>
                   <div className="spacer" />
                   <span className="mono">{result ? '100%' : pct === null ? '' : `${pct}%`}</span>
                 </div>
