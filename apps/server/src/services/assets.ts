@@ -1,9 +1,10 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { eq, sql } from 'drizzle-orm'
 import { ctx } from '../context'
-import { type AssetMeta, assets } from '../db/schema'
+import { type AssetMeta, assets, jobs } from '../db/schema'
 import { assetRecord } from '../dto'
 import { notFound } from '../http'
 import { newId } from '../ids'
@@ -185,10 +186,59 @@ export async function localSource(row: AssetRow, tmpDir: string, key = row.sourc
   return dest
 }
 
+/** A scratch folder under tmp/<this process>/, so a sweep can tell a live process's folders from a crashed one's. */
 export function tmpDir(tag: string): string {
-  const d = path.join(ctx().config.dataDir, 'tmp', `${tag}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`)
+  const d = path.join(ctx().config.dataDir, 'tmp', ctx().instanceId, `${tag}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`)
   fs.mkdirSync(d, { recursive: true })
   return d
+}
+
+/** A folder untouched this long is not in use by a process that holds no job (an API-only one). */
+const TMP_IDLE_MS = 3600_000
+
+/** Newest modification time in a folder (a few levels down: running encoders keep touching their output). */
+async function newestChange(p: string, depth = 3): Promise<number> {
+  const st = await fsp.stat(p).catch(() => null)
+  if (!st) return 0
+  let newest = st.mtimeMs
+  if (st.isDirectory() && depth > 0) {
+    for (const e of await fsp.readdir(p).catch(() => [])) newest = Math.max(newest, await newestChange(path.join(p, e), depth - 1))
+  }
+  return newest
+}
+
+/**
+ * What a crash left in tmp/ and renders/ (PIP-7): run when the worker starts and every hour. A process's temp folder
+ * is kept while it is this process, holds a running job, or was used in the last hour; a render folder while its job
+ * is running (or KEEP_RENDERS=1). Returns how many folders were removed.
+ */
+export async function sweepTempDirs(now = Date.now()): Promise<number> {
+  const { dataDir } = ctx().config
+  const tmp = path.join(dataDir, 'tmp')
+  const renders = path.join(dataDir, 'renders')
+  // folders first, jobs second: a job is running before it makes its folder, so one made meanwhile is never taken
+  const tmpEntries = await fsp.readdir(tmp).catch(() => [])
+  const renderEntries = process.env.KEEP_RENDERS === '1' ? [] : await fsp.readdir(renders).catch(() => [])
+  const running = await ctx()
+    .db.select({ id: jobs.id, by: jobs.lockedBy, at: jobs.lockedAt })
+    .from(jobs)
+    .where(eq(jobs.status, 'running'))
+  const live = new Set([ctx().instanceId, ...running.filter((j) => j.by && (j.at ?? 0) > now - 5 * 60_000).map((j) => j.by!)])
+  let n = 0
+  for (const e of tmpEntries) {
+    if (live.has(e)) continue
+    const p = path.join(tmp, e)
+    if ((await newestChange(p)) > now - TMP_IDLE_MS) continue
+    await fsp.rm(p, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined)
+    n++
+  }
+  const rendering = new Set(running.map((j) => j.id))
+  for (const e of renderEntries) {
+    if (rendering.has(e)) continue
+    await fsp.rm(path.join(renders, e), { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined)
+    n++
+  }
+  return n
 }
 
 /** sha256 (hex) of a stored object, streamed. */

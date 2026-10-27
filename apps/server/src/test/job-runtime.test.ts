@@ -1,5 +1,7 @@
 // The worker makes every job end (phase 3, "jobs finish"): a hung job is stopped with a reason and its clip leaves
 // "Processing"; a worker that lost its job to stale recovery drops its copy.
+import fs from 'node:fs'
+import path from 'node:path'
 import { eq } from 'drizzle-orm'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { ctx } from '../context'
@@ -259,6 +261,47 @@ describe('restarts (PIP-30)', () => {
     await cancelJob(exp.id)
     await cancelJob(procJob)
     startWorker({ concurrency: 2, heartbeatMs: 100, graceMs: 300 })
+  })
+})
+
+describe('leftovers of a crash (PIP-7)', () => {
+  it('when the worker starts, temp and render folders no live process or running job owns are removed', async () => {
+    const { tmpDir } = await import('../services/assets')
+    const data = ctx().config.dataDir
+    // the sweep of the worker's last start is over before anything is planted
+    await stopWorker()
+    await new Promise((r) => setTimeout(r, 300))
+    expect(tmpDir('probe')).toContain(path.join('tmp', ctx().instanceId))
+    const old = new Date(Date.now() - 3 * 3600_000)
+    const plant = (rel: string, age?: Date) => {
+      const dir = path.join(data, rel)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'part.mp4'), 'x')
+      if (age) {
+        fs.utimesSync(path.join(dir, 'part.mp4'), age, age)
+        fs.utimesSync(dir, age, age)
+        fs.utimesSync(path.dirname(dir), age, age)
+      }
+      return dir
+    }
+    // a process holding a running job elsewhere (a relay: PGlite's start-up recovery requeues anything else)
+    const now = Date.now()
+    const [busy] = await ctx()
+      .db.insert(jobs)
+      .values({ id: `j_rt_live_${now.toString(36)}`, kind: 'voice.relay', status: 'running', input: {}, ...meta(), attempts: 1, lockedBy: 'w_live', lockedAt: now, createdAt: now, updatedAt: now })
+      .returning()
+    const crashed = plant('tmp/w_crashed/proc-as_1-abc', old)
+    const legacy = plant('tmp/proc-as_2-def', old)
+    const liveProc = plant('tmp/w_live/stt-as_3-ghi', old)
+    const recent = plant('tmp/w_apionly/script-jkl')
+    const mine = plant(`tmp/${ctx().instanceId}/tts-mno`, old)
+    const deadRender = plant('renders/j_crashed_render')
+    const liveRender = plant(`renders/${busy.id}`)
+    startWorker({ concurrency: 2, heartbeatMs: 100, graceMs: 300 })
+    await waitFor(async () => !fs.existsSync(crashed) && !fs.existsSync(deadRender))
+    expect(fs.existsSync(legacy)).toBe(false)
+    for (const kept of [liveProc, recent, mine, liveRender]) expect(fs.existsSync(kept), kept).toBe(true)
+    await ctx().db.delete(jobs).where(eq(jobs.id, busy.id))
   })
 })
 

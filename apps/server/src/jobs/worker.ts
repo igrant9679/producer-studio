@@ -9,7 +9,7 @@ import { assets, jobs, workspaces } from '../db/schema'
 import { log } from '../log'
 import { failAssetOfJob, reconcileAssets } from '../services/asset-recovery'
 import { recoverRelays } from '../routes/voice'
-import { assetPrefix } from '../services/assets'
+import { assetPrefix, sweepTempDirs } from '../services/assets'
 import { pruneOldRows } from '../services/retention'
 import { publicJobError } from './errors'
 import { type JobRow, cancelJob, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, requeueForShutdown, updateProgress } from './queue'
@@ -344,6 +344,14 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
   const sweep = () => void reconcileAssets().catch((err) => log.warn('asset reconcile failed', { err }))
   const first = setTimeout(sweep, 30_000)
   const recon = setInterval(sweep, 5 * 60_000)
+  // temp and render folders a crash left behind (now, and hourly)
+  const sweepTmp = () =>
+    void sweepTempDirs()
+      .then((n) => n && log.info('removed leftover temp folders', { n }))
+      .catch((err) => log.warn('temp folder sweep failed', { err }))
+  sweepTmp()
+  const tmpSweeps = setInterval(sweepTmp, 3600_000)
+  tmpSweeps.unref()
   // expired sessions, old finished jobs and spent invites
   const prune = () => void pruneOldRows().catch((err) => log.warn('pruning old rows failed', { err }))
   const firstPrune = setTimeout(prune, 3 * 60_000)
@@ -362,6 +370,7 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
     clearInterval(rec)
     clearTimeout(first)
     clearInterval(recon)
+    clearInterval(tmpSweeps)
     clearTimeout(firstPrune)
     clearInterval(pruning)
     // a deploy is not a failed attempt: the jobs go back in the queue first, then their processes are stopped
