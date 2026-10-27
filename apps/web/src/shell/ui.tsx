@@ -358,13 +358,13 @@ export interface MenuItemDef {
   className?: string
 }
 
-/** A menu (role="menu"). Its first item takes focus when it opens, unless focus is already in the same popover. */
+/** A menu (role="menu"). In a popover, its first item takes focus when it opens, unless focus is already in the popover. */
 export function MenuList({ items, close, label }: { items: MenuItemDef[]; close: () => void; label?: string }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    const el = ref.current
-    if (!el || el.closest('.ps-pop')?.contains(document.activeElement)) return
-    menuItems(el)[0]?.focus()
+    const pop = ref.current?.closest('.ps-pop')
+    if (!pop || pop.contains(document.activeElement)) return
+    menuItems(ref.current)[0]?.focus()
   }, [])
   return (
     <div role="menu" aria-label={label} ref={ref}>
