@@ -234,8 +234,7 @@ export const api = {
 
   // jobs
   job: <R = unknown>(id: string) => req<Job<R>>('GET', `/jobs/${id}`),
-  /** Newest first, a page at a time (pass the last page's `nextCursor` for the next). */
-  jobs: (opts: { projectId?: string; workspaceId?: string; cursor?: string; limit?: number }) => req<Page<Job>>('GET', `/jobs${qs(opts)}`),
+  jobs: (opts: { projectId?: string; workspaceId?: string }) => listAll<Job>(`/jobs${qs(opts)}`),
   cancelJob: (id: string) => req<Job>('POST', `/jobs/${id}/cancel`),
 
   // ai
