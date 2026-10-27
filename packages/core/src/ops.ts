@@ -4,6 +4,7 @@ import { createAudioItem, createCaptionItem, createTrack } from './factory'
 import type {
   AnimProp,
   AudioItem,
+  CaptionItem,
   CaptionStyle,
   Item,
   Keyframe,
@@ -110,22 +111,30 @@ export function insertTrack(p: Project, kind: TrackKind, aboveIndex?: number): T
   return track
 }
 
+/** Move the items carrying `linkId` on every track but `except` by `by` seconds. */
+function shiftLinked(p: Project, linkId: string, by: number, except?: Track) {
+  for (const tr of p.tracks) {
+    if (tr === except) continue
+    for (const o of tr.items) if (o.linkId === linkId) o.start = Math.max(0, round(o.start + by, 4))
+  }
+}
+
 /** Pack the magnetic main track: items edge to edge in their current order starting at 0. */
 export function packMain(p: Project) {
   const m = mainTrack(p)
   if (!m) return
   sortItems(m)
   let t = 0
+  const led = new Set<string>()
   for (const it of m.items) {
     const delta = round(t, 4) - it.start
     it.start = round(t, 4)
     t += it.duration
-    // linked items on other tracks (separated audio) ride along with their main-track clip
-    if (it.linkId && Math.abs(delta) > EPS) {
-      for (const tr of p.tracks) {
-        if (tr === m) continue
-        for (const o of tr.items) if (o.linkId === it.linkId) o.start = Math.max(0, round(o.start + delta, 4))
-      }
+    // linked items on other tracks (separated audio) ride along with their main-track clip; the first clip of a
+    // link leads, so older documents where split pieces share one link still move it only once
+    if (it.linkId && !led.has(it.linkId)) {
+      led.add(it.linkId)
+      if (Math.abs(delta) > EPS) shiftLinked(p, it.linkId, delta, m)
     }
   }
 }
@@ -236,6 +245,24 @@ function mediaSpan(p: Project, it: Item): { in: number; speed: number; max: numb
   return { in: it.in, speed: it.speed, max }
 }
 
+/** A reversed clip plays its source range backwards: its first frame is the end of the range, its last is `in`. */
+function isReversed(it: Item): boolean {
+  return it.type === 'video' && !!it.reverse && it.freezeAt === undefined
+}
+
+/** Source time a video/audio item shows at timeline time t. */
+function sourceAt(it: VideoItem | AudioItem, t: number): number {
+  if (it.type === 'video' && it.freezeAt !== undefined) return it.freezeAt
+  const local = (t - it.start) * it.speed
+  return isReversed(it) ? it.in + it.duration * it.speed - local : it.in + local
+}
+
+/** Timeline time at which a video/audio item shows source time `src`. */
+function timeAt(it: VideoItem | AudioItem, src: number): number {
+  const local = isReversed(it) ? it.in + it.duration * it.speed - src : src - it.in
+  return it.start + local / it.speed
+}
+
 /**
  * Trim an edge to timeline time `t`. Media items can't be extended past their source bounds.
  * Main-track trims ripple (the track re-packs).
@@ -247,14 +274,22 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
   const it = f.item
   const minDur = 1 / p.fps
   const span = mediaSpan(p, it)
+  const frozen = it.type === 'video' && it.freezeAt !== undefined
   if (edge === 'end') {
     let dur = Math.max(minDur, t - it.start)
-    if (span && (it.type === 'video' ? !(it as VideoItem).freezeAt : true)) dur = Math.min(dur, (span.max - span.in) / span.speed)
+    if (span && isReversed(it)) {
+      // the end of a reversed clip is the start of its range: trimming it moves `in`, extending needs source before it
+      dur = Math.min(dur, it.duration + span.in / span.speed)
+      ;(it as VideoItem).in = round(Math.max(0, span.in + (it.duration - dur) * span.speed), 4)
+    } else if (span && !frozen) dur = Math.min(dur, (span.max - span.in) / span.speed)
     it.duration = round(dur, 4)
   } else {
     const end = itemEnd(it)
     let start = Math.min(t, end - minDur)
-    if (span) {
+    if (span && isReversed(it)) {
+      // the start of a reversed clip is the end of its range: `in` stays, extending needs source after the range
+      start = Math.max(start, it.start - (span.max - span.in - it.duration * span.speed) / span.speed)
+    } else if (span) {
       // moving the start later advances `in`; earlier needs source headroom
       const deltaSrc = (start - it.start) * span.speed
       const newIn = span.in + deltaSrc
@@ -273,11 +308,25 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
   return touch(p)
 }
 
+/**
+ * Move keyframes by `by` seconds and drop the ones outside 0..maxT, except the nearest one beyond each edge: the
+ * curve inside the item keeps running between the same keyframes with the same easing, so it looks exactly as before.
+ */
 function shiftKeyframes(kfs: Partial<Record<AnimProp, Keyframe[]>>, by: number, maxT: number) {
   for (const k of Object.keys(kfs) as AnimProp[]) {
     const list = kfs[k]
     if (!list) continue
-    kfs[k] = list.map((kf) => ({ ...kf, t: round(kf.t + by, 4) })).filter((kf) => kf.t >= -EPS && kf.t <= maxT + EPS)
+    const moved = list.map((kf) => ({ ...kf, t: round(kf.t + by, 4) }))
+    let before = -1
+    let after = -1
+    moved.forEach((kf, i) => {
+      if (kf.t < -EPS) before = i
+      else if (kf.t > maxT + EPS && after < 0) after = i
+    })
+    // an edge with a keyframe of its own needs nothing from beyond it
+    if (moved.some((kf) => Math.abs(kf.t) <= EPS)) before = -1
+    if (moved.some((kf) => Math.abs(kf.t - maxT) <= EPS)) after = -1
+    kfs[k] = moved.filter((kf, i) => i === before || i === after || (kf.t >= -EPS && kf.t <= maxT + EPS))
   }
 }
 
@@ -286,17 +335,42 @@ export function splitItem(p0: Project, itemId: string, t: number): { project: Pr
   const p = clone(p0)
   const f = findItem(p, itemId)
   if (!f || f.item.locked) return { project: p0 }
-  const it = f.item
+  const linkId = f.item.linkId
+  const right = cutAt(p, f.track, f.index, t)
+  if (!right) return { project: p0 }
+  // linked items (separated audio) are cut at the same moment, and the right-hand pieces get a link of their own
+  if (linkId) {
+    right.linkId = uid('l')
+    for (const tr of p.tracks)
+      for (let i = 0; i < tr.items.length; i++) {
+        const o = tr.items[i]
+        if (o.linkId !== linkId || o.id === itemId) continue
+        const r = o.locked ? null : cutAt(p, tr, i, t)
+        if (r) {
+          r.linkId = right.linkId
+          i++
+        } else if (o.start + o.duration / 2 >= t) o.linkId = right.linkId
+      }
+  }
+  return { project: touch(p), rightId: right.id }
+}
+
+/** Cut the item at `index` on `track` at timeline time t, in place. Returns the right piece (null too near an edge). */
+function cutAt(p: Project, track: Track, index: number, t: number): Item | null {
+  const it = track.items[index]
   const local = t - it.start
-  if (local <= 1 / p.fps || local >= it.duration - 1 / p.fps) return { project: p0 }
+  if (local <= 1 / p.fps || local >= it.duration - 1 / p.fps) return null
   const right = clone(it)
+  const rest = it.duration - local
   right.id = uid(it.id.split('_')[0] || 'i')
   right.start = round(t, 4)
-  right.duration = round(it.duration - local, 4)
+  right.duration = round(rest, 4)
   it.duration = round(local, 4)
   if (it.type === 'video' || it.type === 'audio') {
     const r = right as VideoItem | AudioItem
-    if (!(it.type === 'video' && it.freezeAt !== undefined)) r.in = round(it.in + local * it.speed, 4)
+    // a reversed clip shows the later part of its range first, so the left piece takes that part
+    if (isReversed(it)) (it as VideoItem).in = round(it.in + rest * it.speed, 4)
+    else if (!(it.type === 'video' && it.freezeAt !== undefined)) r.in = round(it.in + local * it.speed, 4)
     r.fadeIn = 0
     ;(it as VideoItem | AudioItem).fadeOut = 0
   }
@@ -317,8 +391,8 @@ export function splitItem(p0: Project, itemId: string, t: number): { project: Pr
     it.words = words.filter((w) => w.start < local)
     ;(right as typeof it).words = words.filter((w) => w.start >= local).map((w) => ({ ...w, start: w.start - local, end: w.end - local }))
   }
-  f.track.items.splice(f.index + 1, 0, right)
-  return { project: touch(p), rightId: right.id }
+  track.items.splice(index + 1, 0, right)
+  return right
 }
 
 /** Split every unlocked item under the playhead (Ctrl+B with nothing selected splits the selection or main). */
@@ -332,17 +406,29 @@ export function splitAt(p0: Project, t: number, itemIds?: string[]): Project {
 export function deleteItems(p0: Project, ids: string[], opts: { ripple?: boolean } = {}): Project {
   const p = clone(p0)
   const set = new Set(ids)
+  // links led by a clip staying on the main track move with that clip when the main track packs, not by a ripple
+  const anchored = new Set(mainTrack(p)?.items.filter((i) => i.linkId && !set.has(i.id)).map((i) => i.linkId!))
+  const shifts = new Map<Item, number>()
   for (const t of p.tracks) {
     if (t.locked) continue
     const removed = t.items.filter((i) => set.has(i.id))
     t.items = t.items.filter((i) => !set.has(i.id))
     if (opts.ripple && !t.main && removed.length) {
       // close the gap left by each removed item on that track
-      for (const r of removed.sort((a, b) => b.start - a.start)) {
-        for (const i of t.items) if (i.start >= itemEnd(r) - EPS) i.start = round(i.start - r.duration, 4)
+      for (const i of t.items) {
+        const by = removed.reduce((n, r) => (i.start >= itemEnd(r) - EPS ? n + r.duration : n), 0)
+        if (by > 0 && !(i.linkId && anchored.has(i.linkId))) shifts.set(i, by)
       }
     }
   }
+  // linked items close up together, by the first gap found for their link
+  const byLink = new Map<string, number>()
+  for (const [i, by] of shifts) if (i.linkId && !byLink.has(i.linkId)) byLink.set(i.linkId, by)
+  for (const t of p.tracks)
+    for (const i of t.items) {
+      const by = i.linkId && byLink.has(i.linkId) ? byLink.get(i.linkId) : shifts.get(i)
+      if (by) i.start = round(i.start - by, 4)
+    }
   packMain(p)
   pruneEmptyTracks(p)
   return touch(p)
@@ -427,13 +513,22 @@ export function freezeFrame(p0: Project, itemId: string, t: number, holdSec = 2)
   const f = findItem(p0, itemId)
   if (!f || f.item.type !== 'video') return p0
   const v = f.item
-  const srcTime = v.in + (t - v.start) * v.speed
+  const srcTime = sourceAt(v, t)
   const { project: split, rightId } = splitItem(p0, itemId, t)
   const p = clone(split)
-  const freeze: VideoItem = { ...clone(v), id: uid('v'), start: t, duration: holdSec, freezeAt: round(srcTime, 4), fadeIn: 0, fadeOut: 0, animations: {}, transitionOut: undefined, keyframes: {} }
+  // the held picture has no sound, so it is linked to nothing
+  const freeze: VideoItem = { ...clone(v), id: uid('v'), start: t, duration: holdSec, freezeAt: round(srcTime, 4), fadeIn: 0, fadeOut: 0, animations: {}, transitionOut: undefined, keyframes: {}, linkId: undefined }
   const track = findTrack(p, f.track.id)!
   const insertAt = rightId ? track.items.findIndex((i) => i.id === rightId) : track.items.length
-  if (!track.main) for (const i of track.items) if (i.start >= t - EPS) i.start = round(i.start + holdSec, 4)
+  if (!track.main) {
+    const links = new Set<string>()
+    for (const i of track.items)
+      if (i.start >= t - EPS) {
+        i.start = round(i.start + holdSec, 4)
+        if (i.linkId) links.add(i.linkId)
+      }
+    for (const l of links) shiftLinked(p, l, holdSec, track)
+  }
   track.items.splice(insertAt < 0 ? track.items.length : insertAt, 0, freeze)
   if (track.main) packMain(p)
   else sortItems(track)
@@ -532,6 +627,8 @@ export function itemWords(p: Project, itemId: string): Array<TranscriptWord & { 
   const f = findItem(p, itemId)
   if (!f || (f.item.type !== 'video' && f.item.type !== 'audio')) return []
   const it = f.item
+  // a freeze frame holds one picture and plays no sound
+  if (it.type === 'video' && it.freezeAt !== undefined) return []
   const tr = p.assets[it.assetId]?.transcript
   if (!tr) return []
   const srcEnd = it.in + it.duration * it.speed
@@ -539,9 +636,11 @@ export function itemWords(p: Project, itemId: string): Array<TranscriptWord & { 
   for (const seg of tr.segments)
     for (const w of seg.words) {
       if (w.end <= it.in || w.start >= srcEnd) continue
-      out.push({ w: w.w, srcStart: w.start, srcEnd: w.end, start: round(it.start + (w.start - it.in) / it.speed, 4), end: round(it.start + (w.end - it.in) / it.speed, 4) })
+      const a = timeAt(it, w.start)
+      const b = timeAt(it, w.end)
+      out.push({ w: w.w, srcStart: w.start, srcEnd: w.end, start: round(Math.min(a, b), 4), end: round(Math.max(a, b), 4) })
     }
-  return out
+  return isReversed(it) ? out.reverse() : out
 }
 
 /**
@@ -551,6 +650,8 @@ export function itemWords(p: Project, itemId: string): Array<TranscriptWord & { 
 export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ start: number; end: number }>): Project {
   const f = findItem(p0, itemId)
   if (!f || (f.item.type !== 'video' && f.item.type !== 'audio')) return p0
+  // a freeze frame has no source range to cut (pause removal used to cut pieces out of it)
+  if (f.item.type === 'video' && f.item.freezeAt !== undefined) return p0
   const it0 = f.item
   const trackId = f.track.id
   const sorted = [...ranges].filter((r) => r.end - r.start > 0.01).sort((a, b) => b.start - a.start) // right to left keeps earlier times valid
@@ -564,8 +665,10 @@ export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ sta
     })
     if (!pieceId) continue
     const piece = findItem(p, pieceId)!.item as VideoItem | AudioItem
-    const tStart = Math.max(piece.start, piece.start + (r.start - piece.in) / piece.speed)
-    const tEnd = Math.min(itemEnd(piece), piece.start + (r.end - piece.in) / piece.speed)
+    // a reversed piece shows the range's end first
+    const at = [timeAt(piece, r.start), timeAt(piece, r.end)]
+    const tStart = Math.max(piece.start, Math.min(...at))
+    const tEnd = Math.min(itemEnd(piece), Math.max(...at))
     let midId = pieceId
     const a = splitItem(p, pieceId, tStart)
     if (a.rightId) {
@@ -578,6 +681,10 @@ export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ sta
       p = b.project
       ids.push(b.rightId)
     }
+    // the same stretch of the linked audio goes too; it follows the ripple of the item's own track
+    const link = findItem(p, midId)!.item.linkId
+    const partners = link ? p.tracks.flatMap((t) => t.items).filter((i) => i.linkId === link && i.id !== midId) : []
+    if (partners.length) p = deleteItems(p, partners.map((i) => i.id))
     p = deleteItems(p, [midId], { ripple: true })
     ids = ids.filter((id) => id !== midId)
   }
@@ -657,14 +764,47 @@ export function generateCaptions(p0: Project, opts: { itemIds?: string[]; style?
   if (!words.length) return touch(p)
   const track = insertTrack(p, 'caption')
   if (style) track.captionStyle = clone(style)
-  const lines = chunkWords(words, track.captionStyle!.maxWordsPerLine)
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
+  track.items.push(...captionLines(words, track.captionStyle!.maxWordsPerLine))
+  return touch(p)
+}
+
+/** Caption items for timed words (timeline seconds), at most `maxWords` a line; no line runs past `until`. */
+function captionLines(words: TranscriptWord[], maxWords: number, until = Infinity): CaptionItem[] {
+  const lines = chunkWords(words, maxWords)
+  return lines.map((line, i) => {
     const start = line[0].start
-    const nextStart = lines[i + 1]?.[0].start ?? Infinity
+    const nextStart = lines[i + 1]?.[0].start ?? until
     const end = Math.min(Math.max(line[line.length - 1].end + 0.15, start + 0.6), nextStart)
-    track.items.push(createCaptionItem(round(start, 4), round(end - start, 4), line.map((w) => w.w).join(' '), line.map((w) => ({ w: w.w, start: round(w.start - start, 4), end: round(w.end - start, 4) }))))
+    return createCaptionItem(round(start, 4), round(end - start, 4), line.map((w) => w.w).join(' '), line.map((w) => ({ w: w.w, start: round(w.start - start, 4), end: round(w.end - start, 4) })))
+  })
+}
+
+/**
+ * Break a caption track's lines again at `maxWords` words. Only lines made from a transcript (they carry word
+ * timings) are re-broken; imported, typed and edited captions stay exactly as they are and nothing runs into them.
+ */
+export function rechunkCaptions(p0: Project, trackId: string, maxWords: number): Project {
+  const p = clone(p0)
+  const track = findTrack(p, trackId)
+  if (!track || track.kind !== 'caption') return p0
+  sortItems(track)
+  const items: Item[] = []
+  let run: CaptionItem[] = []
+  const flush = (until: number) => {
+    // words a trim cut off the end stay off
+    const words = run.flatMap((c) => c.words!.filter((w) => w.start < c.duration).map((w) => ({ w: w.w, start: round(c.start + w.start, 4), end: round(c.start + w.end, 4) })))
+    if (words.length) items.push(...captionLines(words, maxWords, until))
+    run = []
   }
+  for (const it of track.items) {
+    if (it.type === 'caption' && it.words?.length) run.push(it)
+    else {
+      flush(it.start)
+      items.push(it)
+    }
+  }
+  flush(Infinity)
+  track.items = items
   return touch(p)
 }
 
