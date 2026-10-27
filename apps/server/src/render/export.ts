@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { and, eq, inArray } from 'drizzle-orm'
-import { EXPORT_RESOLUTIONS, compileToHyperFrames, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
+import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
 import { childEnv } from '../child-env'
 import { REPO_ROOT } from '../config'
 import { ctx } from '../context'
@@ -59,6 +59,53 @@ function assetIdsUsed(p: Project): string[] {
   return [...ids]
 }
 
+/**
+ * Size for a reversed copy: the source scaled down until it just covers the output frame (the largest a fitted clip
+ * is drawn), never up. Even dimensions; undefined when the source size isn't known (it is then kept).
+ */
+export function reversedSize(srcW: number | undefined, srcH: number | undefined, output: { w: number; h: number }): { w: number; h: number } | undefined {
+  if (!srcW || !srcH) return undefined
+  const s = Math.min(1, Math.max(output.w / srcW, output.h / srcH))
+  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
+  return { w: even(srcW * s), h: even(srcH * s) }
+}
+
+/** Frames reversed at a time: ffmpeg's reverse filter keeps every decoded frame of its input in memory. */
+const REVERSE_CHUNK_FRAMES = 60
+
+/**
+ * Write source `range` of `src`, played backwards, to `out`: reversed a couple of seconds at a time (last chunk
+ * first) at the output size and frame rate, then joined, so memory stays at one chunk whatever the clip's length or
+ * resolution. The copy is silent (reversed clips are, in the preview too).
+ */
+export async function reverseRange(src: string, out: string, range: { from: number; to: number }, opts: { size?: { w: number; h: number }; fps: number; signal?: AbortSignal }) {
+  const parts = `${out}.parts`
+  fs.mkdirSync(parts, { recursive: true })
+  const fps = Math.min(120, Math.max(1, opts.fps))
+  const chunk = Math.max(0.25, REVERSE_CHUNK_FRAMES / fps)
+  const len = Math.max(1 / fps, range.to - range.from)
+  const n = Math.max(1, Math.ceil(len / chunk - 1e-6))
+  // never upscale (a draft reverses the smaller proxy)
+  const vf = `${opts.size ? `scale='min(iw,${opts.size.w})':-2,` : ''}fps=${fps},reverse`
+  const list: string[] = []
+  try {
+    for (let i = n - 1; i >= 0; i--) {
+      const start = range.from + i * chunk
+      const part = path.join(parts, `${n - 1 - i}.mp4`)
+      const t = Math.min(chunk, range.from + len - start)
+      await ffmpeg(['-ss', String(round3(start)), '-t', String(round3(t)), '-i', src, '-vf', vf, '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', part], { signal: opts.signal })
+      list.push(`file '${part.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`)
+    }
+    const listFile = path.join(parts, 'list.txt')
+    fs.writeFileSync(listFile, list.join('\n') + '\n')
+    await ffmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-movflags', '+faststart', out], { signal: opts.signal })
+  } finally {
+    fs.rmSync(parts, { recursive: true, force: true })
+  }
+}
+
+const round3 = (n: number) => Math.round(n * 1000) / 1000
+
 export interface PreparedRender {
   dir: string
   index: string
@@ -71,7 +118,12 @@ export interface PreparedRender {
  * Write everything the composition needs into `dir`: media (hardlinked/copied or downloaded), freeze-frame stills,
  * reversed clips, runtime.js, gsap.min.js, font files, and index.html.
  */
-export async function prepareRenderDir(project: Project, workspaceId: string, dir: string, opts: { useProxy?: boolean; signal?: AbortSignal; progress?: (f: number, m: string) => void; output?: { w: number; h: number } } = {}): Promise<PreparedRender> {
+export async function prepareRenderDir(
+  project: Project,
+  workspaceId: string,
+  dir: string,
+  opts: { useProxy?: boolean; signal?: AbortSignal; progress?: (f: number, m: string) => void; output?: { w: number; h: number }; fps?: number } = {},
+): Promise<PreparedRender> {
   fs.mkdirSync(path.join(dir, 'assets'), { recursive: true })
   const files: string[] = []
   const ids = assetIdsUsed(project)
@@ -101,14 +153,25 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
     files.push(`assets/${name}`)
   }
   fs.rmSync(path.join(dir, '.dl'), { recursive: true, force: true })
-  // freeze-frame stills and reversed clips
+  // freeze-frame stills, reversed clips and the frames clips hold before their files start
   const freeze = new Map<string, string>()
   const reversed = new Map<string, string>()
-  for (const t of project.tracks)
-    for (const it of t.items) {
+  const holds = new Map<string, string>()
+  for (let ti = 0; ti < project.tracks.length; ti++)
+    for (let ii = 0; ii < project.tracks[ti].items.length; ii++) {
+      const it = project.tracks[ti].items[ii]
       if (it.type !== 'video') continue
       const src = localFiles.get(it.assetId)
       if (!src) continue
+      const timing = exportVideoTiming(project, ti, ii)
+      if (it.freezeAt === undefined && timing.hold) {
+        const out = `stills/${it.id}-hold.png`
+        fs.mkdirSync(path.join(dir, 'stills'), { recursive: true })
+        await ffmpeg(['-ss', String(timing.hold.at), '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
+        holds.set(it.id, out)
+        files.push(out)
+      }
       if (it.freezeAt !== undefined) {
         const out = `stills/${it.id}.png`
         fs.mkdirSync(path.join(dir, 'stills'), { recursive: true })
@@ -116,11 +179,10 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
         if (!fs.existsSync(path.join(dir, out))) await ffmpeg(['-sseof', '-0.1', '-i', src, '-frames:v', '1', path.join(dir, out)], { signal: opts.signal })
         freeze.set(it.id, out)
         files.push(out)
-      } else if (it.reverse) {
+      } else if (it.reverse && timing.reversed) {
         const out = `reversed/${it.id}.mp4`
-        fs.mkdirSync(path.join(dir, 'reversed'), { recursive: true })
-        const span = it.duration * it.speed
-        await ffmpeg(['-ss', String(it.in), '-t', String(span), '-i', src, '-vf', 'reverse', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', path.join(dir, out)], { signal: opts.signal })
+        const a = project.assets[it.assetId]
+        await reverseRange(src, path.join(dir, out), timing.reversed, { size: reversedSize(a?.width, a?.height, opts.output ?? { w: project.width, h: project.height }), fps: opts.fps ?? project.fps ?? 30, signal: opts.signal })
         reversed.set(it.id, out)
         files.push(out)
       }
@@ -134,6 +196,7 @@ export async function prepareRenderDir(project: Project, workspaceId: string, di
     assetPath: (id) => rel.get(id) ?? '',
     freezeFramePath: (id) => freeze.get(id),
     reversedPath: (id) => reversed.get(id),
+    holdFramePath: (id) => holds.get(id),
     runtimePath: 'runtime.js',
     gsapPath: 'gsap.min.js',
     fontFaceCss: fonts.css,
@@ -236,7 +299,7 @@ export async function exportRender(jc: JobContext): Promise<ExportResult> {
     // Render natively at the requested size: the stage is scaled inside the composition so text, shapes and
     // captions are drawn at full resolution and source footage keeps its detail (no post-render upscale).
     const tgt = targetSize(project.width, project.height, input.resolution)
-    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: input.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt })
+    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: input.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt, fps: input.fps })
     jc.check()
     jc.progress(0.09, 'Checking composition')
     const lint = await lintComposition(dir, jc.signal)

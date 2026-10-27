@@ -1,14 +1,20 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { beforeAll, describe, expect, it } from 'vitest'
-import { addAsset, addItem, createAudioItem, createProject, createTextItem, createVideoItem, generateCaptions, type Project } from '@producer/core'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { addAsset, addItem, createAudioItem, createProject, createTextItem, createVideoItem, exportVideoTiming, generateCaptions, mainTrack, type Project } from '@producer/core'
 import { buildProducerTimeline, syntheticTranscript } from '../ai/produce'
 import { assetDoc } from '../dto'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
-import { processAsset } from '../media/process'
+import { probe, processAsset } from '../media/process'
 import { lintComposition, parseRenderProgress, prepareRenderDir, targetSize } from '../render/export'
+
+// every ffmpeg call still runs; the spy shows how the reversed copies are made
+vi.mock('../media/proc', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../media/proc')>()
+  return { ...m, ffmpeg: vi.fn(m.ffmpeg) }
+})
 import { createAssetFromFile } from '../services/assets'
 import { setup, signup } from './helpers'
 
@@ -17,6 +23,13 @@ let userId: string
 let project: Project
 let videoId: string
 let freezeItemId: string
+
+/** One frame of `file` at `t`, as 64×36 grey bytes. */
+async function gray(file: string, t: number, dir: string): Promise<Buffer> {
+  const out = path.join(dir, `frame-${Math.random().toString(36).slice(2)}.gray`)
+  await ffmpeg(['-ss', String(t), '-i', file, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'gray', out])
+  return fs.readFileSync(out)
+}
 
 beforeAll(async () => {
   const t = await setup()
@@ -62,6 +75,59 @@ describe('export compile', () => {
     const runtime = fs.readFileSync(path.join(dir, 'runtime.js'), 'utf8')
     expect(runtime).toContain('ProducerRuntime')
     expect(prep.duration).toBe(3)
+    const lint = await lintComposition(dir)
+    expect(lint.errors).toEqual([])
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('reverses a clip in short chunks at the output size, padded for its pre-roll (PIP-4, PIP-5)', async () => {
+    const a = project.assets[videoId]
+    let p = createProject({ name: 'Reverse', width: 1280, height: 720 })
+    p = addAsset(p, a)
+    p = addItem(p, createVideoItem(a, 0, { duration: 1.5, transitionOut: { type: 'crossfade', duration: 1 } }))
+    // source 0..2 backwards; the 1 s of source after it is there to pre-roll into the crossfade
+    p = addItem(p, createVideoItem(a, 1.5, { duration: 2, reverse: true }))
+    const track = mainTrack(p)!
+    const rev = track.items[1]
+    const timing = exportVideoTiming(p, p.tracks.indexOf(track), 1)
+    expect(timing.reversed).toEqual({ from: 0, to: 2.5 })
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-render-'))
+    vi.mocked(ffmpeg).mockClear()
+    await prepareRenderDir(p, workspaceId, dir, { output: { w: 320, h: 180 }, fps: 30 })
+    const copy = path.join(dir, 'reversed', `${rev.id}.mp4`)
+    const info = await probe(copy)
+    expect({ w: info.width, h: info.height }).toEqual({ w: 320, h: 180 })
+    expect(info.duration).toBeCloseTo(2.5, 1)
+    // each reverse holds at most 2 s of decoded frames, never the whole clip
+    const reverses = vi.mocked(ffmpeg).mock.calls.map((c) => c[0]).filter((args) => /reverse/.test(args[args.indexOf('-vf') + 1] ?? ''))
+    expect(reverses.length).toBeGreaterThan(1)
+    for (const args of reverses) expect(Number(args[args.indexOf('-t') + 1])).toBeLessThanOrEqual(2)
+    // the copy runs the source backwards from 2.5 s, across the chunk joins
+    const src = path.join(dir, 'assets', `${videoId}.mp4`)
+    const frame = (file: string, t: number) => gray(file, t, dir)
+    const diff = (x: Buffer, y: Buffer) => x.reduce((n, v, i) => n + Math.abs(v - y[i]), 0) / x.length
+    for (const k of [3, 30, 59, 61]) {
+      const f = (k + 0.5) / 30
+      const shown = await frame(copy, f)
+      const same = await frame(src, 2.5 - (k + 1) / 30 + 0.5 / 30)
+      const other = await frame(src, 2.5 - (k + 6) / 30 + 0.5 / 30)
+      expect(diff(shown, same)).toBeLessThan(diff(shown, other))
+    }
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('extracts the frame a clip holds before its file starts (PIP-5 / EDT-3)', async () => {
+    const a = project.assets[videoId]
+    let p = createProject({ name: 'Hold', width: 1280, height: 720 })
+    p = addAsset(p, a)
+    p = addItem(p, createVideoItem(a, 0, { duration: 2, transitionOut: { type: 'crossfade', duration: 1 } }))
+    p = addItem(p, createVideoItem(a, 2, { duration: 2 })) // from the source's first frame: nothing to pre-roll
+    const b = mainTrack(p)!.items[1]
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-render-'))
+    const prep = await prepareRenderDir(p, workspaceId, dir)
+    expect(fs.existsSync(path.join(dir, 'stills', `${b.id}-hold.png`))).toBe(true)
+    const html = fs.readFileSync(prep.index, 'utf8')
+    expect(html).toContain(`<img data-ps-hold="2" src="stills/${b.id}-hold.png"`)
     const lint = await lintComposition(dir)
     expect(lint.errors).toEqual([])
     fs.rmSync(dir, { recursive: true, force: true })

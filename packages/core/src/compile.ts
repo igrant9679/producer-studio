@@ -2,7 +2,7 @@
 // attributes (HyperFrames owns decode/seek/mix); one paused GSAP timeline drives the bundled StageRenderer so every
 // frame is produced by the same evaluate() the editor preview uses.
 import { itemEnd, projectDuration } from './ops'
-import { exportWindow } from './runtime'
+import { exportVideoTiming } from './runtime'
 import type { AudioItem, Project, VideoItem } from './types'
 import { escapeHtml, round, safeColor, sampleKeyframes } from './util'
 
@@ -11,8 +11,10 @@ export interface CompileOptions {
   assetPath: (assetId: string) => string
   /** Path of a pre-extracted still for a freeze-frame item (server extracts it with ffmpeg). */
   freezeFramePath?: (itemId: string) => string | undefined
-  /** Path of a pre-rendered reversed copy of a video item's source range. */
+  /** Path of a server-made reversed copy of a video item's source (exportVideoTiming's `reversed` range). */
   reversedPath?: (itemId: string) => string | undefined
+  /** Path of a still of the frame a video item holds before its file starts (exportVideoTiming's `hold`). */
+  holdFramePath?: (itemId: string) => string | undefined
   /** Relative path of the bundled renderer (packages/core dist/runtime.js). */
   runtimePath: string
   /** Relative path of gsap.min.js. */
@@ -70,25 +72,28 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
     for (let ii = 0; ii < track.items.length; ii++) {
       const it = track.items[ii]
       if (it.type === 'video') {
-        const win = exportWindow(p, ti, ii)
         const freeze = it.freezeAt !== undefined ? opts.freezeFramePath?.(it.id) : undefined
         const reversed = it.reverse ? opts.reversedPath?.(it.id) : undefined
         if (freeze) {
           body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><img data-ps-content src="${attr(freeze)}" alt=""></div>`)
         } else {
           const src = reversed ?? opts.assetPath(it.assetId)
-          // pre-roll into an incoming transition only as far as the file has footage before the clip's first frame
-          // (a reversed copy starts at it), so the picture keeps the clip's own timing, its audio's and the preview's
-          const lead = Math.min(it.start - win.start, reversed ? 0 : it.in / it.speed)
-          const from = it.start - lead
-          const mediaStart = reversed ? 0 : Math.max(0, it.in - lead * it.speed)
-          const timing = `data-start="${round(from, 4)}" data-duration="${round(win.end - from, 4)}" data-media-start="${round(mediaStart, 4)}" data-track-index="${trackIndex}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}`
-          body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><video id="v-${attr(it.id)}" data-ps-content src="${attr(src)}" ${timing} muted playsinline></video></div>`)
+          // the file starts at the clip's true offset and pre-rolls into an incoming transition only the footage that
+          // exists before its first frame (a reversed copy is padded with it); before that the held frame shows, as
+          // in the preview. A reversed clip without its copy just plays the source from its in-point.
+          const tm = exportVideoTiming(p, ti, ii)
+          const from = it.reverse && !reversed ? it.start : tm.from
+          const mediaStart = it.reverse && !reversed ? it.in : tm.mediaStart
+          const holdSrc = tm.hold && (reversed || !it.reverse) ? opts.holdFramePath?.(it.id) : undefined
+          const hold = holdSrc ? `<img data-ps-hold="${round(tm.hold!.until, 4)}" src="${attr(holdSrc)}" alt="">` : ''
+          const timing = `data-start="${round(from, 4)}" data-duration="${round(tm.end - from, 4)}" data-media-start="${round(mediaStart, 4)}" data-track-index="${trackIndex}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}`
+          body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><video id="v-${attr(it.id)}" data-ps-content src="${attr(src)}" ${timing} muted playsinline></video>${hold}</div>`)
           if (it.background?.type === 'blur' && track.main) {
-            body.push(`<div data-ps-bg="${attr(it.id)}" style="position:absolute;inset:0;display:none;overflow:hidden"><video id="vb-${attr(it.id)}" src="${attr(src)}" ${timing.replace(/data-track-index="\d+"/, `data-track-index="${trackIndex}"`)} muted playsinline></video></div>`)
+            body.push(`<div data-ps-bg="${attr(it.id)}" style="position:absolute;inset:0;display:none;overflow:hidden"><video id="vb-${attr(it.id)}" src="${attr(src)}" ${timing} muted playsinline></video>${hold}</div>`)
           }
           const asset = p.assets[it.assetId]
-          if (!it.muted && !track.muted && asset?.hasAudio !== false && !reversed) {
+          // a reversed clip is silent, as in the preview
+          if (!it.muted && !track.muted && asset?.hasAudio !== false && !it.reverse) {
             const lane = volumeLane(it)
             audio.push(
               `<audio id="a-${attr(it.id)}" src="${attr(opts.assetPath(it.assetId))}" data-start="${round(it.start, 4)}" data-duration="${round(it.duration, 4)}" data-media-start="${round(it.in, 4)}" data-volume="${round(Math.min(3.98, it.volume), 3)}" data-track-index="${100 + trackIndex}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane ? ` data-automation='${lane}'` : ''}></audio>`,

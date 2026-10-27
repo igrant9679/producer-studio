@@ -455,7 +455,8 @@ export function evaluate(p: Project, t: number): FrameState {
         const l = visualLayer(p, track, a, z++, t)
         if (l && l.opacity > 0.001) layers.push(l)
       }
-      if (it.type === 'video' && !it.muted && !track.muted && it.freezeAt === undefined) {
+      // freeze frames and reversed clips are silent (the export can't play a source's sound backwards either)
+      if (it.type === 'video' && !it.muted && !track.muted && it.freezeAt === undefined && !it.reverse) {
         if (t >= it.start && t < itemEnd(it)) {
           const asset = p.assets[it.assetId]
           if (asset?.hasAudio !== false) audio.push({ itemId: it.id, assetId: it.assetId, mediaTime: sourceTime(p, it, a.local), volume: audioLevel(it, a.local), speed: it.speed })
