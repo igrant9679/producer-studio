@@ -369,6 +369,28 @@ export interface ProduceScriptRequest {
   brief: NonNullable<ProducerMeta['brief']>
 }
 
+// POST /api/ai/produce/assemble -> Job<{ version, notes? }>; 409 { details: { reason: 'edited' } } when the timeline was
+// edited since the last assembly and neither `replace` nor `intoCopy` is set
+export interface ProduceAssembleRequest {
+  projectId: string
+  scenes: ScriptScene[]
+  /** The brief as it is now (voice, look, title): assembly uses it, not the one the script was written from. */
+  brief?: NonNullable<ProducerMeta['brief']>
+  /** Replace a timeline that was edited since the last assembly. */
+  replace?: boolean
+  /** Assemble into a copy of the project and leave this one as it is (the job's projectId is the copy). */
+  intoCopy?: boolean
+}
+
+// PUT /api/ai/produce/draft -> { version }: the wizard's brief and script edits, saved to the project's `ai` as you type
+export interface ProduceDraftRequest {
+  projectId: string
+  brief: NonNullable<ProducerMeta['brief']>
+  scenes: ScriptScene[]
+  /** The brief the script was written from. */
+  scriptBrief?: NonNullable<ProducerMeta['brief']>
+}
+
 // GET /api/ai/produce/capabilities?workspaceId=   -> ProduceCapabilities  (what a video made from an idea can use here)
 export interface ProduceCapabilities {
   /** AI stills: the workspace has an OpenAI or Gemini key that can make them (billed to that key). */

@@ -416,8 +416,15 @@ export interface ProducerMeta {
     /** Scene visuals the writer may use (source = idea); AI images and clips also need a key that can make them. */
     visualKinds?: VisualKind[]
   }
-  script?: { scenes: ScriptScene[]; message?: string }
+  script?: {
+    scenes: ScriptScene[]
+    message?: string
+    /** The brief this script was written from (a brief changed since can leave the narration out of date). */
+    brief?: ProducerMeta['brief']
+  }
   status?: 'draft' | 'transcribed' | 'scripted' | 'voiced' | 'assembled'
+  /** The timeline as the last assembly left it: assembling again over edits made since asks first. */
+  assembled?: { fingerprint: string; at: number }
 }
 
 /** Evaluated state of the project at one instant — consumed by renderers. */
