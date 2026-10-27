@@ -78,10 +78,11 @@ export function VoiceCard({ v, selected, onSelect, compact }: { v: Voice; select
 /** Bumped after voices are created / renamed / deleted so every picker refetches. */
 export const useVoicesVersion = create<{ n: number; bump: () => void }>((set) => ({ n: 0, bump: () => set((s) => ({ n: s.n + 1 })) }))
 
-/** Voices from the server (built-in + this space's cloned/designed voices), else the bundled Kokoro list. */
-export function useVoices(): Voice[] {
+/** Voices from the server (built-in + a space's cloned/designed voices: `space`, else the current one), else the bundled Kokoro list. */
+export function useVoices(space?: string): Voice[] {
   const [list, setList] = useState<Voice[]>(CORE_VOICES)
-  const workspaceId = useSession((s) => s.workspaceId)
+  const current = useSession((s) => s.workspaceId)
+  const workspaceId = space ?? current
   const version = useVoicesVersion((s) => s.n)
   useEffect(() => {
     let alive = true

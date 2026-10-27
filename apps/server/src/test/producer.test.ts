@@ -183,3 +183,29 @@ describe('Producer AI assembly', () => {
     expect((await assemble(id)).status).toBe(409)
   })
 })
+
+describe('wizard drafts', () => {
+  it('saves brief and script edits to the project as typed, leaving the timeline alone', async () => {
+    const id = await newProject()
+    await (await assemble(id)).run()
+    const before = await load(id)
+    // a scene still being written has no narration yet
+    const edited: ScriptScene[] = [{ ...scenes[0], narration: 'Edited on the Review step.' }, { ...scenes[1], id: 'sc_new_x1', narration: '' }]
+    const r = await client.json('PUT', '/api/ai/produce/draft', { projectId: id, brief: { ...brief, voice: 'am_eric' }, scenes: edited, scriptBrief: brief })
+    expect(r.status).toBe(200)
+    expect(r.body.version).toBe(before.version + 1)
+    const p = (await load(id)).project
+    expect(p.ai?.script?.scenes).toEqual(edited)
+    expect(p.ai?.script?.brief).toMatchObject(brief)
+    expect(p.ai).toMatchObject({ brief: { voice: 'am_eric' }, status: 'assembled' })
+    expect(p.tracks).toEqual(before.project.tracks)
+    // a draft is not a timeline edit: re-assembling doesn't ask
+    expect(editedSinceAssembly(p)).toBe(false)
+  })
+
+  it('needs an editor of the project’s space', async () => {
+    const id = await newProject()
+    const other = await signup((await setup()).app, 'Outsider')
+    expect((await other.client.json('PUT', '/api/ai/produce/draft', { projectId: id, brief, scenes })).status).toBe(404)
+  })
+})

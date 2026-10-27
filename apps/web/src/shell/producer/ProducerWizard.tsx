@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Circle,
   Clapperboard,
+  Copy,
   FileVideo,
   FolderOpen,
   GripVertical,
@@ -38,6 +39,7 @@ import { takeProducerHandoff } from './handoff'
 import {
   briefTitleFromPrompt,
   canAdvance,
+  draftKey,
   IDEA_LENGTHS,
   initialState,
   insertScene,
@@ -50,17 +52,32 @@ import {
   removeScene,
   sanitizeForResume,
   sceneWords,
+  staleBriefFields,
   stateFromProject,
   STEPS,
   storageKey,
   TONES,
   updateScene,
   validateBrief,
+  wizardWorkspace,
+  workspaceMismatch,
   type Brief,
   type StepId,
   type WizardState,
 } from './wizardLogic'
-import { addLibraryAssets, cancelRun, removeWizardAsset, resumeProcessingAssets, runAssemble, runGenerate, uploadToWizard, useWizard } from './wizardStore'
+import {
+  addLibraryAssets,
+  cancelRun,
+  markDraftSaved,
+  removeWizardAsset,
+  resumeDraft,
+  resumeProcessingAssets,
+  runAssemble,
+  runGenerate,
+  saveDraft,
+  uploadToWizard,
+  useWizard,
+} from './wizardStore'
 import './producer.css'
 
 const ORDER: StepId[] = STEPS.map((s) => s.id)
@@ -91,9 +108,8 @@ function Stepper({ s, onJump }: { s: WizardState; onJump: (id: StepId) => void }
 }
 
 // ---------------- ① upload ----------------
-function LibraryPicker({ onClose, onPick }: { onClose: () => void; onPick: (recs: AssetRecord[]) => void }) {
-  const workspaceId = useSession((s) => s.workspaceId)
-  const { data, loading } = useAsync(() => (workspaceId ? api.assets(workspaceId, 'video') : Promise.resolve([])), [workspaceId])
+function LibraryPicker({ workspaceId, onClose, onPick }: { workspaceId: string; onClose: () => void; onPick: (recs: AssetRecord[]) => void }) {
+  const { data, loading } = useAsync(() => api.assets(workspaceId, 'video'), [workspaceId])
   const [sel, setSel] = useState<Set<string>>(new Set())
   const list = (data ?? []).filter((a) => a.asset.kind === 'video' && a.status !== 'error')
   return (
@@ -207,9 +223,10 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
       )}
       {lib && (
         <LibraryPicker
+          workspaceId={workspaceId}
           onClose={() => setLib(false)}
           onPick={(recs) => {
-            addLibraryAssets(recs)
+            addLibraryAssets(recs, workspaceId)
             setLib(false)
           }}
         />
@@ -322,7 +339,8 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
   const set = (p: Partial<Brief>) => patch((st) => ({ brief: { ...st.brief, ...p } }))
   const [touched, setTouched] = useState(false)
   const errs = touched ? validateBrief(b) : {}
-  const voices = useVoices()
+  // the video's own space's voices (cloned voices belong to a space)
+  const voices = useVoices(s.workspaceId)
   const [vf, setVf] = useState<VoiceFilter>('All')
   const shown = filterVoices(voices, vf)
   const builtIn = templates.filter((t) => t.builtIn)
@@ -472,7 +490,7 @@ function GenerateStep({ s, onRun }: { s: WizardState; onRun: () => void }) {
 }
 
 // ---------------- ④ review ----------------
-function RewriteButton({ scene, brief, onText, onBusy }: { scene: ScriptScene; brief: Brief; onText: (t: string) => void; onBusy: (b: boolean) => void }) {
+function RewriteButton({ scene, brief, workspaceId, onText, onBusy }: { scene: ScriptScene; brief: Brief; workspaceId?: string; onText: (t: string) => void; onBusy: (b: boolean) => void }) {
   const [instr, setInstr] = useState('')
   const [busy, setBusy] = useState(false)
   const ctrl = useRef<AbortController>()
@@ -491,7 +509,7 @@ function RewriteButton({ scene, brief, onText, onBusy }: { scene: ScriptScene; b
           prompt: instruction || 'Rewrite this narration so it is clearer, tighter and more engaging. Keep the meaning and roughly the same length.',
           context: [`Video: ${brief.title}`, brief.audience && `Audience: ${brief.audience}`, brief.goal && `Goal: ${brief.goal}`, `Tone: ${brief.tone}`, `Scene: ${scene.title}`, scene.headline && `Headline: ${scene.headline}`, `Narration: ${original}`].filter(Boolean).join('\n'),
           maxWords: Math.max(20, Math.round(sceneWords(original) * 1.4)),
-          workspaceId: useSession.getState().workspaceId,
+          workspaceId,
         },
         (d) => {
           acc += d
@@ -683,7 +701,7 @@ function SceneCard({ scene, index, total, s, kinds, caps, onChange, onMove, onDe
         <div className="ps-scene-top">
           <input className="ps-scene-title" value={scene.title} onChange={(e) => onChange({ title: e.target.value })} aria-label={`Scene ${index + 1} title`} placeholder="Scene title" />
           <span className="spacer" />
-          <RewriteButton scene={scene} brief={s.brief} onText={(t) => onChange({ narration: t })} onBusy={setBusy} />
+          <RewriteButton scene={scene} brief={s.brief} workspaceId={s.workspaceId} onText={(t) => onChange({ narration: t })} onBusy={setBusy} />
           {confirmDel ? (
             <span className="row" style={{ gap: 6 }}>
               <button className="btn sm" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={onDelete}>Delete scene</button>
@@ -747,14 +765,44 @@ function SceneCard({ scene, index, total, s, kinds, caps, onChange, onMove, onDe
   )
 }
 
-function ReviewStep({ s }: { s: WizardState }) {
+/** The brief changed, after the script was written, in ways only the writer reads: rewrite, or keep the script. */
+function StaleScript({ s, onRewrite }: { s: WizardState; onRewrite: () => void }) {
+  const patch = useWizard((st) => st.patch)
+  const [sure, setSure] = useState(false)
+  const stale = staleBriefFields(s)
+  if (!stale.length) return null
+  return (
+    <div className="ps-alert info" role="status" style={{ marginBottom: 14 }}>
+      <AlertTriangle size={15} style={{ flex: 'none', marginTop: 2 }} />
+      <div style={{ flex: 1 }}>
+        <strong>The brief changed after this script was written</strong> ({stale.join(', ')}). Assembly uses the voice, look and title as they are now, but this narration was written for the earlier brief.
+        <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+          {sure ? (
+            <>
+              <span>Replace this script and its edits?</span>
+              <button className="btn sm primary" onClick={onRewrite}>Yes, rewrite</button>
+              <button className="btn sm ghost" onClick={() => setSure(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button className="btn sm primary" onClick={() => setSure(true)}><RefreshCw size={13} /> Rewrite the script</button>
+              <button className="btn sm" onClick={() => patch((st) => ({ scriptBrief: st.brief }))}>Keep this script</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReviewStep({ s, onRewrite }: { s: WizardState; onRewrite: () => void }) {
   const patch = useWizard((st) => st.patch)
   const [dragFrom, setDragFrom] = useState<number>()
   const [over, setOver] = useState<number>()
   const set = (scenes: ScriptScene[]) => patch({ scenes })
   const firstAsset = readyAssetIds(s)[0]
   const idea = isIdea(s)
-  const workspaceId = useSession((st) => st.workspaceId)
+  const workspaceId = s.workspaceId
   const caps = useAsync(() => (idea && workspaceId ? api.produceCapabilities(workspaceId) : Promise.resolve(undefined)), [idea, workspaceId])
   const kinds = ALL_KINDS.filter((k) => kindStatus(k, caps.data).available)
   const totalWords = s.scenes.reduce((t, sc) => t + sceneWords(sc.narration), 0)
@@ -775,6 +823,7 @@ function ReviewStep({ s }: { s: WizardState }) {
       {s.run.message && s.run.phase === 'script' && s.run.status === 'done' && (
         <div className="ps-alert info" style={{ marginBottom: 14 }}><Sparkles size={15} /> {s.run.message}</div>
       )}
+      <StaleScript s={s} onRewrite={onRewrite} />
       <div className="ps-scenes">
         {s.scenes.map((sc, i) => (
           <div key={sc.id} className={clsx('ps-scene-wrap', over === i && dragFrom !== undefined && dragFrom !== i && 'drop', dragFrom === i && 'dragging')}>
@@ -825,16 +874,43 @@ function ReviewStep({ s }: { s: WizardState }) {
 }
 
 // ---------------- ⑤ assemble ----------------
-function AssembleStep({ s, onRun }: { s: WizardState; onRun: () => void }) {
+function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?: boolean; intoCopy?: boolean }) => void }) {
   const navigate = useNavigate()
   const r = s.run
   const done = r.status === 'done' && r.phase === 'assemble'
+  if (r.confirm === 'edited' && r.status !== 'running') {
+    // re-assembling replaces the whole timeline: the person decides what happens to their edits
+    return (
+      <div className="ps-wz-body ps-gen">
+        <div className="ps-gen-orb" aria-hidden><AlertTriangle size={32} /></div>
+        <h2>This video was edited since it was assembled</h2>
+        <p className="ps-gen-line" role="alert">{r.message} Assemble into a copy to keep this one as it is.</p>
+        <div className="row" style={{ justifyContent: 'center', marginTop: 20, flexWrap: 'wrap' }}>
+          <button className="btn primary" onClick={() => onRun({ intoCopy: true })}><Copy size={15} /> Assemble into a copy</button>
+          <button className="btn" onClick={() => onRun({ replace: true })}><RotateCcw size={15} /> Replace the timeline</button>
+          <button className="btn ghost" onClick={() => useWizard.getState().patch({ step: 'review', run: { status: 'idle' } })}>Back to script</button>
+        </div>
+      </div>
+    )
+  }
+  // edited after the last assembly: the video doesn't have those changes yet
+  const behind = done && !!s.assembledFrom && s.assembledFrom !== draftKey(s)
   return (
     <div className="ps-wz-body ps-gen">
       <div className={clsx('ps-gen-orb', done && 'done')} aria-hidden>
         {done ? <Check size={36} strokeWidth={3} /> : <Clapperboard size={32} />}
       </div>
       <h2>{done ? 'Your video is ready' : r.status === 'error' ? 'Assembly failed' : r.status === 'running' ? 'Assembling your video' : 'Assemble the video'}</h2>
+      {behind && (
+        <div className="ps-alert info" role="status" style={{ textAlign: 'left', maxWidth: 560, margin: '0 auto 10px', alignItems: 'center' }}>
+          <span style={{ flex: 1 }}>You changed the brief or script after this was assembled; the video doesn’t have those changes yet.</span>
+          {staleBriefFields(s).length ? (
+            <button className="btn sm" onClick={() => useWizard.getState().patch({ step: 'review' })}>Review the script</button>
+          ) : (
+            <button className="btn sm" onClick={() => onRun()}>Assemble again</button>
+          )}
+        </div>
+      )}
       <p className="ps-gen-line" aria-live="polite">
         {done
           ? isIdea(s)
@@ -879,11 +955,64 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: () => void }) {
         ) : r.status === 'running' ? (
           <button className="btn" onClick={cancelRun}><Square size={13} /> Stop</button>
         ) : (
-          <button className="btn primary" onClick={onRun}>
+          <button className="btn primary" onClick={() => onRun()}>
             {r.status === 'error' ? <><RotateCcw size={15} /> Try again</> : <><Clapperboard size={15} /> {r.interrupted ? 'Resume' : 'Assemble video'}</>}
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+/** Brief and script edits are saved to the project as they're typed. */
+function DraftStatus({ s }: { s: WizardState }) {
+  if (!s.projectId || !s.draft) return null
+  const d = s.draft
+  if (d.state === 'error') {
+    return (
+      <span className="ps-draft err" role="status">
+        <AlertTriangle size={13} /> Not saved: {d.error}
+        <button className="btn ghost sm" onClick={() => void saveDraft()}>Retry</button>
+      </span>
+    )
+  }
+  return (
+    <span className="ps-draft" role="status" aria-live="polite">
+      {d.state === 'saved' ? <><Check size={13} /> Saved</> : 'Saving…'}
+    </span>
+  )
+}
+
+/** The person switched spaces while this video belongs to another: go back to it, or start a new one here. */
+function SpaceMismatch({ s }: { s: WizardState }) {
+  const navigate = useNavigate()
+  const here = useSession((st) => st.workspaceId)
+  const workspaces = useSession((st) => st.workspaces)
+  if (!workspaceMismatch(s, here)) return null
+  const own = workspaces.find((w) => w.id === s.workspaceId)
+  const cur = workspaces.find((w) => w.id === here)
+  return (
+    <div className="ps-alert info ps-space-mismatch" role="alert">
+      <AlertTriangle size={15} style={{ flex: 'none', marginTop: 2 }} />
+      <span style={{ flex: 1 }}>
+        {own ? (
+          <>This video belongs to <strong>{own.name}</strong>, and you switched to <strong>{cur?.name ?? 'another space'}</strong>. Recordings you add here still go to {own.name}.</>
+        ) : (
+          <>This video belongs to a space you’re no longer in.</>
+        )}
+      </span>
+      {own && <button className="btn sm" onClick={() => useSession.getState().setWorkspace(own.id)}>Switch back to {own.name}</button>}
+      {s.run.status !== 'running' && (
+        <button
+          className="btn sm ghost"
+          onClick={() => {
+            useWizard.getState().replace(initialState())
+            navigate('/producer/new')
+          }}
+        >
+          Start a new video in {cur?.name ?? 'this space'}
+        </button>
+      )}
     </div>
   )
 }
@@ -893,8 +1022,10 @@ export default function ProducerWizard() {
   usePageTitle('Producer AI')
   const { projectId } = useParams()
   const navigate = useNavigate()
-  const workspaceId = useSession((s) => s.workspaceId)
+  const sessionWorkspaceId = useSession((s) => s.workspaceId)
   const s = useWizard((st) => st.s)
+  // the video's own space: a switch elsewhere mid-wizard doesn't move its uploads, pickers or looks
+  const workspaceId = wizardWorkspace(s, sessionWorkspaceId)
   const patch = useWizard((st) => st.patch)
   const replace = useWizard((st) => st.replace)
   const [loading, setLoading] = useState(false)
@@ -913,6 +1044,7 @@ export default function ProducerWizard() {
       if (saved && saved.brief) {
         replace(sanitizeForResume(saved))
         resumeProcessingAssets()
+        void resumeDraft()
         return
       }
       setLoading(true)
@@ -923,7 +1055,9 @@ export default function ProducerWizard() {
             navigate(`/edit/${projectId}`, { replace: true })
             return
           }
-          replace(stateFromProject(res))
+          const loaded = stateFromProject(res)
+          markDraftSaved(loaded)
+          replace(loaded)
         })
         .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false))
@@ -932,7 +1066,8 @@ export default function ProducerWizard() {
     const h = takeProducerHandoff()
     if (h) {
       replace(initialState({ prompt: h.prompt, aspect: h.aspect }))
-      if (h.files.length && workspaceId) void uploadToWizard(workspaceId, h.files)
+      const here = useSession.getState().workspaceId
+      if (h.files.length && here) void uploadToWizard(here, h.files)
       return
     }
     if (!cur.projectId && (cur.assets.length || cur.brief.title)) return // in-memory draft
@@ -967,6 +1102,12 @@ export default function ProducerWizard() {
 
   const onProjectCreated = (id: string) => navigate(`/producer/${id}`, { replace: true })
   const generate = () => workspaceId && void runGenerate(workspaceId, onProjectCreated)
+  const assemble = (opts: { replace?: boolean; intoCopy?: boolean } = {}) => void runAssemble({ ...opts, onProject: onProjectCreated })
+  const rewrite = () => {
+    setConfirmRegen(false)
+    patch({ step: 'generate', scenes: [], run: { status: 'idle' } })
+    generate()
+  }
 
   function next() {
     if (!adv.ok) return
@@ -981,7 +1122,7 @@ export default function ProducerWizard() {
     } else if (s.step === 'generate') patch({ step: 'review' })
     else if (s.step === 'review') {
       patch({ step: 'assemble' })
-      void runAssemble()
+      assemble()
     }
   }
   function back() {
@@ -1020,6 +1161,7 @@ export default function ProducerWizard() {
           <h1>{s.brief.title || (isIdea(s) ? 'New video from an idea' : 'New video')}</h1>
         </div>
         <span className="spacer" />
+        <DraftStatus s={s} />
         {s.projectId && (
           <button className="btn ghost sm" onClick={() => navigate('/library')} title="Your work is saved"><FolderOpen size={14} /> Saved in Library</button>
         )}
@@ -1044,14 +1186,15 @@ export default function ProducerWizard() {
           )
         )}
       </div>
+      <SpaceMismatch s={s} />
       <Stepper s={s} onJump={(id) => patch({ step: id })} />
 
       <div className="ps-wz-card">
         {s.step === 'upload' && <StartStep s={s} workspaceId={workspaceId} />}
         {s.step === 'brief' && <BriefStep s={s} templates={templates.data ?? []} tplLoading={templates.loading} />}
         {s.step === 'generate' && <GenerateStep s={s} onRun={generate} />}
-        {s.step === 'review' && <ReviewStep s={s} />}
-        {s.step === 'assemble' && <AssembleStep s={s} onRun={() => void runAssemble()} />}
+        {s.step === 'review' && <ReviewStep s={s} onRewrite={rewrite} />}
+        {s.step === 'assemble' && <AssembleStep s={s} onRun={assemble} />}
 
         {(primaryLabel || idx > 0) && s.step !== 'assemble' && !(s.step === 'generate' && s.run.status === 'running') && (
           <div className="ps-wz-foot">
@@ -1068,14 +1211,7 @@ export default function ProducerWizard() {
               (confirmRegen ? (
                 <span className="row" style={{ gap: 6 }}>
                   <span className="muted" style={{ fontSize: '0.7812rem' }}>Replace this script?</span>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      setConfirmRegen(false)
-                      patch({ step: 'generate', scenes: [], run: { status: 'idle' } })
-                      generate()
-                    }}
-                  >
+                  <button className="btn" onClick={rewrite}>
                     Yes, rewrite
                   </button>
                   <button className="btn ghost" onClick={() => setConfirmRegen(false)}>Keep</button>

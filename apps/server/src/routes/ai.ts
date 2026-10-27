@@ -23,7 +23,7 @@ import { tts, validVoice } from '../ai/tts'
 import { whisperAvailable } from '../ai/whisper'
 import { enqueueRelay } from '../services/voice'
 import { generationCapabilities } from '../ai/generate'
-import { type AssembleJobInput, MAX_AI_CLIPS, allowedVisualKinds, editedSinceAssembly, timelineFingerprint } from '../ai/produce'
+import { type AssembleJobInput, MAX_AI_CLIPS, allowedVisualKinds, editedSinceAssembly, saveOnLatest, timelineFingerprint } from '../ai/produce'
 import { VisualSchema } from '../ai/scenes'
 import { profileVoices } from './voice'
 
@@ -175,6 +175,25 @@ const SceneSchema = z.object({
   visuals: z.string().max(2000).optional(),
   visual: VisualSchema.optional(),
   voice: z.object({ assetId: z.string(), duration: z.number() }).optional(),
+})
+
+/**
+ * The wizard's brief and script edits, saved to the project's `ai` as they're typed, so another tab or device resumes
+ * them. Only `ai` changes (on the latest version): the timeline and everything else stay as they are.
+ */
+aiRoutes.put('/produce/draft', async (c) => {
+  const u = requireUser(c)
+  // a scene still being written may have no narration yet
+  const DraftScene = SceneSchema.extend({ narration: z.string().max(5000) })
+  const b = await body(c, z.object({ projectId: z.string().min(1), brief: BriefSchema, scenes: z.array(DraftScene).max(100), scriptBrief: BriefSchema.optional() }))
+  const row = await loadProjectRow(b.projectId)
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const brief = { ...b.brief, voice: validVoice(b.brief.voice) }
+  const saved = await saveOnLatest(row.id, (cur) => ({
+    ...cur,
+    ai: { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes: b.scenes, ...(b.scriptBrief ? { brief: b.scriptBrief } : {}) } },
+  }))
+  return c.json({ version: saved.version })
 })
 
 /** What Producer AI can make for this space without recordings (which keys exist, whether stock footage is set up). */

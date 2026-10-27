@@ -26,10 +26,13 @@ export interface WizardAsset {
 export interface WizardState {
   step: StepId
   projectId?: string
+  /** The space this video belongs to (its project's, or where its first recording went): uploads and pickers use it. */
   workspaceId?: string
   assets: WizardAsset[]
   brief: Brief
   scenes: ScriptScene[]
+  /** The brief the script was written from: changing what only the writer reads leaves the script stale. */
+  scriptBrief?: Brief
   /** Asset ids already transcribed for this project. */
   transcribed: string[]
   run: {
@@ -40,8 +43,14 @@ export interface WizardState {
     error?: string
     jobId?: string
     interrupted?: boolean
+    /** Assembly is waiting for the person: the timeline was edited since it was assembled (message says so). */
+    confirm?: 'edited'
   }
+  /** Brief and script edits saved to the project (ai.brief, ai.script) as they're typed. */
+  draft?: { state: 'pending' | 'saving' | 'saved' | 'error'; error?: string }
   assembledVersion?: number
+  /** draftKey() of what the last assembly was made from: later edits aren't in the video until it's assembled again. */
+  assembledFrom?: string
   /** Scenes whose visual couldn't be made at assembly (they used animated text instead), with why. */
   assembleNotes?: string[]
 }
@@ -110,6 +119,43 @@ export function validateBrief(b: Brief): Partial<Record<keyof Brief, string>> {
   return e
 }
 
+/**
+ * Brief fields only the script writer reads (assembly uses the voice, look, title and aspect as they are now). Changed
+ * after the script was written, the narration doesn't reflect them.
+ */
+export const WRITER_FIELDS: Array<{ key: keyof Brief; label: string }> = [
+  { key: 'idea', label: 'idea' },
+  { key: 'audience', label: 'audience' },
+  { key: 'goal', label: 'goal' },
+  { key: 'tone', label: 'tone' },
+  { key: 'notes', label: 'notes' },
+  { key: 'lengthSec', label: 'length' },
+  { key: 'visualKinds', label: 'visuals' },
+]
+
+/** What changed in the brief since the script was written, among the fields only the writer reads. */
+export function staleBriefFields(s: Pick<WizardState, 'brief' | 'scriptBrief' | 'scenes'>): string[] {
+  const was = s.scriptBrief
+  if (!was || !s.scenes.length) return []
+  const norm = (v: unknown) => JSON.stringify(Array.isArray(v) ? (v.length ? [...v].sort() : '') : typeof v === 'string' ? v.trim() : v ?? '')
+  return WRITER_FIELDS.filter((f) => norm(s.brief[f.key]) !== norm(was[f.key])).map((f) => f.label)
+}
+
+/** What is saved to the project as the wizard's draft (and what an assembly was made from). */
+export function draftKey(s: Pick<WizardState, 'brief' | 'scenes' | 'scriptBrief'>): string {
+  return JSON.stringify({ brief: s.brief, scenes: s.scenes, scriptBrief: s.scriptBrief })
+}
+
+/** The space the wizard works in: its own once it has one, else the one the person is in. */
+export function wizardWorkspace(s: Pick<WizardState, 'workspaceId'>, sessionWorkspaceId: string | undefined): string | undefined {
+  return s.workspaceId ?? sessionWorkspaceId
+}
+
+/** The person switched to another space while this video belongs to a different one. */
+export function workspaceMismatch(s: Pick<WizardState, 'workspaceId'>, sessionWorkspaceId: string | undefined): boolean {
+  return !!s.workspaceId && !!sessionWorkspaceId && s.workspaceId !== sessionWorkspaceId
+}
+
 /** Can the user move forward from `step`? */
 export function canAdvance(s: WizardState, step: StepId = s.step): { ok: boolean; reason?: string } {
   switch (step) {
@@ -128,7 +174,8 @@ export function canAdvance(s: WizardState, step: StepId = s.step): { ok: boolean
       return s.scenes.length ? { ok: true } : { ok: false, reason: 'The script is not ready yet' }
     case 'review': {
       const r = validateScenes(s.scenes)
-      return r ? { ok: false, reason: r } : { ok: true }
+      if (r) return { ok: false, reason: r }
+      return staleBriefFields(s).length ? { ok: false, reason: 'Rewrite the script or keep it first' } : { ok: true }
     }
     case 'assemble':
       return { ok: s.run.status === 'done' && s.run.phase === 'assemble' }
@@ -185,6 +232,8 @@ export function sanitizeForResume(s: WizardState): WizardState {
     ...s,
     assets: s.assets.map((a) => (a.status === 'uploading' && !a.assetId ? { ...a, status: 'error', error: 'Upload was interrupted — add the file again' } : a.status === 'uploading' ? { ...a, status: 'processing' } : a)),
     run: s.run.status === 'running' ? { ...s.run, status: 'idle', interrupted: true, message: 'Interrupted — pick up where you left off' } : s.run,
+    // a save that was in flight never finished: send it again
+    ...(s.draft?.state === 'saving' ? { draft: { state: 'pending' as const } } : {}),
   }
 }
 
@@ -214,7 +263,9 @@ export function stateFromProject(res: ProjectDocResponse): WizardState {
     assets,
     brief,
     scenes,
+    ...(scenes.length ? { scriptBrief: ai.script?.brief ?? brief } : {}),
     transcribed: status && status !== 'draft' ? [...ids] : [],
     run: status === 'assembled' ? { status: 'done', phase: 'assemble', message: 'Video assembled' } : { status: 'idle' },
+    draft: { state: 'saved' },
   }
 }

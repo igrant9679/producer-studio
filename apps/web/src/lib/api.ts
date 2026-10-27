@@ -17,7 +17,9 @@ import type {
   PendingInvite,
   PreferencesResponse,
   Member,
+  ProduceAssembleRequest,
   ProduceCapabilities,
+  ProduceDraftRequest,
   ProduceScriptRequest,
   Project,
   ProjectDocResponse,
@@ -222,7 +224,9 @@ export const api = {
       if (ev === 'delta') onDelta((data as { text: string }).text)
     }, signal),
   produceScript: (body: ProduceScriptRequest) => req<Job<{ script: { scenes: ScriptScene[] } }>>('POST', '/ai/produce/script', body),
-  produceAssemble: (projectId: string, scenes: ScriptScene[]) => req<Job<{ version: number; notes?: string[] }>>('POST', '/ai/produce/assemble', { projectId, scenes }),
+  /** 409 { details: { reason: 'edited' } }: the timeline was edited since the last assembly (send replace or intoCopy). */
+  produceAssemble: (body: ProduceAssembleRequest) => req<Job<{ version: number; notes?: string[] }>>('POST', '/ai/produce/assemble', body),
+  saveProducerDraft: (body: ProduceDraftRequest) => req<{ version: number }>('PUT', '/ai/produce/draft', body),
   produceCapabilities: (workspaceId: string) => req<ProduceCapabilities>('GET', `/ai/produce/capabilities${qs({ workspaceId })}`),
   assistant: (body: AssistantRequest, on: { text?: (d: string) => void; tool?: (name: string, summary: string) => void }, signal?: AbortSignal) =>
     new Promise<AssistantResult>((resolve, reject) => {
