@@ -1,9 +1,10 @@
 // Edit actions and properties-panel edits from the phase 4 pass.
-import { cleanup } from '@testing-library/react'
-import { addAsset, addItem, createProject, createTextItem, createVideoItem, findItem, mainTrack, type Asset, type Project, type VideoItem, type VisualItem } from '@producer/core'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { addAsset, addItem, createProject, createTextItem, createVideoItem, findItem, mainTrack, setKeyframe, updateItem, type Asset, type Project, type VideoItem, type VisualItem } from '@producer/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useToasts } from '../../lib/toast'
 import * as A from '../actions'
+import { PropertiesPanel } from '../PropertiesPanel'
 import { useEditor } from '../store'
 
 const S = () => useEditor.getState()
@@ -35,6 +36,19 @@ describe('separate audio (EDT-21)', () => {
     A.separate()
     expect(S().project).toBe(once)
     expect(useToasts.getState().toasts.map((t) => t.text)).toContain("This clip's audio is already on its own track")
+  })
+})
+
+describe('Speed tab (EDT-23)', () => {
+  it('a speed chip rescales the clip, its keyframes and its fades', () => {
+    load(setKeyframe(updateItem<VideoItem>(project(), 'v1', { fadeOut: 2 }), 'v1', 'opacity', 6, 0.3))
+    S().select(['v1'])
+    S().set({ activeRightTab: 'speed' })
+    render(<PropertiesPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '2×' }))
+    const v = findItem(S().project, 'v1')!.item as VideoItem
+    expect(v).toMatchObject({ speed: 2, duration: 5, fadeOut: 1 })
+    expect(v.keyframes.opacity!.map((k) => k.t)).toEqual([3])
   })
 })
 

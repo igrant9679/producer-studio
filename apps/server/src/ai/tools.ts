@@ -30,6 +30,7 @@ import {
   round,
   separateAudio,
   setAspect,
+  setItemSpeed,
   setKeyframe,
   splitAt,
   trimItem,
@@ -287,18 +288,16 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
       if (i.opacity !== undefined && 'opacity' in it) (patch.opacity = i.opacity), bits.push(`opacity ${i.opacity}`)
       if ((it.type === 'video' || it.type === 'audio') && i.volume !== undefined) (patch.volume = i.volume), bits.push(`volume ${i.volume}`)
       if ((it.type === 'video' || it.type === 'audio') && i.muted !== undefined) (patch.muted = i.muted), bits.push(i.muted ? 'muted' : 'unmuted')
-      if ((it.type === 'video' || it.type === 'audio') && i.speed !== undefined) {
-        const m = it as VideoItem | AudioItem
-        const span = m.duration * m.speed
-        patch.speed = i.speed
-        patch.duration = round(span / i.speed, 4)
-        bits.push(`speed ${i.speed}×`)
-      }
+      // speed goes through its own op, which rescales keyframes, fades and animations with it
+      const speed = (it.type === 'video' || it.type === 'audio') && i.speed !== undefined ? (i.speed as number) : undefined
+      if (speed !== undefined) bits.push(`speed ${speed}×`)
       if ((it.type === 'video' || it.type === 'image') && i.filter !== undefined) (patch.filter = i.filter ?? undefined), bits.push(i.filter ? `filter ${i.filter.id}` : 'no filter')
       if ((it.type === 'video' || it.type === 'image') && i.adjust) (patch.adjust = { ...it.adjust, ...i.adjust }), bits.push('colour adjust')
       if ((it.type === 'video' || it.type === 'image') && i.fit) (patch.fit = i.fit), bits.push(`fit ${i.fit}`)
       if (!bits.length) throw new ToolError('None of those properties apply to this item type')
-      return done(set(s, updateItem(p, it.id, patch as Partial<Item>), `Set ${bits.join(', ')} on ${label(it)}`))
+      let next = Object.keys(patch).length ? updateItem(p, it.id, patch as Partial<Item>) : p
+      if (speed !== undefined) next = setItemSpeed(next, it.id, speed)
+      return done(set(s, next, `Set ${bits.join(', ')} on ${label(it)}`))
     }
     case 'add_transition': {
       const it = need(p, i.itemId)

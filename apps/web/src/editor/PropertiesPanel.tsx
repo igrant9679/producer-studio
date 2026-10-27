@@ -21,6 +21,7 @@ import {
   rechunkCaptions,
   setAspect,
   setCanvasSize,
+  setItemSpeed,
   updateItem,
   updateProject,
   updateTrack,
@@ -106,7 +107,7 @@ export function PropertiesPanel() {
           {item && tab === 'adjust' && (item.type === 'video' || item.type === 'image') && <AdjustTab item={item} />}
           {item && tab === 'background' && (item.type === 'video' || item.type === 'image') && <BackgroundTab item={item} project={project} />}
           {item && tab === 'animation' && 'animations' in item && <AnimationTab item={item as VisualItem} />}
-          {item && tab === 'speed' && (item.type === 'video' || item.type === 'audio') && <SpeedTab item={item} project={project} />}
+          {item && tab === 'speed' && (item.type === 'video' || item.type === 'audio') && <SpeedTab item={item} />}
           {item && tab === 'audio' && (item.type === 'video' || item.type === 'audio') && <AudioTab item={item} />}
           {item && tab === 'text' && item.type === 'text' && <TextTab item={item} />}
           {item && tab === 'shape' && item.type === 'shape' && <ShapeTab item={item} />}
@@ -537,14 +538,11 @@ function AnimationTab({ item }: { item: VisualItem }) {
 
 // ---------- speed ----------
 
-function SpeedTab({ item, project }: { item: VideoItem | AudioItem; project: Project }) {
-  const asset = project.assets[item.assetId]
+function SpeedTab({ item }: { item: VideoItem | AudioItem }) {
   const setSpeed = (v: number) => {
-    const it = live<VideoItem | AudioItem>(item.id) ?? item
-    const span = it.duration * it.speed
-    const max = asset?.duration ? (asset.duration - it.in) : Infinity
-    const src = Math.min(span, max)
-    up<VideoItem>(it as VideoItem, { speed: +v.toFixed(3), duration: +(src / v).toFixed(4) }, 'Speed', `speed:${item.id}`)
+    // keyframes, fades and animations stay on the same frames
+    const s = useEditor.getState()
+    s.commit(setItemSpeed(s.project, item.id, v), 'Speed', { coalesce: `speed:${item.id}` })
   }
   const frozen = item.type === 'video' && item.freezeAt !== undefined
   return (

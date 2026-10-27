@@ -21,6 +21,7 @@ import {
   moveItem,
   separateAudio,
   separateAudioRefusal,
+  setItemSpeed,
   setKeyframe,
   splitAt,
   splitItem,
@@ -182,6 +183,31 @@ describe('separate audio (EDT-21)', () => {
     const right = mainTrack(p)!.items[1]
     expect(separateAudioRefusal(p, right.id)).toBe('separated')
     expect(separateAudioRefusal(p, 'vb')).toBeNull()
+  })
+})
+
+describe('speed changes rescale clip-relative times (EDT-23)', () => {
+  it('keyframes, fades and animations land on the same frames at the new speed', () => {
+    let p = updateItem<VideoItem>(twoClips(), 'va', { fadeIn: 1, fadeOut: 2, animations: { in: { preset: 'fade', duration: 0.5 }, out: { preset: 'zoomOut', duration: 1 } } })
+    p = setKeyframe(setKeyframe(p, 'va', 'opacity', 2, 0.2), 'va', 'scale', 8, 1.5)
+    const q = setItemSpeed(p, 'va', 2)
+    const v = item(q, 'va') as VideoItem
+    expect(v).toMatchObject({ speed: 2, duration: 5, fadeIn: 0.5, fadeOut: 1 })
+    expect(v.keyframes.opacity!.map((k) => k.t)).toEqual([1])
+    expect(v.keyframes.scale!.map((k) => k.t)).toEqual([4])
+    expect(v.animations).toMatchObject({ in: { duration: 0.25 }, out: { duration: 0.5 } })
+    // the main track ripples
+    expect(item(q, 'vb').start).toBe(5)
+    // slowing down keeps the same stretch of source, and its keyframes with it
+    const slow = item(setItemSpeed(q, 'va', 0.5), 'va') as VideoItem
+    expect(slow.duration).toBe(20)
+    expect(slow.keyframes.scale!.map((k) => k.t)).toEqual([16])
+  })
+
+  it('leaves a freeze frame alone', () => {
+    const frozen = freezeFrame(twoClips(), 'va', 4)
+    const hold = mainTrack(frozen)!.items.find((i) => (i as VideoItem).freezeAt !== undefined)!
+    expect(setItemSpeed(frozen, hold.id, 2)).toBe(frozen)
   })
 })
 

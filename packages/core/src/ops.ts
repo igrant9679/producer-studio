@@ -8,6 +8,7 @@ import type {
   CaptionStyle,
   Item,
   Keyframe,
+  Keyframes,
   Project,
   TextStyle,
   Track,
@@ -231,6 +232,33 @@ function unstack(p: Project, track: Track, it: Item) {
   const to = room ?? insertTrack(p, track.kind, p.tracks.indexOf(track))
   to.items.push(it)
   sortItems(to)
+}
+
+/**
+ * Change a video or audio clip's speed. The clip keeps its source range (as much of it as the source has) and every
+ * clip-relative time scales by old speed over new: keyframes, fades, in/out animations and a split piece's phase land
+ * on the same frames as before. A clip made longer on an overlay track moves to a free track (see `unstack`).
+ */
+export function setItemSpeed(p0: Project, itemId: string, speed: number): Project {
+  const f = findItem(p0, itemId)
+  if (!editable(f) || (f.item.type !== 'video' && f.item.type !== 'audio') || !(speed > 0)) return p0
+  const it = f.item
+  if (it.type === 'video' && it.freezeAt !== undefined) return p0
+  const to = round(speed, 3)
+  const max = p0.assets[it.assetId]?.duration
+  const src = Math.min(it.duration * it.speed, max !== undefined ? Math.max(0, max - it.in) : Infinity)
+  const duration = round(src / to, 4)
+  const k = it.speed / to
+  const at = (t: number) => round(Math.min(t * k, duration), 4)
+  const keyframes: Keyframes = {}
+  for (const [prop, list] of Object.entries(it.keyframes ?? {}) as Array<[AnimProp, Keyframe[]]>) keyframes[prop] = list.map((kf) => ({ ...kf, t: round(kf.t * k, 4) }))
+  const patch: Partial<VideoItem> = { speed: to, duration, fadeIn: at(it.fadeIn), fadeOut: at(it.fadeOut), keyframes }
+  if (it.type === 'video') {
+    const a = it.animations ?? {}
+    patch.animations = { ...a, ...(a.in ? { in: { ...a.in, duration: at(a.in.duration) } } : {}), ...(a.out ? { out: { ...a.out, duration: at(a.out.duration) } } : {}) }
+    if (it.phase) patch.phase = { offset: round(it.phase.offset * k, 4), length: round(it.phase.length * k, 4) }
+  }
+  return updateItem<VideoItem>(p0, itemId, patch)
 }
 
 export function updateTrack(p0: Project, trackId: string, patch: Partial<Track>): Project {
