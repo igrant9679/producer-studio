@@ -27,6 +27,7 @@ interface LayerEl {
   kind: FrameLayer['type']
   lastText?: string
   lastStyle?: string
+  lastFill?: string
 }
 
 /** The loudest a clip plays (+12 dB), in the preview as in the export. */
@@ -345,25 +346,27 @@ export class StageRenderer {
       `transform:translate(-50%,-50%) ${layer.transform};opacity:${layer.opacity.toFixed(4)};z-index:${layer.z};` +
       (layer.filter ? `filter:${layer.filter};` : '') +
       (layer.blend !== 'normal' ? `mix-blend-mode:${layer.blend};` : '') +
-      (layer.clipPath ? `clip-path:${layer.clipPath};` : '')
+      (layer.clipPath ? `clip-path:${layer.clipPath};` : '') +
+      (layer.crop ? 'overflow:hidden;' : '')
     el.overlay.style.backgroundImage = layer.overlay ?? 'none'
     el.overlay.style.display = layer.overlay ? 'block' : 'none'
     this.ensureBackground(el, layer)
 
     if (layer.type === 'video' || layer.type === 'image') {
       const media = el.content as HTMLVideoElement | HTMLImageElement
-      if (layer.crop) {
-        const c = layer.crop
-        media.style.setProperty('object-view-box', `inset(${c.top * 100}% ${c.right * 100}% ${c.bottom * 100}% ${c.left * 100}%)`)
-      } else media.style.removeProperty('object-view-box')
+      // the layer box is the cropped size: the whole frame is drawn larger behind it and the box clips it
+      // (object-view-box would do it in one property, but only Chromium draws it)
+      const fill = cropFill(layer.crop)
+      if (el.lastFill !== fill) {
+        media.style.cssText = fill
+        el.lastFill = fill
+      }
       if (el.hold) {
         // before the file starts there is no footage to pre-roll: show the frame the preview holds
         const on = t < el.hold.until
         const { still, bgStill } = el.hold
-        still.style.cssText = MEDIA_FILL
+        still.style.cssText = fill
         still.style.display = on ? 'block' : 'none'
-        const box = media.style.getPropertyValue('object-view-box')
-        if (box) still.style.setProperty('object-view-box', box)
         if (bgStill) {
           bgStill.style.cssText = el.bgMedia?.style.cssText || MEDIA_FILL
           bgStill.style.display = on && layer.background?.type === 'blur' ? 'block' : 'none'
@@ -515,6 +518,15 @@ export class StageRenderer {
     if (this.rendering) this.bufferChanged = true
     else this.opts.onBuffering?.(this.waiting.size > 0)
   }
+}
+
+/** Style that draws a whole frame so that only its uncropped part shows inside the layer box (which clips it). */
+export function cropFill(crop: FrameLayer['crop']): string {
+  if (!crop || (!crop.left && !crop.right && !crop.top && !crop.bottom)) return MEDIA_FILL
+  const w = Math.max(0.01, 1 - crop.left - crop.right)
+  const h = Math.max(0.01, 1 - crop.top - crop.bottom)
+  const pct = (v: number) => `${+(v * 100).toFixed(4)}%`
+  return `position:absolute;left:${pct(-crop.left / w)};top:${pct(-crop.top / h)};width:${pct(1 / w)};height:${pct(1 / h)};max-width:none;object-fit:fill;display:block`
 }
 
 /** Free a media element's player: without its source (and a reload) the browser keeps the decoder. */

@@ -89,6 +89,27 @@ describe('preview renderer', () => {
     }
   })
 
+  it('crops with a clipping box that every browser draws, not object-view-box (EDT-29)', () => {
+    let p = createProject()
+    p = addAsset(p, asset('a'))
+    p = addItem(p, createVideoItem(p.assets.a, 0, { crop: { left: 0.1, right: 0.1, top: 0.2, bottom: 0 } }))
+    const { root, r } = preview(p)
+    r.render(1)
+    const wrap = root.querySelector('[data-ps-layer]') as HTMLElement
+    const v = wrap.querySelector('video')!
+    expect(wrap.style.overflow).toBe('hidden')
+    expect(v.style.getPropertyValue('object-view-box')).toBe('')
+    // 80 % of the width and 80 % of the height show: the frame is drawn 125 % of the box, shifted to the crop
+    expect([v.style.width, v.style.height, v.style.left, v.style.top]).toEqual(['125%', '125%', '-12.5%', '-25%'])
+    // without a crop the frame fills the box again
+    const id = mainTrack(p)!.items[0].id
+    r.setProject(updateItem(p, id, { crop: undefined }))
+    r.render(1)
+    expect([v.style.width, v.style.left]).toEqual(['100%', ''])
+    expect(wrap.style.overflow).toBe('')
+    r.destroy()
+  })
+
   describe('buffering and drift (EDT-24)', () => {
     function talk() {
       let p = createProject()
@@ -268,7 +289,11 @@ describe('export renderer', () => {
     const shown = () => holds.map((h) => h.style.display)
     renderer.render(9.7)
     expect(shown()).toEqual(['block', 'block'])
-    expect(holds[0].style.width).toBe('100%')
+    // the held still is cropped like the clip (10 % off the left: the frame is drawn 1/0.9 wide, shifted left)
+    const video = stage.querySelector(`[data-ps-layer="${b}"] video`) as HTMLVideoElement
+    expect(holds[0].style.width).toBe('111.1111%')
+    expect(holds[0].style.left).toBe('-11.1111%')
+    expect(video.style.width).toBe(holds[0].style.width)
     renderer.render(10.2)
     expect(shown()).toEqual(['none', 'none'])
     renderer.render(9.9)
