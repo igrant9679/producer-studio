@@ -296,6 +296,29 @@ describe('one item that keeps failing never blocks the rest (DSK-5)', () => {
   })
 })
 
+describe('a delete that arrives again never removes a project that came back (DSK-10)', () => {
+  beforeAll(linkA)
+
+  it('keeps a project kept here after a cloud delete, when the same changes are delivered again', async () => {
+    const { kvGet, kvSet } = await import('../desktop/db')
+    const id = (await A.http.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Comeback' })).body.summary.id
+    await sync()
+    const before = (await kvGet<number>('cursor'))!
+    // edited here while it's deleted in the cloud: kept here, and created in the cloud again
+    await editDoc(desk, id, (p) => (p.name = 'Comeback, edited here'))
+    await A.http.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    expect((await A.http.json('DELETE', `/api/projects/${id}`)).status).toBe(200)
+    await sync()
+    expect((await A.http.json('GET', `/api/projects/${id}`)).body.summary.name).toBe('Comeback, edited here')
+    // the same changes arrive again (the cursor held back): the old delete must not apply
+    await kvSet('cursor', before)
+    await sync()
+    await sync()
+    expect((await desk.json('GET', `/api/projects/${id}`)).body.summary?.name).toBe('Comeback, edited here')
+    expect((await A.http.json('GET', `/api/projects/${id}`)).status).toBe(200)
+  })
+})
+
 describe('losing a space keeps the work that exists only here (DSK-11)', () => {
   beforeAll(linkA)
 

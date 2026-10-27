@@ -208,6 +208,21 @@ describe('change feed', () => {
     expect(bc.body.projects.some((p: { project: { id: string } }) => p.project.id === p1.project.id)).toBe(false)
   })
 
+  it('a deleted project that comes back drops its old tombstone from the feed', async () => {
+    const A = await signup(t.app)
+    const id = crypto.randomUUID()
+    const created = (await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, id, name: 'Back again' })).body
+    const c0 = (await A.client.json('GET', '/api/sync/changes?since=0&limit=500')).body.cursor
+    await A.client.json('PATCH', `/api/projects/${id}`, { trashed: true })
+    await A.client.json('DELETE', `/api/projects/${id}`)
+    expect((await A.client.json('GET', `/api/sync/changes?since=${c0}`)).body.deleted.projects).toEqual([id])
+    // a replica that kept its edited copy creates it again with the same id
+    expect((await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, id, project: created.project })).status).toBe(200)
+    const again = await A.client.json('GET', `/api/sync/changes?since=${c0}`)
+    expect(again.body.deleted.projects).toEqual([])
+    expect(again.body.projects.map((p: { project: { id: string } }) => p.project.id)).toEqual([id])
+  })
+
   it('assets appear with sha256; joining a workspace republishes its content', async () => {
     const A = await signup(t.app)
     const V = await signup(t.app)

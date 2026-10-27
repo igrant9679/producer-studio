@@ -115,6 +115,8 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
 "Download all". Exports (`origin: render`) stay local. Runs at start, every 60 s, 3 s after local saves; backs off
 (5 s → 5 min) while offline.
 
+- **A delete never comes back to bite.** The change feed leaves out a tombstone whose id exists again in your spaces
+  (a project kept here after a cloud delete and created anew), so a re-delivered page can't delete it a second time.
 - **Trash, restore and template flags** changed in the cloud are applied here even though they don't bump the version
   (a flag toggled here since the last sync stays ours and is pushed).
 - **Deletes are guarded.** A project deleted here is deleted in the cloud with `POST /api/sync/projects/:id/delete

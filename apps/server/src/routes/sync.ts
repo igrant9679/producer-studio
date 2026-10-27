@@ -150,6 +150,16 @@ export async function changesSince(userId: string, since: number, limit: number)
     db.select({ id: workspaces.id, seq: workspaces.changeSeq }).from(workspaces).where(and(inArray(workspaces.id, wsIds), gt(workspaces.changeSeq, since))),
     db.select().from(voiceProfiles).where(and(inArray(voiceProfiles.workspaceId, wsIds), gt(voiceProfiles.changeSeq, since))).orderBy(asc(voiceProfiles.changeSeq)).limit(n),
   ])
+  // a deleted id that exists again (a replica kept its edited copy and created it anew): its old tombstone is void,
+  // or delivering it again would delete the copy that came back
+  const back = new Set<string>()
+  const ofKind = (k: string) => [...new Set(t.filter((r) => r.kind === k).map((r) => r.id))]
+  const [bp, ba, bv] = await Promise.all([
+    ofKind('project').length ? db.select({ id: projects.id }).from(projects).where(and(inArray(projects.id, ofKind('project')), inArray(projects.workspaceId, wsIds))) : [],
+    ofKind('asset').length ? db.select({ id: assets.id }).from(assets).where(and(inArray(assets.id, ofKind('asset')), inArray(assets.workspaceId, wsIds))) : [],
+    ofKind('voice_profile').length ? db.select({ id: voiceProfiles.id }).from(voiceProfiles).where(and(inArray(voiceProfiles.id, ofKind('voice_profile')), inArray(voiceProfiles.workspaceId, wsIds))) : [],
+  ])
+  for (const [kind, rows] of [['project', bp], ['asset', ba], ['voice_profile', bv]] as const) for (const r of rows) back.add(`${kind}:${r.id}`)
   const all: Change[] = [
     ...p.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'project' as const, row })),
     ...a.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'asset' as const, row })),
@@ -173,6 +183,7 @@ export async function changesSince(userId: string, since: number, limit: number)
     } else if (ch.kind === 'brand') {
       out.brandKits.push({ workspaceId: ch.row.workspaceId, doc: ch.row.doc, changeSeq: ch.seq })
     } else if (ch.kind === 'tombstone') {
+      if (back.has(`${ch.row.kind}:${ch.row.id}`)) continue
       if (ch.row.kind === 'project') out.deleted.projects.push(ch.row.id)
       else if (ch.row.kind === 'asset') out.deleted.assets.push(ch.row.id)
       else if (ch.row.kind === 'voice_profile') out.deleted.voiceProfiles!.push(ch.row.id)
