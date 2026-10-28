@@ -64,6 +64,7 @@ import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
 import { InOutBand, TransportControls } from './TransportControls'
+import { ClipMediaMenuItems, canDropReplace, replaceMedia } from './clipMedia'
 import { peakBetween, useWaveformPeaks } from './waveform'
 import {
   HEADER_W,
@@ -1084,7 +1085,8 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
     const p = dragPayload()
     if (!p || !isInternalDrag(e)) return
     const visual = item.type === 'video' || item.type === 'image' || item.type === 'text' || item.type === 'shape'
-    if ((p.kind === 'effect' && visual) || (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) || (p.kind === 'transition' && visual)) {
+    // Alt+drop of library media onto a clip replaces the clip's media (E-10)
+    if ((p.kind === 'effect' && visual) || (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) || (p.kind === 'transition' && visual) || (p.kind === 'asset' && e.altKey && canDropReplace(item.id, p.asset))) {
       e.preventDefault()
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
@@ -1103,6 +1105,8 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
       s.set({ activeRightTab: 'basic' })
     } else if (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) {
       s.commit(updateItem<VideoItem>(s.project, item.id, { filter: { id: p.id, intensity: 80 } }), 'Apply filter', { selection: [item.id] })
+    } else if (p.kind === 'asset' && e.altKey) {
+      replaceMedia(item.id, p.asset)
     } else if (p.kind === 'transition') {
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
       const rightHalf = e.clientX > r.left + r.width / 2
@@ -1299,6 +1303,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
               <MenuItem icon={<Snowflake size={14} />} label="Freeze frame" onClick={run(() => A.freezeClip(it.id, ctx.time))} />
             </>
           )}
+          <ClipMediaMenuItems item={it} run={run} />
           {(it.type === 'video' || it.type === 'audio') && (
             <MenuItem icon={<FileText size={14} />} label="Transcript editing" onClick={run(() => useEditor.setState({ activeLeftTab: 'transcript', leftCollapsed: false }))} />
           )}
