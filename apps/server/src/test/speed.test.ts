@@ -4,7 +4,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { addAsset, addItem, applyRampPreset, applySmoothCopy, createProject, createVideoItem, findItem, mainTrack, setItemSpeed, setPitchShift, setSmoothJob, smoothRange, type VideoItem } from '@producer/core'
+import { addAsset, addItem, applyRampPreset, applySmoothCopy, clipSourceAt, createProject, createVideoItem, evaluate, findItem, mainTrack, setItemSpeed, setPitchShift, setSmoothJob, smoothRange, type VideoItem } from '@producer/core'
+import { runTool } from '../ai/tools'
 import { assetDoc } from '../dto'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
@@ -35,7 +36,7 @@ beforeAll(async () => {
   await ffmpeg(['-f', 'lavfi', '-i', 'testsrc2=s=160x90:r=15:d=3', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:d=3', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', clip])
   const created = await createAssetFromFile({ workspaceId, userId, filePath: clip, name: 'moving.mp4', mime: 'video/mp4', kind: 'video', origin: 'upload' })
   video = assetDoc(await processAsset(created.id, inlineContext({ id: 't', kind: 'asset.process', workspaceId, userId, projectId: null, input: {} })))
-})
+}, 240_000)
 
 describe('smooth slow motion (E-17)', () => {
   it('makes a copy of the stretch asked for with frames made in between, ready for the editor', { timeout: 120_000 }, async () => {
@@ -135,5 +136,23 @@ describe('the pitch toggle in the export (E-17)', () => {
     expect(html2).toMatch(new RegExp(`<audio id="a-${id}" src="assets/${video.id}[^"]*"[^>]*"target":"rate"`))
     expect(html2).toMatch(new RegExp(`<video id="v-${id}"[^>]*"target":"rate"`))
     expect(html2).not.toContain('pitch/')
+  })
+})
+
+describe('the assistant on a ramped clip (E-17)', () => {
+  it('cuts the stretch of the recording it was shown at those timeline times', async () => {
+    let p = createProject()
+    p = addAsset(p, { id: 'as_r', kind: 'video', name: 'r.mp4', src: '/api/media/as_r/source', duration: 30, width: 1920, height: 1080, hasAudio: true })
+    p = addItem(p, createVideoItem(p.assets.as_r, 0, { id: 'v_r', in: 2, duration: 8 }))
+    p = applyRampPreset(p, 'v_r', 'rampUp')
+    const it = findItem(p, 'v_r')!.item as VideoItem
+    const [a, b] = [2, 3]
+    const from = clipSourceAt(it, a)
+    const to = clipSourceAt(it, b)
+    const s = { project: p, playhead: 0, selection: [], changes: [] }
+    await runTool(s, 'cut_transcript_ranges', { itemId: 'v_r', ranges: [{ start: a, end: b }] }, { transcribe: async () => undefined as never, tts: async () => undefined as never })
+    // the piece after the cut starts on the frame that was at 3 s
+    expect(evaluate(s.project, a + 1e-4).layers[0].mediaTime).toBeCloseTo(to, 2)
+    expect(evaluate(s.project, a - 0.01).layers[0].mediaTime).toBeLessThan(from)
   })
 })

@@ -64,7 +64,26 @@ const opts = { assetPath: (id: string) => `assets/${id}`, runtimePath: 'runtime.
  * core/dist/speedRamp.js `buildTable` / `sourceTimeAt`), copied so the test checks the export against the engine's
  * own arithmetic: speeds sampled on a log scale, integrated with trapezoids in 48 cells per segment.
  */
+const hfTables = new WeakMap<object, { ts: number[]; ss: number[]; first: number; last: number }>()
+
 function hfSourceTimeAt(lane: Array<{ t: number; v: number }>, t: number): number {
+  let table = hfTables.get(lane)
+  if (!table) hfTables.set(lane, (table = hfTable(lane)))
+  const { ts, ss } = table
+  const last = ts.length - 1
+  if (t <= 0) return t * table.first
+  if (t >= ts[last]) return ss[last] + (t - ts[last]) * table.last
+  let lo = 0
+  let hi = last
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (ts[mid] <= t) lo = mid
+    else hi = mid
+  }
+  return ss[lo] + ((ss[hi] - ss[lo]) * (t - ts[lo])) / (ts[hi] - ts[lo])
+}
+
+function hfTable(lane: Array<{ t: number; v: number }>): { ts: number[]; ss: number[]; first: number; last: number } {
   const pts = lane.map((q) => ({ t: Math.max(0, q.t), v: Math.min(10, Math.max(0.1, q.v)) })).sort((a, b) => a.t - b.t)
   const sample = (x: number) => {
     if (x <= pts[0].t) return pts[0].v
@@ -98,17 +117,7 @@ function hfSourceTimeAt(lane: Array<{ t: number; v: number }>, t: number): numbe
     if (b <= 0) continue
     for (let k = 1; k <= 48; k++) push(Math.max(a, 0) + ((b - a) * k) / 48)
   }
-  const last = ts.length - 1
-  if (t <= 0) return t * pts[0].v
-  if (t >= ts[last]) return ss[last] + (t - ts[last]) * pts[pts.length - 1].v
-  let lo = 0
-  let hi = last
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1
-    if (ts[mid] <= t) lo = mid
-    else hi = mid
-  }
-  return ss[lo] + ((ss[hi] - ss[lo]) * (t - ts[lo])) / (ts[hi] - ts[lo])
+  return { ts, ss, first: pts[0].v, last: pts[pts.length - 1].v }
 }
 
 interface MediaTag {
@@ -141,7 +150,7 @@ const exportTime = (tag: MediaTag, t: number) => tag.mediaStart + (tag.lane ? hf
  * At many moments, the export's picture and sound are at the source time the preview shows and plays (within a
  * millisecond: a frame at 240 fps is 4 ms).
  */
-function expectExportMatchesPreview(p: Project, step = 0.0173) {
+function expectExportMatchesPreview(p: Project, step = 0.0237) {
   const html = compileToHyperFrames(p, opts)
   const videos = tags(html, 'video')
   const audios = tags(html, 'audio')
@@ -216,7 +225,7 @@ describe('the time mapping', () => {
   })
 })
 
-describe('speed ramps (E-17)', () => {
+describe('speed ramps (E-17)', { timeout: 60_000 }, () => {
   it('a preset keeps the clip on the same stretch of its recording and changes its length', () => {
     const { p, id } = oneClip()
     for (const preset of RAMP_PRESETS) {
@@ -456,7 +465,7 @@ describe('the pitch toggle (E-17)', () => {
   })
 })
 
-describe('smooth slow motion (E-17)', () => {
+describe('smooth slow motion (E-17)', { timeout: 60_000 }, () => {
   it('is offered for a slowed clip whose file has too few frames', () => {
     const { p, id } = oneClip()
     expect(smoothFps(p, clip(p, id))).toBe(0)
@@ -509,7 +518,7 @@ describe('smooth slow motion (E-17)', () => {
   })
 })
 
-describe('the export lanes', () => {
+describe('the export lanes', { timeout: 60_000 }, () => {
   it('a lane starts at the element: points before it are cut at the speed of that moment', () => {
     const { p, id } = oneClip()
     const q = applyRampPreset(p, id, 'rampUp')

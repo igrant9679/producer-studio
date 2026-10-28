@@ -51,6 +51,7 @@ import {
   type Transcript,
   type VideoItem,
 } from '@producer/core'
+import { sourceOffset } from '@producer/core'
 
 export interface ToolState {
   project: Project
@@ -405,7 +406,9 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
       const it = need(p, i.itemId)
       if (it.type !== 'video' && it.type !== 'audio') throw new ToolError('cut_transcript_ranges needs a video/audio item')
       const m = it as VideoItem | AudioItem
-      const src = (i.ranges as Array<{ start: number; end: number }>).map((r) => ({ start: m.in + (Math.min(r.start, r.end) - m.start) * m.speed, end: m.in + (Math.max(r.start, r.end) - m.start) * m.speed }))
+      // timeline to source time along the clip's speed (a ramp too)
+      const at = (t: number) => m.in + sourceOffset(m, t - m.start)
+      const src = (i.ranges as Array<{ start: number; end: number }>).map((r) => ({ start: at(Math.min(r.start, r.end)), end: at(Math.max(r.start, r.end)) }))
       return done(set(s, cutSourceRanges(p, it.id, src), `Cut ${src.length} range(s) from ${label(it)}`))
     }
     case 'set_aspect_ratio': {
