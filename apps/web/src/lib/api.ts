@@ -383,8 +383,8 @@ export function subscribeEvents(
      * reload what the screen shows.
      */
     resync?: () => void
-    /** Any other event by name (data parsed from JSON). */
-    on?: Record<string, (data: unknown) => void>
+    /** Other events by name, data parsed from JSON (`presence`, `comment`: see packages/core/src/collab.ts). */
+    on?: Record<string, (data: any) => void>
   },
 ): () => void {
   const named: Record<string, ((data: never) => void) | undefined> = { sync: handlers.sync, job: handlers.job, asset: handlers.asset, project: handlers.project, workspace: handlers.workspace, ...handlers.on }

@@ -1,0 +1,7 @@
+/* The Activity page (ActivityPage.tsx). */
+.ps-activity-filters { flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.ps-activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ps-activity-item { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+.ps-activity-icon { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface-2); color: var(--text-2); }
+.ps-activity-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ps-activity-item time { flex: none; color: var(--text-3); font-size: 0.75rem; }

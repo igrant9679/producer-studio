@@ -607,6 +607,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <SpaceSwitcher openModal={setModal} />
             <div style={{ marginTop: 6 }}>
               <NavItem to="/space" icon={<Users size={18} />} label="Members" />
+              <NavItem to="/activity" icon={<Activity size={18} />} label="Activity" />
               {!currentWs?.personal && (
                 <button className="ps-nav-link" onClick={() => setModal('invite')} disabled={!canInvite(currentWs)} data-tip={inviteTip} data-tip-side="right" aria-label="Invite members">
                   <UserPlus size={18} />

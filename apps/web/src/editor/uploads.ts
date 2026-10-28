@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import { api, subscribeEvents } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import { useEditor } from './store'
+import { refuseReadOnly } from './viewer'
 
 export interface UploadRow {
   key: string
@@ -106,14 +107,14 @@ function onWorkspace(w: { id: string; deleted: boolean; brand?: boolean }) {
 }
 
 /** One SSE connection per workspace: asset status for the library, `project` saves for the open project, brand kit saves. */
-export function subscribeWorkspace(workspaceId: string, onProject: (p: { id: string; version: number }) => void, onResync?: () => void): () => void {
+export function subscribeWorkspace(workspaceId: string, onProject: (p: { id: string; version: number }) => void, opts: { onResync?: () => void; on?: Record<string, (data: any) => void> } = {}): () => void {
   // back after missing events that can't be replayed: the library reloads, and the open project checks its version
   const resync = () => {
     void loadLibrary(workspaceId)
-    onResync?.()
+    opts.onResync?.()
   }
   try {
-    return subscribeEvents(workspaceId, { asset: upsertRecord, project: onProject, job: trackJob, workspace: onWorkspace, resync })
+    return subscribeEvents(workspaceId, { asset: upsertRecord, project: onProject, job: trackJob, workspace: onWorkspace, resync, on: opts.on })
   } catch {
     return () => undefined
   }
@@ -188,6 +189,7 @@ async function probeLocal(file: File, kind: Asset['kind']): Promise<Asset> {
 
 /** Upload files to the library. `onUploaded` hears of each clip once the server has it (still processing, maybe). */
 export async function uploadFiles(files: File[] | FileList, opts: { onUploaded?: (assetId: string, file: File) => void } = {}) {
+  if (refuseReadOnly()) return
   const list = Array.from(files)
   const s = useEditor.getState()
   for (const file of list) {

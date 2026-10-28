@@ -1,5 +1,6 @@
 // Project version history (P-15): every save the server accepts is kept as a version, then thinned with age — the
-// last PROJECT_VERSIONS_KEEP saves (default 50), the newest of each hour for the last 7 days, the newest of each day
+// last PROJECT_VERSIONS_KEEP saves (default 50), the newest of each 10 minutes for the last day (autosave runs every
+// second or so while someone edits, so the last 50 alone cover about a minute), of each hour for the last 7 days, of each day
 // for the 30 days after that, and every version someone named. A restore is itself a new save; what it replaced is
 // kept, labelled "before restore" (and what a Producer AI assembly replaced, "before AI").
 import { and, desc, eq, inArray } from 'drizzle-orm'
@@ -13,7 +14,10 @@ export type VersionRow = typeof projectVersions.$inferSelect
 
 const HOUR = 3600_000
 const DAY = 24 * HOUR
-/** One version per hour is kept this long… */
+const TEN_MIN = 600_000
+/** One version per 10 minutes is kept this long… */
+export const TEN_MINUTELY_FOR_MS = DAY
+/** …then one per hour this long… */
 export const HOURLY_FOR_MS = 7 * DAY
 /** …then one per day until this age; older ones go (named ones stay). */
 export const DAILY_UNTIL_MS = 37 * DAY
@@ -25,7 +29,8 @@ export function versionsKeep(env: NodeJS.ProcessEnv = process.env): number {
 
 /**
  * Which versions to keep, newest first in `rows` order or not: the newest `keep`, every named one, a "before …"
- * safety copy younger than the hourly window, and the newest of each hour (last 7 days) and of each day (after).
+ * safety copy younger than the hourly window, and the newest of each 10 minutes (last day), each hour (last 7 days)
+ * and each day (after).
  */
 export function versionsToKeep(rows: Array<Pick<VersionRow, 'id' | 'label' | 'createdAt'>>, now: number, keep = versionsKeep()): Set<string> {
   const sorted = [...rows].sort((a, b) => b.createdAt - a.createdAt)
@@ -35,7 +40,8 @@ export function versionsToKeep(rows: Array<Pick<VersionRow, 'id' | 'label' | 'cr
     const age = now - r.createdAt
     if (i < keep || r.label === 'named' || (r.label.startsWith('before-') && age < HOURLY_FOR_MS)) out.add(r.id)
     let bucket: string | null = null
-    if (age < HOURLY_FOR_MS) bucket = `h${Math.floor(r.createdAt / HOUR)}`
+    if (age < TEN_MINUTELY_FOR_MS) bucket = `m${Math.floor(r.createdAt / TEN_MIN)}`
+    else if (age < HOURLY_FOR_MS) bucket = `h${Math.floor(r.createdAt / HOUR)}`
     else if (age < DAILY_UNTIL_MS) bucket = `d${Math.floor(r.createdAt / DAY)}`
     // newest first: the first row seen in a bucket is its newest
     if (bucket && !buckets.has(bucket)) {

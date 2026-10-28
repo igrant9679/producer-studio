@@ -5,12 +5,13 @@ import * as z from 'zod/v4'
 import { createProject, uid, type Project, type ProjectDocResponse } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
-import { projects } from '../db/schema'
+import { comments, projects } from '../db/schema'
 import { projectSummary } from '../dto'
 import { HttpError, body, invalid, notFound, requireRole } from '../http'
 import { getLook, starterProject } from '../services/looks'
 import { hydrateAssets, insertProject, loadProjectRow, saveProjectDoc, validateProject, withFreshIds, type ProjectRow } from '../services/projects'
 import { recordVersion } from '../services/versions'
+import { recordActivity } from '../services/activity'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 import { getBrand } from './workspaces'
 
@@ -110,6 +111,7 @@ projectRoutes.post('/', async (c) => {
   }
   const row = await insertProject({ workspaceId: b.workspaceId, userId: u.id, doc, kind: b.kind })
   announce(row)
+  await recordActivity({ workspaceId: row.workspaceId, projectId: row.id, actorId: u.id, kind: 'project.created', data: { project: row.name } })
   const res: ProjectDocResponse = { summary: projectSummary(row), project: row.doc, version: row.version }
   return c.json(res)
 })
@@ -134,6 +136,7 @@ projectRoutes.put('/:id', async (c) => {
   // older (a draft saved while the editor was open, then "Keep mine"), so a save keeps the stored ones
   if (row.doc.ai) doc.ai = row.doc.ai
   const r = await saveProjectDoc(id, doc, b.baseVersion, { userId: u.id })
+  if (doc.name !== row.name) await recordActivity({ workspaceId: row.workspaceId, projectId: id, actorId: u.id, kind: 'project.renamed', data: { from: row.name, to: doc.name } })
   return c.json({ version: r.version, updatedAt: r.updatedAt })
 })
 
@@ -162,6 +165,7 @@ projectRoutes.patch('/:id', async (c) => {
   if (b.name !== undefined) await recordVersion(updated, { userId: u.id, note: 'Renamed' })
   // trash, restore and template changes keep the version but still change what other screens list
   announce(updated)
+  if (b.name !== undefined && b.name !== row.name) await recordActivity({ workspaceId: row.workspaceId, projectId: id, actorId: u.id, kind: 'project.renamed', data: { from: row.name, to: b.name } })
   return c.json({ ...projectSummary(updated), version: updated.version })
 })
 
@@ -177,6 +181,7 @@ projectRoutes.post('/:id/duplicate', async (c) => {
   doc.name = `${row.name} copy`
   const copy = await insertProject({ workspaceId: row.workspaceId, userId: u.id, doc, kind: row.kind })
   announce(copy)
+  await recordActivity({ workspaceId: copy.workspaceId, projectId: copy.id, actorId: u.id, kind: 'project.created', data: { project: copy.name, copyOf: row.name } })
   return c.json(projectSummary(copy))
 })
 
@@ -185,7 +190,11 @@ projectRoutes.delete('/:id', async (c) => {
   const row = await loadProjectRow(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'editor')
   if (row.trashedAt == null) throw new HttpError(409, 'conflict', 'Move the project to the trash before deleting it')
-  await ctx().db.delete(projects).where(eq(projects.id, row.id))
+  // review comments have no FK: they go with the project
+  await ctx().db.transaction(async (tx) => {
+    await tx.delete(comments).where(eq(comments.projectId, row.id))
+    await tx.delete(projects).where(eq(projects.id, row.id))
+  })
   announce(row, true)
   return c.json({ ok: true })
 })

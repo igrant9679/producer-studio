@@ -38,6 +38,7 @@ import { FitFields, GlyphWarning, TextEffectsSection, WordStyles } from './TextT
 import { SmartTab } from './SmartPanel'
 import { thumbUrl } from './media'
 import { PROJECT_NAME_MAX, useEditor } from './store'
+import { ViewOnly } from './viewer'
 import { timecode } from './timelineMath'
 
 const BLENDS: BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion']
@@ -105,6 +106,7 @@ export function PropertiesPanel() {
         </button>
       </div>
       <div className="ed-props-body">
+        <ViewOnly>
         {item && <ItemHeader item={item} track={f!.track} />}
         {locked && <p className="ed-note" role="note">{A.LOCKED_NOTE}</p>}
         {tab === 'project' && <ProjectTab project={project} />}
@@ -122,6 +124,7 @@ export function PropertiesPanel() {
           {item && tab === 'caption' && item.type === 'caption' && <CaptionTab item={item} track={f!.track} />}
           {item && tab === 'smart' && (item.type === 'video' || item.type === 'image' || item.type === 'audio') && <SmartTab item={item} />}
         </fieldset>
+        </ViewOnly>
       </div>
     </aside>
   )

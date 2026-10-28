@@ -4,7 +4,6 @@ import type { ThemePreference } from '@producer/core'
 import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, History, Keyboard, Loader2, Monitor, Moon, MousePointer2, Redo2, Share2, Sun, TriangleAlert, Undo2, Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, HttpError } from '../lib/api'
 import { themeLabel, useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { toast, toastError } from '../lib/toast'
@@ -14,6 +13,9 @@ import { Menu, MenuItem } from './controls'
 import { discardJournal, flush, restoreJournal } from './persistence'
 import { VersionsButton } from './VersionsPanel'
 import { PROJECT_NAME_MAX, redoLabel, undoLabel, useEditor } from './store'
+import { useEditorGate, ViewOnlyBadge } from './viewer'
+import { ShareLinksDialog } from '../shell/components/ShareLinks'
+import { PresenceAvatars } from './collab/presence'
 
 export function TopBar() {
   const nav = useNavigate()
@@ -24,6 +26,7 @@ export function TopBar() {
   const uLabel = useEditor(undoLabel)
   const rLabel = useEditor(redoLabel)
   const tool = useEditor((s) => s.canvasTool)
+  const gate = useEditorGate()
   const [draft, setDraft] = useState(name)
   useEffect(() => setDraft(name), [name])
 
@@ -35,21 +38,12 @@ export function TopBar() {
     s.commit(updateProject(s.project, { name: v }), 'Rename project')
   }
 
-  const share = async () => {
+  // review links: this project's, each with its own settings (A-16)
+  const [shareOpen, setShareOpen] = useState(false)
+  const share = () => {
     if (A.demoBlocked('sharing')) return
-    try {
-      await flush()
-      const r = await api.share(useEditor.getState().projectId)
-      const url = r.url.startsWith('http') ? r.url : `${location.origin}${r.url}`
-      await navigator.clipboard.writeText(url).catch(() => undefined)
-      toast('Review link copied to clipboard')
-    } catch (e) {
-      // nothing exported yet: a link would show "No finished video yet", so export first
-      if (e instanceof HttpError && e.status === 409) {
-        useEditor.setState({ exportOpen: true, playing: false })
-        toast('Export the video first: a share link shows a finished export')
-      } else toastError(e)
-    }
+    void flush().catch(() => undefined)
+    setShareOpen(true)
   }
 
   return (
@@ -76,15 +70,18 @@ export function TopBar() {
           spellCheck={false}
           maxLength={PROJECT_NAME_MAX}
           aria-label="Project name"
+          readOnly={!gate.canEdit}
+          data-tip={gate.tip}
         />
         <SaveStatus demo={demo} />
         {!demo && <VersionsButton />}
+        <ViewOnlyBadge />
       </div>
       <div className="row ed-top-c">
-        <button className="ed-tbtn" {...tipProps(canUndo ? `Undo ${uLabel}` : 'Nothing to undo', undefined, 'Ctrl+Z')} disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
+        <button className="ed-tbtn" {...tipProps(canUndo ? `Undo ${uLabel}` : 'Nothing to undo', undefined, 'Ctrl+Z')} {...gate.props} disabled={!canUndo || !gate.canEdit} onClick={() => useEditor.getState().undo()}>
           <Undo2 size={16} />
         </button>
-        <button className="ed-tbtn" {...tipProps(canRedo ? `Redo ${rLabel}` : 'Nothing to redo', undefined, 'Ctrl+Shift+Z')} disabled={!canRedo} onClick={() => useEditor.getState().redo()}>
+        <button className="ed-tbtn" {...tipProps(canRedo ? `Redo ${rLabel}` : 'Nothing to redo', undefined, 'Ctrl+Shift+Z')} {...gate.props} disabled={!canRedo || !gate.canEdit} onClick={() => useEditor.getState().redo()}>
           <Redo2 size={16} />
         </button>
         <div className="ed-tsep" />
@@ -100,17 +97,29 @@ export function TopBar() {
         <RatioMenu />
       </div>
       <div className="row ed-top-r">
+        <PresenceAvatars />
         <ThemeMenu />
         <button className="ed-tbtn" {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
           <Keyboard size={16} />
         </button>
-        <button className="btn sm" onClick={share} {...tipProps('Share', 'Create a review link to this project that you can send to others.')}>
+        <button className="btn sm" onClick={share} {...tipProps('Share', 'Review links to this project: make one, copy it, and set its expiry, password, downloads and comments.')}>
           <Share2 size={14} /> Share
         </button>
-        <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the video or a part of it (MP4, WebM or GIF, 720p to 4K), or just its sound (MP3, WAV). It renders in the background while you keep working.')}>
+        <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the video or a part of it (MP4, WebM or GIF, 720p to 4K), or just its sound (MP3, WAV). It renders in the background while you keep working.')} {...gate.props}>
           <Upload size={14} /> Export
         </button>
       </div>
+      {shareOpen && (
+        <ShareLinksDialog
+          projectId={useEditor.getState().projectId}
+          gate={gate}
+          onClose={() => setShareOpen(false)}
+          onExportFirst={() => {
+            setShareOpen(false)
+            useEditor.setState({ exportOpen: true, playing: false })
+          }}
+        />
+      )}
     </header>
   )
 }
@@ -297,9 +306,10 @@ function RatioMenu() {
   const h = useEditor((s) => s.project.height)
   const [open, setOpen] = useState(false)
   const cur = ASPECT_RATIOS.find((a) => Math.abs(a.width / a.height - w / h) < 0.001)
+  const gate = useEditorGate()
   return (
     <div className="ed-dd">
-      <button className="ed-ddbtn" onClick={() => setOpen(!open)} {...tipProps('Aspect ratio', 'The shape of the video: 16:9 for YouTube, 9:16 for TikTok, Reels and Shorts, 1:1 for Instagram posts.')}>
+      <button className="ed-ddbtn" onClick={() => setOpen(!open)} {...tipProps('Aspect ratio', 'The shape of the video: 16:9 for YouTube, 9:16 for TikTok, Reels and Shorts, 1:1 for Instagram posts.')} {...gate.props}>
         <span className="ed-ratioicon" style={{ aspectRatio: `${w}/${h}` }} />
         {cur?.name ?? `${w}×${h}`} <ChevronDown size={13} />
       </button>

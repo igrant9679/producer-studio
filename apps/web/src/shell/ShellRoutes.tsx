@@ -21,6 +21,7 @@ const pages = {
   brand: () => import('./pages/BrandPage'),
   space: () => import('./pages/SpacePage'),
   exports: () => import('./pages/ExportsPage'),
+  activity: () => import('./pages/ActivityPage'),
   settings: () => import('./pages/SettingsPage'),
   invite: () => import('./pages/InvitePage'),
 }
@@ -42,6 +43,7 @@ const ToolsPage = lazy(pages.tools)
 const BrandPage = lazy(pages.brand)
 const SpacePage = lazy(pages.space)
 const ExportsPage = lazy(pages.exports)
+const ActivityPage = lazy(pages.activity)
 const SettingsPage = lazy(pages.settings)
 const InvitePage = lazy(pages.invite)
 const NotFound = lazy(() => import('./pages/NotFound'))
@@ -117,6 +119,7 @@ export function ShellRoutes() {
             <Route path="brand" element={<BrandPage />} />
             <Route path="space" element={<SpacePage />} />
             <Route path="exports" element={<ExportsPage />} />
+            <Route path="activity" element={<ActivityPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="invite/:token" element={<InvitePage />} />
             <Route path="*" element={<NotFound />} />

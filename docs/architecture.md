@@ -63,8 +63,9 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   version, thumbnail, duration, width, height, is_template, trashed_at, created_by, timestamps)`,
   `assets(id, workspace_id, kind, name, mime, size, storage keys, meta jsonb, status)`, `jobs(id, kind,
   status, progress, message, input jsonb, result jsonb, error, project_id, workspace_id, user_id,
-  timestamps, locked_by, locked_at)`, `exports`, `share_links(token, project_id, export_id)`,
-  `brand_kits(workspace_id, doc jsonb)`, `project_versions` (saved versions, v10), `idempotency_keys` (v10).
+  timestamps, locked_by, locked_at)`, `exports`, `share_links(token, project_id, export_id, expires_at,
+  password_hash, allow_download, allow_comments, views, last_viewed_at)`, `brand_kits(workspace_id, doc jsonb)`,
+  `project_versions` (saved versions, v10), `idempotency_keys` (v10), `comments`, `activity` (v11, see Collaboration).
 - **Object storage**: S3-compatible (`S3_*` env; R2/Railway buckets) with presigned PUT uploads and signed GET;
   dev falls back to local disk `.data/storage` with the same interface.
 - The project document is the `Project` type from core. Asset `src` = storage key; the client resolves media via
@@ -86,7 +87,7 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   and offered back on the next open.
 - **Version history** (`project_versions`, migration v10, `services/versions.ts`, `routes/versions.ts`): every save
   is kept with author, time, size and a label (autosave, named, before-restore, before-ai), thinned to the last
-  `PROJECT_VERSIONS_KEEP` (50), one an hour for 7 days, one a day for 30 days after, and every named one. List, read,
+  `PROJECT_VERSIONS_KEEP` (50), one per 10 minutes for a day, one an hour for 7 days, one a day for 30 days after, and every named one. List, read,
   name and restore under `/api/projects/:id/versions`; a restore is a new save that keeps what it replaced.
 - **Base versions on small records**: `PATCH /api/projects/:id` takes `baseVersion`; asset, brand kit and workspace
   updates answer with an `ETag` of what they edit and refuse a stale `If-Match` with 412 (`etag.ts`). Without one,
@@ -171,6 +172,29 @@ at a `media.smooth` copy (time 0 = source `from`) while it covers what the clip 
 ## Auth & tenancy
 Email + password (scrypt), httpOnly `ps_session` cookie (30 days, sliding). Every user gets a personal workspace;
 workspaces are the tenancy boundary (projects, assets, brand kit). Roles: owner, editor, viewer.
+
+A viewer opens the editor read-only (`editor/viewer.tsx`): the store's `readOnly` flag follows the role in the
+project's space, `commit`/undo/redo refuse while it is set, write controls sit in a disabled fieldset (`<ViewOnly>`)
+with the viewer tooltip, and drags, drops and the canvas/timeline handles are off. Viewers still play, scrub, inspect
+and comment.
+
+## Collaboration (migration v11; contract in `packages/core/src/collab.ts`)
+- **Share links** (`routes/share.ts`): each link has `expires_at` (410 after), an optional `password_hash` (the page,
+  video, poster and comments answer 401 until `POST /api/share/:token/unlock` gives a key, an HMAC over the token and
+  an expiry keyed by the password hash, sent back as `?k=` or `X-Share-Key`), `allow_download`, `allow_comments`,
+  `views` and `last_viewed_at`. `PATCH /api/share/:token` changes them (editors); `GET /api/workspaces/:id/shares`
+  lists a space's links. The share page fetches without cookies.
+- **Review comments** (`services/comments.ts`, `routes/collab.ts`, table `comments`): threads pinned to a project
+  time and optionally a frame point (0–1); replies name the first comment. Members comment (viewers too); share
+  visitors comment with a name when the link allows it, at video times mapped through the export's range. Changes go
+  out as `comment` events on the workspace stream.
+- **Presence** (`services/presence.ts`): open editors POST a heartbeat every 20 s per tab; the API process keeps who
+  is in each project in memory (gone after 50 s without one) and publishes `presence` events when that changes. One
+  API process is assumed; several replicas would each know only their own visitors.
+- **Activity** (`services/activity.ts`, table `activity`): created, renamed, exported, shared, link changed/revoked,
+  commented and member changes, recorded per space by the routes (and the export job) and listed newest first in
+  pages (`GET /api/workspaces/:id/activity`), shown on the shell's Activity page.
+- None of these tables sync to desktops.
 
 ## Two products, one codebase
 

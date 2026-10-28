@@ -1,0 +1,13 @@
+/* Viewer mode (viewer.tsx): the write controls' fieldsets, the badge, and the handles a viewer doesn't get. */
+.ed-viewonly { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ed-viewonly.inline { display: contents; }
+.ed-ro-badge {
+  display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap;
+  font-size: 0.75rem; font-weight: 600; color: var(--amber);
+  padding: 2px 8px; border-radius: 999px; background: var(--amber-soft); border: 1px solid var(--amber-line);
+}
+/* handles that only edit: moving, scaling, rotating and cropping on the canvas; trimming and transitions on the timeline */
+.ed-readonly .cv-handle, .ed-readonly .cv-toolbar, .ed-readonly .cv-crop, .ed-readonly .tl-trim { display: none; }
+.ed-readonly .tl-kfdot, .ed-readonly .tl-clip { cursor: default; }
+.ed-readonly .tl-trans { pointer-events: none; }
+.ed-readonly .tl-trans:not(.on) { display: none; }

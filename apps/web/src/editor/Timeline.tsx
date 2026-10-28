@@ -77,6 +77,8 @@ import { KeyframeDots } from './KeyframeDots'
 import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
+import { isReadOnly, ViewOnly } from './viewer'
+import { CommentMarks } from './collab/CommentMarks'
 import { placeAsset, placementFor, uploadToTimeline } from './timelineDrop'
 import { fitTimeline, registerTimelineFit } from './timelineView'
 import { InOutBand, TransportControls } from './TransportControls'
@@ -427,7 +429,7 @@ function TimelineBody() {
       return
     }
     if (!s.selection.includes(item.id)) s.select([item.id])
-    if (track.locked || item.locked) return
+    if (track.locked || item.locked || s.readOnly) return
     const ids = useEditor.getState().selection.filter((id) => {
       const f = findItem(s.project, id)
       return f && !f.track.locked && !f.item.locked
@@ -515,6 +517,7 @@ function TimelineBody() {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+    if (isReadOnly()) return
     const s = useEditor.getState()
     if (!s.selection.includes(item.id)) s.select([item.id])
     const orig = s.project
@@ -649,6 +652,7 @@ function TimelineBody() {
 
   // ---------- drops from panels and from the desktop ----------
   const onDragOver = (e: React.DragEvent) => {
+    if (isReadOnly()) return
     if (isFileDrag(e) && !isInternalDrag(e)) {
       // files from the desktop: they land here once uploaded
       e.preventDefault()
@@ -672,6 +676,7 @@ function TimelineBody() {
     const p = dragPayload()
     const hint = dropHint
     setDropHint(null)
+    if (isReadOnly()) return
     if (isFileDrag(e) && !isInternalDrag(e)) {
       const files = Array.from(e.dataTransfer.files ?? [])
       if (!files.length) return
@@ -837,6 +842,7 @@ function TimelineToolbar() {
   return (
     <div className="tl-toolbar">
       <div className="row tl-tools">
+        <ViewOnly inline>
         <ToolBtn icon={<Scissors size={15} />} title="Split" desc="Cut at the playhead: the clip becomes two you can move, trim or delete on their own." kbd="Ctrl+B" onClick={A.split} />
         <ToolBtn
           icon={<Trash2 size={15} />}
@@ -856,6 +862,7 @@ function TimelineToolbar() {
           onClick={A.separate}
           disabled={!hasVideo}
         />
+        </ViewOnly>
         <div className="tl-sep" />
         <HistoryButton />
         <ToolBtn
@@ -944,6 +951,7 @@ const Ruler = memo(function Ruler({ width, zoom, fps, duration, onPointerDown }:
         </span>
       ))}
       <MarkerFlags zoom={zoom} fps={fps} />
+      <CommentMarks zoom={zoom} />
       <PlayheadHead onPointerDown={onPointerDown} />
     </div>
   )
@@ -1068,12 +1076,13 @@ const TrackHeader = memo(function TrackHeader({ track }: { track: Track }) {
           }}
         />
       ) : (
-        <span className="tl-name" onDoubleClick={() => setEditing(true)} title="Double-click to rename">
+        <span className="tl-name" onDoubleClick={() => !isReadOnly() && setEditing(true)} title="Double-click to rename">
           <span className="nm">{track.name}</span>
           {track.main && <em>Main</em>}
         </span>
       )}
       <div className="tl-head-btns">
+        <ViewOnly inline>
         {visual && (
           <button title={track.hidden ? 'Show track' : 'Hide track'} aria-label={`Hide ${track.name}`} aria-pressed={!!track.hidden} className={clsx(track.hidden && 'off')} onClick={() => up({ hidden: !track.hidden }, track.hidden ? 'Show track' : 'Hide track')}>
             {track.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
@@ -1100,6 +1109,7 @@ const TrackHeader = memo(function TrackHeader({ track }: { track: Track }) {
             <Trash2 size={13} />
           </button>
         )}
+        </ViewOnly>
       </div>
     </div>
   )
@@ -1353,6 +1363,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
   const canTransition = it && A.transitionTargetFor(it.id) !== null && it.type !== 'audio' && it.type !== 'caption'
   return (
     <Menu open onClose={onClose} className="tl-ctx" style={{ left: x, top: y }} label={it ? 'Clip' : 'Timeline'}>
+      <ViewOnly inline>
       {it ? (
         <>
           <MenuItem icon={<Scissors size={14} />} label="Split" kbd="Ctrl B" onClick={run(A.split)} />
@@ -1415,6 +1426,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
           {project.markers?.some((m) => m.beat) && <MenuItem icon={<Trash2 size={14} />} label="Remove beat markers" onClick={run(clearBeatMarkers)} />}
         </>
       )}
+      </ViewOnly>
     </Menu>
   )
 }

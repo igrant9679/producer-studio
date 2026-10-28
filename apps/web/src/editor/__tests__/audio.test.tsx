@@ -8,6 +8,7 @@ import { useSession } from '../../lib/session'
 import { ExportDialog } from '../Dialogs'
 import { useEditor } from '../store'
 import { Timeline } from '../Timeline'
+import { startViewerMode } from '../viewer'
 
 const S = () => useEditor.getState()
 const video = (id: string, duration = 30): Asset => ({ id, kind: 'video', name: `${id}.mp4`, src: `/api/media/${id}/source`, duration, width: 1920, height: 1080, hasAudio: true })
@@ -100,7 +101,8 @@ describe('track sound: volume, solo, ducking (E-14)', () => {
     const me = { id: 'u', email: 'v@example.com', name: 'Vi', avatarColor: '#fff', createdAt: 0 } as User
     const ws = { id: 'w', name: 'Client review', role: 'viewer', personal: false, memberCount: 2 } as Workspace
     useSession.setState({ status: 'ready', user: me, workspaces: [ws], workspaceId: ws.id } as never)
-    load(withMusic())
+    S().load({ project: withMusic(), version: 1, projectId: 'p1', demo: false, workspaceId: ws.id })
+    const stop = startViewerMode()
     show()
     const btn = screen.getByRole('button', { name: 'Sound of Audio' }) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
@@ -108,6 +110,8 @@ describe('track sound: volume, solo, ducking (E-14)', () => {
     // and no rubber band handles on a selected clip
     act(() => S().select([music().id]))
     expect(screen.queryByRole('slider', { name: 'Volume of Music' })).toBeNull()
+    stop()
+    S().set({ readOnly: false, readOnlyTip: undefined })
   })
 })
 

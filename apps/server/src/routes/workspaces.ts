@@ -4,7 +4,8 @@ import * as z from 'zod/v4'
 import { FONTS, INVITE_TTL_MS, type BrandKitDoc, type InviteInfo, type InviteStatus, type Member, type PendingInvite, type Role, type Workspace } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
-import { brandKits, exportsTable, invites, jobs, memberships, projects, shareLinks, users, workspaces } from '../db/schema'
+import { activity, brandKits, comments, exportsTable, invites, jobs, memberships, projects, shareLinks, users, workspaces } from '../db/schema'
+import { recordActivity } from '../services/activity'
 import { HttpError, body, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { newId, randomToken } from '../ids'
 import { jobsDeleted } from '../jobs/queue'
@@ -51,7 +52,7 @@ export async function renameWorkspace(userId: string, id: string, name: string):
 
 /**
  * Permanently delete a workspace (owner; not a personal space). Projects, assets, memberships, invites, brand kit
- * and AI settings/keys cascade; jobs, exports and share links have no FK so they go explicitly. A running job is
+ * and AI settings/keys cascade; jobs, exports, share links, comments and activity have no FK so they go explicitly. A running job is
  * stopped (here at once, on another worker at its next heartbeat, when it finds its row gone), and whatever it
  * writes to storage after this is swept when it ends. Membership deletes write tombstones so members' desktops drop
  * the space too.
@@ -65,6 +66,8 @@ export async function deleteWorkspace(userId: string, id: string): Promise<void>
   const removed = await db.transaction(async (tx) => {
     await tx.delete(shareLinks).where(inArray(shareLinks.projectId, tx.select({ id: projects.id }).from(projects).where(eq(projects.workspaceId, id))))
     await tx.delete(exportsTable).where(eq(exportsTable.workspaceId, id))
+    await tx.delete(comments).where(eq(comments.workspaceId, id))
+    await tx.delete(activity).where(eq(activity.workspaceId, id))
     const gone = await tx.delete(jobs).where(eq(jobs.workspaceId, id)).returning({ id: jobs.id })
     await tx.delete(workspaces).where(eq(workspaces.id, id))
     return gone
@@ -163,6 +166,7 @@ workspaceRoutes.patch('/:id/members/:userId', async (c) => {
     throw new HttpError(409, 'conflict', 'A space needs at least one owner. Make someone else an owner first.')
   await ctx().db.update(memberships).set({ role: b.role }).where(and(eq(memberships.workspaceId, id), eq(memberships.userId, target)))
   membersChanged(id)
+  if (current !== b.role) await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: b.role } })
   return c.json({ ok: true, role: b.role })
 })
 
@@ -192,6 +196,7 @@ workspaceRoutes.delete('/:id/members/:userId', async (c) => {
         .where(and(eq(invites.workspaceId, id), eq(invites.email, email.toLowerCase()), isNull(invites.acceptedAt), isNull(invites.revokedAt)))
   })
   membersChanged(id)
+  await recordActivity(self ? { workspaceId: id, actorId: u.id, kind: 'member.left' } : { workspaceId: id, actorId: u.id, kind: 'member.removed', data: { member: await userName(target) } })
   return c.json({ ok: true })
 })
 
@@ -333,6 +338,9 @@ inviteRoutes.post('/:token/accept', async (c) => {
     else if (!roleAtLeast(existing.role as Role, inv.role as Role))
       await tx.update(memberships).set({ role: inv.role }).where(and(eq(memberships.workspaceId, inv.workspaceId), eq(memberships.userId, u.id)))
   })
+  await recordActivity({ workspaceId: inv.workspaceId, actorId: u.id, kind: 'member.joined', data: { role: inv.role } })
   const ws = (await listWorkspaces(u.id)).find((w) => w.id === inv.workspaceId)
   return c.json(ws)
 })
+
+const userName = async (id: string) => (await ctx().db.select({ name: users.name }).from(users).where(eq(users.id, id)).limit(1))[0]?.name ?? 'someone'

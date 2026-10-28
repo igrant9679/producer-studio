@@ -25,12 +25,23 @@ function labelShowing(el: Element, title: string): boolean {
   return label instanceof HTMLElement && getComputedStyle(label).display !== 'none' && label.textContent?.trim() === title.trim()
 }
 
+/**
+ * A control that viewer mode disabled (inside a `[data-ro-tip]` box, see editor/viewer.tsx): it gets a tip even
+ * without its own, saying who can use it.
+ */
+function viewOnlyTarget(t: Element | null): Element | null {
+  const box = t?.closest?.('[data-ro-tip]')
+  const ctl = box && t!.closest('button, input, select, textarea, [role="menuitem"]')
+  return ctl && box.contains(ctl) && ctl.matches(':disabled') ? ctl : null
+}
+
 function tipFrom(el: Element): Tip | null {
-  const title = el.getAttribute('data-tip')
+  const ro = el.matches(':disabled') ? el.closest('[data-ro-tip]')?.getAttribute('data-ro-tip') : null
+  const title = el.getAttribute('data-tip') ?? (ro ? el.getAttribute('aria-label') || el.textContent?.trim() || 'View only' : null)
   if (!title || labelShowing(el, title)) return null
   return {
     title,
-    desc: el.getAttribute('data-tip-desc') || undefined,
+    desc: ro || el.getAttribute('data-tip-desc') || undefined,
     kbd: el.getAttribute('data-tip-kbd') || undefined,
     side: (el.getAttribute('data-tip-side') as Side | null) || undefined,
     rect: el.getBoundingClientRect(),
@@ -53,7 +64,8 @@ export function TooltipLayer() {
     }
     const over = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return
-      const el = (e.target as Element | null)?.closest?.('[data-tip]') ?? null
+      const target = e.target as Element | null
+      const el = viewOnlyTarget(target) ?? target?.closest?.('[data-tip]') ?? null
       if (el === s.el) return
       window.clearTimeout(s.timer)
       if (!el) return hide()

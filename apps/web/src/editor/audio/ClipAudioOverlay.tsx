@@ -7,7 +7,7 @@ import type { AudioItem, Keyframe, VideoItem } from '@producer/core'
 import { MAX_GAIN, clipLevel, sampleKeyframes, setVolumeKeyframes, updateItem } from '@producer/core'
 import clsx from 'clsx'
 import { useMemo } from 'react'
-import { useEditGate } from '../../shell/ui'
+import { useEditorGate } from '../viewer'
 import { useEditor } from '../store'
 import './audio.css'
 
@@ -56,7 +56,7 @@ const commit = (fn: (p: ReturnType<typeof useEditor.getState>['project']) => Ret
 }
 
 export function ClipAudioOverlay({ item, width, height, zoom, selected, locked }: Props) {
-  const gate = useEditGate()
+  const gate = useEditorGate()
   const fps = useEditor((s) => s.project.fps)
   const h = Math.max(4, height - PAD * 2 - 2)
   const yOf = (v: number) => PAD + (1 - Math.min(VMAX, Math.max(0, v)) / VMAX) * h

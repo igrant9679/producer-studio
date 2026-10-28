@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 10
+export const SCHEMA_VERSION = 11
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -415,6 +415,52 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
 CREATE INDEX IF NOT EXISTS idempotency_keys_created_idx ON idempotency_keys(created_at);
 `
 
+/**
+ * v11 — collaboration. Share links get their own settings (expiry, password, download, comments) and a view count.
+ * Timecoded review comments (threaded: a reply names its thread's first comment; share-page visitors comment with a
+ * name and no account). A per-space activity feed. None of these sync to desktops: they live on the cloud.
+ */
+export const DDL_V11 = `
+ALTER TABLE share_links ADD COLUMN IF NOT EXISTS expires_at double precision;
+ALTER TABLE share_links ADD COLUMN IF NOT EXISTS password_hash text;
+ALTER TABLE share_links ADD COLUMN IF NOT EXISTS allow_download boolean NOT NULL DEFAULT true;
+ALTER TABLE share_links ADD COLUMN IF NOT EXISTS allow_comments boolean NOT NULL DEFAULT false;
+ALTER TABLE share_links ADD COLUMN IF NOT EXISTS views integer NOT NULL DEFAULT 0;
+ALTER TABLE share_links ADD COLUMN IF NOT EXISTS last_viewed_at double precision;
+CREATE INDEX IF NOT EXISTS share_links_project_idx ON share_links(project_id);
+
+CREATE TABLE IF NOT EXISTS comments (
+  id text PRIMARY KEY,
+  project_id text NOT NULL,
+  workspace_id text NOT NULL,
+  parent_id text,
+  author_id text,
+  author_name text NOT NULL,
+  share_token text,
+  body text NOT NULL,
+  at double precision,
+  x double precision,
+  y double precision,
+  resolved_at double precision,
+  resolved_by text,
+  created_at double precision NOT NULL,
+  updated_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS comments_project_idx ON comments(project_id, created_at);
+
+CREATE TABLE IF NOT EXISTS activity (
+  id text PRIMARY KEY,
+  workspace_id text NOT NULL,
+  project_id text,
+  actor_id text,
+  actor_name text NOT NULL,
+  kind text NOT NULL,
+  data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS activity_ws_idx ON activity(workspace_id, created_at, id);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -429,4 +475,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [8, DDL_V8],
   [9, DDL_V9],
   [10, DDL_V10],
+  [11, DDL_V11],
 ]

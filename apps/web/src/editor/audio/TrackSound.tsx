@@ -6,7 +6,7 @@ import clsx from 'clsx'
 import { Headphones, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useEditGate } from '../../shell/ui'
+import { useEditorGate } from '../viewer'
 import { Field, Slider, Toggle } from '../controls'
 import { useEditor } from '../store'
 import './audio.css'
@@ -17,7 +17,7 @@ export function TrackSoundButton({ track }: { track: Track }) {
   const [open, setOpen] = useState(false)
   const btn = useRef<HTMLButtonElement>(null)
   const solo = useEditor((s) => soloActive(s.project))
-  const gate = useEditGate()
+  const gate = useEditorGate()
   if (!hasSound(track)) return null
   const silenced = solo && !track.solo && !track.muted
   const vol = track.volume ?? 1

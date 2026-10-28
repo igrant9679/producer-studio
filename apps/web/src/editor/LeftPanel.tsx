@@ -14,6 +14,7 @@ import {
   FileText,
   Keyboard,
   Loader2,
+  MessageSquare,
   Mic,
   Palette,
   Pause,
@@ -41,6 +42,8 @@ import { CaptionsPanel } from './panels/CaptionsPanel'
 import { EffectsPanel, FiltersPanel, TransitionsPanel } from './panels/FxPanels'
 import { TranscriptPanel } from './panels/TranscriptPanel'
 import { type LeftTab, useEditor } from './store'
+import { ViewOnly } from './viewer'
+import { CommentsPanel } from './collab/CommentsPanel'
 import { shortDuration } from './timelineMath'
 import { libraryAssets, removeAsset, retryAsset, uploadFiles, useLibrary } from './uploads'
 import { tipProps } from '../lib/tooltip'
@@ -55,6 +58,7 @@ const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: str
   { id: 'transitions', label: 'Transitions', icon: <ArrowLeftRight size={18} />, desc: 'How one clip turns into the next: crossfade, push, wipe, zoom.' },
   { id: 'filters', label: 'Filters', icon: <Palette size={18} />, desc: 'Colour grades for the selected clip, with adjustable strength.' },
   { id: 'brand', label: 'Brand', icon: <SwatchBook size={18} />, desc: "Your workspace's brand colours and fonts, applied to text, shapes or the background." },
+  { id: 'comments', label: 'Comments', icon: <MessageSquare size={18} />, desc: 'Review comments pinned to moments (and points on the frame), from your team and from share links. Reply, resolve and jump to each.' },
   { id: 'ai', label: 'AI', icon: <Bot size={18} />, desc: 'Ask the assistant to edit for you: trim, split, add text and captions, remove silences.' },
 ]
 
@@ -97,6 +101,7 @@ export function AssetPanel() {
         </button>
       </header>
       <div className={clsx('ed-panelbody', active === 'ai' && 'flush')}>
+        <ViewOnly inline>
         {active === 'media' && <MediaPanel />}
         {active === 'audio' && <AudioPanel />}
         {active === 'text' && <TextPanel />}
@@ -107,6 +112,8 @@ export function AssetPanel() {
         {active === 'filters' && <FiltersPanel />}
         {active === 'brand' && <BrandPanel />}
         {active === 'ai' && <AssistantPanel />}
+        </ViewOnly>
+        {active === 'comments' && <CommentsPanel />}
       </div>
     </aside>
   )

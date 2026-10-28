@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
+import { SpaceShareLinks } from '../components/ShareLinks'
 import { EmptyState, Soon, Spinner, Thumb, useAsync, usePageTitle } from '../ui'
 import { absoluteUrl, copyText, downloadUrl, formatBytes, formatDuration, relativeTime } from '../util'
 
@@ -152,6 +153,8 @@ export default function ExportsPage() {
           ))}
         </div>
       )}
+
+      {workspaceId && <SpaceShareLinks key={`${workspaceId}:${(data ?? []).map((r) => r.shareToken ?? '').join()}`} workspaceId={workspaceId} />}
 
       <section className="ps-section">
         <ScheduleCalendar />

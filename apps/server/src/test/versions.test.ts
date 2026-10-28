@@ -95,16 +95,21 @@ describe('version history', () => {
 describe('thinning with age', () => {
   const H = 3600_000
   const now = Date.UTC(2026, 9, 28, 12, 0, 0)
-  it('keeps the newest N, one an hour for a week, one a day after that, and every named one', () => {
+  it('keeps the newest N, one per 10 minutes for a day, one an hour for a week, one a day after that, and every named one', () => {
     const rows = [
       // the newest two
       { id: 'a', label: 'autosave', createdAt: now - 1000 },
       { id: 'b', label: 'autosave', createdAt: now - 2000 },
-      // two in the same hour (09:30, 09:29): the newer stays
-      { id: 'c', label: 'autosave', createdAt: now - 2.5 * H },
-      { id: 'd', label: 'autosave', createdAt: now - 2.5 * H - 60_000 },
-      // a safety copy in that hour stays too
-      { id: 'e', label: 'before-ai', createdAt: now - 2.5 * H - 120_000 },
+      // two in the same 10 minutes (09:35, 09:34): the newer stays
+      { id: 'c', label: 'autosave', createdAt: now - 2.5 * H + 300_000 },
+      { id: 'd', label: 'autosave', createdAt: now - 2.5 * H + 240_000 },
+      // a safety copy in those minutes stays too
+      { id: 'e', label: 'before-ai', createdAt: now - 2.5 * H + 180_000 },
+      // the 10 minutes before (09:25) keep their own
+      { id: 'j', label: 'autosave', createdAt: now - 2.5 * H - 300_000 },
+      // two days ago, the same hour (12:30, 12:10): one
+      { id: 'k', label: 'autosave', createdAt: now - 47.5 * H },
+      { id: 'l', label: 'autosave', createdAt: now - 47.5 * H - 20 * 60_000 },
       // ten days ago, the same day: one
       { id: 'f', label: 'autosave', createdAt: now - 240 * H },
       { id: 'g', label: 'autosave', createdAt: now - 240 * H - 2 * H },
@@ -112,6 +117,6 @@ describe('thinning with age', () => {
       { id: 'h', label: 'autosave', createdAt: now - 60 * 24 * H },
       { id: 'i', label: 'named', createdAt: now - 90 * 24 * H },
     ]
-    expect([...versionsToKeep(rows, now, 2)].sort()).toEqual(['a', 'b', 'c', 'e', 'f', 'i'])
+    expect([...versionsToKeep(rows, now, 2)].sort()).toEqual(['a', 'b', 'c', 'e', 'f', 'i', 'j', 'k'])
   })
 })

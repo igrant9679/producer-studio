@@ -22,6 +22,9 @@ import { Timeline } from './Timeline'
 import { JournalBanner, SaveErrorBanner, TopBar } from './TopBar'
 import { VersionPreviewBanner, VersionsPanel } from './VersionsPanel'
 import { loadLibrary, subscribeWorkspace, uploadFiles } from './uploads'
+import { isReadOnly, refuseReadOnly, startViewerMode } from './viewer'
+import { loadComments, onCommentEvent, resetComments } from './collab/comments'
+import { onPresenceEvent, startPresence } from './collab/presence'
 
 export function EditorPage({ demo = false }: { demo?: boolean }) {
   const params = useParams()
@@ -46,16 +49,17 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   // ?export=1 (the Library's "Export this project first" before a share link) opens the export dialog
   const exportParam = search.get('export') === '1'
   useEffect(() => {
-    if (loaded && exportParam) useEditor.setState({ exportOpen: true, playing: false })
+    if (loaded && exportParam && !isReadOnly()) useEditor.setState({ exportOpen: true, playing: false })
   }, [loaded, exportParam])
   useEffect(() => {
     if (!loaded || !tabParam) return
-    const tabs: LeftTab[] = ['media', 'audio', 'text', 'captions', 'transcript', 'effects', 'transitions', 'filters', 'brand', 'ai']
+    const tabs: LeftTab[] = ['media', 'audio', 'text', 'captions', 'transcript', 'effects', 'transitions', 'filters', 'brand', 'ai', 'comments']
     if ((tabs as string[]).includes(tabParam)) useEditor.setState({ activeLeftTab: tabParam as LeftTab, leftCollapsed: false })
   }, [loaded, tabParam])
 
   useEffect(() => startPlaybackClock(), [])
   useEffect(() => startAutosave(), [])
+  useEffect(() => startViewerMode(), [])
   useShortcuts()
 
   useEffect(() => {
@@ -66,8 +70,19 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   useEffect(() => {
     if (demo || !workspaceId) return
     void loadLibrary(workspaceId)
-    return subscribeWorkspace(workspaceId, (ev) => void onProjectEvent(ev), () => void resyncProject())
+    return subscribeWorkspace(workspaceId, (ev) => void onProjectEvent(ev), { onResync: () => (void resyncProject(), void loadComments(useEditor.getState().projectId)), on: { comment: onCommentEvent, presence: onPresenceEvent } })
   }, [demo, workspaceId])
+
+  // review comments and who else is here (E-22, A-23)
+  useEffect(() => {
+    if (!loaded || demo) return
+    void loadComments(id)
+    const stop = startPresence(id)
+    return () => {
+      stop()
+      resetComments()
+    }
+  }, [loaded, demo, id])
 
   if (error)
     return (
@@ -128,12 +143,13 @@ function EditorShell() {
   const leftCollapsed = useEditor((s) => s.leftCollapsed)
   const saveState = useEditor((s) => s.saveState)
   const versionsOpen = useEditor((s) => s.versionsOpen)
+  const readOnly = useEditor((s) => s.readOnly)
   const [fileDrag, setFileDrag] = useState(false)
 
   useEffect(() => {
     let depth = 0
     const enter = (e: DragEvent) => {
-      if (!isFileDrag(e)) return
+      if (!isFileDrag(e) || isReadOnly()) return
       depth++
       setFileDrag(true)
     }
@@ -152,7 +168,7 @@ function EditorShell() {
       e.preventDefault()
       depth = 0
       setFileDrag(false)
-      if (!taken && e.dataTransfer?.files.length) {
+      if (!taken && e.dataTransfer?.files.length && !refuseReadOnly()) {
         useEditor.setState({ activeLeftTab: 'media', leftCollapsed: false })
         void uploadFiles(e.dataTransfer.files).catch(toastError)
       }
@@ -170,7 +186,7 @@ function EditorShell() {
   }, [])
 
   return (
-    <div className={`ed-root${leftCollapsed ? ' left-collapsed' : ''}`}>
+    <div className={`ed-root${leftCollapsed ? ' left-collapsed' : ''}${readOnly ? ' ed-readonly' : ''}`}>
       <TopBar />
       <StorageBanner />
       {saveState === 'conflict' && <ConflictBanner />}

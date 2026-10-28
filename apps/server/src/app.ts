@@ -24,7 +24,8 @@ import { eventRoutes, jobRoutes } from './routes/jobs'
 import { preferenceRoutes } from './routes/preferences'
 import { projectRoutes } from './routes/projects'
 import { versionRoutes } from './routes/versions'
-import { exportRoutes, projectExportRoutes, shareRoutes } from './routes/share'
+import { exportRoutes, projectExportRoutes, shareRoutes, workspaceShareRoutes } from './routes/share'
+import { activityRoutes, commentRoutes, projectCollabRoutes } from './routes/collab'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { templateRoutes } from './routes/templates'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
@@ -111,10 +112,14 @@ export function createApp() {
   if (ctx().config.mode === 'desktop') app.route('/api', desktopRoutes)
   app.route('/api/auth', authRoutes)
   app.route('/api/me', preferenceRoutes)
+  app.route('/api/workspaces', workspaceShareRoutes)
+  app.route('/api/workspaces', activityRoutes)
   app.route('/api/workspaces', workspaceRoutes)
   app.route('/api/invites', inviteRoutes)
   app.route('/api/projects', projectExportRoutes)
   app.route('/api/projects', versionRoutes)
+  app.route('/api/projects', projectCollabRoutes)
+  app.route('/api/comments', commentRoutes)
   app.route('/api/projects', projectRoutes)
   app.route('/api/uploads', uploadRoutes)
   app.route('/api/assets', sceneRoutes)

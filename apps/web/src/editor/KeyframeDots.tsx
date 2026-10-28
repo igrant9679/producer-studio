@@ -11,7 +11,7 @@ export function KeyframeDots({ item, times, zoom, locked }: { item: Item; times:
     const s0 = useEditor.getState()
     s0.select([item.id])
     A.seek(item.start + t0)
-    if (e.button > 0 || locked || !editable(findItem(s0.project, item.id))) return
+    if (e.button > 0 || locked || s0.readOnly || !editable(findItem(s0.project, item.id))) return
     e.preventDefault()
     const orig = s0.project
     const fps = orig.fps
