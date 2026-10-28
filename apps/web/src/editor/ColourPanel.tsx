@@ -27,13 +27,13 @@ function live<T extends Item>(id: string): T | undefined {
   return findItem(useEditor.getState().project, id)?.item as T | undefined
 }
 
-/** Change the item's grade (a LUT no clip uses any more leaves the project). */
+/** Change the item's grade. */
 function setGrade(id: string, f: (g: Grade) => Grade, label: string, coalesce?: string) {
   const s = useEditor.getState()
   const cur = live<Graded>(id)
   if (!cur) return
   const next = f(cur.grade ?? {})
-  s.commit(pruneLuts(updateItem<Graded>(s.project, id, { grade: next })), label, coalesce ? { coalesce } : undefined)
+  s.commit(updateItem<Graded>(s.project, id, { grade: next }), label, coalesce ? { coalesce } : undefined)
 }
 
 // ---------- effects ----------
@@ -247,6 +247,7 @@ function LutSection({ item }: { item: Graded }) {
   const file = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const lut = item.grade?.lut
+  const unused = useEditor((s) => Object.keys(s.project.luts ?? {}).length - Object.keys(pruneLuts(s.project).luts ?? {}).length)
   const choose = (id: string) => setGrade(item.id, (g) => ({ ...g, lut: id ? { id, intensity: g.lut?.intensity ?? 100 } : undefined }), id ? 'LUT' : 'Remove LUT')
   const load = async (f: File) => {
     if (f.size > CUBE_MAX) return toast(`${f.name} is larger than ${CUBE_MAX / 1024 / 1024} MB: not a .cube LUT this editor can read`)
@@ -257,7 +258,7 @@ function LutSection({ item }: { item: Graded }) {
       const cur = live<Graded>(item.id)
       if (!cur) return
       const r = addLut(s.project, f.name.replace(/\.cube$/i, ''), data)
-      s.commit(pruneLuts(updateItem<Graded>(r.project, item.id, { grade: { ...(cur.grade ?? {}), lut: { id: r.id, intensity: cur.grade?.lut?.intensity ?? 100 } } })), 'Load LUT')
+      s.commit(updateItem<Graded>(r.project, item.id, { grade: { ...(cur.grade ?? {}), lut: { id: r.id, intensity: cur.grade?.lut?.intensity ?? 100 } } }), 'Load LUT')
     } catch (e) {
       toast(e instanceof CubeError ? `${f.name}: ${e.message}` : `Could not read ${f.name}`)
     } finally {
@@ -294,7 +295,12 @@ function LutSection({ item }: { item: Graded }) {
       <button type="button" className="btn sm" disabled={busy} onClick={() => file.current?.click()}>
         <Upload size={13} /> Load .cube LUT…
       </button>
-      <p className="ed-note">Applied after the curves and HSL. The LUT is kept in this project, so the export uses it as you see it.</p>
+      {unused > 0 && (
+        <button type="button" className="btn sm" onClick={() => useEditor.getState().commit(pruneLuts(useEditor.getState().project), 'Remove unused LUTs')}>
+          Remove {unused} unused LUT{unused > 1 ? 's' : ''}
+        </button>
+      )}
+      <p className="ed-note">Applied after the curves and HSL. LUTs are kept in this project, so the export uses them as you see them.</p>
     </Section>
   )
 }

@@ -106,7 +106,7 @@ describe('the Colour tab', () => {
     expect(clip().grade?.hsl).toBeUndefined()
   })
 
-  it('loads a .cube LUT into the project, sets its intensity, and drops it when no clip uses it', async () => {
+  it('loads a .cube LUT into the project, sets its intensity, and removes it from the project on request once unused', async () => {
     open()
     const input = screen.getByLabelText('LUT file') as HTMLInputElement
     await act(async () => {
@@ -120,10 +120,13 @@ describe('the Colour tab', () => {
     expect(clip().grade!.lut!.intensity).toBe(35)
     fireEvent.change(screen.getByRole('combobox', { name: 'Look' }), { target: { value: '' } })
     expect(clip().grade?.lut).toBeUndefined()
+    // still in the project, to pick again
+    expect(within(screen.getByRole('combobox', { name: 'Look' })).getByRole('option', { name: 'Warm' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 1 unused LUT' }))
     expect(S().project.luts).toEqual({})
-    // one undo brings the LUT and the clip's use of it back together
+    expect(screen.queryByRole('button', { name: /unused LUT/ })).toBeNull()
+    // undo brings it back
     act(() => S().undo())
-    expect(clip().grade!.lut!.id).toBe(id)
     expect(S().project.luts![id]).toBeTruthy()
   })
 
