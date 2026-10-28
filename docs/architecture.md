@@ -72,6 +72,26 @@ Postgres-backed queue (`SELECT … FOR UPDATE SKIP LOCKED`), polled by the worke
 scene score over a clip's proxy in a source range → cut times, for "Split at scene changes"; a quick job,
 `POST /api/assets/:id/scenes`). Progress is pushed to clients over SSE (`/api/events`).
 
+### Smart tools (E-21)
+- **Masks and chroma key** live in the document (`masks.ts`, `key.ts`): `item.mask` (rect / ellipse / path, in fractions
+  of the clip's frame; its numbers are keyframes `maskX`…`maskExpand` among the clip's others) and `item.chromaKey`.
+  `evaluate` gives the layer `smart: { mask, key }`; `smartRuntime.ts` puts the mask on the layer wrapper as a CSS
+  `mask-image` (an SVG image with an SVG `<mask>`, feGaussianBlur for the feather, a stroke for the expansion) and the
+  key on the picture as `filter: url(#ps-key-…)` (an sRGB SVG filter in a hidden `<svg data-ps-keys>` in the stage:
+  chroma-distance matrices → alpha table → spill step → picture × matte). Both modes draw the same; HyperFrames copies
+  a video's computed filter onto the frame image it draws in the video's place, and the mask is on the wrapper above.
+- **Processed copies** are jobs, one file each under `media/`: `media.stabilise` (`stabilise.ts`: vid.stab two-pass,
+  else deshake), `media.denoise` (`denoise.ts`: afftdn / arnndn with `DENOISE_MODEL` for sound over the whole file,
+  picture copied; hqdn3d / nlmeans for the picture over the clip's part), `media.bgremove` (`bgremove.ts`: runs
+  `BG_REMOVAL_CMD` with `{in}` / `{out}`, no shell; PNG frames or `out.webm` → VP9 WebM with alpha; off when unset).
+  `smartTools.ts` holds the shared part: `GET /api/smart-tools` (what this ffmpeg and config can do, and why not),
+  the source range, saving the copy as a new clip (`origin: 'smart'`, `meta.derivedFrom { assetId, tool, offset,
+  settings }`, the transcript moved along) processed inside the job. Routes: `POST /api/assets/:id/stabilise |
+  denoise | remove-background` (editors; 501 before queuing when the tool is missing). The editor swaps the copy in
+  with core's `applyProcessedCopy` (offset, then Replace media's rules), one undo step.
+- A clip with transparency (`probe().alpha`: VP9 `alpha_mode`, yuva/rgba pixel formats) gets a VP9-alpha WebM proxy
+  (`proxy.webm`, served as `video/webm`); the export reads the original, whose alpha HyperFrames keeps (PNG frames).
+
 ## AI (Claude API, `@anthropic-ai/sdk`)
 - Model `claude-opus-5`, adaptive thinking, server-side refusal fallbacks (`fallbacks: "default"`,
   beta `server-side-fallback-2026-07-01`), streaming for long outputs.

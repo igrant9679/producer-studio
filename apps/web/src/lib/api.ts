@@ -26,6 +26,9 @@ import type {
   ProjectDocResponse,
   ProjectSummary,
   SceneCuts,
+  SmartJobRequest,
+  SmartJobResult,
+  SmartToolsInfo,
   ScriptScene,
   ShareLink,
   SyncStatus,
@@ -285,6 +288,9 @@ export const api = {
   exportProject: (id: string, body: ExportRequest) => req<Job<ExportResult>>('POST', `/projects/${id}/export`, body),
   /** Scene changes in a video clip's file (E-10): a short job; `from`/`to` are seconds into the file. */
   detectScenes: (assetId: string, body: { from?: number; to?: number; threshold?: number } = {}) => req<Job<SceneCuts>>('POST', `/assets/${assetId}/scenes`, body),
+  /** Smart tools (E-21): what this server can do, and a job making a processed copy of a clip's media. */
+  smartTools: () => req<SmartToolsInfo>('GET', '/smart-tools'),
+  smartTool: (assetId: string, tool: 'stabilise' | 'denoise' | 'remove-background', body: SmartJobRequest = {}) => req<Job<SmartJobResult>>('POST', `/assets/${assetId}/${tool}`, body),
   exports: (projectId: string) => req<ExportRecord[]>('GET', `/exports${qs({ projectId })}`),
   share: (id: string, exportId?: string) => req<ShareLink>('POST', `/projects/${id}/share`, { exportId }),
   shares: (id: string) => req<ShareLink[]>('GET', `/projects/${id}/shares`),

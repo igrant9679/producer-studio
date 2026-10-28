@@ -851,6 +851,38 @@ on('POST', '/api/assets/([^/]+)/scenes', (m, _q, b) => {
   const j = startJob('media.scenes', assetWs(m[1]) ?? 'ws_personal', 1500, { message: `Finding scene changes in ${a.name}`, onDone: () => ({ assetId: a.id, cuts }) })
   return json(publicJob(j))
 })
+// smart tools (E-21): like a server whose ffmpeg has every tool and no background removal command set up
+on('GET', '/api/smart-tools', () =>
+  json({ stabilise: { method: 'vidstab' }, denoise: { audio: ['afftdn'], video: ['hqdn3d', 'nlmeans'] }, removeBackground: { available: false }, why: { removeBackground: 'Background removal is not set up on this server: the owner sets BG_REMOVAL_CMD to a removal tool installed there.' } }),
+)
+on('POST', '/api/assets/([^/]+)/(stabilise|denoise|remove-background)', (m, _q, b) => {
+  const denied = editorOnly(assetWs(m[1]))
+  if (denied) return denied
+  const src = assets.find((x) => x.asset.id === m[1])
+  if (!src) return fail(404, 'Asset not found', 'not_found')
+  const tool = m[2] === 'remove-background' ? 'removeBackground' : (m[2] as 'stabilise' | 'denoise')
+  if (tool === 'removeBackground') return fail(501, 'Background removal is not set up on this server: the owner sets BG_REMOVAL_CMD to a removal tool installed there.', 'server')
+  if (tool === 'stabilise' && src.asset.kind !== 'video') return fail(400, 'Stabilisation works on video clips', 'invalid')
+  if (tool === 'denoise' && src.asset.kind === 'image') return fail(400, 'Denoising works on video and sound clips', 'invalid')
+  if (b.from !== undefined && b.to !== undefined && Number(b.to) <= Number(b.from)) return fail(400, 'The range must end after it starts', 'invalid')
+  const ws = src.workspaceId
+  const offset = b.target === 'audio' ? 0 : Number(b.from ?? 0)
+  const length = b.target === 'audio' ? src.asset.duration : Number(b.to ?? src.asset.duration ?? 10) - offset
+  const soundOnly = src.asset.kind === 'audio' || b.soundOnly === true
+  const j = startJob(tool === 'stabilise' ? 'media.stabilise' : 'media.denoise', ws, 2500, {
+    message: `${tool === 'stabilise' ? 'Stabilising' : 'Denoising'} ${src.asset.name}`,
+    onDone: () => {
+      const name = `${src.asset.name.replace(/\.[a-z0-9]+$/i, '')} (${tool === 'stabilise' ? 'stabilised' : 'denoised'})`
+      const a = mkAsset(ws, soundOnly ? 'audio' : src.asset.kind, name, 'smart', { duration: length, width: src.asset.width, height: src.asset.height, hasAudio: src.asset.hasAudio }, 0)
+      a.demo = src.demo
+      a.createdAt = Date.now()
+      assets.unshift(a)
+      emit('asset', pub(a))
+      return { tool, asset: pub(a), offset, sourceAssetId: src.asset.id }
+    },
+  })
+  return json(publicJob(j))
+})
 // like the server: one link per export (reused), nothing to share before an export, and links can be stopped
 on('POST', '/api/projects/([^/]+)/share', async (m, _q, b) => {
   await delay(200)

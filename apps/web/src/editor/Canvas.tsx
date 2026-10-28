@@ -12,6 +12,7 @@ import { AlignButtons } from './AlignTools'
 import { layerBoxes, parseTransform } from './canvasActions'
 import { CanvasRulers, CanvasViewBar, SafeZoneOverlay, SnapLines } from './CanvasGuides'
 import { safeRect, shift, snapBox, snapTargets, union, type Box } from './canvasSnap'
+import { SmartCanvasOverlay } from './SmartCanvas'
 import { useCanvasView } from './canvasView'
 import { Menu, MenuItem, Slider, useThrottledPlayhead } from './controls'
 import { dragPayload, isInternalDrag, makeResolver } from './media'
@@ -343,6 +344,7 @@ export function Canvas() {
         {!fullscreen && <CanvasRulers W={W} H={H} scale={scale} boxRef={boxRef} />}
         {!fullscreen && <SelectionOverlay scale={scale} boxRef={boxRef} beginMove={beginMove} margin={Math.max(0, (avail.h - H * scale) / 2 + pan.y)} />}
         {!fullscreen && <GroupOverlay scale={scale} boxRef={boxRef} margin={Math.max(0, (avail.h - H * scale) / 2 + pan.y)} />}
+        {!fullscreen && <SmartCanvasOverlay scale={scale} boxRef={boxRef} />}
       </div>
       {!fullscreen && <CanvasViewBar />}
       {(buffering || loadingMedia > 0) && (
