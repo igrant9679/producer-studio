@@ -107,11 +107,14 @@ export async function finishJob(id: string, result: unknown, lockedBy?: string):
   return rows[0] ?? null
 }
 
-/** End a running job. The error is shown to people, so any file path in it is dropped (callers log the raw text). */
-export async function failJob(id: string, error: string, status: 'error' | 'cancelled' = 'error', lockedBy?: string): Promise<JobRow | null> {
+/**
+ * End a running job. The error is shown to people, so any file path in it is dropped; `detail`, the raw error, is kept
+ * on the job for operators (and callers log it).
+ */
+export async function failJob(id: string, error: string, status: 'error' | 'cancelled' = 'error', lockedBy?: string, detail?: string): Promise<JobRow | null> {
   const rows = await ctx()
     .db.update(jobs)
-    .set({ status, error: scrubPaths(error).slice(0, 4000), message: status === 'cancelled' ? 'Cancelled' : 'Failed', updatedAt: Date.now(), lockedBy: null })
+    .set({ status, error: scrubPaths(error).slice(0, 4000), ...(detail !== undefined ? { errorDetail: detail.slice(0, 8000) } : {}), message: status === 'cancelled' ? 'Cancelled' : 'Failed', updatedAt: Date.now(), lockedBy: null })
     .where(runningBy(id, lockedBy))
     .returning()
   if (rows[0]) emitJob(rows[0])

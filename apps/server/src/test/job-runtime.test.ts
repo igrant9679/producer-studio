@@ -166,7 +166,11 @@ describe('job errors people see (PIP-33 / QA-13)', () => {
       const shown = (await client.json('GET', `/api/jobs/${j.id}`)).body
       expect(shown.status).toBe('error')
       expect(shown.error).not.toMatch(/\/data\/|C:\\|Users|AppData|0x55/)
-      expect(shown.error).toMatch(/Invalid data found|could not open/)
+      // a plain reason, not the tool's output (R4-A): the raw text stays on the job for operators
+      expect(shown.error).not.toMatch(/exit 1|\||Invalid data found/)
+      expect(shown.error).toMatch(/^The transcription failed\. (The file is damaged|A file it needed)/)
+      expect(shown).not.toHaveProperty('errorDetail')
+      expect((await getJob(j.id))!.errorDetail).toContain(message)
     }
     // processing errors read like the clip's
     const { publicJobError } = await import('../jobs/errors')
