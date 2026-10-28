@@ -1,7 +1,7 @@
 // DEV-ONLY mock routes for the brand kits, templates, onboarding, Voice Studio and Producer additions (A-6, A-7, A-20,
 // A-21, A-22), registered by mockApi.ts with its router and state. Same role rules as the server.
-import type { BrandFont, BrandKitDoc, BrandKitSummary } from '@producer/core'
-import { DEFAULT_KIT_ID } from '@producer/core'
+import type { BrandFont, BrandKitDoc, BrandKitSummary, TemplateSummary } from '@producer/core'
+import { DEFAULT_KIT_ID, addItem, createProject, createTextItem } from '@producer/core'
 
 type Json = Record<string, unknown>
 type Handler = (m: RegExpMatchArray, q: URLSearchParams, body: Json) => Response | Promise<Response>
@@ -14,13 +14,18 @@ export interface MockKit {
   editorOnly: (wsId: string | undefined) => Response | null
   memberOf: (wsId: string) => boolean
   brands: Record<string, BrandKitDoc>
+  templates: TemplateSummary[]
+  /** Add a team template project; returns its summary. */
+  addTemplate: (ws: string, name: string, width: number, height: number) => TemplateSummary
 }
+
+const SIZES: Record<string, [number, number]> = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080] }
 
 let n = 0
 const id = (p: string) => `${p}_${Date.now().toString(36)}${++n}`
 
 export function registerR3cMocks(k: MockKit) {
-  const { on, json, fail, delay, editorOnly, memberOf, brands } = k
+  const { on, json, fail, delay, editorOnly, memberOf, brands, templates, addTemplate } = k
   const extra: Record<string, BrandKitSummary[]> = {}
   const fonts: Record<string, BrandFont[]> = {}
   const defaultKit = (ws: string): BrandKitSummary => ({ id: DEFAULT_KIT_ID, default: true, doc: brands[ws] ?? { name: '', colors: [], fonts: { headline: 'Space Grotesk', body: 'Inter' } }, updatedAt: Date.now() })
@@ -98,5 +103,33 @@ export function registerR3cMocks(k: MockKit) {
     if (denied) return denied
     fonts[m[1]] = (fonts[m[1]] ?? []).filter((f) => f.id !== m[2])
     return json({ ok: true })
+  })
+
+  // ---- templates (A-22) ----
+  const kitDoc = (ws: string | null, kitId: string | null): BrandKitDoc | undefined => (ws ? (kitId && kitId !== DEFAULT_KIT_ID ? extra[ws]?.find((x) => x.id === kitId)?.doc : defaultKit(ws).doc) : undefined)
+  /** A stand-in for the server's starter project: the look's name as a title card in the kit's colours. */
+  const starter = (t: TemplateSummary, aspect: string, brand?: BrandKitDoc) => {
+    const [width, height] = SIZES[aspect] ?? SIZES[t.aspect] ?? SIZES['16:9']
+    let p = createProject({ name: t.name, width, height, background: brand?.colors[0] ?? '#0b1830' })
+    p = addItem(p, createTextItem(0.3, 'title-bold', { text: brand?.name || t.name, duration: Math.max(3, t.duration - 0.3) }, p))
+    return p
+  }
+  on('GET', '/api/templates/([^/]+)/doc', (m, q) => {
+    const t = templates.find((x) => x.id === decodeURIComponent(m[1]))
+    if (!t) return fail(404, 'Template not found', 'not_found')
+    const ws = q.get('workspaceId')
+    if (ws && !memberOf(ws)) return fail(404, 'Not found', 'not_found')
+    return json(starter(t, q.get('aspect') ?? t.aspect, kitDoc(ws, q.get('kitId'))))
+  })
+  on('POST', '/api/templates/from-brand', async (_m, _q, b) => {
+    await delay(300)
+    const ws = String(b.workspaceId)
+    const denied = notMember(ws) ?? editorOnly(ws)
+    if (denied) return denied
+    const t = templates.find((x) => x.id === `tpl:${b.lookId}`)
+    if (!t) return fail(404, 'Template not found', 'not_found')
+    const brand = kitDoc(ws, typeof b.kitId === 'string' ? b.kitId : null)
+    const [w, h] = SIZES[String(b.aspect ?? t.aspect)] ?? SIZES['16:9']
+    return json(addTemplate(ws, String(b.name ?? `${brand?.name || 'Brand'} · ${t.name}`), w, h))
   })
 }

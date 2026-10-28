@@ -556,7 +556,21 @@ on('PUT', '/api/workspaces/([^/]+)/brand', async (m, _q, b) => {
   return json(brands[m[1]])
 })
 // brand kits, templates, onboarding, Voice Studio and Producer additions (R3-C)
-registerR3cMocks({ on, json, fail, delay, editorOnly, memberOf: (ws) => workspaces.some((w) => w.id === ws), brands })
+registerR3cMocks({
+  on,
+  json,
+  fail,
+  delay,
+  editorOnly,
+  memberOf: (ws) => workspaces.some((w) => w.id === ws),
+  brands,
+  templates,
+  addTemplate: (ws, name, width, height) => {
+    const p = mkProject({ name, workspaceId: ws, width, height, isTemplate: true, duration: 11, updatedAt: Date.now(), createdAt: Date.now() })
+    projects.unshift(p)
+    return { id: p.id, name, category: 'Team', aspect: width === height ? '1:1' : width > height ? '16:9' : '9:16', duration: p.duration, builtIn: false, clipCount: 0, textCount: 4 }
+  },
+})
 
 on('GET', '/api/projects', async (_m, q) => {
   await delay(280)

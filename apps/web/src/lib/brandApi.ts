@@ -1,5 +1,5 @@
 // Brand kits, their font files and colours from a logo (A-21). Contract: packages/core/src/brand.ts.
-import type { BrandFont, BrandKitDoc, BrandKitList, BrandKitSummary } from '@producer/core'
+import type { BrandFont, BrandKitDoc, BrandKitList, BrandKitSummary, Project, TemplateSummary } from '@producer/core'
 import { HttpError, noteStatus, req } from './api'
 
 const base = (ws: string) => `/workspaces/${ws}`
@@ -33,6 +33,30 @@ export const brandApi = {
     }
     return (await res.json()) as BrandFont
   },
+}
+
+const docs = new Map<string, Promise<Project>>()
+
+/** Templates made from looks and kits (A-22). */
+export const templateApi = {
+  /** A built-in look's starter project, as `aspect` with the space's kit `kitId` (cached for the page's life). */
+  doc(id: string, o: { workspaceId?: string; aspect?: string; kitId?: string } = {}): Promise<Project> {
+    const q = new URLSearchParams()
+    if (o.workspaceId) q.set('workspaceId', o.workspaceId)
+    if (o.aspect) q.set('aspect', o.aspect)
+    if (o.kitId) q.set('kitId', o.kitId)
+    const s = q.toString()
+    const path = `/templates/${id.replace(/[^A-Za-z0-9:_-]/g, '')}/doc${s ? `?${s}` : ''}`
+    let p = docs.get(path)
+    if (!p) {
+      p = req<Project>('GET', path)
+      p.catch(() => docs.delete(path))
+      docs.set(path, p)
+    }
+    return p
+  },
+  /** A team template from a built-in look and a brand kit. */
+  fromBrand: (body: { workspaceId: string; lookId: string; kitId?: string; aspect?: string; name?: string }) => req<TemplateSummary>('POST', '/templates/from-brand', body),
 }
 
 /** A family name from a font file's name: "AcmeSans-Bold.woff2" → "AcmeSans". */

@@ -19,11 +19,11 @@ export function useCreateAndOpen() {
   const workspaceId = useSession((s) => s.workspaceId)
   const [busy, setBusy] = useState(false)
   const create = useCallback(
-    async (opts: { width?: number; height?: number; name?: string; templateId?: string; tab?: EditorTab } = {}) => {
+    async (opts: { width?: number; height?: number; name?: string; templateId?: string; tab?: EditorTab; aspect?: string; brandKitId?: string } = {}) => {
       if (!workspaceId) return
       setBusy(true)
       try {
-        const res = await api.createProject({ workspaceId, width: opts.width, height: opts.height, name: opts.name ?? (opts.templateId ? undefined : 'Untitled project'), templateId: opts.templateId })
+        const res = await api.createProject({ workspaceId, width: opts.width, height: opts.height, name: opts.name ?? (opts.templateId ? undefined : 'Untitled project'), templateId: opts.templateId, ...(opts.aspect ? { aspect: opts.aspect } : {}), ...(opts.brandKitId ? { brandKitId: opts.brandKitId } : {}) })
         navigate(`/edit/${res.summary.id}${opts.tab ? `?tab=${opts.tab}` : ''}`)
         return res
       } catch (e) {

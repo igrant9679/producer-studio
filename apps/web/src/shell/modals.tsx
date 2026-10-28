@@ -273,6 +273,7 @@ export function InviteModal({ onClose }: { onClose: () => void }) {
 
 const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Anywhere', [['Search projects & media', 'Ctrl K'], ['Show this help', '?'], ['Cycle theme (system / dark / light)', 'Ctrl Shift L'], ['Close dialogs & menus', 'Esc']]],
+  ['Templates', [['Previous / next template in the viewer', '← / →']]],
   ['Dictation (desktop)', [['Dictate into the focused text box', 'Ctrl Shift Space'], ['Insert / cancel', 'Ctrl Shift Space / Esc'], ['Dictate into any app', 'Ctrl Alt D (Settings → Dictation)']]],
   ['Editor — global', [['Play / pause', 'Space'], ['Undo', 'Ctrl Z'], ['Redo', 'Ctrl Shift Z'], ['Select all', 'Ctrl A'], ['Copy / paste', 'Ctrl C / V'], ['Paste attributes (colour, effects, transform, speed, volume)', 'Ctrl Alt V'], ['Delete', 'Backspace']]],
   ['Editor — timeline', [['Split at playhead', 'Ctrl B'], ['Zoom timeline', 'Ctrl + / −'], ['Fit timeline', 'Shift Z'], ['Previous / next frame', 'Ctrl ← / →'], ['Separate audio', 'Ctrl Shift S'], ['Link / unlink clips', 'Ctrl L'], ['Add marker', 'M'], ['Next / previous marker', 'Shift M / Alt M'], ['Previous / next keyframe', 'Alt [ / ]']]],
