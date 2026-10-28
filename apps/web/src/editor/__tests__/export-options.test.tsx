@@ -31,7 +31,7 @@ beforeAll(() => {
   P.load = () => {}
 })
 
-let exp: ReturnType<typeof vi.spyOn>
+let exp: unknown
 let sent: ExportRequest[]
 beforeEach(() => {
   S().load({ project: project(), version: 3, projectId: 'p1', demo: false, workspaceId: 'w1' })
