@@ -1,4 +1,4 @@
-import { createProject, updateProject } from '@producer/core'
+import { addAsset, addItem, createProject, createVideoItem, updateProject, type Project } from '@producer/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
@@ -29,6 +29,29 @@ const doc = (name: string) => createProject({ id: 'p1', name })
 beforeEach(() => {
   vi.clearAllMocks()
   S().load({ project: doc('mine'), version: 3, projectId: 'p1', demo: false, workspaceId: 'w1' })
+})
+
+describe('what a save sends (EDT-26)', () => {
+  it("leaves out the server's own waveform and transcript, keeps a document-only transcript", async () => {
+    const words = { language: 'en', engine: 'whisper.cpp', segments: [{ start: 0, end: 1, text: 'hi', words: [] }] }
+    const estimate = { ...words, engine: 'estimate' }
+    let p = addAsset(doc('mine'), { id: 'v1', kind: 'video', name: 'talk.mp4', src: '/api/media/v1/source', duration: 60, waveform: [0.1, 0.4], waveformSrc: '/api/media/v1/waveform', transcript: words })
+    p = addAsset(p, { id: 'vo', kind: 'audio', name: 'Voice', src: '/api/media/vo/source', duration: 3, transcript: estimate })
+    p = addAsset(p, { id: 'demo', kind: 'video', name: 'demo.mp4', src: '/demo/clip.mp4', waveform: [0.2], transcript: words })
+    S().load({ project: p, version: 3, projectId: 'p1', demo: false, workspaceId: 'w1' })
+    S().commit(addItem(S().project, createVideoItem(S().project.assets.v1, 0)), 'Add clip')
+    api.saveProject.mockResolvedValueOnce({ version: 4, updatedAt: 1 })
+    await flush()
+    const sent = api.saveProject.mock.calls[0][1] as Project
+    expect(sent.assets.v1.waveform).toBeUndefined()
+    expect(sent.assets.v1.transcript).toBeUndefined()
+    expect(sent.assets.v1).toMatchObject({ duration: 60, waveformSrc: '/api/media/v1/waveform' })
+    expect(sent.assets.vo.transcript).toEqual(estimate)
+    expect(sent.assets.demo.transcript).toEqual(words)
+    // the editor keeps its full records
+    expect(S().project.assets.v1.transcript).toEqual(words)
+    expect(S().project.assets.v1.waveform).toEqual([0.1, 0.4])
+  })
 })
 
 describe('save + sync', () => {

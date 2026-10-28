@@ -25,3 +25,18 @@ describe('asset URLs (PIP-24)', () => {
     expect(assetUrl(video, 'as1', 'proxy')).toBe('/api/media/as1/proxy')
   })
 })
+
+describe('clip sound in the preview (EDT-25)', () => {
+  it('a server video plays its sound from the small audio copy, not the original file', () => {
+    const video = asset({ kind: 'video', proxySrc: '/api/media/as1/proxy' })
+    expect(assetUrl(video, 'as1', 'audio')).toBe('/api/media/as1/audio')
+    // a clip record that hasn't arrived yet: still the audio copy
+    expect(assetUrl(undefined, 'as1', 'audio')).toBe('/api/media/as1/audio')
+  })
+
+  it('a sound clip and a bundled demo video play what they always did', () => {
+    expect(assetUrl(asset({ kind: 'audio', name: 'take.aiff', proxySrc: '/api/media/as1/proxy' }), 'as1', 'audio')).toBe('/api/media/as1/proxy')
+    expect(assetUrl(asset({ kind: 'audio', name: 'a.mp3' }), 'as1', 'audio')).toBe('/api/media/as1/source')
+    expect(assetUrl(asset({ kind: 'video', src: '/demo/clip-city.mp4' }), 'as1', 'audio')).toBe('/demo/clip-city.mp4')
+  })
+})

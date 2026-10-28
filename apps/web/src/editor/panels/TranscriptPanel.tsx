@@ -4,11 +4,11 @@ import type { Item, Project, Transcript as TranscriptT, TranscriptWord } from '@
 import { cutSourceRanges, fillerWordRanges, findItem, isEditable, itemWords, mainTrack, removeSilences } from '@producer/core'
 import clsx from 'clsx'
 import { FileText, Loader2, Scissors, Search, Timer, Eraser } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, waitForJob } from '../../lib/api'
 import { toast, toastError } from '../../lib/toast'
 import { LOCKED_NOTE } from '../actions'
-import { Empty, useThrottledPlayhead } from '../controls'
+import { Empty } from '../controls'
 import { useEditor } from '../store'
 
 type W = TranscriptWord & { srcStart: number; srcEnd: number; itemId: string; key: string; pauseBefore: number }
@@ -39,13 +39,51 @@ function wordsFor(p: Project, items: Item[]): W[] {
 
 const FILLER = /^(um|uh|erm|er|ah|hmm|mm|uhm)[,.!?]*$/i
 
+/** `list` itself while its elements are the same objects as last time (edits elsewhere leave them alone). */
+function useStableList<T>(list: T[]): T[] {
+  const ref = useRef(list)
+  if (ref.current.length !== list.length || ref.current.some((x, i) => x !== list[i])) ref.current = list
+  return ref.current
+}
+
+/** Index of the word playing at t (words are in time order), or -1. */
+function wordAt(words: W[], t: number): number {
+  let lo = 0
+  let hi = words.length - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (words[mid].start > t) hi = mid - 1
+    else if (words[mid].end <= t) lo = mid + 1
+    else return mid
+  }
+  return -1
+}
+
+/** The words. Renders when they or the selection change, never with the playhead. */
+const WordList = memo(function WordList({ words, sel, matchSet, onDown, onEnter }: { words: W[]; sel: Set<string>; matchSet: Set<string>; onDown: (e: React.MouseEvent, i: number) => void; onEnter: (i: number) => void }) {
+  return (
+    <>
+      {words.map((w, i) => (
+        <span key={w.key}>
+          {w.pauseBefore >= 0.6 && <span className="pause" title="Pause">{w.pauseBefore.toFixed(1)}s</span>}
+          <span className={clsx('w', sel.has(w.key) && 'sel', matchSet.has(w.key) && 'match', FILLER.test(w.w) && 'filler')} data-wi={i} onMouseDown={(e) => onDown(e, i)} onMouseEnter={() => onEnter(i)}>
+            {w.w}
+          </span>{' '}
+        </span>
+      ))}
+    </>
+  )
+})
+
 export function TranscriptPanel() {
   const project = useEditor((s) => s.project)
   const selection = useEditor((s) => s.selection)
   const demo = useEditor((s) => s.demo)
-  const playhead = useThrottledPlayhead()
-  const items = useMemo(() => targets(project, selection), [project, selection])
-  const words = useMemo(() => wordsFor(project, items), [project, items])
+  // the words change only with these clips or their transcripts, not with every edit to the project
+  const items = useStableList(useMemo(() => targets(project, selection), [project, selection]))
+  const records = useStableList(items.map((i) => ('assetId' in i ? project.assets[i.assetId] : undefined)))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const words = useMemo(() => wordsFor(project, items), [items, records])
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<number | null>(null)
   const [query, setQuery] = useState('')
@@ -61,8 +99,9 @@ export function TranscriptPanel() {
 
   const q = query.trim().toLowerCase()
   const matches = q ? words.filter((w) => w.w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '').includes(q.replace(/[^\p{L}\p{N}']/gu, ''))) : []
-  const matchSet = new Set(matches.map((m) => m.key))
-  const current = words.find((w) => playhead >= w.start && playhead < w.end)
+  const matchKey = matches.map((m) => m.key).join('|')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const matchSet = useMemo(() => new Set(matches.map((m) => m.key)), [matchKey])
   const fillerCount = words.filter((w) => FILLER.test(w.w)).length
   const pauses = words.filter((w) => w.pauseBefore >= 0.6).length
   const missingIds = [...new Set(items.filter((i) => 'assetId' in i && !project.assets[i.assetId]?.transcript).map((i) => (i as { assetId: string }).assetId))]
@@ -133,7 +172,7 @@ export function TranscriptPanel() {
     }
   }
 
-  const onWordDown = (e: React.MouseEvent, i: number) => {
+  const onWordDown = useCallback((e: React.MouseEvent, i: number) => {
     e.preventDefault()
     boxRef.current?.focus()
     const w = words[i]
@@ -153,13 +192,32 @@ export function TranscriptPanel() {
       useEditor.getState().setPlaying(false)
       useEditor.getState().setPlayhead(w.start + 0.001)
     }
-  }
-  const onWordEnter = (i: number) => {
+  }, [words, sel, anchor])
+  const onWordEnter = useCallback((i: number) => {
     if (dragging.current === null) return
     const a = Math.min(dragging.current, i)
     const b = Math.max(dragging.current, i)
     setSel(new Set(words.slice(a, b + 1).map((x) => x.key)))
-  }
+  }, [words])
+
+  // the word being spoken is marked straight in the page as the playhead moves, without re-rendering the words
+  useLayoutEffect(() => {
+    let cur: Element | null = null
+    const mark = (t: number) => {
+      const i = wordAt(words, t)
+      const el = i >= 0 ? boxRef.current?.querySelector(`[data-wi="${i}"]`) ?? null : null
+      if (el === cur) return
+      cur?.classList.remove('cur')
+      el?.classList.add('cur')
+      cur = el
+    }
+    mark(useEditor.getState().playhead)
+    const unsub = useEditor.subscribe((s, prev) => s.playhead !== prev.playhead && mark(s.playhead))
+    return () => {
+      unsub()
+      cur?.classList.remove('cur')
+    }
+  }, [words, sel, matchSet])
   useEffect(() => {
     const up = () => (dragging.current = null)
     window.addEventListener('mouseup', up)
@@ -167,10 +225,11 @@ export function TranscriptPanel() {
   }, [])
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.key === 'Delete' || e.key === 'Backspace') && sel.size) {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      // the transcript's own key, words selected or not: never the timeline's "delete clip"
       e.preventDefault()
       e.stopPropagation()
-      cutKeys(sel, 'Delete words')
+      if (sel.size) cutKeys(sel, 'Delete words')
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault()
       e.stopPropagation()
@@ -209,19 +268,8 @@ export function TranscriptPanel() {
       {!words.length ? (
         <Empty icon={<FileText size={22} />} title="No transcript yet">{missingIds.length ? 'Transcribe the clip to edit it by text.' : 'No speech in this range.'}</Empty>
       ) : (
-        <div className="ed-words" ref={boxRef} tabIndex={0} onKeyDown={onKeyDown} data-local-keys>
-          {words.map((w, i) => (
-            <span key={w.key}>
-              {w.pauseBefore >= 0.6 && <span className="pause" title="Pause">{w.pauseBefore.toFixed(1)}s</span>}
-              <span
-                className={clsx('w', sel.has(w.key) && 'sel', current?.key === w.key && 'cur', matchSet.has(w.key) && 'match', FILLER.test(w.w) && 'filler')}
-                onMouseDown={(e) => onWordDown(e, i)}
-                onMouseEnter={() => onWordEnter(i)}
-              >
-                {w.w}
-              </span>{' '}
-            </span>
-          ))}
+        <div className="ed-words" ref={boxRef} tabIndex={0} onKeyDown={onKeyDown} data-local-keys aria-label="Transcript words">
+          <WordList words={words} sel={sel} matchSet={matchSet} onDown={onWordDown} onEnter={onWordEnter} />
         </div>
       )}
     </div>

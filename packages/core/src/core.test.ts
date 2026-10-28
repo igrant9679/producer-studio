@@ -744,3 +744,19 @@ describe('caption line length (EDT-4)', () => {
     }
   })
 })
+
+describe('copying a project for an edit (EDT-26)', () => {
+  it('shares the media records instead of copying waveforms and transcripts', () => {
+    let p = createProject()
+    p = addAsset(p, { id: 'a', kind: 'video', name: 'a.mp4', src: 'a.mp4', duration: 60, waveform: [0.1, 0.2], transcript: { language: 'en', engine: 'x', segments: [] } })
+    const next = addItem(p, createVideoItem(p.assets.a, 0))
+    expect(next.assets.a).toBe(p.assets.a)
+    expect(next.assets).not.toBe(p.assets)
+    // the copy is still independent where ops write
+    const c = clone(next)
+    c.tracks[0].items[0].start = 5
+    expect(next.tracks[0].items[0].start).toBe(0)
+    delete c.assets.a
+    expect(next.assets.a).toBeDefined()
+  })
+})

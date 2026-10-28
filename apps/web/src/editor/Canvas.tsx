@@ -4,10 +4,11 @@ import type { FrameLayer, ImageItem, Item, TextItem, VideoItem, VisualItem } fro
 import { StageRenderer, editable, evaluate, findItem, resetTransform, textCss, updateItem, updateTrack } from '@producer/core'
 import clsx from 'clsx'
 import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import * as A from './actions'
-import { Menu, MenuItem, Slider } from './controls'
+import { Menu, MenuItem, Slider, useThrottledPlayhead } from './controls'
 import { dragPayload, isInternalDrag, makeResolver } from './media'
+import { setMediaClock } from './playback'
 import { useEditor } from './store'
 
 const TRANSFORM_RE = /rotate\(([-\d.e]+)deg\) scale\(([-\d.e]+), ([-\d.e]+)\)/
@@ -76,13 +77,15 @@ export function Canvas() {
       onBuffering: (b) => useEditor.setState({ buffering: b }),
     })
     r.render(st.playhead)
+    setMediaClock(() => r.mediaClock())
     let disposed = false
     const media = watchMediaLoading(root, setLoadingMedia, () => !disposed && r.render(useEditor.getState().playhead))
     const unsub = useEditor.subscribe((s, prev) => {
       const pc = s.project !== prev.project
       if (pc) r.setProject(s.project)
       if (s.playing !== prev.playing) r.setPlaying(s.playing)
-      if (pc || s.playhead !== prev.playhead || s.playing !== prev.playing) {
+      // buffering starts or ends: the other media pause for it, or carry on
+      if (pc || s.playhead !== prev.playhead || s.playing !== prev.playing || s.buffering !== prev.buffering) {
         r.render(s.playhead)
         media.recount()
       }
@@ -91,6 +94,7 @@ export function Canvas() {
     void document.fonts?.ready.then(() => !disposed && r.render(useEditor.getState().playhead))
     return () => {
       disposed = true
+      setMediaClock(null)
       media.stop()
       unsub()
       r.destroy()
@@ -375,14 +379,16 @@ function watchMediaLoading(root: HTMLElement, report: (n: number) => void, reren
 function useLayerGeo(scale: number): Geo | null {
   const selection = useEditor((s) => s.selection)
   const project = useEditor((s) => s.project)
-  const playhead = useEditor((s) => s.playhead)
+  // during playback the overlay only dims along: about six updates a second, not a full evaluate every frame
+  const playhead = useThrottledPlayhead()
   const [, bump] = useReducer((x: number) => x + 1, 0)
   const measured = useRef<number>(0)
   const id = selection.length === 1 ? selection[0] : null
   const f = id ? findItem(project, id) : null
+  const visual = !!f && f.item.type !== 'audio'
+  const layer = useMemo(() => (visual ? evaluate(project, playhead).layers.find((l) => l.itemId === id) : undefined), [visual, project, playhead, id])
   let geo: Geo | null = null
-  if (f && f.item.type !== 'audio') {
-    const layer = evaluate(project, playhead).layers.find((l) => l.itemId === id)
+  if (f && visual) {
     if (layer) {
       const { rot, sx, sy } = parseTransform(layer.transform)
       let h = layer.box.height

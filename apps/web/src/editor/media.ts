@@ -4,8 +4,16 @@ import { mediaUrl } from '../lib/api'
 
 const isDirect = (src?: string) => !!src && (src.startsWith('/') || src.startsWith('http') || src.startsWith('blob:') || src.startsWith('data:'))
 
-/** URL for playing an asset. Demo/bundled assets carry absolute src; server assets go through /api/media. */
-export function assetUrl(asset: Asset | undefined, assetId: string, kind: 'media' | 'proxy'): string {
+const isServerMedia = (src?: string) => !!src && src.startsWith('/api/media/')
+
+/**
+ * URL for playing an asset. Demo/bundled assets carry absolute src; server assets go through /api/media. `audio` is
+ * the sound of a clip: for a server video that is the small AAC copy made at upload (the server falls back to the
+ * original when a clip has none), never the whole original file.
+ */
+export function assetUrl(asset: Asset | undefined, assetId: string, kind: 'media' | 'proxy' | 'audio'): string {
+  if (kind === 'audio' && (!asset || (asset.kind === 'video' && (isServerMedia(asset.src) || !isDirect(asset.src))))) return mediaUrl(assetId, 'audio')
+  if (kind === 'audio') kind = 'media'
   if (asset) {
     // a picture's or a sound's proxy is the copy the server made of a format browsers can't use (TIFF → PNG,
     // AIFF/WMA/AMR → AAC): always use that
@@ -17,7 +25,7 @@ export function assetUrl(asset: Asset | undefined, assetId: string, kind: 'media
 }
 
 export function makeResolver(get: () => Project) {
-  return (assetId: string, kind: 'media' | 'proxy') => assetUrl(get().assets[assetId], assetId, kind)
+  return (assetId: string, kind: 'media' | 'proxy' | 'audio') => assetUrl(get().assets[assetId], assetId, kind)
 }
 
 export function thumbUrl(asset: Asset): string | undefined {
