@@ -1,5 +1,5 @@
 // The export dialog mid-render and voiceovers that finish later (EDT-36).
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createProject, type Asset, type AssetRecord, type ExportResult, type Job } from '@producer/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
@@ -60,8 +60,8 @@ describe('a voiceover that finishes later (EDT-36)', { timeout: 20_000 }, () => 
       finish(done)
       await new Promise((r) => setTimeout(r, 10))
     })
-    const added = S().project.tracks.flatMap((t) => t.items).find((i) => i.type === 'audio')
-    expect(added?.start).toBe(3)
+    // a loaded machine can take longer than one tick to add it
+    await waitFor(() => expect(S().project.tracks.flatMap((t) => t.items).find((i) => i.type === 'audio')?.start).toBe(3))
   })
 
   it('is not added to another project opened meanwhile', async () => {

@@ -6,6 +6,7 @@ import { Check, Copy, Download, Film, Loader2, TriangleAlert, X } from 'lucide-r
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
+import { downloadUrl } from '../shell/util'
 import { Field, Segmented, useFieldIds } from './controls'
 import { saveForExport } from './persistence'
 import { useEditor } from './store'
@@ -198,7 +199,7 @@ export function ExportDialog() {
               </div>
               {result && (
                 <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-                  <a className="btn sm primary" href={result.url} download={`${name}.${format}`} target="_blank" rel="noreferrer"><Download size={14} /> Download · {fmtBytes(result.sizeBytes)}</a>
+                  <a className="btn sm primary" href={downloadUrl(result.url)} download><Download size={14} /> Download · {fmtBytes(result.sizeBytes)}</a>
                   <button className="btn sm" onClick={() => copyShare(result.exportId)}><Copy size={14} /> Copy share link</button>
                 </div>
               )}
