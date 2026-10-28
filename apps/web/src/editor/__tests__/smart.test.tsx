@@ -86,7 +86,7 @@ function open(id = 'va', withCanvas = true) {
       <PropertiesPanel />
     </>,
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Smart' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Smart' }))
   return r
 }
 
@@ -104,11 +104,11 @@ const toasts = () => useToasts.getState().toasts.map((t) => t.text)
 describe('the Smart tab', () => {
   it('is there for videos, pictures and sounds, not for text', () => {
     open('va', false)
-    expect(screen.getByRole('button', { name: 'Smart' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Smart' })).toBeTruthy()
     cleanup()
     act(() => S().select(['tt']))
     render(<PropertiesPanel />)
-    expect(screen.queryByRole('button', { name: 'Smart' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Smart' })).toBeNull()
   })
 
   it('a viewer sees every control disabled, saying who can change it', () => {

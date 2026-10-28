@@ -48,7 +48,7 @@ afterEach(() => {
 describe('the Colour tab', () => {
   it('is the clip’s colour tab, with the basic adjustments still there', () => {
     open()
-    expect(within(document.querySelector<HTMLElement>('.ed-tabs')!).getByRole('button', { name: 'Colour' }).className).toBe('on')
+    expect(within(document.querySelector<HTMLElement>('.ed-tabs')!).getByRole('tab', { name: 'Colour' }).className).toBe('on')
     fireEvent.change(screen.getByRole('slider', { name: 'Contrast' }), { target: { value: '25' } })
     expect(clip().adjust.contrast).toBe(25)
   })
@@ -229,10 +229,10 @@ describe('adjustment layers', () => {
     expect(S().activeRightTab).toBe('adjust')
     cleanup()
     render(<PropertiesPanel />)
-    expect(within(document.querySelector<HTMLElement>('.ed-tabs')!).getAllByRole('button').map((b) => b.textContent)).toEqual(['Colour', 'Layer', ''])
+    expect(within(document.querySelector<HTMLElement>('.ed-tabs')!).getAllByRole('tab').map((b) => b.textContent)).toEqual(['Colour', 'Layer'])
     fireEvent.change(screen.getByRole('slider', { name: 'Saturation' }), { target: { value: '-100' } })
     expect((findItem(S().project, adj.id)!.item as AdjustmentItem).adjust.saturation).toBe(-100)
-    fireEvent.click(screen.getByRole('button', { name: 'Layer' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Layer' }))
     fireEvent.change(screen.getByRole('slider', { name: 'Strength' }), { target: { value: '0.5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Film grain' }))
     const now = findItem(S().project, adj.id)!.item as AdjustmentItem

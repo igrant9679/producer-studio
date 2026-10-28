@@ -15,6 +15,7 @@ import { SkipLink } from '../shell/ui'
 import { AssetPanel, LeftRail } from './LeftPanel'
 import { isFileDrag } from './media'
 import { flush, keepBoth, loadInto, onProjectEvent, overwriteServer, reloadTheirs, resyncProject, startAutosave } from './persistence'
+import { startPhoneSheets } from './phone'
 import { startPlaybackClock } from './playback'
 import { PropertiesPanel } from './PropertiesPanel'
 import { useShortcuts } from './shortcuts'
@@ -58,6 +59,7 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
     if ((tabs as string[]).includes(tabParam)) useEditor.setState({ activeLeftTab: tabParam as LeftTab, leftCollapsed: false })
   }, [loaded, tabParam])
 
+  useEffect(() => startPhoneSheets(), [])
   useEffect(() => startPlaybackClock(), [])
   useEffect(() => startAutosave(), [])
   useEffect(() => startViewerMode(), [])

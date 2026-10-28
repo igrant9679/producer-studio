@@ -380,12 +380,18 @@
 
 /* ---------------- properties ---------------- */
 .ed-props { width: 320px; flex: none; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--border); min-height: 0; }
-.ed-tabs { height: var(--h-panelhead); flex: none; display: flex; align-items: stretch; gap: 2px; padding: 0 6px 0 8px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-.ed-tabs::-webkit-scrollbar { height: 0; }
-.ed-tabs > button:not(.ed-collapse) { background: transparent; border: 0; color: var(--text-3); padding: 0 5px; cursor: pointer; font-size: 0.7188rem; font-weight: 600; white-space: nowrap; box-shadow: inset 0 -2px 0 transparent; }
-.ed-tabs > button:not(.ed-collapse):hover { color: var(--text); }
-.ed-tabs > button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
-.ed-tabs .ed-collapse { align-self: center; }
+.ed-tabs { height: var(--h-panelhead); flex: none; display: flex; align-items: stretch; gap: 4px; padding: 0 6px 0 8px; border-bottom: 1px solid var(--border); }
+/* the tab row scrolls sideways when the tabs don't fit, fading on the side that has more (PanelTabs.tsx) */
+.ed-tablist { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 2px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+.ed-tablist::-webkit-scrollbar { height: 0; }
+.ed-tablist[data-more='right'] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.ed-tablist[data-more='left'] { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+.ed-tablist[data-more='both'] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+.ed-tablist > button { flex: none; background: transparent; border: 0; color: var(--text-3); padding: 0 5px; cursor: pointer; font-size: 0.7188rem; font-weight: 600; white-space: nowrap; box-shadow: inset 0 -2px 0 transparent; }
+.ed-tablist > button:hover { color: var(--text); }
+.ed-tablist > button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.ed-tablist > button:focus-visible { outline: 2px solid var(--cyan); outline-offset: -3px; border-radius: 4px; }
+.ed-tabs .ed-collapse { align-self: center; flex: none; }
 .ed-props-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0 20px; }
 .ed-props-body > .ed-note { padding: 0 14px; }
 .ed-expand {
@@ -761,3 +767,35 @@
 .ed-replace-item .th { width: 64px; height: 36px; flex: none; border-radius: 4px; background: var(--surface-3) center / cover no-repeat; display: grid; place-items: center; color: var(--text-3); }
 .ed-replace-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .ed-replace-item .sub { font: 0.6875rem var(--font-mono); color: var(--text-3); }
+
+/* ---------- the editor on a phone (below 760 px; phone.ts) ----------
+   The top bar takes two rows (the tools scroll sideways), the stage gets the width, and the side panels open over
+   it as sheets: media, comments and the other left-rail panels beside the rail, Properties (and Version history,
+   versions.css) from the bottom. */
+@media (max-width: 760px) {
+  .ed-root { height: 100vh; height: 100dvh; }
+  .ed-top { height: auto; min-height: var(--h-edtop); grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'l r' 'c c'; gap: 4px 8px; padding: 6px 8px; }
+  .ed-top-l { grid-area: l; }
+  .ed-top-r { grid-area: r; gap: 6px; }
+  .ed-top-c { grid-area: c; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .ed-logo, .ed-top-wide { display: none; }
+  .ed-title { width: auto; flex: 1 1 64px; min-width: 64px; }
+  .ed-top-r .ed-top-lbl { display: none; }
+  .ed-top-r .btn.sm { padding: 0 9px; }
+  .ed-body { position: relative; }
+  .ed-assets {
+    position: absolute; z-index: 40; top: 0; bottom: 0; left: calc(64px + (var(--ui-scale) - 1) * 56px); right: 0; width: auto;
+    box-shadow: var(--shadow-pop);
+  }
+  .ed-props {
+    position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; width: auto; height: min(68vh, 560px);
+    border-left: 0; border-top: 1px solid var(--border-strong); border-radius: 14px 14px 0 0; box-shadow: var(--shadow-pop);
+  }
+  /* the sheet closes downwards */
+  .ed-props .ed-collapse svg { transform: rotate(90deg); }
+  .ed-tablist > button { padding: 0 8px; }
+  /* the timeline's tools scroll sideways, play and the timecode first */
+  .tl-toolbar { display: flex; gap: 12px; overflow-x: auto; scrollbar-width: none; }
+  .tl-toolbar > * { flex: none; }
+  .tl-transport { order: -1; }
+}

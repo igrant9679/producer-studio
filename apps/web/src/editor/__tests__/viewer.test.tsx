@@ -267,7 +267,7 @@ describe('panels', () => {
     const sliders = screen.getAllByRole('slider') as HTMLInputElement[]
     expect(sliders.length).toBeGreaterThan(0)
     for (const el of sliders) expect(el.matches(':disabled')).toBe(true)
-    const tab = screen.getByRole('button', { name: 'Animation' })
+    const tab = screen.getByRole('tab', { name: 'Animation' })
     expect(tab.matches(':disabled')).toBe(false)
     fireEvent.click(tab)
     expect(S().activeRightTab).toBe('animation')
