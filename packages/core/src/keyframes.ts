@@ -1,5 +1,6 @@
 // Keyframe editing: move, ease, step between, copy and paste. Times are seconds from the item's start; two keyframes
 // within half a frame of each other count as the same one (as setKeyframe and removeKeyframe treat them).
+import { MASK_PROPS } from './masks'
 import { clone, editable, findItem } from './ops'
 import type { AnimProp, Bezier, EaseName, Item, Keyframe, Keyframes, Project } from './types'
 import { round } from './util'
@@ -27,7 +28,8 @@ const VISUAL_PROPS: AnimProp[] = ['x', 'y', 'scale', 'rotation', 'opacity']
 export function animatableProps(it: Item): AnimProp[] {
   if (it.type === 'audio') return ['volume']
   if (it.type === 'caption') return []
-  return it.type === 'video' ? [...VISUAL_PROPS, 'volume'] : VISUAL_PROPS
+  const mask = (it.type === 'video' || it.type === 'image') && it.mask ? MASK_PROPS : []
+  return it.type === 'video' ? [...VISUAL_PROPS, 'volume', ...mask] : [...VISUAL_PROPS, ...mask]
 }
 
 function kfsOf(it: Item): Keyframes {

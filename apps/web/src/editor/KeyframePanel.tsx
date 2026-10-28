@@ -1,7 +1,7 @@
 // Keyframe editing in the properties panel: a lane per animated property with draggable marks, the ease of each
 // keyframe (with a curve editor for a custom curve), previous / next, and copy / paste of keyframes.
 import type { AnimProp, Bezier, EaseName, Item } from '@producer/core'
-import { EASE_CURVES, EASE_NAMES, adjacentKeyframe, copyKeyframes, editable, findItem, keyframeAt, moveKeyframes, pasteKeyframes, removeKeyframe, setKeyframe, setKeyframeEase } from '@producer/core'
+import { EASE_CURVES, EASE_NAMES, MASK_LABELS, adjacentKeyframe, copyKeyframes, editable, findItem, keyframeAt, moveKeyframes, pasteKeyframes, removeKeyframe, setKeyframe, setKeyframeEase } from '@producer/core'
 import clsx from 'clsx'
 import { ChevronLeft, ChevronRight, ClipboardPaste, Copy, Diamond, Trash2 } from 'lucide-react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
@@ -12,7 +12,7 @@ import { jumpToKeyframe, keyframeClipboard, setKeyframeClipboard, subscribeKeyfr
 import { useEditor } from './store'
 import './canvas-tools.css'
 
-export const PROP_LABELS: Record<AnimProp, string> = { x: 'Position X', y: 'Position Y', scale: 'Scale', rotation: 'Rotation', opacity: 'Opacity', volume: 'Volume' }
+export const PROP_LABELS: Record<AnimProp, string> = { x: 'Position X', y: 'Position Y', scale: 'Scale', rotation: 'Rotation', opacity: 'Opacity', volume: 'Volume', ...MASK_LABELS }
 
 const S = () => useEditor.getState()
 
@@ -22,7 +22,8 @@ function props(it: Item, only?: AnimProp[]): AnimProp[] {
   return all.filter((k) => it.keyframes[k]?.length)
 }
 
-const fmt = (prop: AnimProp, v: number) => (prop === 'scale' || prop === 'opacity' || prop === 'volume' ? `${Math.round(v * 100)}%` : prop === 'rotation' ? `${+v.toFixed(1)}°` : `${Math.round(v)} px`)
+const PERCENT = new Set<AnimProp>(['scale', 'opacity', 'volume', 'maskX', 'maskY', 'maskWidth', 'maskHeight'])
+const fmt = (prop: AnimProp, v: number) => (PERCENT.has(prop) ? `${Math.round(v * 100)}%` : prop === 'rotation' || prop === 'maskRotation' ? `${+v.toFixed(1)}°` : `${Math.round(v)} px`)
 
 interface Sel {
   prop: AnimProp
@@ -200,7 +201,7 @@ function KeyframeDetail({ item, sel, onMoved, onRemoved }: { item: Item; sel: Se
   const kf = keyframeAt(item, sel.prop, sel.t, fps)!
   const list = ('keyframes' in item ? item.keyframes[sel.prop] : undefined) ?? []
   const last = list.indexOf(kf) === list.length - 1
-  const pct = sel.prop === 'scale' || sel.prop === 'opacity' || sel.prop === 'volume'
+  const pct = PERCENT.has(sel.prop)
   const ease = kf.ease ?? 'linear'
   const setEase = (e: EaseName, b?: Bezier, coalesce?: string) => {
     const s = S()
@@ -233,7 +234,7 @@ function KeyframeDetail({ item, sel, onMoved, onRemoved }: { item: Item; sel: Se
         <NumberInput
           value={pct ? kf.value * 100 : kf.value}
           step={1}
-          suffix={pct ? '%' : sel.prop === 'rotation' ? '°' : 'px'}
+          suffix={pct ? '%' : sel.prop === 'rotation' || sel.prop === 'maskRotation' ? '°' : 'px'}
           width={86}
           onChange={(v) => {
             const s = S()

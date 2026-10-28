@@ -3,6 +3,7 @@
 // composition and HyperFrames owns their playback, the renderer only positions and styles them).
 import { evaluate, textBoxCss, textInnerHtml } from './evaluate'
 import { itemEnd, projectDuration } from './ops'
+import { applyKey, smartWrapCss } from './smartRuntime'
 import { fitScale, scaledTextStyle } from './text'
 import type { FrameLayer, Item, Project, TextStyle, Track, VideoItem } from './types'
 import { cssNumber, safeColor } from './util'
@@ -367,7 +368,8 @@ export class StageRenderer {
       (layer.filter ? `filter:${layer.filter};` : '') +
       (layer.blend !== 'normal' ? `mix-blend-mode:${layer.blend};` : '') +
       (layer.clipPath ? `clip-path:${layer.clipPath};` : '') +
-      (layer.crop ? 'overflow:hidden;' : '')
+      (layer.crop ? 'overflow:hidden;' : '') +
+      smartWrapCss(layer)
     el.overlay.style.backgroundImage = layer.overlay ?? 'none'
     el.overlay.style.display = layer.overlay ? 'block' : 'none'
     this.ensureBackground(el, layer)
@@ -392,6 +394,7 @@ export class StageRenderer {
           bgStill.style.display = on && layer.background?.type === 'blur' ? 'block' : 'none'
         }
       }
+      applyKey(this.root, layer, [media, el.hold?.still])
       if (layer.type === 'video' && this.opts.mode === 'preview') this.syncVideo(media as HTMLVideoElement, layer.mediaTime ?? 0, layer.itemId)
     } else if (layer.text) {
       const st = layer.text.style

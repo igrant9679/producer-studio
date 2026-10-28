@@ -1,6 +1,8 @@
 // Producer Studio project model. One JSON document describes a whole edit; the browser preview and
 // the HyperFrames export both evaluate it through `evaluate()` so what you see is what renders.
 // All times are seconds (float). Positions are canvas pixels relative to the canvas centre.
+import type { ChromaKey } from './key'
+import type { Mask, MaskProp, SmartLayer } from './masks'
 
 export type Id = string
 
@@ -75,7 +77,7 @@ export interface Keyframe {
 }
 
 /** Every keyframe-able numeric property. */
-export type AnimProp = 'x' | 'y' | 'scale' | 'rotation' | 'opacity' | 'volume'
+export type AnimProp = 'x' | 'y' | 'scale' | 'rotation' | 'opacity' | 'volume' | MaskProp
 
 export type Keyframes = Partial<Record<AnimProp, Keyframe[]>>
 
@@ -226,7 +228,13 @@ interface VisualProps {
   phase?: { offset: number; length: number }
 }
 
-export interface VideoItem extends ItemBase, VisualProps {
+/** Smart tools on a picture (masks.ts, key.ts): a shape mask and a chroma key, drawn alike in the preview and the export. */
+interface SmartProps {
+  mask?: Mask
+  chromaKey?: ChromaKey
+}
+
+export interface VideoItem extends ItemBase, VisualProps, SmartProps {
   type: 'video'
   assetId: Id
   /** Source offset (seconds into the asset) at the item's start. */
@@ -246,7 +254,7 @@ export interface VideoItem extends ItemBase, VisualProps {
   reverse?: boolean
 }
 
-export interface ImageItem extends ItemBase, VisualProps {
+export interface ImageItem extends ItemBase, VisualProps, SmartProps {
   type: 'image'
   assetId: Id
   adjust: ColorAdjust
@@ -504,6 +512,8 @@ export interface FrameLayer {
   /** `full`: the whole text's markup when `html` shows part of it (typewriter); a fit is measured on it. */
   text?: { html: string; style: TextStyle; full?: string }
   shape?: ShapeItem
+  /** Mask and chroma key (masks.ts). */
+  smart?: SmartLayer
   z: number
 }
 

@@ -276,7 +276,7 @@ export function transcriptRev(t: Transcript): string {
 // GET /api/events?workspaceId=         -> text/event-stream, events: `job` (Job), `asset` (AssetRecord), `project`
 //   ({id, version, deleted?}: created, saved, renamed, trashed/restored, template flag, deleted), `workspace`
 //   ({id, name?, deleted, members?, brand?}: renamed, deleted, members changed, brand kit saved), `sync`
-export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task' | 'media.scenes'
+export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task' | 'media.scenes' | 'media.stabilise' | 'media.denoise' | 'media.bgremove'
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
 export interface Job<R = unknown> {
