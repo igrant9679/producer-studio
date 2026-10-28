@@ -1,0 +1,34 @@
+/* Version history panel, preview / journal banners and the clickable save states (E-2, E-3). */
+button.ed-save { background: none; border: 0; cursor: pointer; font: inherit; font-size: 0.75rem; border-radius: var(--radius-sm); height: 24px; }
+button.ed-save:hover { background: var(--surface-2); }
+button.ed-save:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+
+.ed-banner.ed-banner-info { background: var(--cyan-soft); border-bottom-color: var(--border); }
+.ed-banner.ed-banner-info > svg { color: var(--cyan); }
+
+.ed-versions {
+  width: 320px; flex: none; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto;
+  background: var(--surface); border-left: 1px solid var(--border); padding: 0 0 16px;
+}
+.ed-versions-head { display: flex; align-items: center; gap: 8px; padding: 10px 10px 0 14px; }
+.ed-versions-head h2 { flex: 1; margin: 0; font-size: 0.875rem; font-weight: 700; color: var(--text); }
+.ed-versions-note { margin: 0; padding: 0 14px; font-size: 0.75rem; color: var(--text-3); line-height: 1.4; }
+.ed-versions-namecur { margin: 0 14px; align-self: flex-start; }
+.ed-versions-error { margin: 0 14px; font-size: 0.75rem; color: var(--danger); }
+.ed-versions-loading { margin: 0 14px; font-size: 0.75rem; display: flex; align-items: center; gap: 6px; }
+.ed-versions-list { list-style: none; margin: 0; padding: 0 8px; display: flex; flex-direction: column; gap: 2px; }
+.ed-versions-list > li { padding: 8px 6px; border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 6px; }
+.ed-versions-list > li:hover { background: var(--surface-2); }
+.ed-versions-list > li.on { background: var(--accent-soft); }
+.ed-versions-what { display: flex; flex-direction: column; gap: 2px; font-size: 0.75rem; min-width: 0; }
+.ed-versions-what b { color: var(--text); font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-versions-tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ed-versions-tag { font-size: 0.6875rem; padding: 1px 6px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); }
+.ed-versions-tag.cur { background: var(--cyan-soft); color: var(--text); }
+.ed-versions-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.ed-versions-name { display: flex; gap: 4px; align-items: center; padding: 0 14px; }
+.ed-versions-list .ed-versions-name { padding: 0; }
+.ed-versions-name .input { flex: 1; min-width: 0; }
+@media (max-width: 760px) {
+  .ed-versions { position: absolute; right: 0; top: 0; bottom: 0; z-index: 30; width: min(320px, 92vw); box-shadow: var(--shadow-drop); }
+}

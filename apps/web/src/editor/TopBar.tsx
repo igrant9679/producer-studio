@@ -1,16 +1,18 @@
 import { ASPECT_RATIOS, presetCanvasSize, setAspect, updateProject } from '@producer/core'
 import clsx from 'clsx'
 import type { ThemePreference } from '@producer/core'
-import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, Keyboard, Loader2, Monitor, Moon, MousePointer2, Redo2, Share2, Sun, TriangleAlert, Undo2, Upload } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, History, Keyboard, Loader2, Monitor, Moon, MousePointer2, Redo2, Share2, Sun, TriangleAlert, Undo2, Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, HttpError } from '../lib/api'
 import { themeLabel, useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { toast, toastError } from '../lib/toast'
+import { useEditGate } from '../shell/ui'
 import * as A from './actions'
 import { Menu, MenuItem } from './controls'
-import { flush } from './persistence'
+import { discardJournal, flush, restoreJournal } from './persistence'
+import { VersionsButton } from './VersionsPanel'
 import { PROJECT_NAME_MAX, redoLabel, undoLabel, useEditor } from './store'
 
 export function TopBar() {
@@ -76,6 +78,7 @@ export function TopBar() {
           aria-label="Project name"
         />
         <SaveStatus demo={demo} />
+        {!demo && <VersionsButton />}
       </div>
       <div className="row ed-top-c">
         <button className="ed-tbtn" {...tipProps(canUndo ? `Undo ${uLabel}` : 'Nothing to undo', undefined, 'Ctrl+Z')} disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
@@ -112,20 +115,60 @@ export function TopBar() {
   )
 }
 
+/** Seconds until `at`, ticking once a second while there is one. */
+function useCountdown(at: number | undefined): number | undefined {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!at) return
+    setNow(Date.now())
+    const iv = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [at])
+  return at ? Math.max(0, Math.ceil((at - now) / 1000)) : undefined
+}
+
+const signInAgain = () => window.open('/login', '_blank')
+
+/**
+ * Where saving stands, in the top bar: Saved, Saving…, Offline (and when it tries again, only while a retry is
+ * really scheduled), Sign in again, Too large, Failed (with Retry), Conflict. The ones with a way out are buttons.
+ */
 function SaveStatus({ demo }: { demo: boolean }) {
   const st = useEditor((s) => s.saveState)
-  const why = useEditor((s) => s.saveError?.message)
+  const err = useEditor((s) => s.saveError)
+  const secs = useCountdown(useEditor((s) => s.saveRetryAt))
+  const retryNow = () => void flush()
+  const again = secs === undefined ? undefined : secs > 0 ? `retrying in ${secs} s` : 'retrying…'
   if (st === 'conflict')
     return (
       <span className="ed-save conflict"><TriangleAlert size={13} /> Conflict</span>
     )
+  if (st === 'error' && err?.status === 401)
+    return (
+      <button type="button" className="ed-save conflict" aria-label="Sign in again to save" title={`${err.message} Opens sign-in in a new tab; this tab keeps your changes.`} onClick={signInAgain}>
+        <TriangleAlert size={13} /> Sign in again
+      </button>
+    )
+  if (st === 'error' && err?.status === 413)
+    return (
+      <span className="ed-save conflict" title={err.message}><TriangleAlert size={13} /> Too large</span>
+    )
   if (st === 'error')
     return (
-      <span className="ed-save conflict" title={why}><TriangleAlert size={13} /> Not saved</span>
+      <button type="button" className="ed-save conflict" title={`${err?.message ?? 'The server refused your latest changes.'} Click to try again now.`} onClick={retryNow}>
+        <TriangleAlert size={13} /> {again ? `Failed · ${again}` : 'Failed · Retry'}
+      </button>
     )
   if (st === 'offline')
     return (
-      <span className="ed-save offline" title="Can’t reach the server. Your changes are kept in this tab and saving retries every few seconds."><CloudOff size={13} /> Offline</span>
+      <button
+        type="button"
+        className="ed-save offline"
+        title={`Can’t reach the server. Your changes are kept in this browser${again ? ' and saving tries again on its own' : ''}. Click to try now.`}
+        onClick={retryNow}
+      >
+        <CloudOff size={13} /> {again ? `Offline · ${again}` : 'Offline · Retry'}
+      </button>
     )
   if (st === 'saving' || st === 'dirty')
     return (
@@ -138,7 +181,7 @@ function SaveStatus({ demo }: { demo: boolean }) {
 
 /**
  * A save the server refused: why, and the way out. "Sign in again" opens sign-in in another tab so this one keeps
- * the edits; coming back here saves them.
+ * the edits; coming back here (or signing in) saves them.
  */
 export function SaveErrorBanner() {
   const err = useEditor((s) => (s.saveState === 'error' ? s.saveError : undefined))
@@ -149,11 +192,45 @@ export function SaveErrorBanner() {
       <span>{err.message}</span>
       <div className="spacer" />
       {err.status === 401 && (
-        <button className="btn sm primary" onClick={() => window.open('/login', '_blank')} title="Opens sign-in in a new tab; this tab keeps your changes">
+        <button className="btn sm primary" onClick={signInAgain} title="Opens sign-in in a new tab; this tab keeps your changes">
           Sign in again
         </button>
       )}
       <button className="btn sm" onClick={() => void flush()}>Try again</button>
+    </div>
+  )
+}
+
+/** Changes this browser kept from an earlier visit (the tab closed or crashed before they were saved). */
+export function JournalBanner() {
+  const offer = useEditor((s) => s.journalOffer)
+  const gate = useEditGate()
+  const [busy, setBusy] = useState(false)
+  if (!offer) return null
+  const when = new Date(offer.savedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  return (
+    <div className="ed-banner ed-banner-info" role="alert">
+      <History size={15} />
+      <span>This browser kept changes to this project that never reached the server (last edited {when}).</span>
+      <div className="spacer" />
+      <button
+        className="btn sm primary"
+        disabled={busy || !gate.canEdit}
+        data-tip={gate.tip}
+        onClick={async () => {
+          setBusy(true)
+          try {
+            await restoreJournal()
+          } catch (e) {
+            toastError(e)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        Restore unsaved changes
+      </button>
+      <button className="btn sm" disabled={busy} onClick={discardJournal}>Discard</button>
     </div>
   )
 }

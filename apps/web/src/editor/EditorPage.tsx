@@ -17,7 +17,8 @@ import { PropertiesPanel } from './PropertiesPanel'
 import { useShortcuts } from './shortcuts'
 import { useEditor, type LeftTab } from './store'
 import { Timeline } from './Timeline'
-import { SaveErrorBanner, TopBar } from './TopBar'
+import { JournalBanner, SaveErrorBanner, TopBar } from './TopBar'
+import { VersionPreviewBanner, VersionsPanel } from './VersionsPanel'
 import { loadLibrary, subscribeWorkspace, uploadFiles } from './uploads'
 
 export function EditorPage({ demo = false }: { demo?: boolean }) {
@@ -124,6 +125,7 @@ function EditorShell() {
   const rightCollapsed = useEditor((s) => s.rightCollapsed)
   const leftCollapsed = useEditor((s) => s.leftCollapsed)
   const saveState = useEditor((s) => s.saveState)
+  const versionsOpen = useEditor((s) => s.versionsOpen)
   const [fileDrag, setFileDrag] = useState(false)
 
   useEffect(() => {
@@ -171,6 +173,8 @@ function EditorShell() {
       <StorageBanner />
       {saveState === 'conflict' && <ConflictBanner />}
       <SaveErrorBanner />
+      <JournalBanner />
+      <VersionPreviewBanner />
       <div className="ed-body">
         <LeftRail />
         <AssetPanel />
@@ -179,7 +183,9 @@ function EditorShell() {
             <div className="ed-center">
               <Canvas />
             </div>
-            {rightCollapsed ? (
+            {versionsOpen ? (
+              <VersionsPanel />
+            ) : rightCollapsed ? (
               <button className="ed-expand" title="Show properties" onClick={() => useEditor.setState({ rightCollapsed: false })}>
                 <ChevronsLeft size={14} />
                 <span>Properties</span>
@@ -220,10 +226,14 @@ function ConflictBanner() {
       setBusy(false)
     }
   }
+  const what = useEditor((s) => s.conflictWhat)
   return (
     <div className="ed-banner">
       <TriangleAlert size={15} />
-      <span>This project was saved somewhere else (another tab, teammate or device) while you had unsaved edits.</span>
+      <span>
+        This project was saved somewhere else (another tab, teammate or device) while you had unsaved edits
+        {what ? `, and both of you changed ${what}, so the two couldn’t be combined.` : '.'}
+      </span>
       <div className="spacer" />
       <button className="btn sm" disabled={busy} onClick={run(reloadTheirs)} title="Discard your unsaved edits and load the other version">Reload theirs</button>
       <button className="btn sm" disabled={busy} onClick={run(overwriteServer)} title="Replace the other version with yours">Overwrite with mine</button>

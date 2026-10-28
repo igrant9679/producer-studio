@@ -49,7 +49,7 @@ describe('a save the server refuses', { timeout: 20_000 }, () => {
     render(<MemoryRouter><TopBar /><SaveErrorBanner /></MemoryRouter>)
     S().commit(updateProject(S().project, { name: 'Edited' }), 'Rename project')
     await act(() => flush())
-    expect(screen.getByText('Not saved')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Sign in again to save' })).toBeTruthy()
     expect(screen.queryByText('Offline')).toBeNull()
     expect(screen.getByRole('alert').textContent).toMatch(/signed out/i)
     fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))

@@ -18,6 +18,7 @@ import type {
   Member,
   Project,
   ProjectSummary,
+  ProjectVersionSummary,
   ScriptScene,
   SyncStatus,
   SystemInfo,
@@ -589,6 +590,64 @@ on('PUT', '/api/projects/([^/]+)', (m, _q, b) => {
   p.doc = b.project as Project
   p.version++
   p.updatedAt = Date.now()
+  keepVersion(p)
+  return json({ version: p.version, updatedAt: p.updatedAt })
+})
+
+// version history (P-15), like the server's: every save kept, viewers read, editors name and restore
+const mockVersions = new Map<string, Array<{ s: ProjectVersionSummary; doc: Project }>>()
+function keepVersion(p: MockProject, label: ProjectVersionSummary['label'] = 'autosave', extra: Partial<ProjectVersionSummary> = {}) {
+  const doc = structuredClone(docFor(p))
+  const list = mockVersions.get(p.id) ?? []
+  list.unshift({ s: { id: `pv_${Math.random().toString(36).slice(2, 10)}`, version: p.version, label, sizeBytes: JSON.stringify(doc).length, createdAt: Date.now(), authorName: currentUser()?.name ?? 'You', ...extra }, doc })
+  mockVersions.set(p.id, list.slice(0, 50))
+  return list[0]
+}
+const versionsOf = (p: MockProject) => (mockVersions.get(p.id) ?? []).map((v) => (v.s.version === p.version ? { ...v.s, current: true as const } : v.s))
+on('GET', '/api/projects/([^/]+)/versions', (m) => {
+  const p = projects.find((x) => x.id === m[1])
+  return p ? json(versionsOf(p)) : fail(404, 'Project not found', 'not_found')
+})
+on('GET', '/api/projects/([^/]+)/versions/at/(\\d+)', (m) => {
+  const v = mockVersions.get(m[1])?.find((x) => x.s.version === Number(m[2]))
+  return v ? json({ summary: v.s, project: v.doc }) : fail(404, 'That version is no longer in the history', 'not_found')
+})
+on('GET', '/api/projects/([^/]+)/versions/([^/]+)', (m) => {
+  const v = mockVersions.get(m[1])?.find((x) => x.s.id === m[2])
+  return v ? json({ summary: v.s, project: v.doc }) : fail(404, 'Version not found', 'not_found')
+})
+on('POST', '/api/projects/([^/]+)/versions', (m, _q, b) => {
+  const p = projects.find((x) => x.id === m[1])
+  if (!p) return fail(404, 'Project not found', 'not_found')
+  const denied = editorOnly(p.workspaceId)
+  if (denied) return denied
+  const at = mockVersions.get(p.id)?.find((x) => x.s.version === p.version) ?? keepVersion(p)
+  at.s = { ...at.s, label: 'named', name: String(b.name) }
+  return json({ ...at.s, current: true })
+})
+on('PATCH', '/api/projects/([^/]+)/versions/([^/]+)', (m, _q, b) => {
+  const p = projects.find((x) => x.id === m[1])
+  const v = mockVersions.get(m[1])?.find((x) => x.s.id === m[2])
+  if (!p || !v) return fail(404, 'Version not found', 'not_found')
+  const denied = editorOnly(p.workspaceId)
+  if (denied) return denied
+  const name = typeof b.name === 'string' && b.name.trim() ? b.name.trim() : undefined
+  v.s = { ...v.s, name, label: name ? 'named' : v.s.label === 'named' ? 'autosave' : v.s.label }
+  return json(v.s)
+})
+on('POST', '/api/projects/([^/]+)/versions/([^/]+)/restore', (m, _q, b) => {
+  const p = projects.find((x) => x.id === m[1])
+  const v = mockVersions.get(m[1])?.find((x) => x.s.id === m[2])
+  if (!p || !v) return fail(404, 'Version not found', 'not_found')
+  const denied = editorOnly(p.workspaceId)
+  if (denied) return denied
+  if (typeof b.baseVersion === 'number' && b.baseVersion !== p.version) return fail(409, 'The project was changed elsewhere. Reload to get the latest version.', 'conflict')
+  const cur = mockVersions.get(p.id)?.find((x) => x.s.version === p.version)
+  if (cur && cur.s.label === 'autosave') cur.s = { ...cur.s, label: 'before-restore' }
+  p.doc = { ...structuredClone(v.doc), id: p.id }
+  p.version++
+  p.updatedAt = Date.now()
+  keepVersion(p, 'autosave', { note: `Restored from version ${v.s.version}` })
   return json({ version: p.version, updatedAt: p.updatedAt })
 })
 on('PATCH', '/api/projects/([^/]+)', async (m, _q, b) => {

@@ -25,6 +25,8 @@ import type {
   Project,
   ProjectDocResponse,
   ProjectSummary,
+  ProjectVersionResponse,
+  ProjectVersionSummary,
   SceneCuts,
   ScriptScene,
   ShareLink,
@@ -254,6 +256,14 @@ export const api = {
   patchProject: (id: string, patch: { name?: string; trashed?: boolean; isTemplate?: boolean; baseVersion?: number }) => req<ProjectSummary>('PATCH', `/projects/${id}`, patch),
   duplicateProject: (id: string) => req<ProjectSummary>('POST', `/projects/${id}/duplicate`),
   deleteProject: (id: string) => req<{ ok: true }>('DELETE', `/projects/${id}`),
+  // version history (P-15)
+  versions: (id: string) => req<ProjectVersionSummary[]>('GET', `/projects/${id}/versions`),
+  version: (id: string, versionId: string) => req<ProjectVersionResponse>('GET', `/projects/${id}/versions/${encodeURIComponent(versionId)}`),
+  /** The saved copy of project version `version` (404 once history has thinned it away). */
+  versionAt: (id: string, version: number) => req<ProjectVersionResponse>('GET', `/projects/${id}/versions/at/${version}`),
+  nameCurrentVersion: (id: string, name: string) => req<ProjectVersionSummary>('POST', `/projects/${id}/versions`, { name }),
+  nameVersion: (id: string, versionId: string, name: string | null) => req<ProjectVersionSummary>('PATCH', `/projects/${id}/versions/${encodeURIComponent(versionId)}`, { name }),
+  restoreVersion: (id: string, versionId: string, baseVersion: number) => req<{ version: number; updatedAt: number }>('POST', `/projects/${id}/versions/${encodeURIComponent(versionId)}/restore`, { baseVersion }),
 
   // assets
   /** Light records (no transcripts): `asset(id)` has the full one. */

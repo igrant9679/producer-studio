@@ -16,7 +16,7 @@ vi.mock('../lib/api', () => {
       this.body = body
     }
   }
-  return { api, HttpError, mediaUrl: (id: string, v: string) => `/api/media/${id}/${v}` }
+  return { api, HttpError, mediaUrl: (id: string, v: string) => `/api/media/${id}/${v}`, setUnauthorizedHandler: () => undefined }
 })
 
 import { HttpError } from '../lib/api'
