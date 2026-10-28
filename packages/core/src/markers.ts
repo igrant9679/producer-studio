@@ -1,6 +1,7 @@
 // Timeline markers and beat detection (E-6). Markers live on the project (`markers`, by time); edits snap to them
 // (`snapPoints`). Beat markers come from a music clip's waveform peaks, the data every clip record already carries.
 import { findItem, itemEnd } from './ops'
+import { clipLocalAt, sourceRange } from './speed'
 import type { Marker, Project } from './types'
 import { EPS, round, uid } from './util'
 
@@ -112,11 +113,10 @@ export function addBeatMarkers(p0: Project, itemId: string, peaks?: { values: Ar
   const values = peaks?.values ?? asset?.waveform
   const rate = peaks?.rate ?? asset?.waveformRate ?? 50
   if (!values?.length) return { project: p0, count: 0 }
-  const reversed = it.type === 'video' && !!it.reverse
-  const srcEnd = it.in + it.duration * it.speed
+  const srcEnd = sourceRange(it).end
   const times = detectBeats(values, rate, { scale: peaks?.scale })
     .filter((s) => s >= it.in - EPS && s < srcEnd - EPS)
-    .map((s) => round(it.start + (reversed ? srcEnd - s : s - it.in) / it.speed, 4))
+    .map((s) => round(it.start + clipLocalAt(it, s), 4))
     .filter((t) => t >= it.start - EPS && t <= itemEnd(it) + EPS)
   if (!times.length) return { project: p0, count: 0 }
   const kept = (p0.markers ?? []).filter((m) => !(m.beat && m.t >= it.start - EPS && m.t <= itemEnd(it) + EPS))

@@ -3,6 +3,7 @@
 import { frameAudio } from './audio'
 import { FILTERS } from './presets'
 import { itemEnd } from './ops'
+import { clipSourceAt, smoothSource } from './speed'
 import { textGradientCss, textMarkup } from './text'
 import type {
   AnimationSpec,
@@ -238,9 +239,8 @@ function sourceTime(p: Project, it: VideoItem, local: number): number {
   const asset = p.assets[it.assetId]
   const dur = asset?.duration ?? Infinity
   if (it.freezeAt !== undefined) return it.freezeAt
-  const span = it.duration * it.speed
-  const offset = it.reverse ? span - local * it.speed : local * it.speed
-  return clamp(it.in + offset, 0, Math.max(0, dur - 0.001))
+  // speed ramps included (speed.ts)
+  return clamp(clipSourceAt(it, local), 0, Math.max(0, dur - 0.001))
 }
 
 function textHtml(it: TextItem, reveal?: number): string {
@@ -422,6 +422,12 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
   if (it.type === 'video') {
     layer.assetId = it.assetId
     layer.mediaTime = sourceTime(p, it, lt)
+    // smooth slow motion: the picture comes from the copy with frames made in between (its time 0 is source `from`)
+    const smooth = smoothSource(p, it)
+    if (smooth) {
+      layer.assetId = smooth.assetId
+      layer.mediaTime = Math.max(0, layer.mediaTime - smooth.from)
+    }
     layer.objectFit = 'fill'
     layer.crop = it.crop
     layer.background = track.main ? it.background : undefined

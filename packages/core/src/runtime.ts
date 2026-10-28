@@ -3,6 +3,7 @@
 // composition and HyperFrames owns their playback, the renderer only positions and styles them).
 import { evaluate, textBoxCss, textInnerHtml } from './evaluate'
 import { itemEnd, projectDuration } from './ops'
+import { clipLocalAt, clipSourceAt, localAtOffset, smoothSource, speedAt } from './speed'
 import { fitScale, scaledTextStyle } from './text'
 import type { FrameLayer, Item, Project, TextStyle, Track, VideoItem } from './types'
 import { cssNumber, safeColor } from './util'
@@ -26,6 +27,8 @@ interface LayerEl {
   /** Export: the still shown over the video (and its blurred background) until the file starts. */
   hold?: { until: number; still: HTMLImageElement; bgStill?: HTMLImageElement }
   kind: FrameLayer['type']
+  /** The file a video layer plays (a clip's smooth slow-motion copy, or its source). */
+  assetId?: string
   lastText?: string
   lastStyle?: string
   lastFill?: string
@@ -208,10 +211,11 @@ export class StageRenderer {
     for (const it of soon.slice(0, PRELOAD_VIDEOS)) {
       const track = this.items.get(it.id)?.track
       if (!this.layers.has(it.id) && !track?.hidden) {
-        const el = this.createLayer({ itemId: it.id, type: 'video', assetId: it.assetId } as FrameLayer)
+        const smooth = smoothSource(this.project, it)
+        const el = this.createLayer({ itemId: it.id, type: 'video', assetId: smooth?.assetId ?? it.assetId } as FrameLayer)
         el.wrap.style.display = 'none'
         const v = el.content as HTMLVideoElement
-        v.currentTime = it.freezeAt ?? (it.reverse ? it.in + it.duration * it.speed : it.in)
+        v.currentTime = Math.max(0, clipSourceAt(it, 0) - (smooth?.from ?? 0))
       }
       const silent = it.muted || track?.muted || it.reverse || it.freezeAt !== undefined || this.project.assets[it.assetId]?.hasAudio === false
       if (!silent && !this.voices.has(it.id)) this.createVoice(it.id, it.assetId).el.currentTime = it.in
@@ -224,11 +228,13 @@ export class StageRenderer {
    */
   mediaClock(): number | undefined {
     if (!this.playing || this.waiting.size) return undefined
-    const at = (id: string, m: HTMLMediaElement) => {
+    const at = (id: string, m: HTMLMediaElement, assetId?: string) => {
       const it = this.items.get(id)?.item
       if (!it || (it.type !== 'audio' && it.type !== 'video') || m.paused || m.seeking || m.readyState < 3) return undefined
       if (it.type === 'video' && (it.reverse || it.freezeAt !== undefined)) return undefined
-      const t = it.start + (m.currentTime - it.in) / it.speed
+      // a smooth copy's time 0 is source `from`; along a speed ramp the clip time comes from speed.ts
+      const smooth = assetId && assetId !== it.assetId ? smoothSource(this.project, it) : null
+      const t = it.start + clipLocalAt(it, m.currentTime + (smooth?.from ?? 0))
       return t >= it.start && t <= itemEnd(it) ? t : undefined
     }
     for (const [id, v] of this.voices) {
@@ -236,7 +242,7 @@ export class StageRenderer {
       if (t !== undefined) return t
     }
     for (const [id, el] of this.layers) {
-      const t = el.content instanceof HTMLVideoElement && el.wrap.style.display !== 'none' ? at(id, el.content) : undefined
+      const t = el.content instanceof HTMLVideoElement && el.wrap.style.display !== 'none' ? at(id, el.content, el.assetId) : undefined
       if (t !== undefined) return t
     }
     return undefined
@@ -313,7 +319,7 @@ export class StageRenderer {
       content.style.cssText = MEDIA_FILL
       content.draggable = false
     }
-    const el: LayerEl = { wrap, content, overlay, bg, bgMedia, kind: layer.type }
+    const el: LayerEl = { wrap, content, overlay, bg, bgMedia, kind: layer.type, assetId: layer.assetId }
     const still = wrap.querySelector('img[data-ps-hold]') as HTMLImageElement | null
     if (still) el.hold = { until: Number(still.dataset.psHold), still, bgStill: (bg?.querySelector('img[data-ps-hold]') as HTMLImageElement | null) ?? undefined }
     this.layers.set(layer.itemId, el)
@@ -356,7 +362,13 @@ export class StageRenderer {
   }
 
   private drawLayer(layer: FrameLayer, t: number) {
-    const el = this.layers.get(layer.itemId) ?? this.createLayer(layer)
+    let el = this.layers.get(layer.itemId)
+    // the picture's file changed (a smooth slow-motion copy arrived, or no longer fits the clip): a new player
+    if (el && this.opts.mode === 'preview' && el.kind === 'video' && el.assetId !== layer.assetId) {
+      this.removeLayer(layer.itemId, el)
+      el = undefined
+    }
+    el ??= this.createLayer(layer)
     const w = el.wrap
     const auto = layer.box.height <= 0
     w.style.cssText =
@@ -460,7 +472,8 @@ export class StageRenderer {
   private syncVideo(v: HTMLVideoElement, mediaTime: number, itemId: string, isBg = false) {
     const item = this.findVideoItem(itemId)
     const frozen = item?.freezeAt !== undefined
-    const speed = (item?.speed ?? 1) * this.rate
+    // a speed ramp's speed at this moment
+    const speed = (item ? speedAt(item, (this.lastT ?? 0) - item.start) : 1) * this.rate
     if (this.playing && !frozen && !item?.reverse && !this.held(isBg ? `bg:${itemId}` : itemId)) {
       const drift = v.currentTime - mediaTime
       const far = Math.abs(drift) > SEEK_DRIFT * speed
@@ -546,6 +559,8 @@ export class StageRenderer {
       active.add(a.itemId)
       const voice = this.voices.get(a.itemId) ?? this.createVoice(a.itemId, a.assetId)
       const el = voice.el
+      // the pitch toggle: keep the voice's pitch at any speed, or let it follow (as the export's copy does)
+      if (el.preservesPitch !== !a.pitchShift) el.preservesPitch = !a.pitchShift
       const level = Math.min(MAX_GAIN, Math.max(0, a.volume))
       if (voice.gain) {
         if (Math.abs(voice.gain.gain.value - level) > 1e-4) voice.gain.gain.value = level
@@ -641,16 +656,22 @@ export function exportVideoTiming(p: Project, trackIdx: number, itemIdx: number)
   const known = dur !== undefined && Number.isFinite(dur) && dur > 0
   const pre = it.start - win.start
   const post = win.end - itemEnd(it)
-  const span = it.duration * it.speed
-  // footage before the clip's first frame: the source before its in-point, or after its range when reversed
-  const before = it.reverse ? (known ? Math.max(0, dur - (it.in + span)) : 0) : it.in
-  const lead = Math.min(pre, before / it.speed)
-  const from = it.start - lead
-  const out: ExportVideoTiming = { start: win.start, end: win.end, from, mediaStart: it.reverse ? 0 : Math.max(0, it.in - lead * it.speed) }
-  if (it.reverse) out.reversed = { from: Math.max(0, it.in - post * it.speed), to: it.in + span + lead * it.speed }
-  if (from - win.start > 1e-3) {
-    const at = it.reverse ? it.in + span + pre * it.speed : it.in - pre * it.speed
-    out.hold = { until: from, at: Math.min(Math.max(0, at), known ? dur : Infinity) }
+  if (it.reverse) {
+    const span = it.duration * it.speed
+    // footage before the clip's first frame: the source after its range
+    const before = known ? Math.max(0, dur - (it.in + span)) : 0
+    const lead = Math.min(pre, before / it.speed)
+    const from = it.start - lead
+    const out: ExportVideoTiming = { start: win.start, end: win.end, from, mediaStart: 0, reversed: { from: Math.max(0, it.in - post * it.speed), to: it.in + span + lead * it.speed } }
+    if (from - win.start > 1e-3) out.hold = { until: from, at: Math.min(Math.max(0, it.in + span + pre * it.speed), known ? dur : Infinity) }
+    return out
   }
+  // footage before the clip's first frame: the source before its in-point (in its smooth copy, when it plays one),
+  // played at the clip's first speed (speed.ts)
+  const base = smoothSource(p, it)?.from ?? 0
+  const lead = Math.min(pre, -localAtOffset(it, -Math.max(0, it.in - base)))
+  const from = it.start - lead
+  const out: ExportVideoTiming = { start: win.start, end: win.end, from, mediaStart: Math.max(base, clipSourceAt(it, -lead)) }
+  if (from - win.start > 1e-3) out.hold = { until: from, at: Math.min(Math.max(base, clipSourceAt(it, -pre)), known ? dur : Infinity) }
   return out
 }

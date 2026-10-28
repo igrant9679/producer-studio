@@ -1,6 +1,7 @@
 // Replace a clip's media keeping everything else about it, and split a clip where its picture changes (E-10). The
 // scene changes come from the server (media.scenes, ffmpeg's scene score) as times in the clip's file.
 import { clone, findItem, itemEnd, packMain, splitItem } from './ops'
+import { clipLocalAt, localAtOffset, sourceRange, syncAverageSpeed } from './speed'
 import type { Asset, Item, Project } from './types'
 import { EPS, clamp, round } from './util'
 
@@ -41,10 +42,12 @@ export function replaceClipMedia(p0: Project, itemId: string, asset: Asset): { p
       return
     }
     if (max === undefined) return
-    const need = x.duration * x.speed
+    const need = sourceRange(x).end - x.in
     if (x.in + need > max + EPS) x.in = round(Math.max(0, max - need), 4)
     if (need > max + EPS) {
-      x.duration = round(max / x.speed, 4)
+      // the whole new file, along the clip's speed ramp if it has one
+      x.duration = round(localAtOffset(x, max), 4)
+      syncAverageSpeed(x)
       shortened = true
     }
   }
@@ -60,7 +63,7 @@ export function replaceClipMedia(p0: Project, itemId: string, asset: Asset): { p
 export function timelineAtSource(it: Item, src: number): number | undefined {
   if (it.type !== 'video' && it.type !== 'audio') return undefined
   if (it.type === 'video' && it.freezeAt !== undefined) return undefined
-  const local = it.type === 'video' && it.reverse ? (it.in + it.duration * it.speed - src) / it.speed : (src - it.in) / it.speed
+  const local = clipLocalAt(it, src)
   return local > EPS && local < it.duration - EPS ? round(it.start + local, 4) : undefined
 }
 

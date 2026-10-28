@@ -4,6 +4,7 @@
 import { itemEnd, projectDuration } from './ops'
 import { MAX_GAIN, type SoundSpan, laneParts, soloActive, trackAudible, trackSpans } from './audio'
 import { exportVideoTiming } from './runtime'
+import { rateLane, smoothSource } from './speed'
 import type { Project } from './types'
 import { escapeHtml, round, safeColor } from './util'
 
@@ -16,6 +17,11 @@ export interface CompileOptions {
   reversedPath?: (itemId: string) => string | undefined
   /** Path of a still of the frame a video item holds before its file starts (exportVideoTiming's `hold`). */
   holdFramePath?: (itemId: string) => string | undefined
+  /**
+   * Path of a server-made copy of a clip's sound with its pitch following its speed (speed.ts `shiftsPitch`): it
+   * covers the clip's sound span (audio.ts) in timeline time, so it plays at 1x from the span's start.
+   */
+  pitchShiftPath?: (itemId: string) => string | undefined
   /** Relative path of the bundled renderer (packages/core dist/runtime.js). */
   runtimePath: string
   /** Relative path of gsap.min.js. */
@@ -41,16 +47,22 @@ function attr(v: string | number): string {
  * see audio.ts) goes in as a volume lane, which HyperFrames plays as the gain itself in place of data-volume, so the
  * export is heard at the levels the preview plays.
  */
-function audioTag(p: Project, span: SoundSpan, trackIndex: number, src: string, solo: boolean): string {
+function audioTag(p: Project, span: SoundSpan, trackIndex: number, src: string, solo: boolean, shifted?: string): string {
   const it = span.item
   return laneParts(p, span, solo)
     .map((part, k) => {
       const pts = part.points
       const flat = pts.every((x) => Math.abs(x.v - pts[0].v) < 1e-4)
-      const lane = flat ? '' : ` data-automation='${JSON.stringify({ version: 1, lanes: [{ target: 'volume', points: pts }] })}'`
+      // a speed ramp plays as a rate lane (speed.ts): the source times the preview plays. A pitch-shifted copy is
+      // already at the clip's speed, so it plays at 1× from the span's start.
+      const rate = shifted ? null : rateLane(it, part.start)
+      const lanes = [...(flat ? [] : [{ target: 'volume', points: pts }]), ...(rate ? [{ target: 'rate', points: rate }] : [])]
+      const lane = lanes.length ? ` data-automation='${JSON.stringify({ version: 1, lanes })}'` : ''
       const volume = flat ? (pts[0]?.v ?? 0) : Math.min(MAX_GAIN, Math.max(0, it.volume))
+      const mediaStart = shifted ? part.start - span.start : part.mediaStart
+      const speed = !shifted && !rate && it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''
       // the parts of a long lane overlap at their joins: they alternate tracks too
-      return `<audio id="a-${attr(it.id)}${k ? `-p${k + 1}` : ''}" src="${attr(src)}" data-start="${round(part.start, 4)}" data-duration="${round(part.end - part.start, 4)}" data-media-start="${round(part.mediaStart, 4)}" data-volume="${round(volume, 3)}" data-track-index="${trackIndex + (k % 2 ? 2000 : 0)}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane}></audio>`
+      return `<audio id="a-${attr(it.id)}${k ? `-p${k + 1}` : ''}" src="${attr(shifted ?? src)}" data-start="${round(part.start, 4)}" data-duration="${round(part.end - part.start, 4)}" data-media-start="${round(mediaStart, 4)}" data-volume="${round(volume, 3)}" data-track-index="${trackIndex + (k % 2 ? 2000 : 0)}"${speed}${lane}></audio>`
     })
     .join('\n')
 }
@@ -81,16 +93,20 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
         if (freeze) {
           body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><img data-ps-content src="${attr(freeze)}" alt=""></div>`)
         } else {
-          const src = reversed ?? opts.assetPath(it.assetId)
+          // smooth slow motion: the copy with frames made in between, whose time 0 is source `from`
+          const smooth = reversed ? null : smoothSource(p, it)
+          const src = reversed ?? opts.assetPath(smooth?.assetId ?? it.assetId)
           // the file starts at the clip's true offset and pre-rolls into an incoming transition only the footage that
           // exists before its first frame (a reversed copy is padded with it); before that the held frame shows, as
           // in the preview. A reversed clip without its copy just plays the source from its in-point.
           const tm = exportVideoTiming(p, ti, ii)
           const from = it.reverse && !reversed ? it.start : tm.from
-          const mediaStart = it.reverse && !reversed ? it.in : tm.mediaStart
+          const mediaStart = it.reverse && !reversed ? it.in : tm.mediaStart - (smooth?.from ?? 0)
+          // a speed ramp is a rate lane from the element's start (speed.ts)
+          const rate = rateLane(it, from)
           const holdSrc = tm.hold && (reversed || !it.reverse) ? opts.holdFramePath?.(it.id) : undefined
           const hold = holdSrc ? `<img data-ps-hold="${round(tm.hold!.until, 4)}" src="${attr(holdSrc)}" alt="">` : ''
-          const timing = `data-start="${round(from, 4)}" data-duration="${round(tm.end - from, 4)}" data-media-start="${round(mediaStart, 4)}" data-track-index="${trackIndex}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}`
+          const timing = `data-start="${round(from, 4)}" data-duration="${round(tm.end - from, 4)}" data-media-start="${round(mediaStart, 4)}" data-track-index="${trackIndex}"${rate ? ` data-automation='${JSON.stringify({ version: 1, lanes: [{ target: 'rate', points: rate }] })}'` : it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}`
           body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><video id="v-${attr(it.id)}" data-ps-content src="${attr(src)}" ${timing} muted playsinline></video>${hold}</div>`)
           if (it.background?.type === 'blur' && track.main) {
             body.push(`<div data-ps-bg="${attr(it.id)}" style="position:absolute;inset:0;display:none;overflow:hidden"><video id="vb-${attr(it.id)}" src="${attr(src)}" ${timing} muted playsinline></video>${hold}</div>`)
@@ -98,7 +114,7 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
           // its sound (none for a reversed clip, as in the preview), widened into the transitions either side;
           // neighbours overlap there, so they alternate tracks
           const span = spans.get(it.id)
-          if (span) audio.push(audioTag(p, span, 100 + trackIndex + (ii % 2 ? 1000 : 0), opts.assetPath(it.assetId), solo))
+          if (span) audio.push(audioTag(p, span, 100 + trackIndex + (ii % 2 ? 1000 : 0), opts.assetPath(it.assetId), solo, opts.pitchShiftPath?.(it.id)))
         }
       } else if (it.type === 'image') {
         body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><img data-ps-content src="${attr(opts.assetPath(it.assetId))}" alt=""></div>`)
@@ -113,7 +129,7 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
   for (const track of p.tracks) {
     if (track.kind !== 'audio' || !trackAudible(p, track, solo)) continue
     audioTrack++
-    for (const span of trackSpans(p, track)) audio.push(audioTag(p, span, audioTrack + (track.items.indexOf(span.item) % 2 ? 1000 : 0), opts.assetPath(span.item.assetId), solo))
+    for (const span of trackSpans(p, track)) audio.push(audioTag(p, span, audioTrack + (track.items.indexOf(span.item) % 2 ? 1000 : 0), opts.assetPath(span.item.assetId), solo, opts.pitchShiftPath?.(span.item.id)))
   }
   // captions and text layers are created by the renderer at runtime (no media)
   const projectJson = JSON.stringify(p).replace(/</g, '\\u003c')

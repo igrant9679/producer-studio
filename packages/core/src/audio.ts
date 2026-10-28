@@ -4,6 +4,7 @@
 // playing source beyond each clip's edge where the source has it. A track set to duck under voice drops while a
 // voiceover or a clip with a transcript is speaking. A soloed track silences every track that isn't soloed.
 import { clone, editable, findItem, itemEnd, updateItem, updateTrack } from './ops'
+import { clipLocalAt, clipSourceAt, localAtOffset, shiftRamp, shiftsPitch, sourceOffset, sourceRange, speedAt, syncAverageSpeed } from './speed'
 import type { AudioItem, FrameAudio, Item, Keyframe, Project, Track, Transition, VideoItem } from './types'
 import { EPS, clamp, round, sampleKeyframes } from './util'
 
@@ -108,18 +109,18 @@ export function trackSpans(p: Project, track: Track): SoundSpan[] {
     if (ptr && ptr.duration > 0) {
       const half = Math.min(ptr.duration / 2, prev.duration / 2, it.duration / 2)
       // sound before the clip's first frame only as far as the source has it
-      span.start = Math.max(0, it.start - Math.min(half, it.in / it.speed))
+      span.start = Math.max(0, it.start - Math.min(half, -localAtOffset(it, -it.in)))
       span.xIn = { from: span.start, to: it.start + half }
     }
     const tr = transitionAfter(p, items, i)
     if (tr && tr.duration > 0) {
       const half = Math.min(tr.duration / 2, it.duration / 2, items[i + 1].duration / 2)
       const dur = p.assets[it.assetId]?.duration
-      const after = dur !== undefined && Number.isFinite(dur) ? Math.max(0, dur - it.in - it.duration * it.speed) / it.speed : 0
+      const after = dur !== undefined && Number.isFinite(dur) ? Math.max(0, localAtOffset(it, dur - it.in) - it.duration) : 0
       span.end = itemEnd(it) + Math.min(half, after)
       span.xOut = { from: itemEnd(it) - half, to: span.end }
     }
-    span.mediaStart = Math.max(0, it.in + (span.start - it.start) * it.speed)
+    span.mediaStart = Math.max(0, clipSourceAt(it, span.start - it.start))
     out.push(span)
   }
   return out
@@ -154,11 +155,11 @@ export function voiceIntervals(p: Project, from: number, to: number, solo = solo
       const segs = p.assets[it.assetId]?.transcript?.segments
       if (!segs?.length) continue
       const a = it.in
-      const b = it.in + it.duration * it.speed
+      const b = sourceRange(it).end
       for (const sg of segs) {
         if (sg.end <= a || sg.start >= b) continue
-        const s = it.start + (Math.max(a, sg.start) - a) / it.speed
-        const e = it.start + (Math.min(b, sg.end) - a) / it.speed
+        const s = it.start + clipLocalAt(it, Math.max(a, sg.start))
+        const e = it.start + clipLocalAt(it, Math.min(b, sg.end))
         if (e + DUCK_HOLD + DUCK_RELEASE >= from && s - DUCK_ATTACK <= to) out.push({ s, e })
       }
     }
@@ -205,7 +206,8 @@ export function frameAudio(p: Project, t: number): FrameAudio[] {
     if (t < span.start || t >= span.end) continue
     const voices = span.track.duck ? voiceIntervals(p, t - DUCK_HOLD - DUCK_RELEASE, t + DUCK_ATTACK, solo) : undefined
     const it = span.item
-    out.push({ itemId: it.id, assetId: it.assetId, mediaTime: span.mediaStart + (t - span.start) * it.speed, volume: spanGain(span, t, voices), speed: it.speed })
+    const lt = t - it.start
+    out.push({ itemId: it.id, assetId: it.assetId, mediaTime: Math.max(0, clipSourceAt(it, lt)), volume: spanGain(span, t, voices), speed: speedAt(it, lt), ...(shiftsPitch(it) ? { pitchShift: true } : {}) })
   }
   return out
 }
@@ -267,7 +269,7 @@ export function laneParts(p: Project, span: SoundSpan, solo = soloActive(p)): La
     // after the first part: rise from silence over the join while the part before falls to it
     if (i0 > 0) local = [{ t: 0, v: 0 }, { t: JOIN, v: gain(t0 + JOIN) }, ...local.filter((q) => q.t > JOIN + EPS)]
     if (!last) local.push({ t: round(t1 - t0 + JOIN, 3), v: 0 })
-    parts.push({ start: span.start + t0, end: span.start + t1 + (last ? 0 : JOIN), mediaStart: span.mediaStart + t0 * span.item.speed, points: local })
+    parts.push({ start: span.start + t0, end: span.start + t1 + (last ? 0 : JOIN), mediaStart: Math.max(0, clipSourceAt(span.item, span.start + t0 - span.item.start)), points: local })
     i0 = i1
   }
   return parts
@@ -343,21 +345,24 @@ export function setVolumeKeyframes(p0: Project, itemId: string, list: Keyframe[]
 function edgeRange(p: Project, it: AudioItem, edge: 'start' | 'end'): [number, number] {
   const minDur = 1 / p.fps
   const max = p.assets[it.assetId]?.duration ?? Infinity
-  if (edge === 'end') return [it.start + minDur, it.start + Math.max(0, max - it.in) / it.speed]
-  return [Math.max(0, it.start - it.in / it.speed), itemEnd(it) - minDur]
+  if (edge === 'end') return [it.start + minDur, it.start + localAtOffset(it, Math.max(0, max - it.in))]
+  return [Math.max(0, it.start + localAtOffset(it, -it.in)), itemEnd(it) - minDur]
 }
 
 function trimOne(it: AudioItem, edge: 'start' | 'end', t: number) {
   if (edge === 'end') {
     it.duration = round(t - it.start, 4)
+    syncAverageSpeed(it)
     return
   }
   const shift = t - it.start
-  it.in = round(Math.max(0, it.in + shift * it.speed), 4)
+  it.in = round(Math.max(0, it.in + sourceOffset(it, shift)), 4)
   it.start = round(t, 4)
   it.duration = round(it.duration - shift, 4)
-  // keyframes stay on the same moments of the sound
+  // keyframes and a speed ramp stay on the same moments of the sound
   for (const list of Object.values(it.keyframes ?? {})) for (const kf of list ?? []) kf.t = round(kf.t - shift, 4)
+  if (it.speedRamp) it.speedRamp = shiftRamp(it.speedRamp, -shift)
+  syncAverageSpeed(it)
 }
 
 /**

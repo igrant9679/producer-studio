@@ -17,6 +17,7 @@ import type {
   VideoItem,
   VisualItem,
 } from './types'
+import { clipLocalAt, clipSourceAt, localAtOffset, rampOf, shiftRamp, sourceOffset, sourceRange, syncAverageSpeed } from './speed'
 import { EPS, linkCopies, round, uid } from './util'
 
 export function clone<T>(v: T): T {
@@ -240,33 +241,6 @@ function unstack(p: Project, track: Track, it: Item) {
   sortItems(to)
 }
 
-/**
- * Change a video or audio clip's speed. The clip keeps its source range (as much of it as the source has) and every
- * clip-relative time scales by old speed over new: keyframes, fades, in/out animations and a split piece's phase land
- * on the same frames as before. A clip made longer on an overlay track moves to a free track (see `unstack`).
- */
-export function setItemSpeed(p0: Project, itemId: string, speed: number): Project {
-  const f = findItem(p0, itemId)
-  if (!editable(f) || (f.item.type !== 'video' && f.item.type !== 'audio') || !(speed > 0)) return p0
-  const it = f.item
-  if (it.type === 'video' && it.freezeAt !== undefined) return p0
-  const to = round(speed, 3)
-  const max = p0.assets[it.assetId]?.duration
-  const src = Math.min(it.duration * it.speed, max !== undefined ? Math.max(0, max - it.in) : Infinity)
-  const duration = round(src / to, 4)
-  const k = it.speed / to
-  const at = (t: number) => round(Math.min(t * k, duration), 4)
-  const keyframes: Keyframes = {}
-  for (const [prop, list] of Object.entries(it.keyframes ?? {}) as Array<[AnimProp, Keyframe[]]>) keyframes[prop] = list.map((kf) => ({ ...kf, t: round(kf.t * k, 4) }))
-  const patch: Partial<VideoItem> = { speed: to, duration, fadeIn: at(it.fadeIn), fadeOut: at(it.fadeOut), keyframes }
-  if (it.type === 'video') {
-    const a = it.animations ?? {}
-    patch.animations = { ...a, ...(a.in ? { in: { ...a.in, duration: at(a.in.duration) } } : {}), ...(a.out ? { out: { ...a.out, duration: at(a.out.duration) } } : {}) }
-    if (it.phase) patch.phase = { offset: round(it.phase.offset * k, 4), length: round(it.phase.length * k, 4) }
-  }
-  return updateItem<VideoItem>(p0, itemId, patch)
-}
-
 /** Position, scale and rotation back to neutral (flips too), with their keyframes; opacity and volume keyframes stay. */
 export function resetTransform(p0: Project, itemId: string): Project {
   const f = findItem(p0, itemId)
@@ -324,17 +298,14 @@ function isReversed(it: Item): boolean {
   return it.type === 'video' && !!it.reverse && it.freezeAt === undefined
 }
 
-/** Source time a video/audio item shows at timeline time t. */
+/** Source time a video/audio item shows at timeline time t (speed ramps included: see speed.ts). */
 function sourceAt(it: VideoItem | AudioItem, t: number): number {
-  if (it.type === 'video' && it.freezeAt !== undefined) return it.freezeAt
-  const local = (t - it.start) * it.speed
-  return isReversed(it) ? it.in + it.duration * it.speed - local : it.in + local
+  return clipSourceAt(it, t - it.start)
 }
 
 /** Timeline time at which a video/audio item shows source time `src`. */
 function timeAt(it: VideoItem | AudioItem, src: number): number {
-  const local = isReversed(it) ? it.in + it.duration * it.speed - src : src - it.in
-  return it.start + local / it.speed
+  return it.start + clipLocalAt(it, src)
 }
 
 /**
@@ -359,8 +330,9 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
       // the end of a reversed clip is the start of its range: trimming it moves `in`, extending needs source before it
       dur = Math.min(dur, it.duration + span.in / span.speed)
       ;(it as VideoItem).in = round(Math.max(0, span.in + (it.duration - dur) * span.speed), 4)
-    } else if (span && !frozen) dur = Math.min(dur, (span.max - span.in) / span.speed)
+    } else if (span && !frozen) dur = Math.min(dur, localAtOffset(it as VideoItem | AudioItem, span.max - span.in))
     it.duration = round(dur, 4)
+    syncAverageSpeed(it)
   } else {
     const end = itemEnd(it)
     const prev = Math.max(0, ...others.filter((i) => i.start < it.start - EPS).map(itemEnd))
@@ -370,11 +342,10 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
       // the start of a reversed clip is the end of its range: `in` stays, extending needs source after the range
       start = Math.max(start, it.start - (span.max - span.in - it.duration * span.speed) / span.speed)
     } else if (span) {
-      // moving the start later advances `in`; earlier needs source headroom
-      const deltaSrc = (start - it.start) * span.speed
-      const newIn = span.in + deltaSrc
-      if (newIn < 0) start = it.start - span.in / span.speed
-      ;(it as VideoItem | AudioItem).in = round(Math.max(0, span.in + (start - it.start) * span.speed), 4)
+      // moving the start later advances `in` (along a speed ramp too); earlier needs source headroom
+      const m = it as VideoItem | AudioItem
+      start = Math.max(start, it.start + localAtOffset(m, -span.in))
+      m.in = round(Math.max(0, span.in + sourceOffset(m, start - it.start)), 4)
     }
     start = Math.max(0, start)
     const shift = start - it.start
@@ -384,6 +355,9 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
     if ('keyframes' in it && it.keyframes) shiftKeyframes(it.keyframes, -shift, it.duration)
     if ('phase' in it && it.phase) it.phase = { ...it.phase, offset: round(it.phase.offset + shift, 4) }
     if (it.type === 'caption' && it.words) it.words = it.words.map((w) => ({ ...w, start: w.start - shift, end: w.end - shift })).filter((w) => w.end > 0)
+    // a speed ramp stays on the same frames
+    if ((it.type === 'video' || it.type === 'audio') && it.speedRamp) it.speedRamp = shiftRamp(it.speedRamp, -shift)
+    syncAverageSpeed(it)
   }
   if (f.track.main) packMain(p)
   return touch(p)
@@ -451,7 +425,11 @@ function cutAt(p: Project, track: Track, index: number, t: number): Item | null 
     const r = right as VideoItem | AudioItem
     // a reversed clip shows the later part of its range first, so the left piece takes that part
     if (isReversed(it)) (it as VideoItem).in = round(it.in + rest * it.speed, 4)
-    else if (!(it.type === 'video' && it.freezeAt !== undefined)) r.in = round(it.in + local * it.speed, 4)
+    else if (!(it.type === 'video' && it.freezeAt !== undefined)) r.in = round(it.in + sourceOffset(it, local), 4)
+    // the right piece's speed ramp carries on from the cut
+    if (r.speedRamp) r.speedRamp = shiftRamp(r.speedRamp, -local)
+    syncAverageSpeed(it)
+    syncAverageSpeed(r)
     r.fadeIn = 0
     ;(it as VideoItem | AudioItem).fadeOut = 0
   }
@@ -623,6 +601,9 @@ export function separateAudio(p0: Project, itemId: string): Project {
   const asset = p0.assets[v.assetId]
   const linkId = v.linkId ?? uid('l')
   const audio = createAudioItem(asset, v.start, { in: v.in, speed: v.speed, duration: v.duration, volume: v.volume, fadeIn: v.fadeIn, fadeOut: v.fadeOut, linkId, name: `${v.name ?? asset.name} audio` })
+  // the sound keeps the clip's speed ramp and pitch setting, so it plays the frames' sound
+  if (rampOf(v)) audio.speedRamp = clone(v.speedRamp)
+  if (v.pitchShift) audio.pitchShift = true
   let p = updateItem<VideoItem>(p0, itemId, { muted: true, linkId })
   const audioTrack = p.tracks.find((t) => t.kind === 'audio' && !t.locked && !overlaps(t, audio.start, itemEnd(audio), new Set()))
   p = addItem(p, audio, audioTrack?.id)
@@ -749,7 +730,7 @@ export function itemWords(p: Project, itemId: string): Array<TranscriptWord & { 
   if (it.type === 'video' && it.freezeAt !== undefined) return []
   const tr = p.assets[it.assetId]?.transcript
   if (!tr) return []
-  const srcEnd = it.in + it.duration * it.speed
+  const srcEnd = sourceRange(it).end
   const out: Array<TranscriptWord & { srcStart: number; srcEnd: number }> = []
   for (const seg of tr.segments)
     for (const w of seg.words) {
@@ -779,7 +760,7 @@ export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ sta
     // find the piece containing this range (source time)
     const pieceId = ids.find((id) => {
       const x = findItem(p, id)?.item as VideoItem | AudioItem | undefined
-      return x && r.start < x.in + x.duration * x.speed && r.end > x.in
+      return x && r.start < sourceRange(x).end && r.end > x.in
     })
     if (!pieceId) continue
     const piece = findItem(p, pieceId)!.item as VideoItem | AudioItem

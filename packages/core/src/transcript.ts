@@ -2,13 +2,14 @@
 // restored; filler words from an editable list; speaker labels on the transcript.
 import { captionsInsert } from './captionLines'
 import { clone, editable, findItem, isEditable, itemEnd, packMain } from './ops'
+import { rampOf, sourceRange } from './speed'
 import type { AudioItem, Item, Project, Track, Transcript, TranscriptSegment, TranscriptWord, VideoItem } from './types'
 import { EPS, round, uid } from './util'
 
 type Media = VideoItem | AudioItem
 
 const isMedia = (i: Item | undefined): i is Media => !!i && (i.type === 'video' || i.type === 'audio')
-const srcEnd = (it: Media) => it.in + it.duration * it.speed
+const srcEnd = (it: Media) => sourceRange(it).end
 /** Plays its source forwards (not a freeze frame, not reversed). */
 const forwards = (it: Media) => !(it.type === 'video' && (it.freezeAt !== undefined || it.reverse))
 
@@ -23,6 +24,8 @@ export function cutNeighbour(p: Project, itemId: string): Media | null {
   const next = [...f.track.items].sort((x, y) => x.start - y.start).find((i) => i.start >= a.start + EPS && i.id !== a.id)
   if (!isMedia(next) || next.type !== a.type || next.assetId !== a.assetId || !forwards(next)) return null
   if (Math.abs(next.start - itemEnd(a)) > 0.01 || Math.abs(next.speed - a.speed) > EPS) return null
+  // a cut out of a speed ramp has no one speed to play the restored words at
+  if (rampOf(a) || rampOf(next)) return null
   return next.in > srcEnd(a) + 0.005 ? next : null
 }
 
