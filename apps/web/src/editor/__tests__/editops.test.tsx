@@ -153,7 +153,7 @@ describe('context-menu actions (EDT-33)', () => {
     S().setPlayhead(4)
     S().set({ activeRightTab: 'speed' })
     render(<PropertiesPanel />)
-    fireEvent.click(screen.getByRole('button', { name: /Freeze frame at playhead/ }))
+    fireEvent.click(screen.getByRole('button', { name: /At the playhead/ }))
     const holds = (mainTrack(S().project)!.items as VideoItem[]).filter((i) => i.freezeAt !== undefined)
     expect(holds.map((h) => [h.start, h.freezeAt])).toEqual([[4, 4]])
   })
