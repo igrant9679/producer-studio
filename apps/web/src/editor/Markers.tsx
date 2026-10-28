@@ -9,6 +9,7 @@ import * as A from './actions'
 import { Menu, MenuItem } from './controls'
 import { deleteMarker, moveMarker, renameMarker } from './markerActions'
 import { useEditor } from './store'
+import { isReadOnly, ViewOnly } from './viewer'
 import { snapAt, timecode } from './timelineMath'
 
 const S = () => useEditor.getState()
@@ -44,8 +45,10 @@ export function MarkerFlags({ zoom, fps }: { zoom: number; fps: number }) {
     const sx = e.clientX
     const pts = snapPoints(removeMarkers(S().project, [m.id]), new Set(), S().playhead)
     let moved = false
+    // a viewer's marker only jumps
+    const fixed = isReadOnly()
     const move = (ev: PointerEvent) => {
-      if (!moved && Math.abs(ev.clientX - sx) < 3) return
+      if (fixed || (!moved && Math.abs(ev.clientX - sx) < 3)) return
       moved = true
       const z = S().zoom
       let t = Math.max(0, m.t + (ev.clientX - sx) / z)
@@ -85,7 +88,7 @@ export function MarkerFlags({ zoom, fps }: { zoom: number; fps: number }) {
       A.seek(to.t)
     } else if (k === 'F2') {
       done()
-      setEditing(m.id)
+      if (!isReadOnly()) setEditing(m.id)
     } else if (k === 'Delete' || k === 'Backspace') {
       done()
       const next = markers[i + 1] ?? markers[i - 1]
@@ -122,7 +125,7 @@ export function MarkerFlags({ zoom, fps }: { zoom: number; fps: number }) {
               A.seek(m.t)
             }
           }}
-          onDoubleClick={() => setEditing(m.id)}
+          onDoubleClick={() => !isReadOnly() && setEditing(m.id)}
           onContextMenu={(e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -148,6 +151,7 @@ export function MarkerFlags({ zoom, fps }: { zoom: number; fps: number }) {
       )}
       {menu && menuMarker && (
         <Menu open onClose={() => setMenu(null)} className="tl-ctx" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: menu.y }} label="Marker">
+          <ViewOnly inline>
           <MenuItem icon={<Pencil size={14} />} label="Rename marker" kbd="F2" onClick={() => (setMenu(null), setEditing(menuMarker.id))} />
           <MenuItem
             icon={<Trash2 size={14} />}
@@ -159,6 +163,7 @@ export function MarkerFlags({ zoom, fps }: { zoom: number; fps: number }) {
               deleteMarker(menuMarker.id)
             }}
           />
+          </ViewOnly>
         </Menu>
       )}
     </div>

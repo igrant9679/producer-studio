@@ -4,6 +4,7 @@
 // Media records from the server go through `updateMedia` and are never undone.
 import type { Asset, Item, Project } from '@producer/core'
 import { create } from 'zustand'
+import { toast } from '../lib/toast'
 
 /** `offline`: the server couldn't be reached (retries on its own). `error`: the server refused the save (see saveError). */
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'error'
@@ -74,6 +75,10 @@ export interface EditorState {
   fullscreen: boolean
   shortcutsOpen: boolean
   exportOpen: boolean
+  /** Viewer mode (viewer.tsx): the person looks, plays and comments; every edit is refused. */
+  readOnly: boolean
+  /** Who can edit instead, for the tooltips on disabled controls and the note a refused edit shows. */
+  readOnlyTip?: string
 
   load: (p: { project: Project; version: number; projectId: string; demo: boolean; workspaceId?: string }) => void
   commit: (next: Project, label: string, opts?: CommitOptions) => void
@@ -178,6 +183,14 @@ function withFreshMedia(target: Project, s: EditorState): Project {
   return assets ? { ...target, assets } : target
 }
 
+let notedAt = -Infinity
+/** A refused edit says why, once in a while (a drag refuses many times a second). */
+function noteReadOnly(tip?: string) {
+  if (Date.now() - notedAt < 4000) return
+  notedAt = Date.now()
+  toast(tip ?? 'This project is view only.')
+}
+
 export const useEditor = create<EditorState>((set, get) => ({
   loaded: false,
   demo: false,
@@ -209,6 +222,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   fullscreen: false,
   shortcutsOpen: false,
   exportOpen: false,
+  readOnly: false,
 
   load: ({ project, version, projectId, demo, workspaceId }) =>
     set({
@@ -237,6 +251,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       if (opts.selection) set({ selection: opts.selection })
       return
     }
+    if (s.readOnly) return noteReadOnly(s.readOnlyTip)
     const next = shareUnchanged(s.project, next0)
     const now = Date.now()
     const merge = !!opts.coalesce && s.lastCommit?.key === opts.coalesce && now - s.lastCommit.at < COALESCE_MS
@@ -264,7 +279,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (lc?.key) set({ lastCommit: { ...lc, key: undefined } })
   },
 
-  replaceSilently: (next) => set({ project: shareUnchanged(get().project, next), saveState: get().saveState === 'conflict' ? 'conflict' : 'dirty' }),
+  replaceSilently: (next) => !get().readOnly && set({ project: shareUnchanged(get().project, next), saveState: get().saveState === 'conflict' ? 'conflict' : 'dirty' }),
 
   updateMedia: (asset) => {
     const s = get()
@@ -276,13 +291,15 @@ export const useEditor = create<EditorState>((set, get) => ({
     const record = { ...(s.project.assets[id] ?? s.media[id] ?? findInHistory(s, id)), ...asset } as Asset
     const media = { ...s.media, [id]: record }
     if (!inDoc) return set({ media })
-    set({ media, project: { ...s.project, assets: { ...s.project.assets, [id]: record } }, saveState: s.saveState === 'conflict' ? 'conflict' : 'dirty' })
+    // a viewer's copy takes the record but has nothing to save
+    set({ media, project: { ...s.project, assets: { ...s.project.assets, [id]: record } }, saveState: s.readOnly ? s.saveState : s.saveState === 'conflict' ? 'conflict' : 'dirty' })
   },
 
   undo: () => {
     const s = get()
     const prev = s.history.past[s.history.past.length - 1]
     if (!prev) return
+    if (s.readOnly) return noteReadOnly(s.readOnlyTip)
     const ids = existingIds(prev.project)
     set({
       project: withFreshMedia(prev.project, s),
@@ -298,6 +315,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const s = get()
     const next = s.history.future[0]
     if (!next) return
+    if (s.readOnly) return noteReadOnly(s.readOnlyTip)
     const ids = existingIds(next.project)
     set({
       project: withFreshMedia(next.project, s),

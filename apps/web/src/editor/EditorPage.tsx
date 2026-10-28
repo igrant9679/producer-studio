@@ -19,6 +19,7 @@ import { useEditor, type LeftTab } from './store'
 import { Timeline } from './Timeline'
 import { SaveErrorBanner, TopBar } from './TopBar'
 import { loadLibrary, subscribeWorkspace, uploadFiles } from './uploads'
+import { isReadOnly, refuseReadOnly, startViewerMode } from './viewer'
 
 export function EditorPage({ demo = false }: { demo?: boolean }) {
   const params = useParams()
@@ -43,7 +44,7 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   // ?export=1 (the Library's "Export this project first" before a share link) opens the export dialog
   const exportParam = search.get('export') === '1'
   useEffect(() => {
-    if (loaded && exportParam) useEditor.setState({ exportOpen: true, playing: false })
+    if (loaded && exportParam && !isReadOnly()) useEditor.setState({ exportOpen: true, playing: false })
   }, [loaded, exportParam])
   useEffect(() => {
     if (!loaded || !tabParam) return
@@ -53,6 +54,7 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
 
   useEffect(() => startPlaybackClock(), [])
   useEffect(() => startAutosave(), [])
+  useEffect(() => startViewerMode(), [])
   useShortcuts()
 
   useEffect(() => {
@@ -124,12 +126,13 @@ function EditorShell() {
   const rightCollapsed = useEditor((s) => s.rightCollapsed)
   const leftCollapsed = useEditor((s) => s.leftCollapsed)
   const saveState = useEditor((s) => s.saveState)
+  const readOnly = useEditor((s) => s.readOnly)
   const [fileDrag, setFileDrag] = useState(false)
 
   useEffect(() => {
     let depth = 0
     const enter = (e: DragEvent) => {
-      if (!isFileDrag(e)) return
+      if (!isFileDrag(e) || isReadOnly()) return
       depth++
       setFileDrag(true)
     }
@@ -148,7 +151,7 @@ function EditorShell() {
       e.preventDefault()
       depth = 0
       setFileDrag(false)
-      if (!taken && e.dataTransfer?.files.length) {
+      if (!taken && e.dataTransfer?.files.length && !refuseReadOnly()) {
         useEditor.setState({ activeLeftTab: 'media', leftCollapsed: false })
         void uploadFiles(e.dataTransfer.files).catch(toastError)
       }
@@ -166,7 +169,7 @@ function EditorShell() {
   }, [])
 
   return (
-    <div className={`ed-root${leftCollapsed ? ' left-collapsed' : ''}`}>
+    <div className={`ed-root${leftCollapsed ? ' left-collapsed' : ''}${readOnly ? ' ed-readonly' : ''}`}>
       <TopBar />
       <StorageBanner />
       {saveState === 'conflict' && <ConflictBanner />}

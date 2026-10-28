@@ -17,6 +17,7 @@ import { Menu, MenuItem, Slider, useThrottledPlayhead } from './controls'
 import { dragPayload, isInternalDrag, makeResolver } from './media'
 import { applyTransport, setMediaClock } from './playback'
 import { useEditor } from './store'
+import { isReadOnly } from './viewer'
 import { previewVariant, useTransport } from './transport'
 
 const NO_LINES = { x: [] as number[], y: [] as number[] }
@@ -156,6 +157,8 @@ export function Canvas() {
       s.select(s.selection.includes(id) ? s.selection.filter((x) => x !== id) : [...s.selection, id])
       return
     }
+    // a viewer selects to look, and moves nothing
+    if (s.readOnly) return void (s.selection.includes(id) || s.select([id]))
     // dragging one of several selected objects moves them all; a click without a drag selects just that one
     if (s.selection.length > 1 && s.selection.includes(id)) return beginMove(e, id, s.selection)
     if (!s.selection.includes(id)) s.select([id])
@@ -261,7 +264,7 @@ export function Canvas() {
     const id = hitTest(e.clientX, e.clientY)
     if (!id) return
     const f = findItem(useEditor.getState().project, id)
-    if (f?.item.type === 'text' && editable(f)) useEditor.setState({ selection: [id], editingTextId: id, playing: false })
+    if (f?.item.type === 'text' && editable(f) && !isReadOnly()) useEditor.setState({ selection: [id], editingTextId: id, playing: false })
     if (f?.item.type === 'caption') useEditor.setState({ selection: [id], activeRightTab: 'caption' })
   }
 
@@ -301,6 +304,7 @@ export function Canvas() {
   }, [])
 
   const onDragOver = (e: React.DragEvent) => {
+    if (isReadOnly()) return
     const p = dragPayload()
     if (!isInternalDrag(e) || !p || (p.kind !== 'asset' && p.kind !== 'text')) return
     e.preventDefault()

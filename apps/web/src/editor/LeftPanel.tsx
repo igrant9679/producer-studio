@@ -41,6 +41,7 @@ import { CaptionsPanel } from './panels/CaptionsPanel'
 import { EffectsPanel, FiltersPanel, TransitionsPanel } from './panels/FxPanels'
 import { TranscriptPanel } from './panels/TranscriptPanel'
 import { type LeftTab, useEditor } from './store'
+import { ViewOnly } from './viewer'
 import { shortDuration } from './timelineMath'
 import { libraryAssets, removeAsset, retryAsset, uploadFiles, useLibrary } from './uploads'
 import { tipProps } from '../lib/tooltip'
@@ -97,6 +98,7 @@ export function AssetPanel() {
         </button>
       </header>
       <div className={clsx('ed-panelbody', active === 'ai' && 'flush')}>
+        <ViewOnly inline>
         {active === 'media' && <MediaPanel />}
         {active === 'audio' && <AudioPanel />}
         {active === 'text' && <TextPanel />}
@@ -107,6 +109,7 @@ export function AssetPanel() {
         {active === 'filters' && <FiltersPanel />}
         {active === 'brand' && <BrandPanel />}
         {active === 'ai' && <AssistantPanel />}
+        </ViewOnly>
       </div>
     </aside>
   )

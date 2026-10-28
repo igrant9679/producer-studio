@@ -12,6 +12,7 @@ import * as A from './actions'
 import { Menu, MenuItem } from './controls'
 import { flush } from './persistence'
 import { PROJECT_NAME_MAX, redoLabel, undoLabel, useEditor } from './store'
+import { useEditorGate, ViewOnlyBadge } from './viewer'
 
 export function TopBar() {
   const nav = useNavigate()
@@ -22,6 +23,7 @@ export function TopBar() {
   const uLabel = useEditor(undoLabel)
   const rLabel = useEditor(redoLabel)
   const tool = useEditor((s) => s.canvasTool)
+  const gate = useEditorGate()
   const [draft, setDraft] = useState(name)
   useEffect(() => setDraft(name), [name])
 
@@ -74,14 +76,17 @@ export function TopBar() {
           spellCheck={false}
           maxLength={PROJECT_NAME_MAX}
           aria-label="Project name"
+          readOnly={!gate.canEdit}
+          data-tip={gate.tip}
         />
         <SaveStatus demo={demo} />
+        <ViewOnlyBadge />
       </div>
       <div className="row ed-top-c">
-        <button className="ed-tbtn" {...tipProps(canUndo ? `Undo ${uLabel}` : 'Nothing to undo', undefined, 'Ctrl+Z')} disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
+        <button className="ed-tbtn" {...tipProps(canUndo ? `Undo ${uLabel}` : 'Nothing to undo', undefined, 'Ctrl+Z')} {...gate.props} disabled={!canUndo || !gate.canEdit} onClick={() => useEditor.getState().undo()}>
           <Undo2 size={16} />
         </button>
-        <button className="ed-tbtn" {...tipProps(canRedo ? `Redo ${rLabel}` : 'Nothing to redo', undefined, 'Ctrl+Shift+Z')} disabled={!canRedo} onClick={() => useEditor.getState().redo()}>
+        <button className="ed-tbtn" {...tipProps(canRedo ? `Redo ${rLabel}` : 'Nothing to redo', undefined, 'Ctrl+Shift+Z')} {...gate.props} disabled={!canRedo || !gate.canEdit} onClick={() => useEditor.getState().redo()}>
           <Redo2 size={16} />
         </button>
         <div className="ed-tsep" />
@@ -101,10 +106,10 @@ export function TopBar() {
         <button className="ed-tbtn" {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
           <Keyboard size={16} />
         </button>
-        <button className="btn sm" onClick={share} {...tipProps('Share', 'Create a review link to this project that you can send to others.')}>
+        <button className="btn sm" onClick={share} {...tipProps('Share', 'Create a review link to this project that you can send to others.')} {...gate.props}>
           <Share2 size={14} /> Share
         </button>
-        <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the video or a part of it (MP4, WebM or GIF, 720p to 4K), or just its sound (MP3, WAV). It renders in the background while you keep working.')}>
+        <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the video or a part of it (MP4, WebM or GIF, 720p to 4K), or just its sound (MP3, WAV). It renders in the background while you keep working.')} {...gate.props}>
           <Upload size={14} /> Export
         </button>
       </div>
@@ -220,9 +225,10 @@ function RatioMenu() {
   const h = useEditor((s) => s.project.height)
   const [open, setOpen] = useState(false)
   const cur = ASPECT_RATIOS.find((a) => Math.abs(a.width / a.height - w / h) < 0.001)
+  const gate = useEditorGate()
   return (
     <div className="ed-dd">
-      <button className="ed-ddbtn" onClick={() => setOpen(!open)} {...tipProps('Aspect ratio', 'The shape of the video: 16:9 for YouTube, 9:16 for TikTok, Reels and Shorts, 1:1 for Instagram posts.')}>
+      <button className="ed-ddbtn" onClick={() => setOpen(!open)} {...tipProps('Aspect ratio', 'The shape of the video: 16:9 for YouTube, 9:16 for TikTok, Reels and Shorts, 1:1 for Instagram posts.')} {...gate.props}>
         <span className="ed-ratioicon" style={{ aspectRatio: `${w}/${h}` }} />
         {cur?.name ?? `${w}×${h}`} <ChevronDown size={13} />
       </button>

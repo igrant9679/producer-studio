@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import { api, subscribeEvents } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import { useEditor } from './store'
+import { refuseReadOnly } from './viewer'
 
 export interface UploadRow {
   key: string
@@ -183,6 +184,7 @@ async function probeLocal(file: File, kind: Asset['kind']): Promise<Asset> {
 
 /** Upload files to the library. `onUploaded` hears of each clip once the server has it (still processing, maybe). */
 export async function uploadFiles(files: File[] | FileList, opts: { onUploaded?: (assetId: string, file: File) => void } = {}) {
+  if (refuseReadOnly()) return
   const list = Array.from(files)
   const s = useEditor.getState()
   for (const file of list) {
