@@ -3,7 +3,7 @@
 // playhead scrub, keyframe diamonds, transition markers, context menu and drops from the asset panels.
 import type { Asset, Item, Project, Track, TransitionType, VideoItem, VisualItem } from '@producer/core'
 import {
-
+  ADJUSTMENT_EFFECTS,
   FILTERS,
   TRANSITIONS,
   acceptsItem,
@@ -60,6 +60,7 @@ import {
   Unlink,
   Diamond,
   X,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
@@ -81,6 +82,7 @@ import { fitTimeline, registerTimelineFit } from './timelineView'
 import { InOutBand, TransportControls } from './TransportControls'
 import { ClipMediaMenuItems, canDropReplace, replaceMedia } from './clipMedia'
 import { peakBetween, useWaveformPeaks } from './waveform'
+import { openPasteAttributes } from './PasteAttributes'
 import {
   HEADER_W,
   RULER_H,
@@ -1121,7 +1123,7 @@ interface ClipProps {
   events: ClipEvents
 }
 
-const TYPE_NAME: Record<Item['type'], string> = { video: 'Video', image: 'Image', audio: 'Audio', text: 'Text', caption: 'Caption', shape: 'Shape' }
+const TYPE_NAME: Record<Item['type'], string> = { video: 'Video', image: 'Image', audio: 'Audio', text: 'Text', caption: 'Caption', shape: 'Shape', adjustment: 'Adjustment layer' }
 
 const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMain, zoom, height, dragging, tabStop, adjacent, linked, visFrom, visTo, events }: ClipProps) {
   const selected = useEditor((s) => s.selection.includes(item.id))
@@ -1143,7 +1145,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
   const [dropOn, setDropOn] = useState(false)
   const label =
     item.type === 'text' ? item.text : item.type === 'caption' ? item.text : item.name ?? asset?.name ?? item.type
-  const Icon = item.type === 'video' ? Film : item.type === 'image' ? ImageIcon : item.type === 'audio' ? AudioLines : item.type === 'text' ? Type : item.type === 'shape' ? Shapes : Subtitles
+  const Icon = item.type === 'video' ? Film : item.type === 'image' ? ImageIcon : item.type === 'audio' ? AudioLines : item.type === 'text' ? Type : item.type === 'shape' ? Shapes : item.type === 'adjustment' ? SlidersHorizontal : Subtitles
   const kfTimes = useMemo(() => {
     if (!('keyframes' in item) || !item.keyframes) return []
     const s = new Set<number>()
@@ -1160,7 +1162,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
     if (!p || !isInternalDrag(e)) return
     const visual = item.type === 'video' || item.type === 'image' || item.type === 'text' || item.type === 'shape'
     // Alt+drop of library media onto a clip replaces the clip's media (E-10)
-    if ((p.kind === 'effect' && visual) || (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) || (p.kind === 'transition' && visual) || (p.kind === 'asset' && e.altKey && canDropReplace(item.id, p.asset))) {
+    if ((p.kind === 'effect' && (visual || (item.type === 'adjustment' && (ADJUSTMENT_EFFECTS as readonly string[]).includes(p.type)))) || (p.kind === 'filter' && (item.type === 'video' || item.type === 'image' || item.type === 'adjustment')) || (p.kind === 'transition' && visual) || (p.kind === 'asset' && e.altKey && canDropReplace(item.id, p.asset))) {
       e.preventDefault()
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
@@ -1176,8 +1178,8 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
     const s = useEditor.getState()
     if (p.kind === 'effect' && 'effects' in item) {
       s.commit(updateItem<VisualItem>(s.project, item.id, { effects: [...item.effects, { id: uid('fx'), type: p.type as never, intensity: 60 }] }), 'Add effect', { selection: [item.id] })
-      s.set({ activeRightTab: 'basic' })
-    } else if (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) {
+      s.set({ activeRightTab: item.type === 'adjustment' ? 'layer' : 'basic' })
+    } else if (p.kind === 'filter' && (item.type === 'video' || item.type === 'image' || item.type === 'adjustment')) {
       s.commit(updateItem<VideoItem>(s.project, item.id, { filter: { id: p.id, intensity: 80 } }), 'Apply filter', { selection: [item.id] })
     } else if (p.kind === 'asset' && e.altKey) {
       replaceMedia(item.id, p.asset)
@@ -1355,6 +1357,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
           <MenuItem icon={<Copy size={14} />} label="Copy" kbd="Ctrl C" onClick={run(A.copy)} />
           <MenuItem icon={<Scissors size={14} />} label="Cut" kbd="Ctrl X" onClick={run(A.cut)} />
           <MenuItem icon={<ClipboardPaste size={14} />} label="Paste" kbd="Ctrl V" onClick={run(A.paste)} disabled={!clipboard.length} />
+          <MenuItem icon={<ClipboardPaste size={14} />} label="Paste attributes…" kbd="Ctrl Alt V" onClick={run(openPasteAttributes)} disabled={!clipboard.length} />
           <MenuItem icon={<CopyPlus size={14} />} label="Duplicate" kbd="Ctrl D" onClick={run(A.duplicate)} />
           <div className="ed-menu-sep" />
           {(selection.length > 1 || it.linkId) && (

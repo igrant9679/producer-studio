@@ -1,13 +1,14 @@
 // Effects, Transitions and Filters panels. Each card previews on a sample frame with a CSS approximation.
-import type { EffectType, TransitionType, VideoItem, VisualItem } from '@producer/core'
-import { EFFECTS, FILTERS, NEUTRAL_ADJUST, TRANSITIONS, adjustToFilter, findItem, uid, updateItem } from '@producer/core'
+import type { EffectType, Item, TransitionType, VideoItem, VisualItem } from '@producer/core'
+import { ADJUSTMENT_EFFECTS, EFFECTS, FILTERS, NEUTRAL_ADJUST, TRANSITIONS, adjustToFilter, findItem, uid, updateItem } from '@producer/core'
 import clsx from 'clsx'
-import { X } from 'lucide-react'
+import { SlidersHorizontal, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from '../../lib/toast'
 import { tipProps } from '../../lib/tooltip'
 import * as A from '../actions'
 import { Slider } from '../controls'
+import { addAdjustment } from '../colourActions'
 import { endDrag, startDrag, thumbUrl } from '../media'
 import { useEditor } from '../store'
 
@@ -28,18 +29,28 @@ function Sample({ src, style, className }: { src?: string; style?: React.CSSProp
 
 const cats = <T extends { category: string }>(list: T[]) => [...new Set(list.map((x) => x.category))]
 
+/** Adds an adjustment layer: the colour, filter and effects put on it apply to everything beneath it. */
+function AdjustmentLayerButton() {
+  return (
+    <button type="button" className="btn sm ed-adjlayer" onClick={addAdjustment} {...tipProps('Add adjustment layer', 'A layer above every track: the colour, filter and effects you give it apply to everything beneath it, over the selected clips (or from the playhead).')}>
+      <SlidersHorizontal size={13} /> Add adjustment layer
+    </button>
+  )
+}
+
 // ---------- effects ----------
 
 export function EffectsPanel() {
   const [a] = useSampleFrames()
   const selection = useEditor((s) => s.selection)
   const project = useEditor((s) => s.project)
+  // an adjustment layer takes only the effects that change the colour or the look
   const targets = A.selectedItems(project, selection).filter((i): i is VisualItem => 'effects' in i)
   const primary = targets[targets.length - 1]
   const apply = (type: EffectType) => {
     if (!targets.length) return toast('Select a clip, then pick an effect (or drag it onto a clip)')
     let p = project
-    for (const t of targets) p = updateItem<VisualItem>(p, t.id, { effects: [...t.effects.filter((e) => e.type !== type), { id: uid('fx'), type, intensity: 60 }] })
+    for (const t of targets) if ((t as Item).type !== 'adjustment' || (ADJUSTMENT_EFFECTS as readonly string[]).includes(type)) p = updateItem<VisualItem>(p, t.id, { effects: [...t.effects.filter((e) => e.type !== type), { id: uid('fx'), type, intensity: 60 }] })
     useEditor.getState().commit(p, 'Add effect')
   }
   return (
@@ -69,6 +80,7 @@ export function EffectsPanel() {
           ))}
         </div>
       )}
+      <AdjustmentLayerButton />
       {cats(EFFECTS).map((c) => (
         <div key={c} className="ed-group">
           <div className="eyebrow">{c}</div>
@@ -167,10 +179,10 @@ export function FiltersPanel() {
   const [a] = useSampleFrames()
   const selection = useEditor((s) => s.selection)
   const project = useEditor((s) => s.project)
-  const targets = A.selectedItems(project, selection).filter((i): i is VideoItem => i.type === 'video' || i.type === 'image')
+  const targets = A.selectedItems(project, selection).filter((i): i is VideoItem => i.type === 'video' || i.type === 'image' || i.type === 'adjustment')
   const primary = targets[targets.length - 1]
   const apply = (id: string | null) => {
-    if (!targets.length) return toast('Select a video or image clip, then pick a filter (or drag it onto a clip)')
+    if (!targets.length) return toast('Select a video or image clip or an adjustment layer, then pick a filter (or drag it onto a clip)')
     let p = project
     for (const t of targets) p = updateItem<VideoItem>(p, t.id, { filter: id ? { id, intensity: t.filter?.intensity ?? 80 } : undefined })
     useEditor.getState().commit(p, id ? 'Apply filter' : 'Remove filter')
@@ -194,6 +206,7 @@ export function FiltersPanel() {
           />
         </div>
       )}
+      <AdjustmentLayerButton />
       <div className="ed-grid3" style={{ marginBottom: 12 }}>
         <button className={clsx('ed-fxcard', primary && !primary.filter && 'on')} onClick={() => apply(null)}>
           <div className="fx-prev"><Sample src={a} /></div>

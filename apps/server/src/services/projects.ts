@@ -10,7 +10,7 @@ import { keepBefore, recordVersion } from './versions'
 
 export type ProjectRow = typeof projects.$inferSelect
 
-const ItemShape = z.looseObject({ id: z.string().min(1), type: z.enum(['video', 'image', 'audio', 'text', 'caption', 'shape']), start: z.number().min(0), duration: z.number().positive() })
+const ItemShape = z.looseObject({ id: z.string().min(1), type: z.enum(['video', 'image', 'audio', 'text', 'caption', 'shape', 'adjustment']), start: z.number().min(0), duration: z.number().positive() })
 const TrackShape = z.looseObject({ id: z.string().min(1), kind: z.enum(['video', 'overlay', 'text', 'audio', 'caption']), name: z.string(), items: z.array(ItemShape) })
 export const ProjectShape = z.looseObject({
   id: z.string().min(1),

@@ -1,13 +1,12 @@
 // Frame evaluation: project + time -> positioned layers and audio levels. Renderer-agnostic and deterministic
 // (no clocks, seeded noise), so the browser preview and the HyperFrames export produce identical frames.
 import { frameAudio } from './audio'
-import { FILTERS } from './presets'
+import { adjustToFilter, adjustmentLayer, itemGrades, spreadAdjustments } from './colour'
 import { itemEnd } from './ops'
 import { textGradientCss, textMarkup } from './text'
 import type {
   AnimationSpec,
   CaptionItem,
-  ColorAdjust,
   FrameAudio,
   FrameLayer,
   FrameState,
@@ -189,34 +188,6 @@ function applyTransition(m: Mods, tr: Transition, p: number, side: 'out' | 'in',
       }
       break
   }
-}
-
-export function adjustToFilter(adjust: ColorAdjust | undefined, filterId?: string, intensity = 100): { filter: string; vignette: number } {
-  const a: ColorAdjust = { brightness: 0, contrast: 0, saturation: 0, exposure: 0, temperature: 0, tint: 0, hue: 0, sharpen: 0, vignette: 0, ...(adjust ?? {}) }
-  let sepia = 0
-  let gray = 0
-  if (filterId) {
-    const f = FILTERS.find((x) => x.id === filterId)
-    if (f) {
-      const k = intensity / 100
-      for (const [key, v] of Object.entries(f.adjust)) a[key as keyof ColorAdjust] += (v as number) * k
-      sepia += (f.sepia ?? 0) * k
-      gray += (f.grayscale ?? 0) * k
-    }
-  }
-  const parts: string[] = []
-  const bright = (1 + a.brightness / 200) * 2 ** (a.exposure / 100)
-  if (Math.abs(bright - 1) > 0.001) parts.push(`brightness(${bright.toFixed(3)})`)
-  const contrast = 1 + a.contrast / 100 + a.sharpen / 400
-  if (Math.abs(contrast - 1) > 0.001) parts.push(`contrast(${contrast.toFixed(3)})`)
-  const sat = 1 + a.saturation / 100
-  if (Math.abs(sat - 1) > 0.001) parts.push(`saturate(${Math.max(0, sat).toFixed(3)})`)
-  if (a.temperature > 0) sepia += a.temperature * 0.35
-  const hue = a.hue * 1.8 + (a.temperature < 0 ? a.temperature * 0.25 : 0) + a.tint * 0.4
-  if (sepia > 0) parts.push(`sepia(${clamp(sepia / 100, 0, 1).toFixed(3)})`)
-  if (gray > 0) parts.push(`grayscale(${clamp(gray / 100, 0, 1).toFixed(3)})`)
-  if (Math.abs(hue) > 0.01) parts.push(`hue-rotate(${hue.toFixed(2)}deg)`)
-  return { filter: parts.join(' '), vignette: a.vignette }
 }
 
 function naturalSize(p: Project, it: VisualItem): { w: number; h: number } {
@@ -440,6 +411,7 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
   } else if (it.type === 'shape') {
     layer.shape = it
   }
+  if (it.type === 'video' || it.type === 'image') layer.grades = itemGrades(p, it)
   return layer
 }
 
@@ -456,9 +428,13 @@ export function evaluate(p: Project, t: number): FrameState {
       if (!track.hidden && (it.type === 'video' || it.type === 'image' || it.type === 'text' || it.type === 'shape')) {
         const l = visualLayer(p, track, a, z++, t)
         if (l && l.opacity > 0.001) layers.push(l)
+      } else if (!track.hidden && it.type === 'adjustment') {
+        const l = adjustmentLayer(p, track, it, a.local, z++, t)
+        if (l) layers.push(l)
       }
     }
   }
+  spreadAdjustments(layers)
   for (const track of captions) {
     if (track.hidden || !track.captionStyle) continue
     const cs = track.captionStyle

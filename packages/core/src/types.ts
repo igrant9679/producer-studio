@@ -116,6 +116,43 @@ export interface ColorAdjust {
   vignette: number
 }
 
+/** The eight hue ranges an HSL adjustment works on (as in Lightroom). */
+export type HueRange = 'red' | 'orange' | 'yellow' | 'green' | 'aqua' | 'blue' | 'purple' | 'magenta'
+
+/** Hue shift, saturation and lightness for one hue range, each -100..100 (0 = neutral; hue ±100 = ±30°). */
+export interface HslShift {
+  h: number
+  s: number
+  l: number
+}
+
+/** A tone curve: points (input, output) in 0..1, sorted by input; absent or fewer than two points = straight. */
+export type CurvePoints = Array<[number, number]>
+
+/** Curves applied after the master curve: each channel's curve takes the master's output. */
+export interface Curves {
+  master?: CurvePoints
+  r?: CurvePoints
+  g?: CurvePoints
+  b?: CurvePoints
+}
+
+/** Pixel colour grading (curves, then HSL, then a LUT), drawn the same in the preview and the export. */
+export interface Grade {
+  curves?: Curves
+  hsl?: Partial<Record<HueRange, HslShift>>
+  /** A LUT from `project.luts`, mixed in at `intensity` 0..100. */
+  lut?: { id: Id; intensity: number }
+}
+
+/** A 3D LUT loaded from a .cube file: `size`³ RGB entries, red fastest, as bytes in base64. */
+export interface Lut {
+  id: Id
+  name: string
+  size: number
+  data: string
+}
+
 export interface Crop {
   /** Fractions 0..1 of the source frame. */
   left: number
@@ -244,6 +281,7 @@ export interface VideoItem extends ItemBase, VisualProps {
   /** If set, holds this source time for the whole item (freeze frame). */
   freezeAt?: number
   reverse?: boolean
+  grade?: Grade
 }
 
 export interface ImageItem extends ItemBase, VisualProps {
@@ -254,6 +292,21 @@ export interface ImageItem extends ItemBase, VisualProps {
   crop?: Crop
   fit: 'contain' | 'cover'
   background?: BackgroundFill
+  grade?: Grade
+}
+
+/**
+ * An adjustment layer on an overlay track: its colour, filter and colour effects apply to everything beneath it for
+ * its duration (its curves, HSL and LUT to the clips and images beneath); `opacity` (keyframable) is how strongly.
+ */
+export interface AdjustmentItem extends ItemBase {
+  type: 'adjustment'
+  opacity: number
+  keyframes: Keyframes
+  adjust: ColorAdjust
+  filter?: { id: string; intensity: number }
+  grade?: Grade
+  effects: Effect[]
 }
 
 export interface AudioItem extends ItemBase {
@@ -333,7 +386,7 @@ export interface ShapeItem extends ItemBase, VisualProps {
 }
 
 export type VisualItem = VideoItem | ImageItem | TextItem | ShapeItem
-export type Item = VideoItem | ImageItem | AudioItem | TextItem | CaptionItem | ShapeItem
+export type Item = VideoItem | ImageItem | AudioItem | TextItem | CaptionItem | ShapeItem | AdjustmentItem
 export type ItemType = Item['type']
 
 export type TrackKind = 'video' | 'overlay' | 'text' | 'audio' | 'caption'
@@ -407,6 +460,8 @@ export interface Project {
   ai?: ProducerMeta
   /** The transcript's filler words and phrases ("um", "you know"); `on` ones are marked and removed. Absent: the defaults. */
   fillerWords?: Array<{ w: string; on: boolean }>
+  /** LUTs loaded into this project (.cube files), by id. */
+  luts?: Record<Id, Lut>
   createdAt: number
   updatedAt: number
 }
@@ -485,7 +540,7 @@ export interface ProducerMeta {
 export interface FrameLayer {
   itemId: Id
   trackId: Id
-  type: 'video' | 'image' | 'text' | 'shape' | 'caption'
+  type: 'video' | 'image' | 'text' | 'shape' | 'caption' | 'adjustment'
   assetId?: Id
   /** Source time to display (video only). */
   mediaTime?: number
@@ -504,6 +559,10 @@ export interface FrameLayer {
   /** `full`: the whole text's markup when `html` shows part of it (typewriter); a fit is measured on it. */
   text?: { html: string; style: TextStyle; full?: string }
   shape?: ShapeItem
+  /** Pixel grades drawn over the picture in order (the clip's own, then adjustment layers above it), each mixed in at `mix`. */
+  grades?: Array<{ grade: Grade; mix: number }>
+  /** Adjustment layer: the CSS filter applied to everything beneath it. */
+  backdrop?: string
   z: number
 }
 

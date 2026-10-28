@@ -87,8 +87,9 @@ function sortItems(track: Track) {
 export function acceptsItem(kind: TrackKind, type: Item['type']): boolean {
   switch (kind) {
     case 'video':
-    case 'overlay':
       return type === 'video' || type === 'image' || type === 'shape' || type === 'text'
+    case 'overlay':
+      return type === 'video' || type === 'image' || type === 'shape' || type === 'text' || type === 'adjustment'
     case 'text':
       return type === 'text' || type === 'shape'
     case 'audio':

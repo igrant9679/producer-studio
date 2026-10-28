@@ -11,6 +11,7 @@ import { flush } from './persistence'
 import { useEditor } from './store'
 import { fitTimeline } from './timelineView'
 import { transportKey } from './transport'
+import { openPasteAttributes } from './PasteAttributes'
 
 const NOT_TEXT = new Set(['range', 'checkbox', 'radio', 'color', 'button', 'submit', 'reset', 'file', 'image'])
 const CONTROL = 'button, a[href], input, summary, [role="button"], [role="checkbox"], [role="switch"], [role="slider"], [role="tab"], [role="menuitem"], [role="option"], [role="radio"]'
@@ -73,6 +74,7 @@ export function handleKey(e: KeyboardEvent) {
   if (mod && lower === 'b') return done(), A.split()
   if (mod && lower === 'c') return done(), A.copy()
   if (mod && lower === 'x') return done(), A.cut()
+  if (mod && e.altKey && lower === 'v') return done(), openPasteAttributes()
   if (mod && lower === 'v') return done(), A.paste()
   if (mod && lower === 'd') return done(), A.duplicate()
   if (mod && lower === 'a') return done(), A.selectAll()
