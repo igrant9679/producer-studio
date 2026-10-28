@@ -20,6 +20,7 @@ import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAss
 import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { buildFontFaces, fontsUsed } from './fonts'
 import { normalizeLoudness } from './loudness'
+import { makePitchShiftCopies } from './pitch'
 
 const require = createRequire(import.meta.url)
 
@@ -52,12 +53,15 @@ export function hyperframesCli(): string {
   return path.join(dir, bin)
 }
 
-function assetIdsUsed(p: Project): string[] {
+function assetIdsUsed(project: Project): string[] {
+  const p = project
   const ids = new Set<string>()
   for (const t of p.tracks)
     for (const it of t.items) {
       if (it.type === 'video' || it.type === 'image' || it.type === 'audio') ids.add(it.assetId)
       if ((it.type === 'video' || it.type === 'image') && it.background?.type === 'image') ids.add(it.background.assetId)
+      // a smooth slow-motion copy the clip's picture plays from (E-17)
+      if (it.type === 'video' && it.smooth?.assetId && project.assets[it.smooth.assetId]) ids.add(it.smooth.assetId)
     }
   return [...ids]
 }
@@ -192,6 +196,9 @@ export async function prepareRenderDir(
         files.push(out)
       }
     }
+  // sound whose pitch follows its speed (E-17)
+  const pitch = await makePitchShiftCopies(project, localFiles, dir, opts.signal)
+  files.push(...pitch.values())
   fs.writeFileSync(path.join(dir, 'runtime.js'), await runtimeBundle())
   fs.copyFileSync(gsapPath(), path.join(dir, 'gsap.min.js'))
   files.push('runtime.js', 'gsap.min.js')
@@ -202,6 +209,7 @@ export async function prepareRenderDir(
     freezeFramePath: (id) => freeze.get(id),
     reversedPath: (id) => reversed.get(id),
     holdFramePath: (id) => holds.get(id),
+    pitchShiftPath: (id) => pitch.get(id),
     runtimePath: 'runtime.js',
     gsapPath: 'gsap.min.js',
     fontFaceCss: fonts.css,

@@ -385,7 +385,9 @@ export function smoothSource(p: Project, it: Item): { assetId: string; from: num
   const a = p.assets[it.smooth.assetId]
   if (!a || a.kind !== 'video') return null
   const r = sourceRange(it)
-  return r.start >= it.smooth.from - 1e-3 && r.end <= it.smooth.to + 1e-3 ? { assetId: it.smooth.assetId, from: it.smooth.from } : null
+  // the copy can stop a frame of the file short of its end (no frame after the last to make frames towards)
+  const frame = 1 / (p.assets[it.assetId]?.fps ?? 30)
+  return r.start >= it.smooth.from - 1e-3 && r.end <= it.smooth.to + frame + 1e-3 ? { assetId: it.smooth.assetId, from: it.smooth.from } : null
 }
 
 /** Where a clip's smooth copy stands: none, being made, in use, or made for a range the clip no longer fits in. */
@@ -404,15 +406,16 @@ export function setSmoothJob(p0: Project, itemId: string, s: Pick<SmoothCopy, 'f
 
 /**
  * The smooth copy is made: the clip (and every piece split from it since, which carries the same job) plays its
- * picture from `asset`. Its sound stays the source's.
+ * picture from `asset`, which covers source `from` to `to` (where the job says the copy really ends). Its sound stays
+ * the source's.
  */
-export function applySmoothCopy(p0: Project, jobId: string, asset: Asset): Project {
+export function applySmoothCopy(p0: Project, jobId: string, asset: Asset, to?: number): Project {
   const p = clone(p0)
   let used = false
   for (const t of p.tracks)
     for (const it of t.items)
       if (it.type === 'video' && it.smooth?.jobId === jobId) {
-        it.smooth = { from: it.smooth.from, to: it.smooth.to, fps: it.smooth.fps, assetId: asset.id }
+        it.smooth = { from: it.smooth.from, to: to ?? it.smooth.to, fps: it.smooth.fps, assetId: asset.id }
         used = true
       }
   if (!used) return p0

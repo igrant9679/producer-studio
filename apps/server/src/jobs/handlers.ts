@@ -3,6 +3,7 @@ import { produceAssemble, produceScript } from '../ai/produce'
 import { synthesizeToAsset, transcribeAsset } from '../ai/speech'
 import { processAsset } from '../media/process'
 import { detectScenes } from '../media/scenes'
+import { makeSmoothCopy } from '../media/smooth'
 import { assetRecord } from '../dto'
 import { exportRender } from '../render/export'
 import { failAsset, reopenAsset } from '../services/asset-recovery'
@@ -41,4 +42,5 @@ export function registerHandlers() {
   registerHandler('ai.produce.assemble', produceAssemble)
   registerHandler('export.render', exportRender)
   registerHandler('media.scenes', detectScenes)
+  registerHandler('media.smooth', makeSmoothCopy)
 }
