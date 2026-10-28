@@ -68,10 +68,11 @@ import { FreezeButton } from './FreezeMenu'
 import { HistoryButton } from './HistoryPanel'
 import { addMarkerAtPlayhead, clearBeatMarkers, detectBeatsOn } from './markerActions'
 import { MarkerFlags, MarkerLines } from './Markers'
-import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
+import { dragPayload, filmstripUrl, isFileDrag, isInternalDrag, thumbUrl } from './media'
 import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
+import { placeAsset, placementFor, uploadToTimeline } from './timelineDrop'
 import { fitTimeline, registerTimelineFit } from './timelineView'
 import { peakBetween, useWaveformPeaks } from './waveform'
 import {
@@ -633,8 +634,17 @@ function TimelineBody() {
     [],
   )
 
-  // ---------- drops from panels ----------
+  // ---------- drops from panels and from the desktop ----------
   const onDragOver = (e: React.DragEvent) => {
+    if (isFileDrag(e) && !isInternalDrag(e)) {
+      // files from the desktop: they land here once uploaded
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      const { x, y } = toContent(e.clientX, e.clientY)
+      const target = dropTargetAt(y, rows)
+      if (target) setDropHint({ x: Math.max(0, x), target, w: 5 * zoom })
+      return
+    }
     const p = dragPayload()
     if (!isInternalDrag(e) || !p || (p.kind !== 'asset' && p.kind !== 'text')) return
     e.preventDefault()
@@ -649,6 +659,16 @@ function TimelineBody() {
     const p = dragPayload()
     const hint = dropHint
     setDropHint(null)
+    if (isFileDrag(e) && !isInternalDrag(e)) {
+      const files = Array.from(e.dataTransfer.files ?? [])
+      if (!files.length) return
+      e.preventDefault()
+      const { x, y } = toContent(e.clientX, e.clientY)
+      const target = hint?.target ?? dropTargetAt(y, rows)
+      const mainIdx = useEditor.getState().project.tracks.findIndex((tr) => tr.main)
+      void uploadToTimeline(files, Math.max(0, x / zoom), (kind) => placementFor(kind, target, rows, mainIdx))
+      return
+    }
     if (!p || (p.kind !== 'asset' && p.kind !== 'text')) return
     e.preventDefault()
     const { x, y } = toContent(e.clientX, e.clientY)
@@ -666,15 +686,7 @@ function TimelineBody() {
       return
     }
     const asset: Asset = p.asset
-    const type = asset.kind === 'audio' ? 'audio' : asset.kind
-    if (target?.type === 'row' && acceptsItem(target.row.track.kind, type) && !target.row.track.locked) {
-      A.addAssetAt(asset, t, { trackId: target.row.track.id })
-    } else if (target && asset.kind !== 'audio') {
-      // new overlay track at the gap (or directly above a row that can't hold video/images)
-      const mainIdx = s.project.tracks.findIndex((tr) => tr.main)
-      const above = target.type === 'gap' ? gapToAboveIndex(target.gap, rows, mainIdx) : Math.max(mainIdx, target.row.index)
-      A.addAssetAt(asset, t, { overlay: { above } })
-    } else A.addAssetAt(asset, t)
+    placeAsset(asset, t, placementFor(asset.kind, target, rows, s.project.tracks.findIndex((tr) => tr.main)))
   }
 
   const primaryRowOf = (id: string) => rows.find((r) => r.track.items.some((i) => i.id === id))

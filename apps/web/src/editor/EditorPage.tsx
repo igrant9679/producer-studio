@@ -142,10 +142,12 @@ function EditorShell() {
     }
     const drop = (e: DragEvent) => {
       if (!isFileDrag(e)) return
+      // the timeline took the drop: it uploads the files and puts them where they were dropped
+      const taken = e.defaultPrevented
       e.preventDefault()
       depth = 0
       setFileDrag(false)
-      if (e.dataTransfer?.files.length) {
+      if (!taken && e.dataTransfer?.files.length) {
         useEditor.setState({ activeLeftTab: 'media', leftCollapsed: false })
         void uploadFiles(e.dataTransfer.files).catch(toastError)
       }
@@ -195,7 +197,7 @@ function EditorShell() {
           <div>
             <Upload size={28} />
             <b>Drop to upload</b>
-            <span>Video, audio and images are added to your media library</span>
+            <span>Video, audio and images are added to your media library; drop on the timeline to place them there too</span>
           </div>
         </div>
       )}
