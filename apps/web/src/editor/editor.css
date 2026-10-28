@@ -720,3 +720,18 @@
 .tl-inout .in, .tl-inout .out { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--cyan); }
 .tl-inout .in { left: 0; }
 .tl-inout .out { right: 0; }
+
+/* export options (E-5) and the draft preview (E-23) */
+.ed-export-dialog { max-width: 940px; max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.ed-export-dialog .ed-export { overflow: auto; min-height: 0; }
+.ed-cover-pick { display: flex; gap: 10px; align-items: flex-start; }
+.ed-cover { position: relative; flex: none; overflow: hidden; border-radius: 6px; border: 1px solid var(--border); background: #000; }
+.ed-cover-stage { position: absolute; left: 0; top: 0; overflow: hidden; transform-origin: 0 0; }
+.ed-cover-ctl { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.ed-cover-t { font-size: 0.75rem; color: var(--text-2); min-width: 64px; }
+.ed-draft { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); display: grid; gap: 6px; }
+.ed-draft-player { width: 100%; max-height: 240px; border-radius: 8px; background: #000; }
+@media (max-width: 760px) {
+  .ed-export { grid-template-columns: 1fr; }
+  .ed-export-form { border-right: 0; border-bottom: 1px solid var(--border); }
+}

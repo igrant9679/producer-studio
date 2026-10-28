@@ -33,7 +33,21 @@ function Toasts() {
   return (
     <div className="toast-host" role="status" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.kind === 'error' ? 'error' : ''}`}>{t.text}</div>
+        <div key={t.id} className={`toast ${t.kind === 'error' ? 'error' : ''}`}>
+          {t.text}
+          {t.action && (
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => {
+                useToasts.getState().dismiss(t.id)
+                t.action!.run()
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
+        </div>
       ))}
     </div>
   )

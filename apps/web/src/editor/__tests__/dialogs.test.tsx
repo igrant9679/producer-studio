@@ -4,6 +4,7 @@ import { createProject, type Asset, type AssetRecord, type ExportResult, type Jo
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
 import { ExportDialog } from '../Dialogs'
+import { useExports } from '../exportJobs'
 import { VoiceoverBox } from '../LeftPanel'
 import { useEditor } from '../store'
 
@@ -19,19 +20,27 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('the export dialog (EDT-36)', { timeout: 20_000 }, () => {
-  it('Escape does not close it while the video renders', async () => {
+describe('the export dialog (EDT-36, E-5)', { timeout: 20_000 }, () => {
+  // EDT-36 kept the dialog open mid-render so the progress wasn't lost; since E-5 the export carries on in the
+  // background, so closing it loses nothing and opening it again shows the same render
+  it('Escape closes it while the video renders, and the render carries on', async () => {
     const running = { id: 'j1', kind: 'export.render', status: 'running', progress: 0.3, message: 'Rendering' } as unknown as Job<ExportResult>
     vi.spyOn(api, 'exportProject').mockResolvedValue(running as never)
     vi.spyOn(api, 'job').mockResolvedValue(running as never)
     S().set({ exportOpen: true })
-    render(<ExportDialog />)
+    const view = render(<ExportDialog />)
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Export$/ }))
       await new Promise((r) => setTimeout(r, 10))
     })
     fireEvent.keyDown(window, { key: 'Escape' })
-    expect(S().exportOpen).toBe(true)
+    expect(S().exportOpen).toBe(false)
+    view.unmount()
+    render(<ExportDialog />)
+    expect(screen.getByText('Rendering')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Keep working' })).toBeTruthy()
+    // stop following it, so it doesn't poll into the next test
+    useExports.setState({ byProject: {} })
   })
 })
 

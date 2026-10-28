@@ -4,6 +4,7 @@ import { createProject, updateProject, type ExportResult, type Job } from '@prod
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpError, api } from '../../lib/api'
 import { ExportDialog } from '../Dialogs'
+import { useExports } from '../exportJobs'
 import { flush } from '../persistence'
 import { useEditor } from '../store'
 
@@ -13,6 +14,8 @@ const doneJob = { id: 'j1', kind: 'export.render', status: 'done', progress: 1, 
 
 beforeEach(() => {
   S().load({ project: createProject({ id: 'p1', name: 'On screen' }), version: 3, projectId: 'p1', demo: false, workspaceId: 'w1' })
+  // exports carry on in the background: each test starts with none
+  useExports.setState({ byProject: {} })
   vi.spyOn(api, 'exports').mockResolvedValue([])
   vi.spyOn(api, 'job').mockResolvedValue(doneJob as never)
 })
