@@ -6,6 +6,7 @@ import { useEffect } from 'react'
 import * as A from './actions'
 import { flush } from './persistence'
 import { useEditor } from './store'
+import { transportKey } from './transport'
 
 const NOT_TEXT = new Set(['range', 'checkbox', 'radio', 'color', 'button', 'submit', 'reset', 'file', 'image'])
 const CONTROL = 'button, a[href], input, summary, [role="button"], [role="checkbox"], [role="switch"], [role="slider"], [role="tab"], [role="menuitem"], [role="option"], [role="radio"]'
@@ -91,6 +92,7 @@ export function handleKey(e: KeyboardEvent) {
   if (e.shiftKey && (k === ')' || k === '0')) return done(), s.set({ canvasZoom: 0.5 })
   if (e.shiftKey && (k === '!' || k === '1')) return done(), s.set({ canvasZoom: 1 })
   if (e.shiftKey && (k === '@' || k === '2')) return done(), s.set({ canvasZoom: 2 })
+  if (transportKey(e)) return done()
   if (e.shiftKey || e.altKey) return
   if (lower === 's') return done(), s.set({ snapping: !s.snapping })
   if (lower === 'v') return done(), s.set({ canvasTool: 'select' })

@@ -709,3 +709,14 @@
 :root[data-theme='light'] .cv-toolbar { border-color: var(--border); }
 :root[data-theme='light'] .cv-toolbar > button:hover { background: var(--surface-2); }
 .ed-dd-right .ed-menu { left: auto !important; right: 0; }
+
+/* review playback (E-8): in/out, loop, speed and quality beside the play button; the in-to-out band on the ruler */
+.tl-tx { gap: 2px; margin-left: 6px; }
+.tl-mark { font: 600 0.75rem var(--font-mono); }
+.tl-txmenu .ed-ddbtn { height: 28px; padding: 0 8px; }
+.tl-txmenu .ed-menu { top: auto; bottom: 34px; }
+.tl-hq { font: 600 0.625rem var(--font-mono); color: var(--cyan); margin-left: 4px; }
+.tl-inout { position: absolute; top: 0; bottom: 0; background: var(--cyan-soft); pointer-events: none; }
+.tl-inout .in, .tl-inout .out { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--cyan); }
+.tl-inout .in { left: 0; }
+.tl-inout .out { right: 0; }

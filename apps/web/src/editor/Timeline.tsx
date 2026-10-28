@@ -63,6 +63,7 @@ import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
 import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
+import { InOutBand, TransportControls } from './TransportControls'
 import { peakBetween, useWaveformPeaks } from './waveform'
 import {
   HEADER_W,
@@ -805,6 +806,7 @@ function TimelineToolbar({ viewW }: { viewW: number }) {
           <span className="sep">/</span>
           <span className="total">{timecode(duration, fps)}</span>
         </div>
+        <TransportControls />
       </div>
       <div className="row tl-zoom">
         <ToolBtn icon={<ZoomOut size={15} />} title="Zoom out" desc="See more of the timeline at once." kbd="Ctrl+-" onClick={() => useEditor.getState().setZoom(zoom / 1.4)} />
@@ -863,6 +865,7 @@ const Ruler = memo(function Ruler({ width, zoom, fps, duration, onPointerDown }:
       onPointerDown={onPointerDown}
     >
       <div className="tl-ruler-end" style={{ left: duration * zoom }} title="End of project" />
+      <InOutBand zoom={zoom} />
       {labels.map((t) => (
         <span key={t} className="tl-tick" style={{ left: t * zoom }}>
           {rulerLabel(t, major, fps)}

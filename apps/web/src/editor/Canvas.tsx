@@ -8,8 +8,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import * as A from './actions'
 import { Menu, MenuItem, Slider, useThrottledPlayhead } from './controls'
 import { dragPayload, isInternalDrag, makeResolver } from './media'
-import { setMediaClock } from './playback'
+import { applyTransport, setMediaClock } from './playback'
 import { useEditor } from './store'
+import { previewVariant, useTransport } from './transport'
 
 const TRANSFORM_RE = /rotate\(([-\d.e]+)deg\) scale\(([-\d.e]+), ([-\d.e]+)\)/
 
@@ -41,6 +42,7 @@ export function Canvas() {
   const buffering = useEditor((s) => s.buffering)
   const editingTextId = useEditor((s) => s.editingTextId)
   const fullscreen = useEditor((s) => s.fullscreen)
+  const fullQuality = useTransport((t) => t.fullQuality)
   const [avail, setAvail] = useState({ w: 800, h: 450 })
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [guides, setGuides] = useState<{ v: boolean; h: boolean }>({ v: false, h: false })
@@ -71,19 +73,23 @@ export function Canvas() {
   useEffect(() => {
     const root = stageRef.current!
     const st = useEditor.getState()
+    const resolve = makeResolver(() => useEditor.getState().project)
     const r = new StageRenderer(root, st.project, {
       mode: 'preview',
-      resolveUrl: makeResolver(() => useEditor.getState().project),
+      resolveUrl: (id, kind) => resolve(id, previewVariant(kind)),
       onBuffering: (b) => useEditor.setState({ buffering: b }),
     })
+    applyTransport(r, st.playing)
     r.render(st.playhead)
     setMediaClock(() => r.mediaClock())
+    // a shuttle or preview speed change while playing
+    const unsubTransport = useTransport.subscribe((t, prev) => (t.shuttle !== prev.shuttle || t.speed !== prev.speed) && applyTransport(r, useEditor.getState().playing))
     let disposed = false
     const media = watchMediaLoading(root, setLoadingMedia, () => !disposed && r.render(useEditor.getState().playhead))
     const unsub = useEditor.subscribe((s, prev) => {
       const pc = s.project !== prev.project
       if (pc) r.setProject(s.project)
-      if (s.playing !== prev.playing) r.setPlaying(s.playing)
+      if (s.playing !== prev.playing) applyTransport(r, s.playing)
       // buffering starts or ends: the other media pause for it, or carry on
       if (pc || s.playhead !== prev.playhead || s.playing !== prev.playing || s.buffering !== prev.buffering) {
         r.render(s.playhead)
@@ -97,9 +103,11 @@ export function Canvas() {
       setMediaClock(null)
       media.stop()
       unsub()
+      unsubTransport()
       r.destroy()
     }
-  }, [])
+    // full-quality preview loads the original files: a new renderer
+  }, [fullQuality])
 
   // full-screen preview
   useEffect(() => {

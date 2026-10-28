@@ -4,6 +4,7 @@
 // subscribes to playhead changes and renders; nothing else re-renders per frame unless it subscribes to the playhead.
 import { projectDuration } from '@producer/core'
 import { useEditor } from './store'
+import { advance, playRate, rendererTransport, resetTransportFor, useTransport } from './transport'
 
 let mediaClock: (() => number | undefined) | null = null
 
@@ -29,11 +30,13 @@ export function startPlaybackClock(): () => void {
       return
     }
     const end = projectDuration(s.project)
-    let next = s.playhead + dt
-    const m = mediaClock?.()
-    if (m !== undefined && Math.abs(m - next) < 1) next += (m - next) * FOLLOW
-    if (next >= end) {
-      useEditor.setState({ playhead: end, playing: false })
+    // at the shuttle and preview speed, round the loop when it is on (E-8)
+    const step = advance(s.playhead, dt, end)
+    let next = step.t
+    const m = playRate() > 0 ? mediaClock?.() : undefined
+    if (m !== undefined && Math.abs(m - next) < 1 && Math.abs(next - s.playhead) < 1) next += (m - next) * FOLLOW
+    if (!step.playing) {
+      useEditor.setState({ playhead: step.t, playing: false })
       return
     }
     useEditor.setState({ playhead: next })
@@ -45,10 +48,21 @@ export function startPlaybackClock(): () => void {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(tick)
     }
-    if (!s.playing && prev.playing) cancelAnimationFrame(raf)
+    if (!s.playing && prev.playing) {
+      cancelAnimationFrame(raf)
+      // the next play (Space, L) starts at normal speed forward
+      if (useTransport.getState().shuttle !== 1) useTransport.setState({ shuttle: 1 })
+    }
+    if (s.session !== prev.session) resetTransportFor()
   })
   return () => {
     unsub()
     cancelAnimationFrame(raf)
   }
+}
+
+/** The canvas renderer follows the transport: its media play forward at the rate, or hold while the playhead goes back. */
+export function applyTransport(r: { setPlaying: (playing: boolean, rate?: number) => void }, playing: boolean) {
+  const t = rendererTransport(playing)
+  r.setPlaying(t.playing, t.rate)
 }
