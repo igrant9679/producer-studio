@@ -196,6 +196,17 @@ and comment.
   pages (`GET /api/workspaces/:id/activity`), shown on the shell's Activity page.
 - None of these tables sync to desktops.
 
+## Accessibility (web)
+- Shared controls carry the keyboard patterns: `shell/ui.tsx` (Modal / ConfirmDialog trap and restore focus,
+  Popover + MenuList, Tabs, RadioCards, SkipLink) and `editor/controls.tsx` (Field names what sits in it; Menu:
+  a popover keeps Tab inside, a menu closes on Tab). Build new screens from these.
+- `lib/announce.ts` is the app's one polite live region: `announce(text)` / `useAnnounceChange(text)` say a change
+  once. Don't put a percentage inside `role="status"`; announce the start and the end.
+- Reduce motion (`data-reduce-motion`, the person's setting or the OS's): CSS animations stop (theme.css), hover
+  previews stay still, and `lib/motion.ts` holds any `<video autoPlay>` until Play.
+- Below 760 px the editor's side panels are sheets (`editor/phone.ts`, the phone block in editor.css).
+- `editor/__tests__/audit.test.tsx` and `shell/__tests__/audit.test.tsx` fail on any control without a name.
+
 ## Two products, one codebase
 
 | | **Producer Studio Web** | **Producer Studio Desktop** |

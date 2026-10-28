@@ -20,6 +20,10 @@
 :root .ps-qcard:focus-visible,
 :root .ps-space-card:focus-visible,
 :root .ps-voice:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+/* reduce motion: cards don't lift on hover or focus either (transitions are already off, theme.css) */
+:root[data-reduce-motion='true'] .ps-qcard:hover,
+:root[data-reduce-motion='true'] .ps-tcard:hover .ps-thumb,
+:root[data-reduce-motion='true'] .ps-tcard:focus-visible .ps-thumb { transform: none; }
 /* the editor's media cards: their Add button shows for the keyboard too, not only on hover */
 :root .ed-asset:focus-within .thumb { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
 :root .ed-asset:focus-within .add { opacity: 1; transform: none; }
