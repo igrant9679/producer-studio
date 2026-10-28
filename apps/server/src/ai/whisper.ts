@@ -15,6 +15,10 @@ interface WhisperSegment {
   text: string
   offsets: { from: number; to: number }
   tokens?: WhisperToken[]
+  /** `-di` (stereo diarization): "0", "1", or "?" when it can't tell. */
+  speaker?: string
+  /** `-tdrz` (a tinydiarize model): the next segment is another speaker's. */
+  speaker_turn_next?: boolean
 }
 
 export function whisperAvailable(): boolean {
@@ -60,7 +64,12 @@ export function whisperLanguage(requested: string | undefined, model?: string): 
 /** Map whisper.cpp `-ojf` output to the core Transcript shape. */
 export function mapWhisperJson(data: { transcription?: WhisperSegment[]; result?: { language?: string } }, language: string): Transcript {
   const segments: TranscriptSegment[] = []
+  // speakers where whisper gives them: a channel per speaker, or turns (two voices taking turns)
+  const turns = (data.transcription ?? []).some((t) => t.speaker_turn_next)
+  let turn = 0
   for (const t of data.transcription ?? []) {
+    const who = t.speaker !== undefined ? (/^\d+$/.test(t.speaker.trim()) ? `Speaker ${+t.speaker.trim() + 1}` : undefined) : turns ? `Speaker ${(turn % 2) + 1}` : undefined
+    if (t.speaker_turn_next) turn++
     const text = t.text.trim()
     if (!text || /^\[.*\]$|^\(.*\)$/.test(text)) continue
     const words: Array<{ w: string; start: number; end: number }> = []
@@ -80,7 +89,7 @@ export function mapWhisperJson(data: { transcription?: WhisperSegment[]; result?
     const clean = words
       .filter((w) => w.w && !/^[[(].*[\])]$/.test(w.w))
       .map((w) => ({ w: w.w, start: Math.round(w.start * 1000) / 1000, end: Math.round(Math.max(w.end, w.start + 0.02) * 1000) / 1000 }))
-    segments.push({ start: t.offsets.from / 1000, end: t.offsets.to / 1000, text, words: clean })
+    segments.push({ start: t.offsets.from / 1000, end: t.offsets.to / 1000, text, words: clean, ...(who ? { speaker: who } : {}) })
   }
   return { language: data.result?.language || language, engine: 'whisper.cpp', segments }
 }

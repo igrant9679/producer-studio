@@ -262,7 +262,11 @@ export interface AssetRecord {
 /** Tells one transcript from another without sending it (cheap: no hashing of what can be an hour of words). */
 export function transcriptRev(t: Transcript): string {
   const words = t.segments.reduce((n, s) => n + s.words.length, 0)
-  return `${t.language}:${t.engine}:${t.segments.length}:${words}:${t.segments[t.segments.length - 1]?.end ?? 0}`
+  const rev = `${t.language}:${t.engine}:${t.segments.length}:${words}:${t.segments[t.segments.length - 1]?.end ?? 0}`
+  // speaker labels change without changing the words (a rename): they count too
+  let spk = 0
+  for (const s of t.segments) if (s.speaker) for (let i = 0; i < s.speaker.length; i++) spk = (Math.imul(spk, 31) + s.speaker.charCodeAt(i) + Math.round(s.start * 100)) >>> 0
+  return spk ? `${rev}:${spk.toString(36)}` : rev
 }
 
 // ---- jobs ----
