@@ -1,6 +1,6 @@
 import { addAsset, addItem, createImageItem, createProject, createTextItem, deleteItems, importSrt, updateItem, updateProject, type Asset, type Project } from '@producer/core'
 import { describe, expect, it } from 'vitest'
-import { rebase } from './rebase'
+import { rebase, rebaseDetailed } from './rebase'
 
 const still: Asset = { id: 'as_still', kind: 'image', name: 'still.png', src: '/api/media/as_still/source', width: 1920, height: 1080 }
 
@@ -62,11 +62,41 @@ describe('rebase (apply a result made from an older document)', () => {
     expect(rebase(base, theirs, mine)).toBeNull()
   })
 
+  it('combines a ripple on the magnetic main track with a trim of the clip it moved (E-3)', () => {
+    const base = start()
+    // they deleted the first still (the second moves up to 0); I shortened the second
+    const theirs = deleteItems(base, ['img1'], { ripple: true })
+    const mine = updateItem(base, 'img2', { duration: 2 })
+    const out = rebase(base, theirs, mine)!
+    expect(out).not.toBeNull()
+    expect(item(out, 'img1')).toBeUndefined()
+    expect(item(out, 'img2')).toMatchObject({ start: 0, duration: 2 })
+  })
+
   it('refuses when both changed the magnetic main track (ripples collide)', () => {
     const base = start()
     const theirs = deleteItems(base, ['img1'], { ripple: true })
-    const mine = updateItem(base, 'img2', { duration: 2 })
+    const mine = updateItem(base, 'img1', { duration: 2 })
     expect(rebase(base, theirs, mine)).toBeNull()
+  })
+
+  it('merges two people changing different things about the same clip, field by field (E-3)', () => {
+    const base = start()
+    const title = item(base, 'title') as unknown as { style: Record<string, unknown> }
+    // they recoloured the title, I lengthened it and changed its font size
+    const theirs = updateItem(base, 'title', { style: { ...title.style, color: '#ff0000' } } as never)
+    const mine = updateItem(base, 'title', { duration: 3, style: { ...title.style, fontSize: 99 } } as never)
+    const out = rebase(base, theirs, mine)!
+    expect(out).not.toBeNull()
+    expect(item(out, 'title')).toMatchObject({ duration: 3, style: { color: '#ff0000', fontSize: 99 } })
+  })
+
+  it('says what overlapped when the same field changed both ways', () => {
+    const base = start()
+    const r = rebaseDetailed(base, updateItem(base, 'title', { duration: 1 }), updateItem(base, 'title', { duration: 3 }))
+    expect(r).toEqual({ conflict: expect.stringMatching(/^“.+”$|^a text$/) })
+    const bg = rebaseDetailed(base, updateProject(base, { background: '#111111' }), updateProject(base, { background: '#222222' }))
+    expect(bg).toEqual({ conflict: 'the background colour' })
   })
 
   it('keeps the media records that arrived meanwhile', () => {
