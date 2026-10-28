@@ -153,6 +153,7 @@ const BriefSchema = z.object({
   idea: z.string().max(PRODUCE_LIMITS.ideaChars).optional(),
   lengthSec: z.number().int().min(15).max(600).optional(),
   visualKinds: z.array(z.enum(['motion', 'diagram', 'image', 'stock', 'aiVideo'])).max(6).optional(),
+  brandKitId: z.string().max(80).optional(),
 })
 
 aiRoutes.post('/produce/script', async (c) => {
@@ -179,6 +180,7 @@ const SceneSchema = z.object({
   visuals: z.string().max(2000).optional(),
   visual: VisualSchema.optional(),
   voice: z.object({ assetId: z.string(), duration: z.number() }).optional(),
+  narrator: z.object({ voice: z.string().max(80).optional(), speed: z.number().min(0.5).max(2).optional() }).optional(),
 })
 
 /**
@@ -193,10 +195,16 @@ aiRoutes.put('/produce/draft', async (c) => {
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
   const brief = { ...b.brief, voice: validVoice(b.brief.voice) }
-  const saved = await saveOnLatest(row.id, (cur) => ({
-    ...cur,
-    ai: { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes: b.scenes, ...(b.scriptBrief ? { brief: b.scriptBrief } : {}) } },
-  }))
+  // the version it makes says who wrote it (the wizard's script versions list them, A-7)
+  const saved = await saveOnLatest(
+    row.id,
+    (cur) => ({
+      ...cur,
+      ai: { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes: b.scenes, ...(b.scriptBrief ? { brief: b.scriptBrief } : {}) } },
+    }),
+    5,
+    { userId: u.id },
+  )
   return c.json({ version: saved.version })
 })
 
@@ -214,7 +222,14 @@ aiRoutes.post('/produce/assemble', async (c) => {
   const u = requireUser(c)
   const b = await body(
     c,
-    z.object({ projectId: z.string().min(1), scenes: z.array(SceneSchema).min(1).max(PRODUCE_LIMITS.scenes), brief: BriefSchema.optional(), replace: z.boolean().optional(), intoCopy: z.boolean().optional() }),
+    z.object({
+      projectId: z.string().min(1),
+      scenes: z.array(SceneSchema).min(1).max(PRODUCE_LIMITS.scenes),
+      brief: BriefSchema.optional(),
+      replace: z.boolean().optional(),
+      intoCopy: z.boolean().optional(),
+      renarrate: z.array(z.string().max(20)).max(PRODUCE_LIMITS.scenes).optional(),
+    }),
   )
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
@@ -231,7 +246,9 @@ aiRoutes.post('/produce/assemble', async (c) => {
   }
   // the brief as it is on screen (voice, look, title): not the one the script was written from
   const brief = b.brief ? { ...b.brief, voice: validVoice(b.brief.voice) } : undefined
-  const input: AssembleJobInput = { projectId: target.id, scenes: b.scenes, ...(brief ? { brief } : {}), base: timelineFingerprint(target.doc) }
+  // a scene's own narrator voice is checked like the brief's
+  const scenes = b.scenes.map((s) => (s.narrator?.voice ? { ...s, narrator: { ...s.narrator, voice: validVoice(s.narrator.voice) } } : s))
+  const input: AssembleJobInput = { projectId: target.id, scenes, ...(brief ? { brief } : {}), base: timelineFingerprint(target.doc), ...(b.renarrate?.length ? { renarrate: b.renarrate } : {}) }
   const j = await enqueue('ai.produce.assemble', { ...input }, { workspaceId: row.workspaceId, userId: u.id, projectId: target.id, message: 'Assembling' })
   return c.json(jobDto(j))
 })

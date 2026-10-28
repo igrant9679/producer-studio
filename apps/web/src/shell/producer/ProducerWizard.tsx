@@ -1,4 +1,4 @@
-import { PRODUCE_LIMITS, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind } from '@producer/core'
+import { PRODUCE_LIMITS, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -81,6 +81,12 @@ import {
   uploadToWizard,
   useWizard,
 } from './wizardStore'
+import { estimateAssemble, estimateWrite, formatEstimate, remainingSeconds } from './estimates'
+import { FootagePicker } from './FootagePicker'
+import { NarratorControl, ScriptVersionsButton } from './sceneTools'
+import { brandApi } from '../../lib/brandApi'
+import { toast } from '../../lib/toast'
+import { loadSaved, useTtsDraft } from '../voicestudio/ttsDraft'
 import './producer.css'
 
 const ORDER: StepId[] = STEPS.map((s) => s.id)
@@ -347,7 +353,14 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
   // the video's own space's voices (cloned voices belong to a space)
   const voices = useVoices(s.workspaceId)
   const [vf, setVf] = useState<VoiceFilter>('All')
-  const shown = filterVoices(voices, vf)
+  // the voices starred in Voice Studio for this space
+  const favourites = useTtsDraft((st) => (s.workspaceId ? st.favourites[s.workspaceId] : undefined))
+  useEffect(() => {
+    if (s.workspaceId) void loadSaved(s.workspaceId)
+  }, [s.workspaceId])
+  const shown = filterVoices(voices, vf, '', favourites ?? [])
+  // the space's brand kits: a video can use another than the default
+  const kits = useAsync(() => (s.workspaceId ? brandApi.kits(s.workspaceId).then((l) => l.items) : Promise.resolve([])), [s.workspaceId])
   const builtIn = templates.filter((t) => t.builtIn)
   const custom = !TONES.includes(b.tone)
   return (
@@ -408,12 +421,21 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
         </div>
       </div>
 
+      {(kits.data?.length ?? 0) > 1 && (
+        <div className="ps-field">
+          <label className="label" htmlFor="b-kit">Brand kit</label>
+          <select id="b-kit" className="input" style={{ maxWidth: 360 }} value={b.brandKitId ?? 'default'} onChange={(e) => set({ brandKitId: e.target.value === 'default' ? undefined : e.target.value })}>
+            {kits.data!.map((k) => <option key={k.id} value={k.id}>{k.doc.name || 'Untitled kit'}{k.default ? ' (default)' : ''}</option>)}
+          </select>
+        </div>
+      )}
+
       <div className="ps-field">
         <div className="row" style={{ marginBottom: 8 }}>
           <span className="label" style={{ margin: 0 }}>Narration voice</span>
           <span className="spacer" />
           <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-            {VOICE_FILTERS.slice(0, 5).map((f) => (
+            {VOICE_FILTERS.slice(0, 6).map((f) => (
               <button key={f} className={clsx('chip', vf === f && 'active')} onClick={() => setVf(f)}>{f}</button>
             ))}
           </div>
@@ -431,6 +453,16 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
         <textarea id="b-notes" className="input" rows={3} value={b.notes ?? ''} onChange={(e) => set({ notes: e.target.value })} placeholder="Must-mention features, words to avoid, call to action, target length…" />
       </div>
     </div>
+  )
+}
+
+/** How long a step should take (an estimate), and while it runs about how long is left. */
+function TimeEstimate({ total, running, progress }: { total: number; running: boolean; progress?: number }) {
+  const left = remainingSeconds(total, progress)
+  return (
+    <p className="muted ps-estimate" style={{ fontSize: '0.8125rem', margin: '0 0 12px' }}>
+      {running ? `Estimated time left: ${formatEstimate(left)}.` : `This usually takes ${formatEstimate(total)}.`} You can leave this page: it keeps going.
+    </p>
   )
 }
 
@@ -476,6 +508,7 @@ function GenerateStep({ s, onRun }: { s: WizardState; onRun: () => void }) {
           <Progress value={r.progress ?? -1} />
         </div>
       )}
+      {r.status !== 'error' && !s.scenes.length && <TimeEstimate total={estimateWrite(s)} running={r.status === 'running'} progress={r.phase === 'script' ? r.progress : undefined} />}
       <div className="ps-pipe">
         <PipelineRow label="Create project" state={stateOf(0)} detail={s.projectId ? 'Saved to your library' : undefined} />
         {!isIdea(s) && <PipelineRow label="Transcribe recordings" state={stateOf(1)} detail={`${s.transcribed.filter((id) => ids.includes(id)).length} of ${ids.length} done`} />}
@@ -673,21 +706,25 @@ function VisualEditor({ scene, kinds, caps, onChange }: { scene: ScriptScene; ki
   )
 }
 
-function SceneCard({ scene, index, total, s, kinds, caps, onChange, onMove, onDelete, onAddAfter, dragProps }: {
+function SceneCard({ scene, index, total, s, kinds, caps, voices, onChange, onMove, onDelete, onAddAfter, onRenarrate, dragProps }: {
   scene: ScriptScene
   index: number
   total: number
   s: WizardState
   kinds: Array<Exclude<VisualKind, 'footage'>>
   caps?: ProduceCapabilities
+  voices: Voice[]
   onChange: (p: Partial<ScriptScene>) => void
   onMove: (to: number) => void
   onDelete: () => void
   onAddAfter: () => void
+  onRenarrate: () => void
   dragProps: React.HTMLAttributes<HTMLDivElement> & { draggable: boolean }
 }) {
   const [busy, setBusy] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
+  // the footage window being picked on its video
+  const [picking, setPicking] = useState<number>()
   const assetName = (id: string) => s.assets.find((a) => a.assetId === id)?.name ?? 'Recording'
   const ready = s.assets.filter((a) => a.status === 'ready' && a.assetId)
   const secs = narrationSeconds(scene.narration)
@@ -707,6 +744,7 @@ function SceneCard({ scene, index, total, s, kinds, caps, onChange, onMove, onDe
           <input className="ps-scene-title" value={scene.title} onChange={(e) => onChange({ title: e.target.value })} aria-label={`Scene ${index + 1} title`} placeholder="Scene title" />
           <span className="spacer" />
           <RewriteButton scene={scene} brief={s.brief} workspaceId={s.workspaceId} onText={(t) => onChange({ narration: t })} onBusy={setBusy} />
+          <NarratorControl scene={scene} voices={voices} briefVoice={s.brief.voice} assembled={!!scene.voice} onChange={(narrator) => onChange({ narrator })} onRenarrate={onRenarrate} />
           {confirmDel ? (
             <span className="row" style={{ gap: 6 }}>
               <button className="btn sm" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={onDelete}>Delete scene</button>
@@ -746,7 +784,11 @@ function SceneCard({ scene, index, total, s, kinds, caps, onChange, onMove, onDe
                   <span className={clsx('ps-win-label', !(f.end > f.start) && 'bad')}>{formatTime(f.start)} – {formatTime(f.end)}</span>
                 </div>
               </div>
+              <button className={clsx('btn ghost sm', picking === i && 'on')} onClick={() => setPicking(picking === i ? undefined : i)} aria-expanded={picking === i} aria-label={`Pick footage window ${i + 1} on the video`} title="Scrub the recording and set the start and end there">Pick on video</button>
               <button className="btn ghost sm icon" onClick={() => onChange({ footage: scene.footage.filter((_, j) => j !== i) })} aria-label="Remove footage window"><X size={13} /></button>
+              {picking === i && (
+                <FootagePicker assetId={f.assetId} name={assetName(f.assetId)} duration={s.assets.find((a) => a.assetId === f.assetId)?.duration} start={f.start} end={f.end} onChange={(w) => setWin(i, w)} />
+              )}
             </div>
           ))}
           {ready.length > 0 && scene.footage.length < PRODUCE_LIMITS.footagePerScene && (
@@ -800,8 +842,9 @@ function StaleScript({ s, onRewrite }: { s: WizardState; onRewrite: () => void }
   )
 }
 
-function ReviewStep({ s, onRewrite }: { s: WizardState; onRewrite: () => void }) {
+function ReviewStep({ s, onRewrite, onRenarrate }: { s: WizardState; onRewrite: () => void; onRenarrate: (sceneId: string) => void }) {
   const patch = useWizard((st) => st.patch)
+  const voices = useVoices(s.workspaceId)
   const [dragFrom, setDragFrom] = useState<number>()
   const [over, setOver] = useState<number>()
   const set = (scenes: ScriptScene[]) => patch({ scenes })
@@ -824,6 +867,15 @@ function ReviewStep({ s, onRewrite }: { s: WizardState; onRewrite: () => void })
           <div><strong>{totalWords}</strong><span>words</span></div>
           <div><strong>{formatDuration(totalSecs)}</strong><span>est. length</span></div>
         </div>
+        {s.projectId && (
+          <ScriptVersionsButton
+            projectId={s.projectId}
+            onRestore={(v) => {
+              patch((st) => ({ brief: v.brief ? { ...st.brief, ...v.brief } : st.brief, scenes: v.scenes }))
+              toast('That version of the script is back. The one you had is kept in Versions too.')
+            }}
+          />
+        )}
       </div>
       {s.run.message && s.run.phase === 'script' && s.run.status === 'done' && (
         <div className="ps-alert info" style={{ marginBottom: 14 }}><Sparkles size={15} /> {s.run.message}</div>
@@ -839,6 +891,8 @@ function ReviewStep({ s, onRewrite }: { s: WizardState; onRewrite: () => void })
               s={s}
               kinds={kinds}
               caps={caps.data}
+              voices={voices}
+              onRenarrate={() => onRenarrate(sc.id)}
               onChange={(p) => patch((st) => ({ scenes: updateScene(st.scenes, sc.id, p) }))}
               onMove={(to) => set(moveScene(s.scenes, i, to))}
               onDelete={() => set(removeScene(s.scenes, sc.id))}
@@ -879,20 +933,24 @@ function ReviewStep({ s, onRewrite }: { s: WizardState; onRewrite: () => void })
 }
 
 // ---------------- ⑤ assemble ----------------
-function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?: boolean; intoCopy?: boolean }) => void }) {
+function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?: boolean; intoCopy?: boolean; renarrate?: string[] }) => void }) {
   const navigate = useNavigate()
+  const whisper = useSystem((st) => st.info?.capabilities?.transcribe)
   const r = s.run
   const done = r.status === 'done' && r.phase === 'assemble'
+  // assembled before (this session or a saved one): another assembly can go into a copy, leaving this video as it is
+  const assembledBefore = s.assembledVersion !== undefined || s.scenes.some((sc) => !!sc.voice)
   if (r.confirm === 'edited' && r.status !== 'running') {
     // re-assembling replaces the whole timeline: the person decides what happens to their edits
+    const again = r.renarrate?.length ? { renarrate: r.renarrate } : {}
     return (
       <div className="ps-wz-body ps-gen">
         <div className="ps-gen-orb" aria-hidden><AlertTriangle size={32} /></div>
         <h2>This video was edited since it was assembled</h2>
         <p className="ps-gen-line" role="alert">{r.message} Assemble into a copy to keep this one as it is.</p>
         <div className="row" style={{ justifyContent: 'center', marginTop: 20, flexWrap: 'wrap' }}>
-          <button className="btn primary" onClick={() => onRun({ intoCopy: true })}><Copy size={15} /> Assemble into a copy</button>
-          <button className="btn" onClick={() => onRun({ replace: true })}><RotateCcw size={15} /> Replace the timeline</button>
+          <button className="btn primary" onClick={() => onRun({ intoCopy: true, ...again })}><Copy size={15} /> Assemble into a copy</button>
+          <button className="btn" onClick={() => onRun({ replace: true, ...again })}><RotateCcw size={15} /> Replace the timeline</button>
           <button className="btn ghost" onClick={() => useWizard.getState().patch({ step: 'review', run: { status: 'idle' } })}>Back to script</button>
         </div>
       </div>
@@ -952,6 +1010,7 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
           <div className="muted" style={{ textAlign: 'center', fontSize: '0.75rem', marginTop: 8 }}>{r.progress && r.progress > 0 ? `${Math.round(r.progress * 100)}%` : 'Starting…'}</div>
         </div>
       )}
+      {!done && r.status !== 'error' && <TimeEstimate total={estimateAssemble(s.scenes, { renarrate: r.renarrate, whisper })} running={r.status === 'running'} progress={r.progress} />}
       <div className="row" style={{ justifyContent: 'center', marginTop: 20 }}>
         {done ? (
           <>
@@ -959,13 +1018,19 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
               <Clapperboard size={16} /> Open in editor
             </button>
             <button className="btn" onClick={() => useWizard.getState().patch({ step: 'review' })}>Back to script</button>
+            <button className="btn ghost" onClick={() => onRun({ intoCopy: true })} title="Assemble again into a new project, leaving this video as it is"><Copy size={15} /> Assemble into a copy</button>
           </>
         ) : r.status === 'running' ? (
           <button className="btn" onClick={cancelRun}><Square size={13} /> Stop</button>
         ) : (
-          <button className="btn primary" onClick={() => onRun()}>
-            {r.status === 'error' ? <><RotateCcw size={15} /> Try again</> : <><Clapperboard size={15} /> {r.interrupted ? 'Resume' : 'Assemble video'}</>}
-          </button>
+          <>
+            <button className="btn primary" onClick={() => onRun(r.renarrate?.length && !r.interrupted ? { renarrate: r.renarrate } : {})}>
+              {r.status === 'error' ? <><RotateCcw size={15} /> Try again</> : <><Clapperboard size={15} /> {r.interrupted ? 'Resume' : 'Assemble video'}</>}
+            </button>
+            {assembledBefore && !r.interrupted && (
+              <button className="btn" onClick={() => onRun({ intoCopy: true })} title="Assemble into a new project, leaving the assembled video as it is"><Copy size={15} /> Assemble into a copy</button>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -1176,7 +1241,7 @@ export default function ProducerWizard() {
   // the new project's address keeps the step, so it isn't read as Back to the first one
   const onProjectCreated = (id: string) => navigate(`/producer/${id}?step=${useWizard.getState().s.step}`, { replace: true })
   const generate = () => workspaceId && void runGenerate(workspaceId, onProjectCreated)
-  const assemble = (opts: { replace?: boolean; intoCopy?: boolean } = {}) => void runAssemble({ ...opts, onProject: onProjectCreated })
+  const assemble = (opts: { replace?: boolean; intoCopy?: boolean; renarrate?: string[] } = {}) => void runAssemble({ ...opts, onProject: onProjectCreated })
   const rewrite = () => {
     setConfirmRegen(false)
     patch({ step: 'generate', scenes: [], run: { status: 'idle' } })
@@ -1273,7 +1338,7 @@ export default function ProducerWizard() {
         {s.step === 'upload' && <StartStep s={s} workspaceId={workspaceId} />}
         {s.step === 'brief' && <BriefStep s={s} templates={templates.data ?? []} tplLoading={templates.loading} />}
         {s.step === 'generate' && <GenerateStep s={s} onRun={generate} />}
-        {s.step === 'review' && <ReviewStep s={s} onRewrite={rewrite} />}
+        {s.step === 'review' && <ReviewStep s={s} onRewrite={rewrite} onRenarrate={(id) => assemble({ renarrate: [id] })} />}
         {s.step === 'assemble' && <AssembleStep s={s} onRun={assemble} />}
 
         {(primaryLabel || idx > 0) && s.step !== 'assemble' && !(s.step === 'generate' && s.run.status === 'running') && (

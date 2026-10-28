@@ -280,7 +280,7 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
  * (run.confirm = 'edited'); then `replace` replaces it, or `intoCopy` assembles into a copy, which the wizard follows
  * (`onProject` gets its id).
  */
-export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean; onProject?: (id: string) => void } = {}) {
+export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean; renarrate?: string[]; onProject?: (id: string) => void } = {}) {
   abort?.abort()
   abort = new AbortController()
   const signal = abort.signal
@@ -294,7 +294,7 @@ export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean;
     const job = await runJob(
       patch,
       async () => {
-        const j = await api.produceAssemble({ projectId, scenes: s.scenes, brief: s.brief, ...(opts.replace ? { replace: true } : {}), ...(opts.intoCopy ? { intoCopy: true } : {}) })
+        const j = await api.produceAssemble({ projectId, scenes: s.scenes, brief: s.brief, ...(opts.replace ? { replace: true } : {}), ...(opts.intoCopy ? { intoCopy: true } : {}), ...(opts.renarrate?.length ? { renarrate: opts.renarrate } : {}) })
         if (j.projectId && j.projectId !== projectId) {
           // into a copy: the wizard follows the copy; the edited project stays as it is
           ssSet(storageKey(projectId), undefined)
@@ -332,7 +332,7 @@ export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean;
       // Only the run that was cancelled reports it; a run superseded by a newer one stays silent.
       if (abort?.signal === signal) patch((st) => ({ run: { ...st.run, status: 'idle', message: 'Stopped', jobId: undefined, interrupted: false } }))
     } else if (e instanceof HttpError && e.status === 409 && (e.body?.details as { reason?: string } | undefined)?.reason === 'edited') {
-      if (abort?.signal === signal) patch({ run: { status: 'idle', phase: 'assemble', confirm: 'edited', message: errMsg(e) } })
+      if (abort?.signal === signal) patch({ run: { status: 'idle', phase: 'assemble', confirm: 'edited', message: errMsg(e), ...(opts.renarrate?.length ? { renarrate: opts.renarrate } : {}) } })
     } else if (abort?.signal === signal) patch((st) => ({ run: { ...st.run, status: 'error', error: errMsg(e) } }))
   }
 }

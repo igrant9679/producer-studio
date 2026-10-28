@@ -99,6 +99,16 @@ describe('the dev mock API', () => {
     expect(made.body).toMatchObject({ builtIn: false, aspect: '1:1' })
   })
 
+  it('has the Voice Studio settings and the script versions (A-20, A-7)', async () => {
+    expect((await call('PUT', '/api/workspaces/ws_client/voice-settings', { pronunciations: [] })).status).toBe(403)
+    expect((await call('PUT', '/api/workspaces/ws_team/voice-settings', { pronunciations: [{ word: 'SQL', say: 'sequel' }] })).body.pronunciations).toHaveLength(1)
+    expect((await call('PUT', '/api/workspaces/ws_client/voice-studio', { favourites: ['af_heart'] })).body.favourites).toEqual(['af_heart'])
+    const wav = await fetch('/api/workspaces/ws_team/voice-preview', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'af_heart' }), headers: { 'content-type': 'application/json' } })
+    expect(wav.headers.get('content-type')).toBe('audio/wav')
+    expect((await call('POST', '/api/workspaces/ws_client/voice-preview', { text: 'Hi', voice: 'af_heart' })).status).toBe(403)
+    expect((await call('GET', '/api/ai/produce/p_nope/script-versions')).status).toBe(404)
+  })
+
   it('lets only owners invite', async () => {
     expect((await call('POST', '/api/workspaces/ws_team/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(403)
     expect((await call('POST', '/api/workspaces/ws_personal/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(200)

@@ -30,6 +30,7 @@ import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { brandRoutes } from './routes/brand'
 import { onboardingRoutes } from './routes/onboarding'
 import { voiceStudioRoutes } from './routes/voiceStudio'
+import { producerRoutes } from './routes/producer'
 import { templateRoutes } from './routes/templates'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
@@ -137,6 +138,7 @@ export function createApp() {
   app.route('/api/jobs', jobRoutes)
   app.route('/api/events', eventRoutes)
   app.route('/api/ai', aiSettingsRoutes)
+  app.route('/api/ai', producerRoutes)
   app.route('/api/ai', aiRoutes)
   app.route('/api/voice', voiceRoutes)
   app.route('/api/exports', exportRoutes)

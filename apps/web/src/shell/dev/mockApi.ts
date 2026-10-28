@@ -578,6 +578,13 @@ registerR3cMocks({
     producerVideos: projects.filter((p) => p.workspaceId === ws && p.kind === 'producer' && !p.trashed).length,
     sampleProjectId: projects.find((p) => p.workspaceId === ws && p.name === 'Sample project' && !p.trashed)?.id,
   }),
+  scriptOf: (id) => {
+    const p = projects.find((x) => x.id === id)
+    if (!p) return undefined
+    const scenes = p.doc?.ai?.script?.scenes
+    if (!scenes?.length) return null
+    return { versionId: `pv_${p.id}_${p.version}`, version: p.version, createdAt: p.updatedAt, label: 'autosave', ...(p.doc?.ai?.brief ? { brief: p.doc.ai.brief } : {}), scenes, words: scenes.reduce((t, s) => t + s.narration.split(/\s+/).filter(Boolean).length, 0) }
+  },
 })
 
 on('GET', '/api/projects', async (_m, q) => {

@@ -215,6 +215,20 @@ and comment.
   member or a pending invite); `PUT {dismissed}` hides it for that person (`member_settings`). `createWorkspace` adds a
   sample project (a look's starter) to each new cloud space and records it in `space_settings` (`SAMPLE_PROJECT=0`
   turns this off; the test harness does).
+- **Voice scripts** (`packages/core/src/voice.ts`, `ai/voiceScript.ts`, `routes/voiceStudio.ts`): every TTS made in a
+  space (Voice Studio, Producer narration, the assistant's voiceovers) goes through `speakScript`: the space's
+  pronunciation dictionary (`space_settings.pronunciations`, whole words, longest first), then the markup —
+  `[pause]` / `[pause 2s]` become real silence and `*words*` are voiced slower and 2.5 dB louder, a part at a time,
+  joined by one ffmpeg concat. A plain script is one TTS call as before; the asset keeps the script as written, so
+  Producer's voice reuse still matches. Cloned/designed voices (VoiceStudio) get the plain words (`spokenPlain`).
+  `member_settings.voice` keeps each person's Voice Studio draft and favourite voices per space;
+  `POST /api/workspaces/:id/voice-preview` voices a line (≤ 300 chars, built-in voices) without saving it, for the
+  side-by-side comparison. Batch voiceovers from a CSV are parsed in the browser (`parseVoiceCsv`) and sent as
+  ordinary TTS jobs, one at a time.
+- **Producer AI** (`routes/producer.ts`): `GET /api/ai/produce/:projectId/script-versions` reads the brief and script out
+  of the project's saved versions (`doc->'ai'`), newest first, one per change. A scene's `narrator` (voice, speed)
+  overrides the brief's for that scene, and `renarrate: [sceneIds]` on assemble makes fresh takes of those scenes while
+  the others reuse theirs; `brief.brandKitId` picks the kit.
 - None of the v14 tables sync to desktops: a desktop sees the default kit only.
 
 ## Two products, one codebase

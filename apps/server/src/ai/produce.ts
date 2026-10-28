@@ -536,6 +536,8 @@ export interface AssembleJobInput {
   brief?: Brief
   /** Fingerprint of the timeline the person chose to replace when they pressed Assemble. */
   base?: string
+  /** Scenes to narrate with a fresh take (A-7): the voice made before for the same words isn't reused. */
+  renarrate?: string[]
 }
 
 type Voice = { asset: Asset; duration: number }
@@ -544,9 +546,9 @@ type Voice = { asset: Asset; duration: number }
  * A voice already made for this narration in this voice: the scene's own, else one made for this project (a failed
  * run's: a retry re-voices nothing it already has). One this job made before its worker died is processed now.
  */
-async function reuseVoice(jc: JobContext, o: { workspaceId: string; projectId: string; text: string; voice: string; hint?: string }): Promise<Voice | undefined> {
+async function reuseVoice(jc: JobContext, o: { workspaceId: string; projectId: string; text: string; voice: string; speed?: number; hint?: string }): Promise<Voice | undefined> {
   const db = ctx().db
-  const same = (r: AssetRow) => r.meta?.tts?.text === o.text && r.meta.tts.voice === o.voice && (r.meta.tts.speed ?? 1) === 1
+  const same = (r: AssetRow) => r.meta?.tts?.text === o.text && r.meta.tts.voice === o.voice && (r.meta.tts.speed ?? 1) === (o.speed ?? 1)
   if (o.hint) {
     const r = (await db.select().from(assets).where(and(eq(assets.id, o.hint), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
     if (r && r.status === 'ready' && same(r)) return { asset: assetDoc(r), duration: r.meta.duration ?? 0 }
@@ -581,7 +583,9 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const brief: Brief = input.brief ?? doc.ai?.brief ?? { title: doc.name, audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' }
   // the timeline the person agreed to replace; edits saved after it are never overwritten
   const base = input.base ?? timelineFingerprint(doc)
-  const brand = await getBrand(row.workspaceId)
+  // the brief's brand kit (a kit deleted since: the space's default)
+  const { getBrandKit } = await import('../services/brand')
+  const brand = await getBrandKit(row.workspaceId, brief.brandKitId, { fallback: true })
   if (!input.scenes?.length) throw invalid('No scenes to assemble')
   const footageIds = [...new Set(input.scenes.flatMap((s) => s.footage.map((f) => f.assetId)))]
   const footageRows = await ctx().db.select().from(assets).where(and(eq(assets.workspaceId, row.workspaceId), inArray(assets.id, footageIds.length ? footageIds : ['-'])))
@@ -593,12 +597,16 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
     const s = input.scenes[i]
     jc.check()
     const sub = subContext(jc, (i / input.scenes.length) * 0.6, ((i + 1) / input.scenes.length) * 0.6, `Voicing ${s.id}`)
-    const reused = await reuseVoice(jc, { workspaceId: row.workspaceId, projectId: row.id, text: s.narration, voice: brief.voice, hint: (s.voice ?? prior.get(s.id)?.voice)?.assetId })
+    // a scene may have its own narrator (voice, speed); one asked to be narrated again gets a fresh take
+    const voice = s.narrator?.voice ?? brief.voice
+    const speed = s.narrator?.speed ?? 1
+    const fresh = input.renarrate?.includes(s.id)
+    const reused = fresh ? undefined : await reuseVoice(jc, { workspaceId: row.workspaceId, projectId: row.id, text: s.narration, voice, speed, hint: (s.voice ?? prior.get(s.id)?.voice)?.assetId })
     if (reused) {
       voices.set(s.id, reused)
       continue
     }
-    const v = await synthesizeToAsset({ workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, text: s.narration, voice: brief.voice, name: `${s.id} · ${s.title}`, jobId: jc.job.id }, sub)
+    const v = await synthesizeToAsset({ workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, text: s.narration, voice, speed, name: `${s.id} · ${s.title}`, jobId: jc.job.id }, sub)
     voices.set(s.id, { asset: v.asset.asset, duration: v.duration })
   }
   // 2. word timings for captions (whisper round trip, or an estimate)
