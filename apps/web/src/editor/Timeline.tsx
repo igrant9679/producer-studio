@@ -838,7 +838,8 @@ function TimelineToolbar() {
         <ToolBtn
           icon={<SplitSquareHorizontal size={15} />}
           title="Separate audio"
-          desc={`Put the selected video's sound on its own audio track, so you can trim, move or delete it separately.${hasVideo ? '' : '\nSelect a video clip first.'}`}
+          desc={`Put the selected video's sound on its own audio track. It stays linked to the video: they move, trim and delete together until you unlink them.${hasVideo ? '' : '\nSelect a video clip first.'}`}
+          kbd="Ctrl+Shift+S"
           onClick={A.separate}
           disabled={!hasVideo}
         />
@@ -1369,7 +1370,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
           {it.type === 'video' && (
             <>
               <div className="ed-menu-sep" />
-              <MenuItem icon={<SplitSquareHorizontal size={14} />} label="Separate audio" onClick={run(A.separate)} />
+              <MenuItem icon={<SplitSquareHorizontal size={14} />} label="Separate audio" kbd="Ctrl Shift S" onClick={run(A.separate)} />
               {it.freezeAt === undefined && (
                 <>
                   <MenuItem icon={<Snowflake size={14} />} label="Freeze frame" onClick={run(() => A.freezeClip(it.id, ctx.time))} />

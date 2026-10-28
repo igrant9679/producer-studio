@@ -205,12 +205,15 @@ function ZoomMenu() {
         <MenuItem label="Fit to screen" kbd="Shift F" active={z === 'fit'} onClick={() => set('fit')} />
         <div className="ed-menu-sep" />
         {[0.25, 0.5, 0.75, 1, 1.5, 2].map((v) => (
-          <MenuItem key={v} label={`${v * 100}%`} active={z === v} onClick={() => set(v)} />
+          <MenuItem key={v} label={`${v * 100}%`} kbd={CANVAS_ZOOM_KEYS[v]} active={z === v} onClick={() => set(v)} />
         ))}
       </Menu>
     </div>
   )
 }
+
+/** Shift+0, 1 and 2 set these canvas zooms (shortcuts.ts). */
+const CANVAS_ZOOM_KEYS: Record<number, string | undefined> = { 0.5: 'Shift 0', 1: 'Shift 1', 2: 'Shift 2' }
 
 function RatioMenu() {
   const w = useEditor((s) => s.project.width)
