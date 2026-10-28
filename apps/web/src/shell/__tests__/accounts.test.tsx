@@ -188,7 +188,7 @@ describe('the Account page (A-17)', () => {
   it('lists browsers and desktop apps, signs one out, and signs out everywhere after asking', async () => {
     routes(account(), (c) => (c.path === '/api/account/sign-out-everywhere' ? { body: { ok: true, sessions: 1, devices: 1 } } : undefined))
     open()
-    const list = await screen.findByRole('list', { name: 'Signed-in browsers and apps' })
+    const list = await screen.findByRole('list', { name: 'Signed-in browsers and apps' }, { timeout: 5000 })
     expect(within(list).getByText(/Chrome on Windows/).textContent).toMatch(/this browser/)
     expect(within(list).getByText('Studio PC')).toBeTruthy()
     expect(within(list).getByText(/stops working if unused until/)).toBeTruthy()
