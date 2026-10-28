@@ -64,6 +64,18 @@ export interface Config {
   bgRemovalCmd?: string
   /** An RNNoise model file (.rnnn) for ffmpeg's arnndn voice denoiser; unset = afftdn only. */
   denoiseModel?: string
+  /** Operators (P-10): accounts with these emails get the Operator page (cloud only; empty = nobody). */
+  operatorEmails: string[]
+  /** The bearer token GET /api/metrics asks for (P-7); unset = the endpoint is off. */
+  metricsToken?: string
+  /** The janitor (P-11): days finished jobs, tombstones and audit entries are kept (0 = forever). */
+  retention: { jobDays: number; tombstoneDays: number; auditDays: number }
+  /**
+   * Worker health (P-9): a queued job waiting longer than `maxLagMs` while this worker has a free slot, or a claim loop
+   * quiet for 2 minutes, reports unhealthy; with `stuckExitMs` (0 = off) a worker unhealthy that long exits so the
+   * platform restarts it.
+   */
+  workerHealth: { maxLagMs: number; stuckExitMs: number }
   /** Outgoing mail through Resend's HTTP API (Railway blocks SMTP). Unset = no mail: the app shows links instead. */
   mail?: { resendApiKey: string; from: string }
   /** Abuse brakes and quotas (cloud). Counted in Postgres, so they hold across replicas; 0 turns one off. */
@@ -203,6 +215,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pexelsApiKey: env.PEXELS_API_KEY?.trim() || undefined,
     bgRemovalCmd: env.BG_REMOVAL_CMD?.trim() || undefined,
     denoiseModel: env.DENOISE_MODEL?.trim() || undefined,
+    operatorEmails:
+      mode === 'cloud'
+        ? (env.OPERATOR_EMAILS ?? '')
+            .split(/[,\s]+/)
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean)
+        : [],
+    metricsToken: env.METRICS_TOKEN?.trim() || undefined,
+    retention: {
+      jobDays: envInt(env, 'JOB_RETENTION_DAYS', 30),
+      tombstoneDays: envInt(env, 'TOMBSTONE_RETENTION_DAYS', 90),
+      auditDays: envInt(env, 'AUDIT_RETENTION_DAYS', 365),
+    },
+    workerHealth: {
+      maxLagMs: envInt(env, 'WORKER_MAX_LAG_MINUTES', 15, 1) * 60_000,
+      stuckExitMs: envInt(env, 'WORKER_STUCK_EXIT_MINUTES', 0) * 60_000,
+    },
     // both are needed (Resend only sends from a verified domain); the desktop app never sends mail
     mail: mode === 'cloud' && env.RESEND_API_KEY?.trim() && env.MAIL_FROM?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim(), from: env.MAIL_FROM.trim() } : undefined,
     limits: {

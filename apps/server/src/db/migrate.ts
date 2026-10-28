@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 16
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -580,6 +580,64 @@ CREATE INDEX IF NOT EXISTS jobs_ws_status_idx ON jobs(workspace_id, status);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at double precision;
 `
 
+/**
+ * v16 — operations (R4-A): the security audit log (sign-ins, account and access changes, operator actions); who has
+ * a project open, in Postgres so several API processes share it; what each job waited, ran and used, and its raw
+ * error for operators (people see a plain sentence); an operator can disable an account; small marks the janitor
+ * keeps (how far tombstones were compacted). None of these sync to desktops.
+ */
+export const DDL_V16 = `
+CREATE TABLE IF NOT EXISTS audit_log (
+  id text PRIMARY KEY,
+  at double precision NOT NULL,
+  kind text NOT NULL,
+  actor_id text,
+  actor_email text,
+  workspace_id text,
+  target_id text,
+  target text,
+  ip text,
+  user_agent text,
+  request_id text,
+  data jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS audit_log_ws_idx ON audit_log(workspace_id, at, id);
+CREATE INDEX IF NOT EXISTS audit_log_at_idx ON audit_log(at, id);
+CREATE INDEX IF NOT EXISTS audit_log_actor_idx ON audit_log(actor_id, at);
+CREATE INDEX IF NOT EXISTS audit_log_target_idx ON audit_log(target_id, at);
+
+CREATE TABLE IF NOT EXISTS presence (
+  project_id text NOT NULL,
+  user_id text NOT NULL,
+  client text NOT NULL,
+  workspace_id text NOT NULL,
+  name text NOT NULL,
+  color text NOT NULL,
+  role text NOT NULL,
+  since double precision NOT NULL,
+  seen double precision NOT NULL,
+  PRIMARY KEY (project_id, user_id, client)
+);
+CREATE INDEX IF NOT EXISTS presence_seen_idx ON presence(seen);
+
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS wait_ms double precision;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS run_ms double precision;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS peak_rss double precision;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_detail text;
+CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at double precision;
+
+CREATE TABLE IF NOT EXISTS ops_state (
+  key text PRIMARY KEY,
+  value jsonb NOT NULL,
+  updated_at double precision NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS tombstones_deleted_idx ON tombstones(deleted_at);
+CREATE INDEX IF NOT EXISTS auth_tokens_expires_idx ON auth_tokens(expires_at);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -599,4 +657,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [13, DDL_V13],
   [14, DDL_V14],
   [15, DDL_V15],
+  [16, DDL_V16],
 ]
