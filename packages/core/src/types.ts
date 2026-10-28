@@ -336,6 +336,8 @@ export interface Track {
   main?: boolean
   /** Caption tracks carry their style. */
   captionStyle?: CaptionStyle
+  /** A caption track's language (BCP 47, e.g. "en", "es-MX"); a project can hold one track per language. */
+  language?: string
 }
 
 export interface BrandKit {
@@ -362,6 +364,8 @@ export interface Project {
   brand?: BrandKit
   /** Producer AI metadata (brief, script) for projects built by the AI pipeline. */
   ai?: ProducerMeta
+  /** The transcript's filler words and phrases ("um", "you know"); `on` ones are marked and removed. Absent: the defaults. */
+  fillerWords?: Array<{ w: string; on: boolean }>
   createdAt: number
   updatedAt: number
 }
