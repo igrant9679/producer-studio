@@ -63,7 +63,7 @@ export function OnboardingChecklist() {
     }
   })
 
-  const s = state?.ws === workspaceId ? state.s : undefined
+  const s = state && state.ws === workspaceId ? state.s : undefined
   if (!s || s.dismissed || !gate.canEdit) return null
   const { done, total } = onboardingProgress(s)
   const all = done === total
