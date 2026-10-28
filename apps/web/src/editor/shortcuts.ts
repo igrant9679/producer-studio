@@ -8,6 +8,7 @@ import { addMarkerAtPlayhead, jumpToMarker } from './markerActions'
 import { flush } from './persistence'
 import { useEditor } from './store'
 import { fitTimeline } from './timelineView'
+import { transportKey } from './transport'
 
 const NOT_TEXT = new Set(['range', 'checkbox', 'radio', 'color', 'button', 'submit', 'reset', 'file', 'image'])
 const CONTROL = 'button, a[href], input, summary, [role="button"], [role="checkbox"], [role="switch"], [role="slider"], [role="tab"], [role="menuitem"], [role="option"], [role="radio"]'
@@ -97,6 +98,7 @@ export function handleKey(e: KeyboardEvent) {
   if (e.shiftKey && (k === '@' || k === '2')) return done(), s.set({ canvasZoom: 2 })
   // by key position too: Alt+M types another character on a Mac
   if ((lower === 'm' || e.code === 'KeyM') && (e.shiftKey || e.altKey)) return done(), jumpToMarker(e.shiftKey ? 1 : -1)
+  if (transportKey(e)) return done()
   if (e.shiftKey || e.altKey) return
   if (lower === 'm') return done(), void addMarkerAtPlayhead()
   if (lower === 's') return done(), s.set({ snapping: !s.snapping })

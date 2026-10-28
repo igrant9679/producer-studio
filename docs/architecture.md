@@ -26,6 +26,15 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   elements on the same sound with 20 ms hand-overs). An export with a loudness target (YouTube -14, Podcast -16,
   Broadcast -23 LUFS) gets a two-pass ffmpeg `loudnorm` after the render (`apps/server/src/render/loudness.ts`),
   the picture copied untouched.
+- **Export options** (`ExportRequest`): the job renders `projectForExport(project, request)` (core `exporting.ts`):
+  a `range` is cut out of the edit as a split would cut it and starts at 0; `aspect` reframes a copy to a platform
+  shape (as the ratio menu does); `captions` burns in all or one caption track, or leaves them out, and `sidecar`
+  also writes an SRT/WebVTT file next to the export's file (`assets.meta.captions`, served by
+  `GET /api/exports/:id/captions`). `mp3`/`wav` render the composition small at 10 fps and keep only its sound
+  (ffmpeg), so audio-only exports sound exactly like the video. `coverAt` picks the thumbnail/poster frame.
+- **Draft preview** (`preview: true`): the same pipeline at 360p, 24 fps, draft quality; the file goes to
+  `ws/<workspace>/previews/<project>/<job>.mp4` (only the latest per project is kept, no export row, no asset) and
+  `GET /api/projects/:id/previews/:jobId` plays it in the export dialog.
 - Verified 23 Sept 2026: lint 0/0, 10 s 720p render in ~22 s with title, captions, push transition, audio.
 
 ## Data
@@ -53,8 +62,9 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
 Postgres-backed queue (`SELECT … FOR UPDATE SKIP LOCKED`), polled by the worker loop. Kinds:
 `asset.process` (probe, H.264 proxy ≤720p, thumbnail, filmstrip sprite, waveform peaks, silence detection),
 `ai.transcribe` (whisper.cpp), `ai.tts` (Kokoro-82M, 24 voices), `ai.produce.script` (Claude),
-`ai.produce.assemble` (TTS per scene + timeline assembly), `export.render` (HyperFrames). Progress is pushed
-to clients over SSE (`/api/events`).
+`ai.produce.assemble` (TTS per scene + timeline assembly), `export.render` (HyperFrames), `media.scenes` (ffmpeg
+scene score over a clip's proxy in a source range → cut times, for "Split at scene changes"; a quick job,
+`POST /api/assets/:id/scenes`). Progress is pushed to clients over SSE (`/api/events`).
 
 ## AI (Claude API, `@anthropic-ai/sdk`)
 - Model `claude-opus-5`, adaptive thinking, server-side refusal fallbacks (`fallbacks: "default"`,

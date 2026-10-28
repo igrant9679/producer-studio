@@ -2,7 +2,6 @@
 // as one linear gain with a true-peak ceiling, so the mix keeps its dynamics and lands on the platform's target.
 // The picture is copied untouched.
 import fs from 'node:fs'
-import type { ExportRequest } from '@producer/core'
 import { ffmpeg } from '../media/proc'
 
 /** Ceiling for true peaks (dBTP) and the loudness range loudnorm aims for. */
@@ -43,7 +42,7 @@ export async function measureLoudness(file: string, signal?: AbortSignal): Promi
   return r ? parseLoudnorm(r.stderr) : undefined
 }
 
-const AUDIO_CODEC: Record<Exclude<ExportRequest['format'], 'gif'>, string[]> = {
+const AUDIO_CODEC: Record<'mp4' | 'webm', string[]> = {
   mp4: ['-c:a', 'aac', '-b:a', '192k'],
   webm: ['-c:a', 'libopus', '-b:a', '160k'],
 }
@@ -52,7 +51,7 @@ const AUDIO_CODEC: Record<Exclude<ExportRequest['format'], 'gif'>, string[]> = {
  * Write `src` to `out` with its sound at `lufs` integrated loudness; returns the file to keep (`src` itself when it
  * has no sound to normalise).
  */
-export async function normalizeLoudness(src: string, out: string, lufs: number, opts: { format: ExportRequest['format']; signal?: AbortSignal }): Promise<string> {
+export async function normalizeLoudness(src: string, out: string, lufs: number, opts: { format: 'mp4' | 'webm' | 'gif'; signal?: AbortSignal }): Promise<string> {
   if (opts.format === 'gif') return src
   const m = await measureLoudness(src, opts.signal)
   if (!m || m.i < -70) return src

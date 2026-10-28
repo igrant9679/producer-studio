@@ -790,6 +790,67 @@ on('PUT', '/api/ai/produce/draft', (_m, _q, b) => {
 })
 
 on('GET', '/api/exports', (_m, q) => json(exportsByProject[q.get('projectId') ?? ''] ?? []))
+// like the server: editors export (a range, audio only, captions burned in or as a file, a draft preview); the
+// render "finishes" after a few seconds with one of the demo clips
+const mockCaptions: Record<string, string> = {}
+on('POST', '/api/projects/([^/]+)/export', async (m, _q, b) => {
+  await delay(200)
+  const denied = editorOnly(projectWs(m[1]))
+  if (denied) return denied
+  const p = projects.find((x) => x.id === m[1])
+  if (!p) return fail(404, 'Project not found', 'not_found')
+  const range = b.range as { from: number; to: number } | undefined
+  if (range && (range.to - range.from < 0.1 || range.from >= p.duration)) return fail(400, 'That range is not on the timeline', 'invalid')
+  const duration = range ? range.to - range.from : p.duration
+  const format = String(b.format ?? 'mp4')
+  const j = startJob('export.render', p.workspaceId, b.preview ? 2500 : 6000, {
+    projectId: p.id,
+    message: b.preview ? 'Waiting to render the draft' : 'Waiting to render',
+    onDone: (job) => {
+      if (b.preview) return { previewUrl: DEMO.clips[0].file, sizeBytes: 900_000, duration }
+      const exportId = nid('ex')
+      const audio = format === 'mp3' || format === 'wav'
+      const sidecar = b.captions === 'sidecar' && !audio
+      if (sidecar) mockCaptions[exportId] = b.captionFormat === 'vtt' ? 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nDemo caption\n' : '1\n00:00:00,000 --> 00:00:02,000\nDemo caption\n'
+      const rec: ExportRecord = {
+        exportId,
+        projectId: p.id,
+        name: String(b.name || p.name),
+        url: audio ? DEMO.audio : DEMO.clips[0].file,
+        sizeBytes: Math.round(duration * (audio ? 24_000 : 500_000)),
+        duration,
+        resolution: audio ? 'audio' : String(b.resolution ?? '1080p'),
+        fps: Number(b.fps ?? 30),
+        format: format as ExportRecord['format'],
+        createdAt: job.updatedAt,
+        ...(sidecar ? { captionsUrl: `/api/exports/${exportId}/captions` } : {}),
+      }
+      ;(exportsByProject[p.id] ??= []).unshift(rec)
+      const { projectId: _p, name: _n, resolution: _r, fps: _f, createdAt: _c, ...result } = rec
+      return result
+    },
+  })
+  return json(publicJob(j))
+})
+on('GET', '/api/exports/([^/]+)/captions', (m) => {
+  const text = mockCaptions[m[1]]
+  if (!text) return fail(404, 'This export has no caption file', 'not_found')
+  return new Response(text, { status: 200, headers: { 'Content-Type': text.startsWith('WEBVTT') ? 'text/vtt' : 'application/x-subrip' } })
+})
+// scene detection: editors; cuts every few seconds of the clip
+on('POST', '/api/assets/([^/]+)/scenes', (m, _q, b) => {
+  const denied = editorOnly(assetWs(m[1]))
+  if (denied) return denied
+  const a = assets.find((x) => x.asset.id === m[1])?.asset
+  if (!a) return fail(404, 'Asset not found', 'not_found')
+  if (a.kind !== 'video') return fail(400, 'Scene detection works on video clips', 'invalid')
+  const from = Number(b.from ?? 0)
+  const to = Number(b.to ?? a.duration ?? 10)
+  const cuts: number[] = []
+  for (let t = Math.floor(from / 3) * 3 + 3; t < to; t += 3) cuts.push(t)
+  const j = startJob('media.scenes', assetWs(m[1]) ?? 'ws_personal', 1500, { message: `Finding scene changes in ${a.name}`, onDone: () => ({ assetId: a.id, cuts }) })
+  return json(publicJob(j))
+})
 // like the server: one link per export (reused), nothing to share before an export, and links can be stopped
 on('POST', '/api/projects/([^/]+)/share', async (m, _q, b) => {
   await delay(200)

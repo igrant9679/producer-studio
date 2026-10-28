@@ -74,6 +74,7 @@ export const JOB_LABELS: Record<JobKind, string> = {
   'voice.relay': 'Generating on your desktop',
   'voicestudio.install': 'Installing VoiceStudio',
   'voicestudio.task': 'VoiceStudio',
+  'media.scenes': 'Finding scene changes',
 }
 
 export function initials(name: string | undefined): string {

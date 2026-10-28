@@ -25,6 +25,7 @@ import type {
   Project,
   ProjectDocResponse,
   ProjectSummary,
+  SceneCuts,
   ScriptScene,
   ShareLink,
   SyncStatus,
@@ -282,6 +283,8 @@ export const api = {
 
   // export / share / templates
   exportProject: (id: string, body: ExportRequest) => req<Job<ExportResult>>('POST', `/projects/${id}/export`, body),
+  /** Scene changes in a video clip's file (E-10): a short job; `from`/`to` are seconds into the file. */
+  detectScenes: (assetId: string, body: { from?: number; to?: number; threshold?: number } = {}) => req<Job<SceneCuts>>('POST', `/assets/${assetId}/scenes`, body),
   exports: (projectId: string) => req<ExportRecord[]>('GET', `/exports${qs({ projectId })}`),
   share: (id: string, exportId?: string) => req<ShareLink>('POST', `/projects/${id}/share`, { exportId }),
   shares: (id: string) => req<ShareLink[]>('GET', `/projects/${id}/shares`),

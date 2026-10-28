@@ -77,6 +77,8 @@ import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
 import { placeAsset, placementFor, uploadToTimeline } from './timelineDrop'
 import { fitTimeline, registerTimelineFit } from './timelineView'
+import { InOutBand, TransportControls } from './TransportControls'
+import { ClipMediaMenuItems, canDropReplace, replaceMedia } from './clipMedia'
 import { peakBetween, useWaveformPeaks } from './waveform'
 import {
   HEADER_W,
@@ -871,6 +873,7 @@ function TimelineToolbar() {
           <span className="sep">/</span>
           <span className="total">{timecode(duration, fps)}</span>
         </div>
+        <TransportControls />
       </div>
       <div className="row tl-zoom">
         <ToolBtn icon={<ZoomOut size={15} />} title="Zoom out" desc="See more of the timeline at once. The playhead stays where it is." kbd="Ctrl+-" onClick={() => useEditor.getState().setZoom(zoom / 1.4)} />
@@ -929,6 +932,7 @@ const Ruler = memo(function Ruler({ width, zoom, fps, duration, onPointerDown }:
       onPointerDown={onPointerDown}
     >
       <div className="tl-ruler-end" style={{ left: duration * zoom }} title="End of project" />
+      <InOutBand zoom={zoom} />
       {labels.map((t) => (
         <span key={t} className="tl-tick" style={{ left: t * zoom }}>
           {rulerLabel(t, major, fps)}
@@ -1154,7 +1158,8 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
     const p = dragPayload()
     if (!p || !isInternalDrag(e)) return
     const visual = item.type === 'video' || item.type === 'image' || item.type === 'text' || item.type === 'shape'
-    if ((p.kind === 'effect' && visual) || (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) || (p.kind === 'transition' && visual)) {
+    // Alt+drop of library media onto a clip replaces the clip's media (E-10)
+    if ((p.kind === 'effect' && visual) || (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) || (p.kind === 'transition' && visual) || (p.kind === 'asset' && e.altKey && canDropReplace(item.id, p.asset))) {
       e.preventDefault()
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
@@ -1173,6 +1178,8 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
       s.set({ activeRightTab: 'basic' })
     } else if (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) {
       s.commit(updateItem<VideoItem>(s.project, item.id, { filter: { id: p.id, intensity: 80 } }), 'Apply filter', { selection: [item.id] })
+    } else if (p.kind === 'asset' && e.altKey) {
+      replaceMedia(item.id, p.asset)
     } else if (p.kind === 'transition') {
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
       const rightHalf = e.clientX > r.left + r.width / 2
@@ -1390,6 +1397,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
           {(it.type === 'audio' || (it.type === 'video' && it.freezeAt === undefined)) && (
             <MenuItem icon={<Activity size={14} />} label="Detect beats" onClick={run(() => void detectBeatsOn(it.id))} />
           )}
+          <ClipMediaMenuItems item={it} run={run} />
           {(it.type === 'video' || it.type === 'audio') && (
             <MenuItem icon={<FileText size={14} />} label="Transcript editing" onClick={run(() => useEditor.setState({ activeLeftTab: 'transcript', leftCollapsed: false }))} />
           )}

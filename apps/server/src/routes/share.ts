@@ -1,10 +1,11 @@
 import { Hono } from 'hono'
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 import * as z from 'zod/v4'
-import type { ShareLink, SharedVideo } from '@producer/core'
+import { ASPECT_RATIOS, type ShareLink, type SharedVideo } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
-import { exportsTable, shareLinks } from '../db/schema'
+import { assets, exportsTable, jobs, shareLinks } from '../db/schema'
+import { previewKey } from '../render/export'
 import { exportDto, jobDto, projectSummary } from '../dto'
 import { HttpError, body, invalid, notFound, requireRole } from '../http'
 import { randomToken } from '../ids'
@@ -19,9 +20,19 @@ const ExportSchema = z.object({
   resolution: z.enum(['720p', '1080p', '1440p', '4k']).default('1080p'),
   fps: z.union([z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]).default(30),
   quality: z.enum(['draft', 'standard', 'high']).default('standard'),
-  format: z.enum(['mp4', 'webm', 'gif']).default('mp4'),
+  format: z.enum(['mp4', 'webm', 'gif', 'mp3', 'wav']).default('mp4'),
   name: z.string().max(200).optional(),
   loudness: z.enum(['off', 'youtube', 'podcast', 'broadcast']).optional(),
+  range: z
+    .object({ from: z.number().min(0).max(1e6), to: z.number().min(0).max(1e6) })
+    .refine((r) => r.to - r.from >= 0.1, 'The range must be at least 0.1 s long')
+    .optional(),
+  aspect: z.enum(ASPECT_RATIOS.map((a) => a.id) as [string, ...string[]]).optional(),
+  captions: z.enum(['burn', 'sidecar', 'none']).optional(),
+  captionFormat: z.enum(['srt', 'vtt']).optional(),
+  captionTrackId: z.string().max(100).optional(),
+  coverAt: z.number().min(0).max(1e6).optional(),
+  preview: z.boolean().optional(),
 })
 
 /** Mounted at /api/projects (export + share sub-routes). */
@@ -33,9 +44,20 @@ projectExportRoutes.post('/:id/export', async (c) => {
   await requireRole(u.id, row.workspaceId, 'editor')
   const b = await body(c, ExportSchema)
   if (row.duration <= 0) throw new HttpError(400, 'invalid', 'The project is empty — add something to the timeline first')
+  if (b.range && b.range.from >= row.duration) throw new HttpError(400, 'invalid', 'That range starts after the end of the video')
   await assertQueueRoom(row.workspaceId)
-  const j = await enqueue('export.render', { ...b, projectId: row.id }, { workspaceId: row.workspaceId, userId: u.id, projectId: row.id, message: 'Waiting to render' })
+  const j = await enqueue('export.render', { ...b, projectId: row.id }, { workspaceId: row.workspaceId, userId: u.id, projectId: row.id, message: b.preview ? 'Waiting to render the draft' : 'Waiting to render' })
   return c.json(jobDto(j))
+})
+
+/** The latest draft preview (export with `preview`): only that project's, only while it is the latest. */
+projectExportRoutes.on(['GET', 'HEAD'], '/:id/previews/:jobId', async (c) => {
+  const u = requireUser(c)
+  const row = await loadProjectRow(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'viewer')
+  const job = (await ctx().db.select().from(jobs).where(eq(jobs.id, c.req.param('jobId'))).limit(1))[0]
+  if (!job || job.projectId !== row.id || job.kind !== 'export.render' || job.status !== 'done') throw notFound('This draft is not available')
+  return serveObject(c, { key: previewKey(row.workspaceId, row.id, job.id), contentType: 'video/mp4', filename: `${row.name} draft.mp4` }, { cache: 'private, max-age=300' })
 })
 
 const shareUrl = (token: string) => `${ctx().config.publicUrl ?? ''}/r/${token}`
@@ -84,7 +106,22 @@ exportRoutes.get('/', async (c) => {
   const row = await loadProjectRow(projectId)
   await requireRole(u.id, row.workspaceId, 'viewer')
   const rows = await ctx().db.select().from(exportsTable).where(eq(exportsTable.projectId, projectId)).orderBy(desc(exportsTable.createdAt)).limit(100)
-  return c.json(rows.map(exportDto))
+  // which exports have a sidecar caption file beside them
+  const files = rows.length ? await ctx().db.select({ id: assets.id, meta: assets.meta }).from(assets).where(inArray(assets.id, rows.map((r) => r.assetId))) : []
+  const withCaptions = new Set(files.filter((f) => f.meta?.captions).map((f) => f.id))
+  return c.json(rows.map((r) => exportDto(r, withCaptions.has(r.assetId))))
+})
+
+/** An export's sidecar captions (SRT or WebVTT), saved as a file. */
+exportRoutes.on(['GET', 'HEAD'], '/:id/captions', async (c) => {
+  const u = requireUser(c)
+  const ex = (await ctx().db.select().from(exportsTable).where(eq(exportsTable.id, c.req.param('id'))).limit(1))[0]
+  if (!ex) throw notFound('Export not found')
+  await requireRole(u.id, ex.workspaceId, 'viewer')
+  const a = await loadAsset(ex.assetId)
+  const cap = a.meta?.captions
+  if (!cap) throw notFound('This export has no caption file')
+  return serveObject(c, { key: cap.key, contentType: cap.format === 'srt' ? 'application/x-subrip' : 'text/vtt', filename: `${ex.name}.${cap.format}` }, { cache: 'private, max-age=300' })
 })
 
 /** Public share routes (no auth). */

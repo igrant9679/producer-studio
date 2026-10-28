@@ -104,7 +104,7 @@ export function TopBar() {
         <button className="btn sm" onClick={share} {...tipProps('Share', 'Create a review link to this project that you can send to others.')}>
           <Share2 size={14} /> Share
         </button>
-        <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the finished video (MP4, WebM or GIF, 720p to 4K).')}>
+        <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the video or a part of it (MP4, WebM or GIF, 720p to 4K), or just its sound (MP3, WAV). It renders in the background while you keep working.')}>
           <Upload size={14} /> Export
         </button>
       </div>

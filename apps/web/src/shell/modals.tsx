@@ -279,6 +279,7 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Editor — sound', [['J / L cut (sound leads or trails the picture)', 'Shift drag audio edge'], ['J / L cut to the playhead', 'Shift [ / ]'], ['Add a volume keyframe', 'Double-click the volume line']]],
   ['Editor — canvas', [['Move tool', 'V'], ['Hand tool', 'H'], ['Fit canvas', 'Shift F'], ['Nudge 1 px', '↑ ↓ ← →']]],
   ['Editor — transcript', [['Previous / next word', '← / →'], ['Cut the selected words', 'Delete'], ['Restore struck-through words', 'R']]],
+  ['Editor — review playback', [['Shuttle back / stop / forward (again: faster)', 'J / K / L'], ['Mark in / out', 'I / O'], ['Clear in and out', 'Alt X']]],
 ]
 
 export function HelpModal({ onClose }: { onClose: () => void }) {
