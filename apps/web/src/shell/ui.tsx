@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import { Film, ImageOff, Loader2, X } from 'lucide-react'
 import type { Workspace } from '@producer/core'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useInRouterContext, useLocation } from 'react-router-dom'
 import { create } from 'zustand'
 import { useReducedMotion } from '../lib/motion'
 import { canEdit, currentWorkspace, onUserReset, useSession } from '../lib/session'
@@ -313,9 +314,20 @@ function onMenuKeyDown(e: React.KeyboardEvent<HTMLElement>) {
   items[next]?.focus()
 }
 
+/** Calls `onNavigate` when the page changes (a link in the popover, Back, a shortcut) while it is mounted. */
+function CloseOnNavigate({ onNavigate }: { onNavigate: () => void }) {
+  const key = useLocation().key
+  const first = useRef(key)
+  useEffect(() => {
+    if (key !== first.current) onNavigate()
+  }, [key, onNavigate])
+  return null
+}
+
 /**
- * A trigger + absolutely positioned popover that closes on outside click / Escape. Up / Down move through its menu
- * items, and closing it with focus inside gives focus back to the trigger.
+ * A trigger + absolutely positioned popover that closes on outside click / Escape, and when the page changes (its
+ * Job history link, say). Up / Down move through its menu items, and closing it with focus inside gives focus back
+ * to the trigger (not after a page change: the new page has focus).
  */
 export function Popover({ trigger, children, align = 'left', className, style, open: openProp, onOpenChange }: {
   trigger: (p: { open: boolean; toggle: () => void }) => ReactNode
@@ -335,9 +347,17 @@ export function Popover({ trigger, children, align = 'left', className, style, o
   const close = useCallback(() => setOpen(false), [setOpen])
   useClickOutside(ref, close, open)
   const wasOpen = useRef(false)
+  /** Closed because the page changed: the new page decides where focus goes, not the trigger. */
+  const navigated = useRef(false)
+  const inRouter = useInRouterContext()
+  const closeOnNavigate = useCallback(() => {
+    navigated.current = true
+    setOpen(false)
+  }, [setOpen])
   // the focused item went away with the popover: focus the button that opened it
   useLayoutEffect(() => {
-    if (wasOpen.current && !open && (!document.activeElement || document.activeElement === document.body)) focusables(ref.current)[0]?.focus()
+    if (wasOpen.current && !open && !navigated.current && (!document.activeElement || document.activeElement === document.body)) focusables(ref.current)[0]?.focus()
+    if (open) navigated.current = false
     wasOpen.current = open
   }, [open])
   // Keep the popover on screen: open upwards near the bottom edge, swap sides near the left/right edges.
@@ -374,6 +394,7 @@ export function Popover({ trigger, children, align = 'left', className, style, o
   return (
     <div ref={ref} className="ps-popover-root" style={{ position: 'relative', display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
       {trigger({ open, toggle: () => setOpen(!open) })}
+      {open && inRouter && <CloseOnNavigate onNavigate={closeOnNavigate} />}
       {open && (
         <div
           ref={popRef}
