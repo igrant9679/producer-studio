@@ -1,47 +1,46 @@
-import type { AssetRecord, ProjectSummary } from '@producer/core'
+import type { ProjectSummary } from '@producer/core'
 import clsx from 'clsx'
 import {
   ArchiveRestore,
-  AudioLines,
   Check,
   CheckSquare,
   Copy,
   Download,
-  Eye,
   Film,
   FolderOpen,
-  Image as ImageIcon,
   LayoutGrid,
   LayoutTemplate,
   Link2,
   List,
   MoreHorizontal,
   Pencil,
-  RotateCcw,
   Search,
   Sparkles,
+  Tags,
   Trash2,
-  Upload,
+  User,
   Video,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { api, HttpError, mediaUrl } from '../../lib/api'
+import { api, HttpError } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { projectPath } from '../actions'
 import { InlineRename, KindPill, ProjectCard, ProjectThumb } from '../components/ProjectCard'
-import { liveBus, uploadFiles, uploadsIn, useUploads } from '../stores'
+import { count, downloadAll, runAll, SpacePickerModal, TagsModal, useSelection } from '../library/bulk'
+import { MediaTab, MediaTrash } from '../library/MediaTab'
+import { VirtualGrid } from '../library/VirtualGrid'
+import '../library/library.css'
+import { liveBus } from '../stores'
 import { SyncBadge } from '../SystemChrome'
 import { projectSyncBadge, useIsDesktop, useSystem } from '../system'
-import { CardSkeletons, ConfirmDialog, EmptyState, MenuList, Modal, Popover, Progress, Spinner, TabPanel, Tabs, Thumb, useAsync, useEditGate, useFilePicker, type MenuItemDef, usePageTitle } from '../ui'
-import { absoluteUrl, aspectLabel, copyText, downloadUrl, formatBytes, formatDuration, relativeTime } from '../util'
-import { filterAssets, filterProjects, mergeProjects, ORIGIN_LABEL, PROJECT_FILTERS, SORTS, toggleInSet, type AssetFilter, type ProjectFilter, type SortKey } from './libraryLogic'
+import { CardSkeletons, ConfirmDialog, EmptyState, MenuList, Modal, Popover, TabPanel, Tabs, useAsync, useEditGate, type MenuItemDef, usePageTitle } from '../ui'
+import { absoluteUrl, aspectLabel, copyText, downloadUrl, formatDuration, relativeTime } from '../util'
+import { filterProjects, mergeProjects, PROJECT_FILTERS, readLibraryView, SORTS, tagCounts, writeLibraryView, type LibraryView, type SortKey, type ViewMode } from './libraryLogic'
 
-type Tab = 'projects' | 'assets' | 'trash'
-
-function readView(): 'grid' | 'list' {
+function readStoredView(): ViewMode {
   try {
     return localStorage.getItem('ps.libraryView') === 'list' ? 'list' : 'grid'
   } catch {
@@ -49,22 +48,18 @@ function readView(): 'grid' | 'list' {
   }
 }
 
-/** A delete confirmation: opens on Cancel, so Enter never deletes. */
-function ConfirmModal({ title, body, confirm, onConfirm, onClose, busy }: { title: string; body: string; confirm: string; onConfirm: () => void; onClose: () => void; busy?: boolean }) {
-  return <ConfirmDialog title={title} body={body} confirmLabel={confirm} onConfirm={onConfirm} onClose={onClose} busy={busy} />
-}
+type Update = (p: Partial<LibraryView>, replace?: boolean) => void
 
 // ---------------- projects / trash ----------------
-function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
+function ProjectsTab({ trash, v, update }: { trash: boolean; v: LibraryView; update: Update }) {
   const navigate = useNavigate()
   const workspaceId = useSession((s) => s.workspaceId)
-  const [filter, setFilter] = useState<ProjectFilter>('all')
-  const [sort, setSort] = useState<SortKey>('updated')
-  const [view, setViewState] = useState(readView)
-  const [sel, setSel] = useState<Set<string>>(new Set())
+  const me = useSession((s) => s.user?.id)
   const [renaming, setRenaming] = useState<string>()
   const [confirm, setConfirm] = useState<{ ids: string[] }>()
   const [exportFirst, setExportFirst] = useState<ProjectSummary>()
+  const [tagging, setTagging] = useState<ProjectSummary[]>()
+  const [moving, setMoving] = useState<ProjectSummary[]>()
   const [busy, setBusy] = useState(false)
   const desktop = useIsDesktop()
   const sync = useSystem((s) => s.sync)
@@ -74,24 +69,24 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
   const { data, loading, error, reload, setData } = useAsync(async () => {
     if (!workspaceId) return []
     if (trash) return api.projects(workspaceId, { trashed: true })
-    const [all, tpl] = await Promise.all([api.projects(workspaceId), api.projects(workspaceId, { templates: true }).catch(() => [] as ProjectSummary[])])
+    // a big library shows its first page while the rest arrives (A-15)
+    const [all, tpl] = await Promise.all([api.projects(workspaceId, { onPage: (soFar) => setData(soFar) }), api.projects(workspaceId, { templates: true }).catch(() => [] as ProjectSummary[])])
     return mergeProjects(all, tpl)
   }, [workspaceId, trash])
 
-  useEffect(() => setSel(new Set()), [workspaceId, trash])
   useEffect(() => liveBus.onProject(() => reload()), [reload])
   useEffect(() => liveBus.onResync(() => reload()), [reload])
 
-  const setView = (v: 'grid' | 'list') => {
-    setViewState(v)
-    try {
-      localStorage.setItem('ps.libraryView', v)
-    } catch {
-      /* ignore */
-    }
-  }
-  const list = useMemo(() => filterProjects(data ?? [], { filter: trash ? 'all' : filter, q, sort, trashed: trash }), [data, filter, q, sort, trash])
-  const selecting = sel.size > 0
+  const list = useMemo(
+    () => filterProjects(data ?? [], { filter: trash ? 'all' : v.type, q: v.q, sort: v.sort, trashed: trash, createdBy: v.mine ? me : undefined, tag: trash ? undefined : v.tag }),
+    [data, v.type, v.q, v.sort, trash, v.mine, me, v.tag],
+  )
+  const tags = useMemo(() => tagCounts((data ?? []).filter((p) => !p.trashed)), [data])
+  const order = useMemo(() => list.map((p) => p.id), [list])
+  const s = useSelection(order, `${workspaceId}:${trash}`)
+  const selecting = s.sel.size > 0
+  const byId = useMemo(() => new Map(list.map((p) => [p.id, p])), [list])
+  const selected = s.ids.map((id) => byId.get(id)!).filter(Boolean)
   const patchLocal = (id: string, p: Partial<ProjectSummary> | null) => setData((cur) => (cur ?? []).flatMap((x) => (x.id === id ? (p ? [{ ...x, ...p }] : []) : [x])))
 
   const act = useCallback(
@@ -107,18 +102,82 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
     [reload],
   )
 
-  const trashIds = (ids: string[]) =>
-    act(async () => {
-      ids.forEach((id) => patchLocal(id, null))
-      setSel(new Set())
-      await Promise.all(ids.map((id) => api.patchProject(id, { trashed: true })))
-    }, ids.length > 1 ? `${ids.length} projects moved to trash` : 'Moved to trash')
-  const restoreIds = (ids: string[]) =>
-    act(async () => {
-      ids.forEach((id) => patchLocal(id, null))
-      setSel(new Set())
-      await Promise.all(ids.map((id) => api.patchProject(id, { trashed: false })))
-    }, ids.length > 1 ? `${ids.length} projects restored` : 'Restored')
+  /** One action over many projects: what failed is said, the rest is done. */
+  async function bulk(items: ProjectSummary[], fn: (p: ProjectSummary) => Promise<unknown>, done: (n: number) => string) {
+    const failed = await runAll(items, fn)
+    s.clear()
+    if (items.length > failed.length) toast(done(items.length - failed.length))
+    if (failed.length) {
+      toastError(failed[0].error, `${count(failed.length, 'project')} couldn’t be changed`)
+      reload()
+    }
+  }
+
+  const trashIds = (ids: string[]) => {
+    ids.forEach((id) => patchLocal(id, null))
+    void bulk(ids.map((id) => byId.get(id)!).filter(Boolean), (p) => api.patchProject(p.id, { trashed: true }), (n) => (n > 1 ? `${n} projects moved to trash` : 'Moved to trash'))
+  }
+  const restoreIds = (ids: string[]) => {
+    ids.forEach((id) => patchLocal(id, null))
+    void bulk(ids.map((id) => byId.get(id)!).filter(Boolean), (p) => api.patchProject(p.id, { trashed: false }), (n) => (n > 1 ? `${n} projects restored` : 'Restored'))
+  }
+  const duplicate = (items: ProjectSummary[]) =>
+    bulk(
+      items,
+      async (p) => {
+        const c = await api.duplicateProject(p.id)
+        setData((cur) => [c, ...(cur ?? [])])
+      },
+      (n) => (n > 1 ? `${n} projects duplicated` : 'Duplicated'),
+    )
+  const saveAsTemplates = (items: ProjectSummary[]) =>
+    bulk(
+      items.filter((p) => !p.isTemplate),
+      async (p) => {
+        patchLocal(p.id, { isTemplate: true })
+        await api.patchProject(p.id, { isTemplate: true })
+      },
+      (n) => (n > 1 ? `${n} projects saved as team templates` : 'Saved as a team template'),
+    )
+  // each project's latest export (the ones not exported yet are said)
+  async function download(items: ProjectSummary[]) {
+    const urls: string[] = []
+    let none = 0
+    await runAll(items, async (p) => {
+      const ex = (await api.exports(p.id))[0]
+      if (ex) urls.push(downloadUrl(ex.url))
+      else none++
+    })
+    if (urls.length) downloadAll(urls)
+    if (none) toast(`${count(none, 'project')} ${none === 1 ? 'hasn’t' : 'haven’t'} been exported yet: export ${none === 1 ? 'it' : 'them'} first.`)
+    s.clear()
+  }
+  async function copyTo(items: ProjectSummary[], to: string, move: boolean) {
+    const name = useSession.getState().workspaces.find((x) => x.id === to)?.name ?? 'the other space'
+    let missing = 0
+    await bulk(
+      items,
+      async (p) => {
+        const r = await api.copyProject(p.id, { workspaceId: to, move })
+        missing += r.missingMedia
+        if (move) patchLocal(p.id, null)
+      },
+      (n) => `${count(n, 'project')} ${move ? 'moved' : 'copied'} to “${name}”${missing ? ` (${count(missing, 'clip')} that weren’t ready stayed behind)` : ''}`,
+    )
+    setMoving(undefined)
+  }
+  async function saveTags(items: ProjectSummary[], next: string[]) {
+    await bulk(
+      items,
+      async (p) => {
+        const r = await api.patchProject(p.id, { tags: next })
+        patchLocal(p.id, { tags: r.tags, version: r.version })
+      },
+      (n) => (n > 1 ? `Tags saved on ${n} projects` : 'Tags saved'),
+    )
+    setTagging(undefined)
+  }
+
   // a share link shows a finished export: with none yet, offer to export instead of a link to "No finished video yet"
   async function copyShareLink(p: ProjectSummary) {
     try {
@@ -136,7 +195,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
     try {
       await Promise.all(ids.map((id) => api.deleteProject(id)))
       ids.forEach((id) => patchLocal(id, null))
-      setSel(new Set())
+      s.clear()
       toast(ids.length > 1 ? `${ids.length} projects deleted` : 'Project deleted')
     } catch (e) {
       toastError(e)
@@ -150,7 +209,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
   function menuFor(p: ProjectSummary): MenuItemDef[] {
     if (trash)
       return [
-        { label: 'Restore', icon: <ArchiveRestore size={15} />, ...w, onClick: () => void restoreIds([p.id]) },
+        { label: 'Restore', icon: <ArchiveRestore size={15} />, ...w, onClick: () => restoreIds([p.id]) },
         { sep: true, label: '' },
         { label: 'Delete forever', icon: <Trash2 size={15} />, danger: true, ...w, onClick: () => setConfirm({ ids: [p.id] }) },
       ]
@@ -158,22 +217,8 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
       { label: 'Open in editor', icon: <FolderOpen size={15} />, onClick: () => navigate(`/edit/${p.id}`) },
       ...(p.kind === 'producer' ? [{ label: 'Resume in Producer AI', icon: <Sparkles size={15} />, ...w, onClick: () => navigate(`/producer/${p.id}`) }] : []),
       { label: 'Rename', icon: <Pencil size={15} />, ...w, onClick: () => setRenaming(p.id) },
-      {
-        label: 'Duplicate',
-        icon: <Copy size={15} />,
-        ...w,
-        onClick: () =>
-          void act(async () => {
-            const c = await api.duplicateProject(p.id)
-            setData((cur) => [c, ...(cur ?? [])])
-          }, 'Duplicated'),
-      },
-      {
-        label: 'Copy share link',
-        icon: <Link2 size={15} />,
-        ...w,
-        onClick: () => void copyShareLink(p),
-      },
+      { label: 'Duplicate', icon: <Copy size={15} />, ...w, onClick: () => void duplicate([p]) },
+      { label: 'Copy share link', icon: <Link2 size={15} />, ...w, onClick: () => void copyShareLink(p) },
       {
         label: p.isTemplate ? 'Remove from templates' : 'Save as template',
         icon: <LayoutTemplate size={15} />,
@@ -184,9 +229,11 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
             await api.patchProject(p.id, { isTemplate: !p.isTemplate })
           }, p.isTemplate ? 'Removed from templates' : 'Saved as a team template'),
       },
-      { label: 'Select', icon: <CheckSquare size={15} />, onClick: () => setSel((s) => toggleInSet(s, p.id)) },
+      { label: 'Tags…', icon: <Tags size={15} />, ...w, onClick: () => setTagging([p]) },
+      { label: 'Copy or move to a space…', icon: <Copy size={15} />, ...w, onClick: () => setMoving([p]) },
+      { label: 'Select', icon: <CheckSquare size={15} />, onClick: () => s.toggle(p.id) },
       { sep: true, label: '' },
-      { label: 'Move to trash', icon: <Trash2 size={15} />, danger: true, ...w, onClick: () => void trashIds([p.id]) },
+      { label: 'Move to trash', icon: <Trash2 size={15} />, danger: true, ...w, onClick: () => trashIds([p.id]) },
     ]
   }
 
@@ -197,7 +244,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
     void act(() => api.patchProject(p.id, { name, baseVersion: p.version }))
   }
   const open = (p: ProjectSummary) => (trash ? undefined : navigate(projectPath(p)))
-  const allSelected = list.length > 0 && list.every((p) => sel.has(p.id))
+  const filtered = !!(v.q || v.type !== 'all' || v.mine || v.tag)
 
   return (
     <>
@@ -205,34 +252,47 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
         {!trash && (
           <div className="row" style={{ gap: 6, flexWrap: 'wrap' }} role="group" aria-label="Project type">
             {PROJECT_FILTERS.map((f) => (
-              <button key={f.id} aria-pressed={filter === f.id} className={clsx('chip', filter === f.id && 'active')} onClick={() => setFilter(f.id)}>{f.label}</button>
+              <button key={f.id} aria-pressed={v.type === f.id} className={clsx('chip', v.type === f.id && 'active')} onClick={() => update({ type: f.id })}>{f.label}</button>
             ))}
+            <button aria-pressed={v.mine} className={clsx('chip', v.mine && 'active')} onClick={() => update({ mine: !v.mine })}><User size={13} /> Created by me</button>
+            {tags.length > 0 && (
+              <select className="input" style={{ width: 150, height: 32 }} value={v.tag ?? ''} onChange={(e) => update({ tag: e.target.value || undefined })} aria-label="Tag">
+                <option value="">All tags</option>
+                {tags.map((t) => <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>)}
+              </select>
+            )}
           </div>
         )}
-        {trash && <span className="muted" style={{ fontSize: '0.8125rem' }}>Projects in trash can be restored or deleted permanently.</span>}
         <span className="spacer" />
-        <select className="input" style={{ width: 160, height: 32 }} value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort">
-          {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        <select className="input" style={{ width: 160, height: 32 }} value={v.sort} onChange={(e) => update({ sort: e.target.value as SortKey })} aria-label="Sort">
+          {SORTS.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
         </select>
-        <div className="ps-seg" aria-label="View">
-          <button className={view === 'grid' ? 'on' : ''} onClick={() => setView('grid')} aria-label="Grid view" aria-pressed={view === 'grid'}><LayoutGrid size={14} /></button>
-          <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')} aria-label="List view" aria-pressed={view === 'list'}><List size={14} /></button>
+        <div className="ps-seg" role="group" aria-label="View">
+          <button className={v.view === 'grid' ? 'on' : ''} onClick={() => update({ view: 'grid' })} aria-label="Grid view" aria-pressed={v.view === 'grid'}><LayoutGrid size={14} /></button>
+          <button className={v.view === 'list' ? 'on' : ''} onClick={() => update({ view: 'list' })} aria-label="List view" aria-pressed={v.view === 'list'}><List size={14} /></button>
         </div>
       </div>
 
       {selecting && (
         <div className="ps-bulk" role="region" aria-label="Selection">
-          <button className="btn ghost sm icon" onClick={() => setSel(new Set())} aria-label="Clear selection"><X size={14} /></button>
-          <strong>{sel.size} selected</strong>
-          <button className="btn ghost sm" onClick={() => setSel(allSelected ? new Set() : new Set(list.map((p) => p.id)))}>{allSelected ? 'Deselect all' : 'Select all'}</button>
+          <button className="btn ghost sm icon" onClick={s.clear} aria-label="Clear selection"><X size={14} /></button>
+          <strong aria-live="polite">{s.sel.size} selected</strong>
+          <button className="btn ghost sm" onClick={() => (s.all ? s.clear() : s.selectAll())}>{s.all ? 'Deselect all' : 'Select all'}</button>
           <span className="spacer" />
           {trash ? (
             <>
-              <button className="btn sm" {...gate.props} onClick={() => void restoreIds([...sel])}><ArchiveRestore size={14} /> Restore</button>
-              <button className="btn sm" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} {...gate.props} onClick={() => setConfirm({ ids: [...sel] })}><Trash2 size={14} /> Delete forever</button>
+              <button className="btn sm" {...gate.props} onClick={() => restoreIds(s.ids)}><ArchiveRestore size={14} /> Restore</button>
+              <button className="btn sm ps-danger-btn" {...gate.props} onClick={() => setConfirm({ ids: s.ids })}><Trash2 size={14} /> Delete forever</button>
             </>
           ) : (
-            <button className="btn sm" {...gate.props} onClick={() => void trashIds([...sel])}><Trash2 size={14} /> Move to trash</button>
+            <>
+              <button className="btn sm" {...gate.props} onClick={() => void duplicate(selected)}><Copy size={14} /> Duplicate</button>
+              <button className="btn sm" {...gate.props} onClick={() => void saveAsTemplates(selected)} disabled={!gate.canEdit || selected.every((p) => p.isTemplate)}><LayoutTemplate size={14} /> Save as template</button>
+              <button className="btn sm" {...gate.props} onClick={() => setTagging(selected)}><Tags size={14} /> Tags…</button>
+              <button className="btn sm" {...gate.props} onClick={() => setMoving(selected)}><Copy size={14} /> Copy or move…</button>
+              <button className="btn sm" onClick={() => void download(selected)}><Download size={14} /> Download</button>
+              <button className="btn sm" {...gate.props} onClick={() => trashIds(s.ids)}><Trash2 size={14} /> Move to trash</button>
+            </>
           )}
         </div>
       )}
@@ -244,38 +304,45 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
       ) : !list.length ? (
         trash ? (
           <EmptyState icon={<Trash2 size={24} />} title="Trash is empty" body="Projects you move to trash land here so you can restore them." />
-        ) : q || filter !== 'all' ? (
-          <EmptyState icon={<Search size={24} />} title="Nothing matches" body={q ? `No projects match “${q}”.` : 'No projects of this type yet.'} action={<button className="btn" onClick={() => { setFilter('all'); navigate('/library') }}>Clear filters</button>} />
+        ) : filtered ? (
+          <EmptyState icon={<Search size={24} />} title="Nothing matches" body={v.q ? `No projects match “${v.q}”.` : 'No projects match these filters.'} action={<button className="btn" onClick={() => update({ type: 'all', q: '', mine: false, tag: undefined })}>Clear filters</button>} />
         ) : (
           <EmptyState icon={<FolderOpen size={24} />} title="No projects yet" body="Start a blank edit or let Producer AI build a first cut from a recording." action={<div className="row"><button className="btn primary" {...gate.props} onClick={() => navigate('/producer/new')}><Sparkles size={15} /> New from recording</button><button className="btn" {...gate.props} onClick={() => navigate('/editor')}>Blank project</button></div>} />
         )
-      ) : view === 'grid' ? (
-        <div className={clsx('ps-grid', selecting && 'selecting')}>
-          {list.map((p) => (
-            <ProjectCard
-              key={p.id}
-              p={p}
-              onOpen={() => open(p)}
-              menu={menuFor(p)}
-              selectable
-              selecting={selecting}
-              selected={sel.has(p.id)}
-              onToggleSelect={() => setSel((s) => toggleInSet(s, p.id))}
-              renaming={renaming === p.id}
-              onRename={rename(p)}
-              onRenameCancel={() => setRenaming(undefined)}
-              sub={trash ? `Trashed · edited ${relativeTime(p.updatedAt)}` : undefined}
-              overlay={desktop && !trash ? <SyncBadge state={projectSyncBadge(p.id, sync)} /> : undefined}
-            />
-          ))}
-        </div>
+      ) : v.view === 'grid' ? (
+        <>
+          <VirtualGrid
+            items={list}
+            keyOf={(p) => p.id}
+            label={trash ? 'Projects in the trash' : 'Projects'}
+            className={clsx(selecting && 'selecting')}
+            onKeyDown={(e) => s.onKeyDown(e)}
+            render={(p) => (
+              <ProjectCard
+                p={p}
+                onOpen={() => open(p)}
+                menu={menuFor(p)}
+                selectable
+                selecting={selecting}
+                selected={s.sel.has(p.id)}
+                onToggleSelect={(how) => s.toggle(p.id, how)}
+                renaming={renaming === p.id}
+                onRename={rename(p)}
+                onRenameCancel={() => setRenaming(undefined)}
+                sub={trash ? `Trashed · edited ${relativeTime(p.updatedAt)}` : undefined}
+                overlay={desktop && !trash ? <SyncBadge state={projectSyncBadge(p.id, sync)} /> : undefined}
+              />
+            )}
+          />
+          {loading && <div className="row muted ps-lib-more" role="status">Loading more projects…</div>}
+        </>
       ) : (
-        <div className="ps-table-wrap">
+        <div className="ps-table-wrap" onKeyDown={s.onKeyDown}>
           <table className="ps-table">
             <thead>
               <tr>
                 <th style={{ width: 40 }}>
-                  <button className={clsx('ps-check-sm', allSelected && 'on')} onClick={() => setSel(allSelected ? new Set() : new Set(list.map((p) => p.id)))} aria-label="Select all">{allSelected && <Check size={12} strokeWidth={3} />}</button>
+                  <button className={clsx('ps-check-sm', s.all && 'on')} onClick={() => (s.all ? s.clear() : s.selectAll())} aria-label="Select all" aria-pressed={s.all}>{s.all && <Check size={12} strokeWidth={3} />}</button>
                 </th>
                 <th>Name</th>
                 <th>Type</th>
@@ -287,9 +354,9 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
             </thead>
             <tbody>
               {list.map((p) => (
-                <tr key={p.id} className={clsx(sel.has(p.id) && 'on')} onClick={() => (selecting ? setSel((s) => toggleInSet(s, p.id)) : open(p))}>
+                <tr key={p.id} className={clsx(s.sel.has(p.id) && 'on')} onClick={(e) => (selecting || e.shiftKey ? s.toggle(p.id, { shift: e.shiftKey }) : open(p))}>
                   <td onClick={(e) => e.stopPropagation()}>
-                    <button className={clsx('ps-check-sm', sel.has(p.id) && 'on')} onClick={() => setSel((s) => toggleInSet(s, p.id))} aria-label={`Select ${p.name}`}>{sel.has(p.id) && <Check size={12} strokeWidth={3} />}</button>
+                    <button className={clsx('ps-check-sm', s.sel.has(p.id) && 'on')} onClick={(e) => s.toggle(p.id, { shift: e.shiftKey })} aria-label={`Select ${p.name}`} aria-pressed={s.sel.has(p.id)}>{s.sel.has(p.id) && <Check size={12} strokeWidth={3} />}</button>
                   </td>
                   <td>
                     <div className="row" style={{ gap: 12 }}>
@@ -305,13 +372,14 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
                           className="ps-cell-name ps-text-btn"
                           onClick={(e) => {
                             e.stopPropagation()
-                            if (selecting) setSel((s) => toggleInSet(s, p.id))
+                            if (selecting || e.shiftKey) s.toggle(p.id, { shift: e.shiftKey })
                             else open(p)
                           }}
                         >
                           {p.name}
                         </button>
                       )}
+                      {p.tags?.length ? <span className="ps-pcard-tags" style={{ marginTop: 0 }}>{p.tags.slice(0, 2).map((t) => <span key={t} className="ps-tag">{t}</span>)}</span> : null}
                     </div>
                   </td>
                   <td><KindPill p={p} />{!p.isTemplate && p.kind === 'edit' && <span className="muted">Edit</span>}</td>
@@ -319,7 +387,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
                   <td className="muted mono">{formatDuration(p.duration)}</td>
                   <td className="muted">{relativeTime(p.updatedAt)}</td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    <Popover align="right" style={{ width: 210 }} trigger={({ toggle, open: o }) => <button className="btn ghost sm icon" onClick={toggle} aria-expanded={o} aria-label={`More actions for ${p.name}`}><MoreHorizontal size={15} /></button>}>
+                    <Popover align="right" style={{ width: 230 }} trigger={({ toggle, open: o }) => <button className="btn ghost sm icon" onClick={toggle} aria-expanded={o} aria-label={`More actions for ${p.name}`}><MoreHorizontal size={15} /></button>}>
                       {(close) => <MenuList items={menuFor(p)} close={close} />}
                     </Popover>
                   </td>
@@ -348,254 +416,56 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
       )}
 
       {confirm && (
-        <ConfirmModal
+        <ConfirmDialog
           title={confirm.ids.length > 1 ? `Delete ${confirm.ids.length} projects forever?` : 'Delete this project forever?'}
           body="This permanently removes the project and its edit history. Media in your library is kept. This can’t be undone."
-          confirm="Delete forever"
+          confirmLabel="Delete forever"
           busy={busy}
           onConfirm={() => void deleteForever(confirm.ids)}
           onClose={() => setConfirm(undefined)}
         />
       )}
+      {tagging && (
+        <TagsModal
+          initial={tagging.length === 1 ? tagging[0].tags ?? [] : []}
+          suggestions={tags.map((t) => t.tag)}
+          count={tagging.length}
+          onClose={() => setTagging(undefined)}
+          onSave={(next) => saveTags(tagging, next)}
+        />
+      )}
+      {moving && <SpacePickerModal what={moving.length > 1 ? count(moving.length, 'project') : `“${moving[0].name}”`} onClose={() => setMoving(undefined)} onPick={(to, move) => copyTo(moving, to, move)} />}
     </>
   )
 }
 
-// ---------------- assets ----------------
-function AssetPreview({ a, onClose }: { a: AssetRecord; onClose: () => void }) {
-  const k = a.asset.kind
+function TrashTab({ v, update }: { v: LibraryView; update: Update }) {
   return (
-    <Modal title={a.asset.name} subtitle={`${ORIGIN_LABEL[a.origin] ?? a.origin} · ${formatBytes(a.asset.sizeBytes)}${a.asset.duration ? ` · ${formatDuration(a.asset.duration)}` : ''}${a.asset.width ? ` · ${a.asset.width}×${a.asset.height}` : ''}`} onClose={onClose} width={900}>
-      <div className="ps-preview">
-        {k === 'video' && <video src={mediaUrl(a.asset.id, 'proxy')} poster={mediaUrl(a.asset.id, 'thumb')} controls autoPlay playsInline onError={(e) => { const v = e.currentTarget; if (!v.dataset.fallback) { v.dataset.fallback = '1'; v.src = mediaUrl(a.asset.id, 'source') } }} />}
-        {k === 'audio' && (
-          <div className="ps-preview-audio">
-            <AudioLines size={46} />
-            <audio src={mediaUrl(a.asset.id, 'source')} controls autoPlay style={{ width: '100%' }} />
-          </div>
-        )}
-        {k === 'image' && <img src={mediaUrl(a.asset.id, 'source')} alt={a.asset.name} />}
+    <>
+      <div className="row" style={{ gap: 6, marginBottom: 14 }} role="group" aria-label="What’s in the trash">
+        <button aria-pressed={v.show === 'projects'} className={clsx('chip', v.show === 'projects' && 'active')} onClick={() => update({ show: 'projects' })}><FolderOpen size={13} /> Projects</button>
+        <button aria-pressed={v.show === 'media'} className={clsx('chip', v.show === 'media' && 'active')} onClick={() => update({ show: 'media' })}><Video size={13} /> Media</button>
       </div>
-      <div className="row" style={{ justifyContent: 'flex-end', marginTop: 14 }}>
-        <a className="btn" href={downloadUrl(mediaUrl(a.asset.id, 'source'))} download><Download size={14} /> Download original</a>
-      </div>
-    </Modal>
-  )
-}
-
-function AssetsTab({ q }: { q: string }) {
-  const workspaceId = useSession((s) => s.workspaceId)
-  const [filter, setFilter] = useState<AssetFilter>('all')
-  const [sort, setSort] = useState<SortKey>('updated')
-  const [drag, setDrag] = useState(false)
-  const [preview, setPreview] = useState<AssetRecord>()
-  const [renaming, setRenaming] = useState<string>()
-  const [confirm, setConfirm] = useState<AssetRecord>()
-  const [busy, setBusy] = useState(false)
-  const uploads = useUploads((s) => s.items)
-  const gate = useEditGate()
-  const { data, loading, error, reload, setData } = useAsync(() => (workspaceId ? api.assets(workspaceId) : Promise.resolve([])), [workspaceId])
-  const upsert = useCallback(
-    (a: AssetRecord) => {
-      if (a.workspaceId !== workspaceId) return
-      setData((cur) => {
-        const l = cur ?? []
-        return l.some((x) => x.asset.id === a.asset.id) ? l.map((x) => (x.asset.id === a.asset.id ? a : x)) : [a, ...l]
-      })
-    },
-    [workspaceId, setData],
-  )
-  useEffect(() => liveBus.onAsset(upsert), [upsert])
-  useEffect(() => liveBus.onResync(() => reload()), [reload])
-  const upload = (files: File[]) => workspaceId && gate.canEdit && files.length && void uploadFiles(workspaceId, files)
-  const pick = useFilePicker('video/*,audio/*,image/*', true, upload)
-  const list = useMemo(() => filterAssets(data ?? [], { filter, q, sort }), [data, filter, q, sort])
-  const pending = uploadsIn(uploads, workspaceId).filter((u) => u.status === 'uploading')
-
-  // like the editor's media tiles: process a failed clip again (works when its file reached storage)
-  async function retry(a: AssetRecord) {
-    try {
-      upsert(await api.retryAsset(a.asset.id))
-      toast('Processing again…')
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      if (/not arrived/i.test(msg)) toast('This file never reached storage. Delete it and upload it again.')
-      else toastError(e)
-    }
-  }
-
-  async function remove(a: AssetRecord) {
-    setBusy(true)
-    try {
-      await api.deleteAsset(a.asset.id)
-      setData((cur) => (cur ?? []).filter((x) => x.asset.id !== a.asset.id))
-      toast('Deleted')
-    } catch (e) {
-      toastError(e)
-    } finally {
-      setBusy(false)
-      setConfirm(undefined)
-    }
-  }
-
-  const filters: Array<{ id: AssetFilter; label: string; icon: React.ReactNode }> = [
-    { id: 'all', label: 'All', icon: null },
-    { id: 'video', label: 'Video', icon: <Video size={13} /> },
-    { id: 'audio', label: 'Audio', icon: <AudioLines size={13} /> },
-    { id: 'image', label: 'Images', icon: <ImageIcon size={13} /> },
-    { id: 'generated', label: 'Generated', icon: <Sparkles size={13} /> },
-  ]
-
-  return (
-    <div
-      className={clsx('ps-assets', drag && 'dragging')}
-      onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes('Files') || !gate.canEdit) return
-        e.preventDefault()
-        setDrag(true)
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget.contains(e.relatedTarget as Node)) return
-        setDrag(false)
-      }}
-      onDrop={(e) => {
-        e.preventDefault()
-        setDrag(false)
-        upload(Array.from(e.dataTransfer.files).filter((f) => /^(video|audio|image)\//.test(f.type)))
-      }}
-    >
-      <div className="ps-lib-toolbar">
-        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-          {filters.map((f) => (
-            <button key={f.id} aria-pressed={filter === f.id} className={clsx('chip', filter === f.id && 'active')} onClick={() => setFilter(f.id)}>{f.icon}{f.label}</button>
-          ))}
-        </div>
-        <span className="spacer" />
-        <select className="input" style={{ width: 160, height: 32 }} value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort media">
-          <option value="updated">Newest first</option>
-          <option value="name">Name A–Z</option>
-          <option value="duration">Longest first</option>
-        </select>
-        <button className="btn primary sm" {...gate.props} onClick={pick}><Upload size={14} /> Upload</button>
-      </div>
-
-      {drag && (
-        <div className="ps-drop-overlay">
-          <Upload size={30} />
-          <strong>Drop to upload to this space</strong>
-        </div>
-      )}
-
-      {error ? (
-        <div className="ps-alert">Couldn’t load media. <button className="btn sm" onClick={reload}>Retry</button></div>
-      ) : loading && !data ? (
-        <div className="ps-grid"><CardSkeletons n={8} /></div>
-      ) : !list.length && !pending.length ? (
-        q || filter !== 'all' ? (
-          <EmptyState icon={<Search size={24} />} title="No media matches" body="Try another type or search term." />
-        ) : (
-          <EmptyState icon={<Upload size={24} />} title="Drop files anywhere here" body="Upload recordings, music, voiceovers and images. Everything in this space’s library is available in the editor and to Producer AI." action={<button className="btn primary" {...gate.props} onClick={pick}><Upload size={15} /> Upload media</button>} />
-        )
-      ) : (
-        <div className="ps-grid">
-          {pending.map((u) => (
-            <div key={u.id} className="ps-acard">
-              <div className="ps-thumb" style={{ display: 'grid', placeItems: 'center' }}>
-                <div style={{ width: '70%' }}>
-                  <div className="muted" style={{ fontSize: '0.75rem', marginBottom: 8, textAlign: 'center' }}>Uploading {Math.round(u.progress * 100)}%</div>
-                  <Progress value={u.progress} />
-                </div>
-              </div>
-              <div className="ps-pcard-meta"><div><div className="ps-pcard-name">{u.name}</div><div className="ps-pcard-sub">{formatBytes(u.size)}</div></div></div>
-            </div>
-          ))}
-          {list.map((a) => (
-            <div
-              key={a.asset.id}
-              className="ps-pcard"
-              onClick={() => a.status === 'ready' && setPreview(a)}
-              role="button"
-              tabIndex={0}
-              // only Enter on the card itself: not on its rename field or menu (those would open the preview too)
-              onKeyDown={(e) => e.target === e.currentTarget && e.key === 'Enter' && a.status === 'ready' && setPreview(a)}
-              aria-label={`Preview ${a.asset.name}`}
-            >
-              <Thumb src={a.asset.kind !== 'audio' && a.status === 'ready' ? mediaUrl(a.asset.id, 'thumb') : undefined} seed={a.asset.id} icon={a.asset.kind === 'audio' ? <AudioLines size={28} /> : a.asset.kind === 'image' ? <ImageIcon size={24} /> : <Video size={24} />}>
-                {a.status !== 'ready' && (
-                  <div className={clsx('ps-asset-status', a.status === 'error' && 'failed')}>
-                    {a.status === 'error' ? (
-                      <>
-                        <span className="why" title={a.error}>{a.error || 'Processing failed'}</span>
-                        <button className="btn sm" onClick={(e) => (e.stopPropagation(), void retry(a))} aria-label={`Retry processing ${a.asset.name}`}><RotateCcw size={13} /> Retry</button>
-                      </>
-                    ) : (
-                      <><Spinner size={14} /> Processing…</>
-                    )}
-                  </div>
-                )}
-                {a.asset.duration ? <span className="ps-thumb-badge">{formatDuration(a.asset.duration)}</span> : null}
-                <span className="ps-thumb-badge left">{ORIGIN_LABEL[a.origin] ?? a.origin}</span>
-              </Thumb>
-              <div className="ps-pcard-meta">
-                <div>
-                  {renaming === a.asset.id ? (
-                    <InlineRename
-                      value={a.asset.name}
-                      onCancel={() => setRenaming(undefined)}
-                      onSave={async (name) => {
-                        setRenaming(undefined)
-                        upsert({ ...a, asset: { ...a.asset, name } })
-                        try {
-                          upsert(await api.renameAsset(a.asset.id, name, a.etag))
-                        } catch (e) {
-                          upsert(a)
-                          toastError(e)
-                        }
-                      }}
-                    />
-                  ) : (
-                    <div className="ps-pcard-name" title={a.asset.name}>{a.asset.name}</div>
-                  )}
-                  <div className="ps-pcard-sub">{a.asset.kind} · {formatBytes(a.asset.sizeBytes)} · {relativeTime(a.createdAt)}</div>
-                </div>
-                <Popover align="right" style={{ width: 190 }} trigger={({ toggle, open }) => <button className="btn ghost sm icon ps-pcard-menu" onClick={toggle} aria-expanded={open} aria-label={`More actions for ${a.asset.name}`}><MoreHorizontal size={16} /></button>}>
-                  {(close) => (
-                    <>
-                      <MenuList close={close} items={[{ label: 'Preview', icon: <Eye size={15} />, disabled: a.status !== 'ready', onClick: () => setPreview(a) }, { label: 'Rename', icon: <Pencil size={15} />, disabled: !gate.canEdit, tip: gate.tip, onClick: () => setRenaming(a.asset.id) }]} />
-                      <a className="ps-menu-item" href={downloadUrl(mediaUrl(a.asset.id, 'source'))} download onClick={close}><Download size={15} /> Download</a>
-                      <div className="ps-menu-sep" />
-                      <MenuList close={close} items={[{ label: 'Delete', icon: <Trash2 size={15} />, danger: true, disabled: !gate.canEdit, tip: gate.tip, onClick: () => setConfirm(a) }]} />
-                    </>
-                  )}
-                </Popover>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {preview && <AssetPreview a={preview} onClose={() => setPreview(undefined)} />}
-      {confirm && <ConfirmModal title={`Delete “${confirm.asset.name}”?`} body="Projects that use this file will show it as missing. This can’t be undone." confirm="Delete" busy={busy} onConfirm={() => void remove(confirm)} onClose={() => setConfirm(undefined)} />}
-    </div>
+      {v.show === 'media' ? <MediaTrash /> : <ProjectsTab trash v={v} update={update} />}
+    </>
   )
 }
 
 export default function LibraryPage() {
   usePageTitle('Library')
   const [params, setParams] = useSearchParams()
-  const tab = (['projects', 'assets', 'trash'].includes(params.get('tab') ?? '') ? params.get('tab') : 'projects') as Tab
-  const q = params.get('q') ?? ''
+  const v = readLibraryView(params, readStoredView())
   const ws = useSession((s) => s.workspaces.find((w) => w.id === s.workspaceId))
-  const setTab = (t: Tab) => {
-    const n = new URLSearchParams(params)
-    if (t === 'projects') n.delete('tab')
-    else n.set('tab', t)
-    setParams(n)
-  }
-  const setQ = (v: string) => {
-    const n = new URLSearchParams(params)
-    if (v) n.set('q', v)
-    else n.delete('q')
-    setParams(n, { replace: true })
+  // tab, filters, sort and view live in the URL (A-12): a link opens the same view, and a reload keeps it
+  const update: Update = (patch, replace = false) => {
+    if (patch.view) {
+      try {
+        localStorage.setItem('ps.libraryView', patch.view)
+      } catch {
+        /* ignore */
+      }
+    }
+    setParams(writeLibraryView(params, patch), { replace })
   }
   return (
     <div className="ps-page">
@@ -607,23 +477,23 @@ export default function LibraryPage() {
         <span className="spacer" />
         <div style={{ position: 'relative', width: 'min(300px, 100%)' }}>
           <Search size={15} style={{ position: 'absolute', left: 12, top: 11, color: 'var(--text-3)' }} />
-          <input className="input" style={{ paddingLeft: 34 }} placeholder={tab === 'assets' ? 'Filter media' : 'Filter projects'} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filter library" />
-          {q && <button className="btn ghost sm icon" style={{ position: 'absolute', right: 4, top: 4 }} onClick={() => setQ('')} aria-label="Clear filter"><X size={13} /></button>}
+          <input className="input" style={{ paddingLeft: 34 }} placeholder={v.tab === 'assets' ? 'Filter media' : 'Filter projects'} value={v.q} onChange={(e) => update({ q: e.target.value }, true)} aria-label="Filter library" />
+          {v.q && <button className="btn ghost sm icon" style={{ position: 'absolute', right: 4, top: 4 }} onClick={() => update({ q: '' }, true)} aria-label="Clear filter"><X size={13} /></button>}
         </div>
       </div>
       <Tabs
         id="library"
         label="Library"
-        value={tab}
-        onChange={setTab}
+        value={v.tab}
+        onChange={(t) => update({ tab: t })}
         tabs={[
           { id: 'projects', label: 'Projects', icon: <FolderOpen size={15} /> },
           { id: 'assets', label: 'Assets', icon: <Video size={15} /> },
           { id: 'trash', label: 'Trash', icon: <Trash2 size={15} /> },
         ]}
       />
-      <TabPanel tabs="library" value={tab}>
-        {tab === 'assets' ? <AssetsTab q={q} /> : <ProjectsTab key={tab} trash={tab === 'trash'} q={q} />}
+      <TabPanel tabs="library" value={v.tab}>
+        {v.tab === 'assets' ? <MediaTab v={v} update={update} /> : v.tab === 'trash' ? <TrashTab v={v} update={update} /> : <ProjectsTab key="projects" trash={false} v={v} update={update} />}
       </TabPanel>
     </div>
   )
