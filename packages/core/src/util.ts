@@ -10,6 +10,21 @@ export function uid(prefix = 'i'): string {
 
 export const EPS = 1e-6
 
+/**
+ * Links for copies of items (duplicate, paste): copied clips that were linked are linked to each other under a new
+ * group; a copy whose partner wasn't copied is linked to nothing.
+ */
+export function linkCopies(sources: Array<{ linkId?: string }>): (linkId: string | undefined) => string | undefined {
+  const count = new Map<string, number>()
+  for (const s of sources) if (s.linkId) count.set(s.linkId, (count.get(s.linkId) ?? 0) + 1)
+  const fresh = new Map<string, string>()
+  return (linkId) => {
+    if (!linkId || (count.get(linkId) ?? 0) < 2) return undefined
+    if (!fresh.has(linkId)) fresh.set(linkId, uid('l'))
+    return fresh.get(linkId)
+  }
+}
+
 export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
 }

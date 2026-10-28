@@ -132,6 +132,24 @@ describe('assistant tools', () => {
     expect(frozen).toMatchObject({ duration: 1.5, freezeAt: 5 })
   })
 
+  it('trims, moves and deletes a video with its separated audio, and links and unlinks items (E-1)', async () => {
+    const s = makeState()
+    await runTool(s, 'separate_audio', { itemId: 'v_1' }, env)
+    const audioId = () => s.project.tracks.find((t) => t.kind === 'audio')!.items[0]?.id
+    const a = audioId()
+    expect(JSON.parse((await runTool(s, 'get_timeline', {}, env)).result).tracks.find((t: { kind: string }) => t.kind === 'audio').items[0].linkId).toBeTruthy()
+    await runTool(s, 'trim_item', { itemId: 'v_1', edge: 'end', time: 7 }, env)
+    expect(findItem(s.project, a)!.item.duration).toBe(7)
+    await runTool(s, 'unlink_items', { itemIds: [a] }, env)
+    expect(findItem(s.project, 'v_1')!.item.linkId).toBeUndefined()
+    await runTool(s, 'move_item', { itemId: a, start: 2 }, env)
+    expect(findItem(s.project, a)!.item.start).toBe(2)
+    await runTool(s, 'link_items', { itemIds: ['v_1', a] }, env)
+    await runTool(s, 'delete_items', { itemIds: ['v_1'] }, env)
+    expect(findItem(s.project, a)).toBeNull()
+    await expect(runTool(s, 'link_items', { itemIds: ['v_1'] }, env)).rejects.toBeInstanceOf(ToolError)
+  })
+
   it('rejects invalid input and unknown ids with ToolError (model-fixable)', async () => {
     const s = makeState()
     await expect(runTool(s, 'trim_item', { itemId: 'v_1', edge: 'middle', time: 1 }, env)).rejects.toBeInstanceOf(ToolError)

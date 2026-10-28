@@ -653,6 +653,7 @@
 .t-video .tl-clip-label .badge, .t-image .tl-clip-label .badge { background: rgba(0,0,0,.45); border-color: rgba(255,255,255,.18); }
 .t-text .tl-clip-label, .t-caption .tl-clip-label, .t-shape .tl-clip-label { top: 50%; transform: translateY(-50%); }
 .t-audio .tl-clip-label { text-shadow: var(--clip-text-shadow); }
+.tl-linked { display: inline-grid; place-items: center; flex: none; opacity: .85; }
 .tl-fade { position: absolute; top: 0; bottom: 0; pointer-events: none; }
 .tl-fade.in { left: 0; background: linear-gradient(to bottom right, var(--fade) 50%, transparent 50%); }
 .tl-fade.out { right: 0; background: linear-gradient(to bottom left, var(--fade) 50%, transparent 50%); }

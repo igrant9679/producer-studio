@@ -71,6 +71,7 @@ export function handleKey(e: KeyboardEvent) {
   if (mod && lower === 'v') return done(), A.paste()
   if (mod && lower === 'd') return done(), A.duplicate()
   if (mod && lower === 'a') return done(), A.selectAll()
+  if (mod && !e.shiftKey && !e.altKey && lower === 'l') return done(), A.toggleLink()
   if (mod && e.shiftKey && lower === 's') return done(), A.separate()
   if (mod && lower === 's') return done(), void flush()
   if (mod && (k === '=' || k === '+')) return done(), s.setZoom(s.zoom * 1.4)

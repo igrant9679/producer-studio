@@ -19,7 +19,7 @@ import type {
   VideoItem,
   VisualItem,
 } from './types'
-import { EPS, round, uid } from './util'
+import { EPS, linkCopies, round, uid } from './util'
 
 export function clone<T>(v: T): T {
   // a project's media records (waveforms, transcripts) are never changed by an op: the copy shares them
@@ -532,13 +532,14 @@ export function deleteItems(p0: Project, ids: string[], opts: { ripple?: boolean
 export function duplicateItems(p0: Project, ids: string[]): { project: Project; newIds: string[] } {
   let p = p0
   const newIds: string[] = []
+  const relink = linkCopies(ids.flatMap((id) => findItem(p0, id)?.item ?? []))
   for (const id of ids) {
     const f = findItem(p, id)
     if (!editable(f)) continue
     const copy = clone(f.item)
     copy.id = uid(f.item.id.split('_')[0] || 'i')
     copy.start = itemEnd(f.item)
-    copy.linkId = undefined
+    copy.linkId = relink(f.item.linkId)
     p = addItem(p, copy, f.track.id)
     newIds.push(copy.id)
   }
@@ -563,11 +564,12 @@ export function pasteItems(p0: Project, items: Item[], t: number, assets: Record
   let p = p0
   for (const id of new Set(items.flatMap(assetIdsOf))) if (!p.assets[id] && assets[id]) p = addAsset(p, assets[id])
   const newIds: string[] = []
+  const relink = linkCopies(items)
   for (const src of items) {
     const it = clone(src)
     it.id = uid(src.id.split('_')[0] || 'i')
     it.start = round(t + (src.start - base), 4)
-    it.linkId = undefined
+    it.linkId = relink(src.linkId)
     p = addItem(p, it)
     newIds.push(it.id)
   }

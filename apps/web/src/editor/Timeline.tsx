@@ -12,9 +12,10 @@ import {
   insertTrack,
   itemEnd,
   moveItem,
+  moveLinked,
   projectDuration,
   snapPoints,
-  trimItem,
+  trimLinked,
   uid,
   updateItem,
   updateTrack,
@@ -52,7 +53,9 @@ import {
   ZoomIn,
   ZoomOut,
   Layers,
+  Link2,
   Shapes,
+  Unlink,
   Diamond,
   X,
 } from 'lucide-react'
@@ -196,6 +199,13 @@ function tabStopOf(p: Project, selection: string[]): string | undefined {
   return undefined
 }
 
+/** Link ids that two or more clips hold, sorted. */
+function liveLinkIds(p: Project): string[] {
+  const n = new Map<string, number>()
+  for (const t of p.tracks) for (const i of t.items) if (i.linkId) n.set(i.linkId, (n.get(i.linkId) ?? 0) + 1)
+  return [...n].filter(([, c]) => c > 1).map(([id]) => id).sort()
+}
+
 /** A clip asked to take focus once it has rendered (keyboard moves between clips and tracks). */
 let pendingFocus: string | null = null
 
@@ -218,6 +228,9 @@ function TimelineBody() {
   const { rows, height: rowsH } = useMemo(() => layoutRows(project, compact), [project, compact])
   const duration = projectDuration(project)
   const contentW = Math.max(viewW - HEADER_W, (duration + 12) * zoom)
+  // the same set while the groups don't change, so rows that didn't change don't draw again
+  const linkKey = useMemo(() => liveLinkIds(project).join(' '), [project])
+  const liveLinks = useMemo(() => new Set(linkKey.split(' ').filter(Boolean)), [linkKey])
   const [view, setView] = useState<View>(() => viewWindow(0, viewW))
 
   useLayoutEffect(() => {
@@ -429,12 +442,13 @@ function TimelineBody() {
           const { rows: rs } = layoutRows(orig, isCompact())
           const mainIdx = orig.tracks.findIndex((t) => t.main)
           const t = insertTrack(p2, kind, kind === 'audio' ? undefined : gapToAboveIndex(d.target.gap, rs, mainIdx))
-          p = moveItem(p2, id, { start, trackId: t.id })
-        } else p = moveItem(orig, id, { start })
+          p = moveLinked(p2, id, { start, trackId: t.id })
+        } else p = moveLinked(orig, id, { start })
       } else {
         const tr = d.target.row.track
         const ok = tr.id !== f.track.id && acceptsItem(tr.kind, f.item.type) && !tr.locked
-        p = moveItem(orig, id, { start, trackId: ok ? tr.id : f.track.id })
+        // the clips linked to it come along (dragging separated audio moves its main-track clip)
+        p = moveLinked(orig, id, { start, trackId: ok ? tr.id : f.track.id })
       }
     } else {
       // multi: shift in time on their own tracks (sorted so linked partners don't double-shift). A main-track clip
@@ -449,7 +463,7 @@ function TimelineBody() {
         const cur = findItem(p, id)
         if (!cur) continue
         const target = Math.max(0, starts.get(id)! + d.dt)
-        if (Math.abs(cur.item.start - target) > 1e-4) p = moveItem(p, id, { start: target })
+        if (Math.abs(cur.item.start - target) > 1e-4) p = moveLinked(p, id, { start: target })
       }
     }
     s.commit(p, 'Move clip')
@@ -476,7 +490,7 @@ function TimelineBody() {
         if (r.snapped) line = r.t
       }
       setSnapLine(line)
-      st.commit(trimItem(orig, item.id, edge, t), 'Trim', { coalesce: `trim:${item.id}:${edge}` })
+      st.commit(trimLinked(orig, item.id, edge, t), 'Trim', { coalesce: `trim:${item.id}:${edge}` })
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -536,7 +550,7 @@ function TimelineBody() {
       done()
       const step = (e.shiftKey ? 1 : 1 / p.fps) * (k === 'ArrowLeft' ? -1 : 1)
       pendingFocus = item.id
-      s.commit(moveItem(p, item.id, { start: Math.max(0, item.start + step) }), 'Move clip', { coalesce: `kmove:${item.id}` })
+      s.commit(moveLinked(p, item.id, { start: Math.max(0, item.start + step) }), 'Move clip', { coalesce: `kmove:${item.id}` })
     } else if ((k === 'ArrowUp' || k === 'ArrowDown') && e.altKey) {
       done()
       const rows = order()
@@ -550,7 +564,7 @@ function TimelineBody() {
       done()
       if (s.playhead > item.start && s.playhead < itemEnd(item)) {
         pendingFocus = item.id
-        s.commit(trimItem(p, item.id, k === '[' ? 'start' : 'end', s.playhead), 'Trim')
+        s.commit(trimLinked(p, item.id, k === '[' ? 'start' : 'end', s.playhead), 'Trim')
       }
     } else if (k === 'Enter') {
       done()
@@ -677,6 +691,7 @@ function TimelineBody() {
                 view={view}
                 dragIds={drag?.ids}
                 tabStop={tabStop}
+                liveLinks={liveLinks}
                 events={clipEvents}
               />
             ))}
@@ -912,11 +927,13 @@ interface TrackRowProps {
   view: View
   dragIds?: string[]
   tabStop?: string
+  /** Link ids held by two or more clips. */
+  liveLinks?: Set<string>
   events: ClipEvents
 }
 
 /** One track. Only the clips in and near the view are drawn; a clip re-renders only when it changed. */
-const TrackRow = memo(function TrackRow({ track: t, top, height, index, zoom, contentW, view, dragIds, tabStop, events }: TrackRowProps) {
+const TrackRow = memo(function TrackRow({ track: t, top, height, index, zoom, contentW, view, dragIds, tabStop, liveLinks, events }: TrackRowProps) {
   const visual = t.kind === 'video' || t.kind === 'overlay'
   return (
     <div className={clsx('tl-row', t.main && 'main', t.locked && 'locked', t.hidden && 'hidden')} style={{ top, height }} role="row" aria-rowindex={index}>
@@ -941,6 +958,7 @@ const TrackRow = memo(function TrackRow({ track: t, top, height, index, zoom, co
               dragging={dragging}
               tabStop={tabStop === it.id}
               adjacent={!!adjacent}
+              linked={!!it.linkId && !!liveLinks?.has(it.linkId)}
               visFrom={Math.max(0, view.x0 - a)}
               visTo={Math.max(0, Math.min(b, view.x1) - a)}
               events={events}
@@ -1037,6 +1055,8 @@ interface ClipProps {
   tabStop: boolean
   /** Touches the next clip: offers the transition button. */
   adjacent: boolean
+  /** In a link group with another clip: they split, trim, move and delete together. */
+  linked: boolean
   /** The part of the clip (px from its left edge) near the view: waveforms and filmstrips draw only that. */
   visFrom: number
   visTo: number
@@ -1045,7 +1065,7 @@ interface ClipProps {
 
 const TYPE_NAME: Record<Item['type'], string> = { video: 'Video', image: 'Image', audio: 'Audio', text: 'Text', caption: 'Caption', shape: 'Shape' }
 
-const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMain, zoom, height, dragging, tabStop, adjacent, visFrom, visTo, events }: ClipProps) {
+const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMain, zoom, height, dragging, tabStop, adjacent, linked, visFrom, visTo, events }: ClipProps) {
   const selected = useEditor((s) => s.selection.includes(item.id))
   const asset = useEditor((s) => ('assetId' in item ? s.project.assets[item.assetId] : undefined))
   const ref = useRef<HTMLDivElement>(null)
@@ -1122,7 +1142,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
         role="gridcell"
         tabIndex={tabStop ? 0 : -1}
         aria-selected={selected}
-        aria-label={`${label}: ${TYPE_NAME[item.type].toLowerCase()} clip at ${shortDuration(item.start)}, ${shortDuration(item.duration)} long${locked ? ', locked' : ''}`}
+        aria-label={`${label}: ${TYPE_NAME[item.type].toLowerCase()} clip at ${shortDuration(item.start)}, ${shortDuration(item.duration)} long${linked ? ', linked' : ''}${locked ? ', locked' : ''}`}
         style={{ left, width, height: height - 2, ['--clip' as string]: color }}
         onPointerDown={(e) => events.pointerDown(e, item)}
         onContextMenu={(e) => events.contextMenu(e, item)}
@@ -1140,6 +1160,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
           <Icon size={11} />
           <span className="nm">{label}</span>
           {width > 80 && <span className="du">{shortDuration(item.duration)}</span>}
+          {linked && <span className="tl-linked" aria-hidden="true"><Link2 size={10} /></span>}
           {speed && <span className="badge">{speed}×</span>}
           {item.type === 'video' && item.freezeAt !== undefined && <span className="badge">Freeze</span>}
           {'effects' in item && item.effects.length > 0 && width > 120 && <span className="badge">FX {item.effects.length}</span>}
@@ -1267,6 +1288,8 @@ function Waveform({ asset, item, width, height, visFrom, visTo, mini }: { asset:
 function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => void; onTransition: (itemId: string) => void }) {
   const project = useEditor((s) => s.project)
   const clipboard = useEditor((s) => s.clipboard)
+  const selection = useEditor((s) => s.selection)
+  const linked = A.selectionLinked(project, selection)
   const f = ctx.itemId ? findItem(project, ctx.itemId) : null
   const it = f?.item
   const run = (fn: () => void) => () => {
@@ -1286,6 +1309,15 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
           <MenuItem icon={<Scissors size={14} />} label="Cut" kbd="Ctrl X" onClick={run(A.cut)} />
           <MenuItem icon={<ClipboardPaste size={14} />} label="Paste" kbd="Ctrl V" onClick={run(A.paste)} disabled={!clipboard.length} />
           <MenuItem icon={<CopyPlus size={14} />} label="Duplicate" kbd="Ctrl D" onClick={run(A.duplicate)} />
+          <div className="ed-menu-sep" />
+          {(selection.length > 1 || it.linkId) && (
+            <MenuItem
+              icon={linked ? <Unlink size={14} /> : <Link2 size={14} />}
+              label={linked ? 'Unlink' : 'Link clips'}
+              kbd="Ctrl L"
+              onClick={run(linked ? A.unlink : A.toggleLink)}
+            />
+          )}
           <div className="ed-menu-sep" />
           <MenuItem icon={<Trash2 size={14} />} label="Delete" kbd="Del" onClick={run(() => A.remove())} danger />
           <MenuItem icon={<Trash2 size={14} />} label="Ripple delete" kbd="Shift Del" onClick={run(() => A.remove(true))} danger />
