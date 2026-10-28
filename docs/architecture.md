@@ -178,6 +178,32 @@ project's space, `commit`/undo/redo refuse while it is set, write controls sit i
 with the viewer tooltip, and drags, drops and the canvas/timeline handles are off. Viewers still play, scrub, inspect
 and comment.
 
+### Accounts and mail (migration v12; contract in `packages/core/src/account.ts`)
+- **Mail** (`apps/server/src/mail/`): one HTTP transport, Resend's API through plain `fetch` (Railway blocks SMTP).
+  On only when `RESEND_API_KEY` and `MAIL_FROM` are both set, and never on the desktop; `GET /api/system` says
+  `mail`. Off, nothing is sent: invites hand back their link to copy, and Forgot password says the server sends no
+  mail. Every message (`mail/messages.ts`) is plain HTML plus text and names the app and the space. A mail that can't
+  be sent is logged, never thrown. Tests swap the transport with `setMailTransport`.
+- **Invites**: emailed on creation and on Resend (`POST …/invites/:token/resend`, a fresh 7 days, at most once a
+  minute, 50 invite mails per owner per hour); expired ones stay in the owner's list for 30 days so they can be resent.
+  `POST …/members/:userId/transfer` makes a member an owner and the caller an editor in one transaction.
+- **Tokens** (`services/account.ts`, table `auth_tokens`): password reset (1 hour) and email confirmation (24 hours)
+  tokens are 32 random bytes that only travel in the mail; the table keeps their sha256. Single use (one conditional
+  UPDATE), a newer one cancels the older, and sending is counted from the table (3 per account per kind per hour, 20
+  per client address per hour) so the limit holds across replicas. A reset ends every session and app link.
+- **Account** (`routes/account.ts`, `/api/account`): profile, email change (confirmed from the new inbox; with mail
+  off it is made at once), password change (other sessions end), sessions with last use (`sessions.last_seen_at`,
+  written at most every 5 minutes), sign out everywhere (sessions and app links), notification choices
+  (`users.notify`), and delete account (refused while the only owner of a space others are in; spaces only they are
+  in are deleted with it).
+- **App links** (device tokens) reach only the sync engine's routes (`DEVICE_ROUTES` in `auth.ts`): auth/me, sync,
+  devices, workspaces (list, create, rename, delete, brand), projects, uploads, assets, media, voice profiles and
+  relay, events. Anything else answers 403. They stop working after 90 days unused (`Device.expiresAt`).
+- **Job notices** (A-8): `emitJob` calls `services/notify.ts` once per job end; it emails the person who started a
+  long job (exports, Producer AI, transcription, voiceover, smart tools; at least a minute; not draft previews) when
+  they turned job emails on. In the browser, `shell/jobNotices.ts` and `editor/exportJobs.ts` toast with Open (and
+  Retry for exports) and send a browser notification while the tab is in the background (`lib/notify.ts`).
+
 ## Collaboration (migration v11; contract in `packages/core/src/collab.ts`)
 - **Share links** (`routes/share.ts`): each link has `expires_at` (410 after), an optional `password_hash` (the page,
   video, poster and comments answer 401 until `POST /api/share/:token/unlock` gives a key, an HMAC over the token and
