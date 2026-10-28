@@ -1,6 +1,6 @@
 // DEV-ONLY mock routes for the brand kits, templates, onboarding, Voice Studio and Producer additions (A-6, A-7, A-20,
 // A-21, A-22), registered by mockApi.ts with its router and state. Same role rules as the server.
-import type { BrandFont, BrandKitDoc, BrandKitSummary, TemplateSummary } from '@producer/core'
+import type { BrandFont, BrandKitDoc, BrandKitSummary, OnboardingState, TemplateSummary } from '@producer/core'
 import { DEFAULT_KIT_ID, addItem, createProject, createTextItem } from '@producer/core'
 
 type Json = Record<string, unknown>
@@ -17,6 +17,8 @@ export interface MockKit {
   templates: TemplateSummary[]
   /** Add a team template project; returns its summary. */
   addTemplate: (ws: string, name: string, width: number, height: number) => TemplateSummary
+  /** What a space holds, for the onboarding checklist. */
+  spaceFacts: (ws: string) => { uploads: number; members: number; producerVideos: number; sampleProjectId?: string }
 }
 
 const SIZES: Record<string, [number, number]> = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080] }
@@ -25,7 +27,7 @@ let n = 0
 const id = (p: string) => `${p}_${Date.now().toString(36)}${++n}`
 
 export function registerR3cMocks(k: MockKit) {
-  const { on, json, fail, delay, editorOnly, memberOf, brands, templates, addTemplate } = k
+  const { on, json, fail, delay, editorOnly, memberOf, brands, templates, addTemplate, spaceFacts } = k
   const extra: Record<string, BrandKitSummary[]> = {}
   const fonts: Record<string, BrandFont[]> = {}
   const defaultKit = (ws: string): BrandKitSummary => ({ id: DEFAULT_KIT_ID, default: true, doc: brands[ws] ?? { name: '', colors: [], fonts: { headline: 'Space Grotesk', body: 'Inter' } }, updatedAt: Date.now() })
@@ -103,6 +105,22 @@ export function registerR3cMocks(k: MockKit) {
     if (denied) return denied
     fonts[m[1]] = (fonts[m[1]] ?? []).filter((f) => f.id !== m[2])
     return json({ ok: true })
+  })
+
+  // ---- onboarding (A-6) ----
+  const hidden = new Set<string>()
+  const onboarding = (ws: string): OnboardingState => {
+    const f = spaceFacts(ws)
+    return { steps: { upload: f.uploads > 0, brand: !!brands[ws] || !!extra[ws]?.length, producer: f.producerVideos > 0, invite: f.members > 1 }, dismissed: hidden.has(ws), ...(f.sampleProjectId ? { sampleProjectId: f.sampleProjectId } : {}) }
+  }
+  on('GET', '/api/workspaces/([^/]+)/onboarding', (m) => notMember(m[1]) ?? json(onboarding(m[1])))
+  on('PUT', '/api/workspaces/([^/]+)/onboarding', (m, _q, b) => {
+    const denied = notMember(m[1])
+    if (denied) return denied
+    if (typeof b.dismissed !== 'boolean') return fail(400, 'dismissed: Invalid input', 'invalid')
+    if (b.dismissed) hidden.add(m[1])
+    else hidden.delete(m[1])
+    return json(onboarding(m[1]))
   })
 
   // ---- templates (A-22) ----

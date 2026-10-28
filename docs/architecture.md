@@ -66,7 +66,7 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   timestamps, locked_by, locked_at)`, `exports`, `share_links(token, project_id, export_id, expires_at,
   password_hash, allow_download, allow_comments, views, last_viewed_at)`, `brand_kits(workspace_id, doc jsonb)`,
   `project_versions` (saved versions, v10), `idempotency_keys` (v10), `comments`, `activity` (v11, see Collaboration),
-  `extra_brand_kits`, `brand_fonts`, `voice_settings`, `member_settings` (v14, see Brand kits, voice and onboarding).
+  `extra_brand_kits`, `brand_fonts`, `space_settings`, `member_settings` (v14, see Brand kits, voice and onboarding).
 - **Object storage**: S3-compatible (`S3_*` env; R2/Railway buckets) with presigned PUT uploads and signed GET;
   dev falls back to local disk `.data/storage` with the same interface.
 - The project document is the `Project` type from core. Asset `src` = storage key; the client resolves media via
@@ -210,6 +210,11 @@ and comment.
   ≤ 5 MB), usable as a kit's headline or body font (`customFonts` on the kit lists them, so `lookPalette` keeps them).
   The editor registers the space's fonts with the FontFace API; the export copies the files a project uses and declares
   them next to the bundled faces (`render/brandFonts.ts`).
+- **Onboarding** (`services/onboarding.ts`, `routes/onboarding.ts`): `GET /api/workspaces/:id/onboarding` reads the
+  Home checklist from the space's real state (an uploaded asset, a saved kit, an assembled Producer project, a second
+  member or a pending invite); `PUT {dismissed}` hides it for that person (`member_settings`). `createWorkspace` adds a
+  sample project (a look's starter) to each new cloud space and records it in `space_settings` (`SAMPLE_PROJECT=0`
+  turns this off; the test harness does).
 - None of the v14 tables sync to desktops: a desktop sees the default kit only.
 
 ## Two products, one codebase

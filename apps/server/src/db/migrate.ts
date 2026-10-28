@@ -463,7 +463,7 @@ CREATE INDEX IF NOT EXISTS activity_ws_idx ON activity(workspace_id, created_at,
 
 /**
  * v14 — brand kits and voice (R3-C): a space's other brand kits (brand_kits stays its default, the one desktops sync),
- * font files uploaded for them, the space's voice settings (pronunciation dictionary), and each member's own settings
+ * font files uploaded for them, the space's own settings (pronunciation dictionary, its sample project), and each member's own settings
  * in a space (Voice Studio draft, favourite voices, the onboarding checklist). None of these sync to desktops.
  */
 export const DDL_V14 = `
@@ -491,7 +491,7 @@ CREATE TABLE IF NOT EXISTS brand_fonts (
 );
 CREATE INDEX IF NOT EXISTS brand_fonts_ws_idx ON brand_fonts(workspace_id, family);
 
-CREATE TABLE IF NOT EXISTS voice_settings (
+CREATE TABLE IF NOT EXISTS space_settings (
   workspace_id text PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   doc jsonb NOT NULL DEFAULT '{}'::jsonb,
   updated_at double precision NOT NULL

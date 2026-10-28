@@ -28,6 +28,7 @@ import { exportRoutes, projectExportRoutes, shareRoutes, workspaceShareRoutes } 
 import { activityRoutes, commentRoutes, projectCollabRoutes } from './routes/collab'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { brandRoutes } from './routes/brand'
+import { onboardingRoutes } from './routes/onboarding'
 import { templateRoutes } from './routes/templates'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
@@ -116,6 +117,7 @@ export function createApp() {
   app.route('/api/workspaces', workspaceShareRoutes)
   app.route('/api/workspaces', activityRoutes)
   app.route('/api/workspaces', brandRoutes)
+  app.route('/api/workspaces', onboardingRoutes)
   app.route('/api/workspaces', workspaceRoutes)
   app.route('/api/invites', inviteRoutes)
   app.route('/api/projects', projectExportRoutes)

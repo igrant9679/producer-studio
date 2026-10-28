@@ -436,6 +436,8 @@ on('POST', '/api/workspaces', async (_m, _q, b) => {
   const u = currentUser() ?? demoUser
   members[w.id] = [{ userId: u.id, name: u.name, email: u.email, role: 'owner' }]
   brands[w.id] = { name: w.name, colors: ['#ff5a5f', '#35e0ff'], fonts: { headline: 'Space Grotesk', body: 'Inter' } }
+  // like the server: a new space starts with a sample project (A-6)
+  projects.unshift(mkProject({ name: 'Sample project', workspaceId: w.id, width: 1920, height: 1080, duration: 11, updatedAt: Date.now(), createdAt: Date.now() }))
   return json(w)
 })
 on('PATCH', '/api/workspaces/([^/]+)', async (m, _q, b) => {
@@ -570,6 +572,12 @@ registerR3cMocks({
     projects.unshift(p)
     return { id: p.id, name, category: 'Team', aspect: width === height ? '1:1' : width > height ? '16:9' : '9:16', duration: p.duration, builtIn: false, clipCount: 0, textCount: 4 }
   },
+  spaceFacts: (ws) => ({
+    uploads: assets.filter((a) => a.workspaceId === ws && a.origin === 'upload').length,
+    members: workspaces.find((w) => w.id === ws)?.memberCount ?? 1,
+    producerVideos: projects.filter((p) => p.workspaceId === ws && p.kind === 'producer' && !p.trashed).length,
+    sampleProjectId: projects.find((p) => p.workspaceId === ws && p.name === 'Sample project' && !p.trashed)?.id,
+  }),
 })
 
 on('GET', '/api/projects', async (_m, q) => {

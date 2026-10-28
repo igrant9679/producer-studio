@@ -17,6 +17,9 @@ export async function createWorkspace(userId: string, name: string, personal = f
   const db = ctx().db
   await db.insert(workspaces).values({ id, name, personal, createdBy: userId, createdAt: now })
   await db.insert(memberships).values({ workspaceId: id, userId, role: 'owner', createdAt: now })
+  // a new space starts with a sample project to open (A-6)
+  const { addSampleProject } = await import('../services/onboarding')
+  await addSampleProject(id, userId)
   return { id, name, role: 'owner', personal, memberCount: 1, etag: etagOf({ name }) }
 }
 

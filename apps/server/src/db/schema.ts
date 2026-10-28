@@ -359,8 +359,8 @@ export const brandFonts = pgTable('brand_fonts', {
   createdAt: ms('created_at').notNull(),
 })
 
-/** v14: a space's voice settings (the pronunciation dictionary). Not synced. */
-export const voiceSettings = pgTable('voice_settings', {
+/** v14: a space's own settings (the pronunciation dictionary, its sample project). Not synced. */
+export const spaceSettings = pgTable('space_settings', {
   workspaceId: text('workspace_id').primaryKey(),
   doc: jsonb('doc').$type<Record<string, unknown>>().notNull(),
   updatedAt: ms('updated_at').notNull(),
@@ -378,4 +378,4 @@ export const memberSettings = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.workspaceId] })],
 )
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, extraBrandKits, brandFonts, voiceSettings, memberSettings }
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, extraBrandKits, brandFonts, spaceSettings, memberSettings }

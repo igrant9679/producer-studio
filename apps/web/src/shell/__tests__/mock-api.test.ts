@@ -88,6 +88,17 @@ describe('the dev mock API', () => {
     expect((await fetch('/api/workspaces/ws_client/brand/fonts?family=Acme', { method: 'POST', body: 'x' })).status).toBe(403)
   })
 
+  it('has the onboarding checklist and templates from a kit (A-6, A-22)', async () => {
+    const w = (await call('POST', '/api/workspaces', { name: 'Fresh' })).body
+    const s = (await call('GET', `/api/workspaces/${w.id}/onboarding`)).body
+    expect(s).toMatchObject({ dismissed: false, sampleProjectId: expect.any(String), steps: { upload: false, invite: false } })
+    expect((await call('PUT', `/api/workspaces/${w.id}/onboarding`, { dismissed: true })).body.dismissed).toBe(true)
+    expect((await call('GET', '/api/templates/tpl:studio/doc?aspect=9:16')).body).toMatchObject({ width: 1080, height: 1920 })
+    expect((await call('POST', '/api/templates/from-brand', { workspaceId: 'ws_client', lookId: 'studio' })).status).toBe(403)
+    const made = await call('POST', '/api/templates/from-brand', { workspaceId: 'ws_team', lookId: 'studio', aspect: '1:1' })
+    expect(made.body).toMatchObject({ builtIn: false, aspect: '1:1' })
+  })
+
   it('lets only owners invite', async () => {
     expect((await call('POST', '/api/workspaces/ws_team/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(403)
     expect((await call('POST', '/api/workspaces/ws_personal/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(200)

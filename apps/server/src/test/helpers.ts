@@ -27,6 +27,8 @@ export async function setup(): Promise<TestEnv> {
   delete process.env.ANTHROPIC_PROFILE
   process.env.ANTHROPIC_CONFIG_DIR = path.join(dataDir, 'no-anthropic-config')
   // abuse limits off unless a test file turns one on (every test user signs up from the same address)
+  // new spaces start empty unless a test file turns their sample project on (A-6)
+  process.env.SAMPLE_PROJECT ??= '0'
   for (const k of ['AI_CALLS_PER_DAY', 'AI_CALLS_PER_MINUTE', 'SIGNUPS_PER_HOUR_PER_IP', 'SIGNUPS_PER_HOUR', 'DEVICES_PER_HOUR', 'QUEUED_JOBS_PER_WORKSPACE']) process.env[k] ??= '0'
   const { loadConfig } = await import('../config')
   const { initCtx } = await import('../context')
