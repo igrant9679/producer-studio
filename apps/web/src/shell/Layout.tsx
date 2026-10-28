@@ -47,6 +47,7 @@ import { ThemeSwitcher } from './pages/AppearanceSettings'
 import { DESKTOP_DOWNLOAD_URL, useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, uploadsIn, useJobs, useUploads } from './stores'
 import { StorageBanner } from './StorageBanner'
+import { GlobalSearch } from './palette/CommandPalette'
 import { Avatar, Logo, MenuList, Popover, Progress, Spinner, focusables, spaceColor, useClickOutside, useEditGate, useEscapeLayer, useFilePicker } from './ui'
 import { JOB_LABELS, formatDuration, relativeTime } from './util'
 
@@ -159,176 +160,6 @@ function CreateMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
         />
       )}
     </Popover>
-  )
-}
-
-// ---------------- search ----------------
-function GlobalSearch() {
-  const navigate = useNavigate()
-  const loc = useLocation()
-  const workspaceId = useSession((s) => s.workspaceId)
-  const [q, setQ] = useState('')
-  const [open, setOpen] = useState(false)
-  const [data, setData] = useState<{ ws: string; at: number; projects: ProjectSummary[]; assets: AssetRecord[] }>()
-  const [loading, setLoading] = useState(false)
-  // -1 = the "search the Library" row (default for Enter)
-  const [hi, setHi] = useState(-1)
-  // at phone width the box is an icon that opens a search field over the top bar
-  const [expanded, setExpanded] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const boxRef = useRef<HTMLDivElement>(null)
-  const toggleRef = useRef<HTMLButtonElement>(null)
-  const collapse = useCallback(() => {
-    setOpen(false)
-    setExpanded(false)
-  }, [])
-  useClickOutside(boxRef, collapse, open || expanded)
-
-  useEffect(() => {
-    if (expanded) inputRef.current?.focus()
-  }, [expanded])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setExpanded(true)
-        inputRef.current?.focus()
-        inputRef.current?.select()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  // Keep the box in sync with the Library's ?q=
-  useEffect(() => {
-    if (loc.pathname === '/library') setQ(new URLSearchParams(loc.search).get('q') ?? '')
-  }, [loc.pathname, loc.search])
-
-  const ensureData = useCallback(async () => {
-    if (!workspaceId) return
-    if (data && data.ws === workspaceId && Date.now() - data.at < 30_000) return
-    setLoading(true)
-    try {
-      const [projects, assets] = await Promise.all([api.projects(workspaceId), api.assets(workspaceId).catch(() => [] as AssetRecord[])])
-      setData({ ws: workspaceId, at: Date.now(), projects, assets })
-    } catch {
-      /* search is best-effort */
-    } finally {
-      setLoading(false)
-    }
-  }, [workspaceId, data])
-
-  const term = q.trim().toLowerCase()
-  const results = useMemo(() => {
-    if (!data || !term) return { projects: [], assets: [] }
-    return {
-      projects: data.projects.filter((p) => p.name.toLowerCase().includes(term)).slice(0, 5),
-      assets: data.assets.filter((a) => a.asset.name.toLowerCase().includes(term)).slice(0, 4),
-    }
-  }, [data, term])
-  const flat: Array<{ go: () => void }> = [
-    ...results.projects.map((p) => ({ go: () => navigate(projectPath(p)) })),
-    ...results.assets.map((a) => ({ go: () => navigate(`/library?tab=assets&q=${encodeURIComponent(a.asset.name)}`) })),
-  ]
-  useEffect(() => setHi(-1), [term])
-
-  function submit(idx = hi) {
-    setOpen(false)
-    setExpanded(false)
-    inputRef.current?.blur()
-    if (!term) return navigate('/library')
-    if (idx < 0 || idx >= flat.length) return navigate(`/library?q=${encodeURIComponent(q.trim())}`)
-    flat[idx].go()
-  }
-
-  return (
-    <>
-    <button ref={toggleRef} className="btn ghost icon ps-search-toggle" onClick={() => setExpanded(true)} aria-label="Search projects and media" aria-expanded={expanded}>
-      <Search size={17} />
-    </button>
-    <div className={clsx('ps-search', expanded && 'expanded')} ref={boxRef}>
-      <Search size={16} />
-      <input
-        ref={inputRef}
-        className="input"
-        placeholder="Search projects and media"
-        value={q}
-        aria-label="Search projects and media"
-        onFocus={() => {
-          setOpen(true)
-          void ensureData()
-        }}
-        onChange={(e) => {
-          setQ(e.target.value)
-          setOpen(true)
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            submit()
-          } else if (e.key === 'ArrowDown') {
-            e.preventDefault()
-            setHi((h) => (h + 1 >= flat.length ? -1 : h + 1))
-          } else if (e.key === 'ArrowUp') {
-            e.preventDefault()
-            setHi((h) => (h < 0 ? flat.length - 1 : h - 1))
-          } else if (e.key === 'Escape') {
-            // handled here, not by the layer stack: the field stays put on a wide screen, the overlay closes on a phone
-            e.stopPropagation()
-            setOpen(false)
-            if (expanded) {
-              setExpanded(false)
-              toggleRef.current?.focus()
-            } else inputRef.current?.blur()
-          }
-        }}
-      />
-      {q ? (
-        <button className="btn ghost sm icon" style={{ position: 'absolute', right: 6, top: 5 }} onClick={() => setQ('')} aria-label="Clear search">
-          <X size={14} />
-        </button>
-      ) : (
-        <span className="kbd">Ctrl K</span>
-      )}
-      {open && term && (
-        <div className="ps-pop ps-search-pop" role="listbox">
-          {loading && !data && (
-            <div className="row muted" style={{ padding: 10 }}>
-              <Spinner /> Searching…
-            </div>
-          )}
-          {results.projects.length > 0 && <div className="ps-menu-label">Projects</div>}
-          {results.projects.map((p, i) => (
-            <button key={p.id} className="ps-menu-item" style={hi === i ? { background: 'var(--surface-3)' } : undefined} onMouseEnter={() => setHi(i)} onClick={() => submit(i)}>
-              {p.kind === 'producer' ? <Sparkles size={15} /> : <Film size={15} />}
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
-              <span className="muted" style={{ fontSize: '0.7188rem' }}>{relativeTime(p.updatedAt)}</span>
-            </button>
-          ))}
-          {results.assets.length > 0 && <div className="ps-menu-label">Media</div>}
-          {results.assets.map((a, j) => {
-            const i = results.projects.length + j
-            return (
-              <button key={a.asset.id} className="ps-menu-item" style={hi === i ? { background: 'var(--surface-3)' } : undefined} onMouseEnter={() => setHi(i)} onClick={() => submit(i)}>
-                {a.asset.kind === 'audio' ? <Music size={15} /> : a.asset.kind === 'image' ? <ImageIcon size={15} /> : <Video size={15} />}
-                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.asset.name}</span>
-                {a.asset.duration ? <span className="muted" style={{ fontSize: '0.7188rem' }}>{formatDuration(a.asset.duration)}</span> : null}
-              </button>
-            )
-          })}
-          {data && !results.projects.length && !results.assets.length && <div className="muted" style={{ padding: '10px 10px 4px', fontSize: '0.8125rem' }}>No matches for “{q.trim()}”.</div>}
-          <div className="ps-menu-sep" />
-          <button className="ps-menu-item" style={hi < 0 ? { background: 'var(--surface-3)' } : undefined} onMouseEnter={() => setHi(-1)} onClick={() => submit(-1)}>
-            <FolderOpen size={15} />
-            <span style={{ flex: 1 }}>Search the Library for “{q.trim()}”</span>
-            <span className="kbd">Enter</span>
-          </button>
-        </div>
-      )}
-    </div>
-    </>
   )
 }
 
@@ -632,7 +463,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <button ref={menuBtnRef} className="btn ghost icon ps-menu-btn" onClick={() => (navOpen ? closeNav() : setNavOpen(true))} aria-expanded={navOpen} aria-controls="ps-nav" aria-label="Menu">
             <Menu size={18} />
           </button>
-          <GlobalSearch />
+          <GlobalSearch onNewVideo={() => setModal('aspect')} />
           <span className="spacer" />
           {MOCK_ACTIVE && <span className="ps-mock-badge" title="Dev mock API active (localStorage.psMock)">MOCK API</span>}
           <AiChip />

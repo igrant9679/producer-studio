@@ -64,15 +64,16 @@ describe('the sidebar drawer', () => {
 })
 
 describe('the top bar on a phone', () => {
-  it('has a search icon that opens the search field and closes it on Escape', () => {
+  it('has a search icon that opens the search (the command palette) and closes it on Escape', () => {
     shell()
-    const icon = screen.getByRole('button', { name: 'Search projects and media' })
+    const icon = screen.getByRole('button', { name: 'Search or jump to (Ctrl+K)' })
+    icon.focus()
     fireEvent.click(icon)
-    const box = screen.getByRole('textbox', { name: 'Search projects and media' })
-    expect(box.closest('.ps-search')!.classList.contains('expanded')).toBe(true)
+    const box = screen.getByRole('combobox', { name: /Search projects, media, settings and commands/ })
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeTruthy()
     expect(document.activeElement).toBe(box)
     fireEvent.keyDown(box, { key: 'Escape' })
-    expect(box.closest('.ps-search')!.classList.contains('expanded')).toBe(false)
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull()
     expect(document.activeElement).toBe(icon)
   })
 
