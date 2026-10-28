@@ -2,9 +2,10 @@
 // attributes (HyperFrames owns decode/seek/mix); one paused GSAP timeline drives the bundled StageRenderer so every
 // frame is produced by the same evaluate() the editor preview uses.
 import { itemEnd, projectDuration } from './ops'
-import { MAX_GAIN, exportVideoTiming } from './runtime'
-import type { AudioItem, Project, VideoItem } from './types'
-import { escapeHtml, round, safeColor, sampleKeyframes } from './util'
+import { MAX_GAIN, type SoundSpan, laneParts, soloActive, trackAudible, trackSpans } from './audio'
+import { exportVideoTiming } from './runtime'
+import type { Project } from './types'
+import { escapeHtml, round, safeColor } from './util'
 
 export interface CompileOptions {
   /** Path (relative to index.html) of an asset's source file. */
@@ -36,25 +37,22 @@ function attr(v: string | number): string {
 }
 
 /**
- * Volume automation lane (clip-local seconds) from keyframes + fades, sampled at 10 Hz where needed. HyperFrames
- * plays a lane's values as the gain itself, in place of data-volume: they are the clip's real level (as the preview
- * hears it), not a multiple of its base volume.
+ * One clip's sound. Its level over time (clip keyframes and fades, crossfades into transitions, track volume, ducking:
+ * see audio.ts) goes in as a volume lane, which HyperFrames plays as the gain itself in place of data-volume, so the
+ * export is heard at the levels the preview plays.
  */
-function volumeLane(it: AudioItem | VideoItem): string | undefined {
-  const kf = it.keyframes?.volume
-  if (!kf?.length && !it.fadeIn && !it.fadeOut) return undefined
-  const pts: Array<{ t: number; v: number }> = []
-  const step = 0.1
-  for (let t = 0; t <= it.duration + 1e-6; t += step) {
-    let v = sampleKeyframes(kf, t, it.volume)
-    if (it.fadeIn > 0 && t < it.fadeIn) v *= t / it.fadeIn
-    const rem = it.duration - t
-    if (it.fadeOut > 0 && rem < it.fadeOut) v *= Math.max(0, rem) / it.fadeOut
-    pts.push({ t: round(t, 3), v: round(Math.min(MAX_GAIN, Math.max(0, v)), 4) })
-  }
-  // drop collinear runs to keep the attribute small
-  const out = pts.filter((p, i) => i === 0 || i === pts.length - 1 || !(pts[i - 1].v === p.v && pts[i + 1].v === p.v))
-  return JSON.stringify({ version: 1, lanes: [{ target: 'volume', points: out.map((p) => ({ t: p.t, v: p.v })) }] })
+function audioTag(p: Project, span: SoundSpan, trackIndex: number, src: string, solo: boolean): string {
+  const it = span.item
+  return laneParts(p, span, solo)
+    .map((part, k) => {
+      const pts = part.points
+      const flat = pts.every((x) => Math.abs(x.v - pts[0].v) < 1e-4)
+      const lane = flat ? '' : ` data-automation='${JSON.stringify({ version: 1, lanes: [{ target: 'volume', points: pts }] })}'`
+      const volume = flat ? (pts[0]?.v ?? 0) : Math.min(MAX_GAIN, Math.max(0, it.volume))
+      // the parts of a long lane overlap at their joins: they alternate tracks too
+      return `<audio id="a-${attr(it.id)}${k ? `-p${k + 1}` : ''}" src="${attr(src)}" data-start="${round(part.start, 4)}" data-duration="${round(part.end - part.start, 4)}" data-media-start="${round(part.mediaStart, 4)}" data-volume="${round(volume, 3)}" data-track-index="${trackIndex + (k % 2 ? 2000 : 0)}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane}></audio>`
+    })
+    .join('\n')
 }
 
 function clampRate(speed: number): number {
@@ -69,10 +67,12 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
   const body: string[] = []
   const audio: string[] = []
   let trackIndex = 0
+  const solo = soloActive(p)
   for (let ti = 0; ti < p.tracks.length; ti++) {
     const track = p.tracks[ti]
     if (track.kind === 'audio' || track.kind === 'caption') continue
     trackIndex++
+    const spans = new Map(trackAudible(p, track, solo) ? trackSpans(p, track).map((x) => [x.item.id, x]) : [])
     for (let ii = 0; ii < track.items.length; ii++) {
       const it = track.items[ii]
       if (it.type === 'video') {
@@ -95,14 +95,10 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
           if (it.background?.type === 'blur' && track.main) {
             body.push(`<div data-ps-bg="${attr(it.id)}" style="position:absolute;inset:0;display:none;overflow:hidden"><video id="vb-${attr(it.id)}" src="${attr(src)}" ${timing} muted playsinline></video>${hold}</div>`)
           }
-          const asset = p.assets[it.assetId]
-          // a reversed clip is silent, as in the preview
-          if (!it.muted && !track.muted && asset?.hasAudio !== false && !it.reverse) {
-            const lane = volumeLane(it)
-            audio.push(
-              `<audio id="a-${attr(it.id)}" src="${attr(opts.assetPath(it.assetId))}" data-start="${round(it.start, 4)}" data-duration="${round(it.duration, 4)}" data-media-start="${round(it.in, 4)}" data-volume="${round(Math.min(MAX_GAIN, Math.max(0, it.volume)), 3)}" data-track-index="${100 + trackIndex}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane ? ` data-automation='${lane}'` : ''}></audio>`,
-            )
-          }
+          // its sound (none for a reversed clip, as in the preview), widened into the transitions either side;
+          // neighbours overlap there, so they alternate tracks
+          const span = spans.get(it.id)
+          if (span) audio.push(audioTag(p, span, 100 + trackIndex + (ii % 2 ? 1000 : 0), opts.assetPath(it.assetId), solo))
         }
       } else if (it.type === 'image') {
         body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><img data-ps-content src="${attr(opts.assetPath(it.assetId))}" alt=""></div>`)
@@ -115,15 +111,9 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
   }
   let audioTrack = 200
   for (const track of p.tracks) {
-    if (track.kind !== 'audio' || track.muted) continue
+    if (track.kind !== 'audio' || !trackAudible(p, track, solo)) continue
     audioTrack++
-    for (const it of track.items) {
-      if (it.type !== 'audio' || it.muted) continue
-      const lane = volumeLane(it)
-      audio.push(
-        `<audio id="a-${attr(it.id)}" src="${attr(opts.assetPath(it.assetId))}" data-start="${round(it.start, 4)}" data-duration="${round(it.duration, 4)}" data-media-start="${round(it.in, 4)}" data-volume="${round(Math.min(MAX_GAIN, Math.max(0, it.volume)), 3)}" data-track-index="${audioTrack}"${it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}${lane ? ` data-automation='${lane}'` : ''}></audio>`,
-      )
-    }
+    for (const span of trackSpans(p, track)) audio.push(audioTag(p, span, audioTrack + (track.items.indexOf(span.item) % 2 ? 1000 : 0), opts.assetPath(span.item.assetId), solo))
   }
   // captions and text layers are created by the renderer at runtime (no media)
   const projectJson = JSON.stringify(p).replace(/</g, '\\u003c')

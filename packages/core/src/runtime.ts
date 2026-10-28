@@ -30,8 +30,8 @@ interface LayerEl {
   lastFill?: string
 }
 
-/** The loudest a clip plays (+12 dB), in the preview as in the export. */
-export const MAX_GAIN = 3.98
+import { MAX_GAIN } from './audio'
+export { MAX_GAIN }
 
 interface Voice {
   el: HTMLAudioElement
