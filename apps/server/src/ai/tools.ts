@@ -20,11 +20,13 @@ import {
   deleteItems,
   fillerWordRanges,
   findItem,
+  freezeAtEnd,
   freezeFrame,
   generateCaptions,
   itemEnd,
   itemWords,
-  moveItem,
+  linkItems,
+  moveLinked,
   projectDuration,
   removeSilences,
   round,
@@ -33,8 +35,10 @@ import {
   setItemSpeed,
   setKeyframe,
   splitAt,
-  trimItem,
+  trimLinked,
   uid,
+  unlinkItems,
+  withLinked,
   updateItem,
   updateTrack,
   type Asset,
@@ -70,9 +74,11 @@ export const TOOL_SCHEMAS = {
   get_timeline: z.object({}).describe('Compact summary of the edit: canvas, duration, playhead, selection, tracks and items (ids, types, times, text), assets.'),
   get_transcript: z.object({ itemId: ItemId }).describe('Words spoken inside a video/audio item, with TIMELINE times in seconds (use for transcript cuts).'),
   split_at: z.object({ time: Time.describe('Timeline seconds'), itemIds: z.array(ItemId).optional().describe('Items to split; default every item under the time') }).describe('Split items at a timeline time.'),
-  trim_item: z.object({ itemId: ItemId, edge: z.enum(['start', 'end']), time: Time.describe('New timeline time for that edge') }).describe('Trim the start or end edge of an item to a timeline time (main track ripples).'),
-  move_item: z.object({ itemId: ItemId, start: Time, trackId: z.string().optional() }).describe('Move an item to a new start time (and optionally another track).'),
-  delete_items: z.object({ itemIds: z.array(ItemId).min(1), ripple: z.boolean().optional().describe('Close the gaps on non-main tracks') }).describe('Delete items. The main track always closes gaps.'),
+  trim_item: z.object({ itemId: ItemId, edge: z.enum(['start', 'end']), time: Time.describe('New timeline time for that edge') }).describe('Trim the start or end edge of an item to a timeline time (main track ripples). Linked items sharing that edge are trimmed with it.'),
+  move_item: z.object({ itemId: ItemId, start: Time, trackId: z.string().optional() }).describe('Move an item to a new start time (and optionally another track). Linked items move with it.'),
+  delete_items: z.object({ itemIds: z.array(ItemId).min(1), ripple: z.boolean().optional().describe('Close the gaps on non-main tracks') }).describe('Delete items, with the items linked to them. The main track always closes gaps.'),
+  link_items: z.object({ itemIds: z.array(ItemId).min(2) }).describe('Link items (e.g. a video and audio recorded apart) so they split, trim, move and delete together.'),
+  unlink_items: z.object({ itemIds: z.array(ItemId).min(1) }).describe('Unlink items (and the rest of their group) so each can be edited on its own.'),
   add_text: z
     .object({
       text: z.string().min(1).max(500),
@@ -142,7 +148,7 @@ export const TOOL_SCHEMAS = {
   set_aspect_ratio: z.object({ ratio: z.enum(ids(ASPECT_RATIOS)) }).describe('Change the canvas aspect ratio.'),
   add_voiceover: z.object({ text: z.string().min(1).max(4000), voice: z.string().max(80).optional().describe(`Voice id: a built-in voice (${ids(VOICES).join(', ')}) or a cloned/designed voice of this space (vs:<id>, see the brief or get_project). Default: the brand kit voice.`), start: Time.optional(), speed: z.number().min(0.5).max(2).optional() }).describe('Generate a TTS voiceover and place it on an audio track.'),
   separate_audio: z.object({ itemId: ItemId }).describe('Detach a video’s audio onto its own linked audio item.'),
-  freeze_frame: z.object({ itemId: ItemId, time: Time.describe('Timeline seconds'), hold: z.number().min(0.2).max(30).optional() }).describe('Insert a freeze frame into a video item at a timeline time.'),
+  freeze_frame: z.object({ itemId: ItemId, time: Time.optional().describe('Timeline seconds (not needed with atEnd)'), atEnd: z.boolean().optional().describe("Hold the clip's last frame, right after it"), hold: z.number().min(0.2).max(30).optional() }).describe('Insert a freeze frame into a video item at a timeline time, or after it holding its last frame.'),
 } as const
 
 export type ToolName = keyof typeof TOOL_SCHEMAS
@@ -184,6 +190,7 @@ export function timelineSummary(s: ToolState) {
         ...(it.type === 'video' || it.type === 'audio' ? { assetId: it.assetId, in: r2(it.in), speed: it.speed, ...(it.muted ? { muted: true } : {}) } : {}),
         ...(it.type === 'image' ? { assetId: it.assetId } : {}),
         ...(it.type === 'video' && it.freezeAt !== undefined ? { freezeAt: it.freezeAt } : {}),
+        ...(it.linkId ? { linkId: it.linkId } : {}),
         ...('transitionOut' in it && it.transitionOut ? { transitionOut: it.transitionOut.type } : {}),
         ...('transform' in it && (it.transform.x || it.transform.y || it.transform.scale !== 1) ? { x: r2(it.transform.x), y: r2(it.transform.y), scale: r2(it.transform.scale) } : {}),
       })),
@@ -241,15 +248,23 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
     }
     case 'trim_item': {
       const it = need(p, i.itemId)
-      return done(set(s, trimItem(p, it.id, i.edge, i.time), `Trimmed the ${i.edge} of ${label(it)} to ${r2(i.time)}s`))
+      return done(set(s, trimLinked(p, it.id, i.edge, i.time), `Trimmed the ${i.edge} of ${label(it)} to ${r2(i.time)}s`))
     }
     case 'move_item': {
       const it = need(p, i.itemId)
-      return done(set(s, moveItem(p, it.id, { start: i.start, trackId: i.trackId }), `Moved ${label(it)} to ${r2(i.start)}s`))
+      return done(set(s, moveLinked(p, it.id, { start: i.start, trackId: i.trackId }), `Moved ${label(it)} to ${r2(i.start)}s`))
     }
     case 'delete_items': {
+      const items = withLinked(p, (i.itemIds as string[]).map((id) => need(p, id).id)).map((id) => need(p, id))
+      return done(set(s, deleteItems(p, items.map((x) => x.id), { ripple: i.ripple }), `Deleted ${items.map(label).join(', ')}`))
+    }
+    case 'link_items': {
       const items = (i.itemIds as string[]).map((id) => need(p, id))
-      return done(set(s, deleteItems(p, i.itemIds, { ripple: i.ripple }), `Deleted ${items.map(label).join(', ')}`))
+      return done(set(s, linkItems(p, items.map((x) => x.id)), `Linked ${items.map(label).join(', ')}`))
+    }
+    case 'unlink_items': {
+      const items = (i.itemIds as string[]).map((id) => need(p, id))
+      return done(set(s, unlinkItems(p, withLinked(p, items.map((x) => x.id))), `Unlinked ${items.map(label).join(', ')}`))
     }
     case 'add_text': {
       const tpl = i.template ?? 'heading'
@@ -411,6 +426,8 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
     }
     case 'freeze_frame': {
       const it = need(p, i.itemId)
+      if (i.atEnd) return done(set(s, freezeAtEnd(p, it.id, i.hold ?? 2), `Held the last frame of ${label(it)} for ${i.hold ?? 2}s`))
+      if (i.time === undefined) throw new ToolError('freeze_frame needs a time, or atEnd: true')
       return done(set(s, freezeFrame(p, it.id, i.time, i.hold ?? 2), `Inserted a ${i.hold ?? 2}s freeze frame at ${r2(i.time)}s`))
     }
   }

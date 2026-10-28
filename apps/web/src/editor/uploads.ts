@@ -129,7 +129,8 @@ async function pollUntilReady(assetId: string) {
   }
 }
 
-function kindOf(file: File): Asset['kind'] | null {
+/** What kind of clip a file makes (null: not one the editor takes). */
+export function fileKind(file: File): Asset['kind'] | null {
   if (file.type.startsWith('video/')) return 'video'
   if (file.type.startsWith('audio/')) return 'audio'
   if (file.type.startsWith('image/')) return 'image'
@@ -180,11 +181,12 @@ async function probeLocal(file: File, kind: Asset['kind']): Promise<Asset> {
   return { ...base, duration: Number.isFinite(v.duration) ? v.duration : 5, width: v.videoWidth || 1280, height: v.videoHeight || 720, hasAudio: true, thumbnail }
 }
 
-export async function uploadFiles(files: File[] | FileList) {
+/** Upload files to the library. `onUploaded` hears of each clip once the server has it (still processing, maybe). */
+export async function uploadFiles(files: File[] | FileList, opts: { onUploaded?: (assetId: string, file: File) => void } = {}) {
   const list = Array.from(files)
   const s = useEditor.getState()
   for (const file of list) {
-    const kind = kindOf(file)
+    const kind = fileKind(file)
     if (!kind) {
       toast(`${file.name}: unsupported file type`)
       continue
@@ -199,12 +201,14 @@ export async function uploadFiles(files: File[] | FileList) {
         st.commit(addAsset(st.project, asset), 'Import media')
         patch({ progress: 1, status: 'ready', assetId: asset.id })
         toast(`Imported ${file.name} (local to this browser)`)
+        opts.onUploaded?.(asset.id, file)
       } else {
         if (!s.workspaceId) throw new Error('No workspace selected')
         const rec = await api.upload(s.workspaceId, file, (f) => patch({ progress: f }))
         patch({ progress: 1, status: rec.status === 'ready' ? 'ready' : 'processing', assetId: rec.asset.id })
         upsertRecord(rec)
         if (rec.status !== 'ready') void pollUntilReady(rec.asset.id)
+        opts.onUploaded?.(rec.asset.id, file)
       }
     } catch (e) {
       patch({ status: 'error', error: e instanceof Error ? e.message : String(e) })

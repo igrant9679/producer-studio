@@ -130,6 +130,31 @@ describe('assistant tools', () => {
     await runTool(s, 'freeze_frame', { itemId: 'v_1', time: 5, hold: 1.5 }, env)
     const frozen = s.project.tracks.find((t) => t.main)!.items.find((i) => (i as { freezeAt?: number }).freezeAt !== undefined)
     expect(frozen).toMatchObject({ duration: 1.5, freezeAt: 5 })
+    // E-24: hold a clip's last frame after it
+    const last = s.project.tracks.find((t) => t.main)!.items.at(-1)!
+    await runTool(s, 'freeze_frame', { itemId: last.id, atEnd: true, hold: 3 }, env)
+    const held = s.project.tracks.find((t) => t.main)!.items.at(-1)!
+    expect(held).toMatchObject({ start: last.start + last.duration, duration: 3 })
+    expect((held as { freezeAt?: number }).freezeAt).toBeGreaterThan(9.9)
+    await expect(runTool(s, 'freeze_frame', { itemId: last.id }, env)).rejects.toThrow(/atEnd/)
+  })
+
+  it('trims, moves and deletes a video with its separated audio, and links and unlinks items (E-1)', async () => {
+    const s = makeState()
+    await runTool(s, 'separate_audio', { itemId: 'v_1' }, env)
+    const audioId = () => s.project.tracks.find((t) => t.kind === 'audio')!.items[0]?.id
+    const a = audioId()
+    expect(JSON.parse((await runTool(s, 'get_timeline', {}, env)).result).tracks.find((t: { kind: string }) => t.kind === 'audio').items[0].linkId).toBeTruthy()
+    await runTool(s, 'trim_item', { itemId: 'v_1', edge: 'end', time: 7 }, env)
+    expect(findItem(s.project, a)!.item.duration).toBe(7)
+    await runTool(s, 'unlink_items', { itemIds: [a] }, env)
+    expect(findItem(s.project, 'v_1')!.item.linkId).toBeUndefined()
+    await runTool(s, 'move_item', { itemId: a, start: 2 }, env)
+    expect(findItem(s.project, a)!.item.start).toBe(2)
+    await runTool(s, 'link_items', { itemIds: ['v_1', a] }, env)
+    await runTool(s, 'delete_items', { itemIds: ['v_1'] }, env)
+    expect(findItem(s.project, a)).toBeNull()
+    await expect(runTool(s, 'link_items', { itemIds: ['v_1'] }, env)).rejects.toBeInstanceOf(ToolError)
   })
 
   it('rejects invalid input and unknown ids with ToolError (model-fixable)', async () => {

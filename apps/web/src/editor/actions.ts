@@ -12,10 +12,13 @@ import {
   deleteItems,
   duplicateItems,
   findItem,
+  freezeAtEnd,
   freezeFrame,
   insertTrack,
   isEditable,
+  isLinkedGroup,
   itemEnd,
+  linkItems,
   mainTrack,
   pasteItems,
   projectDuration,
@@ -24,7 +27,9 @@ import {
   separateAudioRefusal,
   setKeyframe,
   splitAt,
+  unlinkItems,
   updateItem,
+  withLinked,
 } from '@producer/core'
 import { toast } from '../lib/toast'
 import { useEditor } from './store'
@@ -71,13 +76,15 @@ export function split() {
 export function remove(ripple = false) {
   const { project, selection } = S()
   if (!selection.length || !editableIds(selection).length) return
+  // a clip goes with the clips linked to it (its separated audio)
+  const ids = withLinked(project, selection)
   let p = project
   if (ripple) {
     // ripple on non-main tracks too; core packs main anyway
-    p = deleteItems(project, selection, { ripple: true })
+    p = deleteItems(project, ids, { ripple: true })
   } else {
     // non-ripple delete on the main track still packs (magnetic)
-    p = deleteItems(project, selection)
+    p = deleteItems(project, ids)
   }
   S().commit(p, ripple ? 'Ripple delete' : 'Delete', { selection: [] })
 }
@@ -93,15 +100,18 @@ function toClipboard(items: Item[]) {
   s.set({ clipboard: clone(items), clipboardMedia: { workspaceId: s.workspaceId, assets: clone(assets) } })
 }
 
+/** The selection with the clips linked to it: copies keep a video and its separated audio together. */
+const selectedGroups = () => selectedItems(S().project, withLinked(S().project, S().selection))
+
 export function copy() {
-  const items = selectedItems()
+  const items = selectedGroups()
   if (!items.length) return
   toClipboard(items)
   toast(`Copied ${items.length} item${items.length > 1 ? 's' : ''}`)
 }
 
 export function cut() {
-  const items = selectedItems()
+  const items = selectedGroups()
   if (!items.length || !editableIds(items.map((i) => i.id)).length) return
   toClipboard(items)
   remove(false)
@@ -121,10 +131,37 @@ export function paste() {
 
 export function duplicate() {
   const { selection, project } = S()
-  const ids = editableIds(selection)
+  const ids = editableIds(withLinked(project, selection))
   if (!ids.length) return
   const { project: p, newIds } = duplicateItems(project, ids)
   S().commit(p, 'Duplicate', { selection: newIds })
+}
+
+/** Whether Ctrl+L unlinks: the selection is one clip of a group, or clips of one group. */
+export function selectionLinked(p: Project = S().project, ids = S().selection): boolean {
+  return ids.length === 1 ? !!findItem(p, ids[0])?.item.linkId : isLinkedGroup(p, ids)
+}
+
+/**
+ * Attach (Ctrl+L): link the selected clips so they split, trim, move and delete together, e.g. a video and audio
+ * recorded apart. With one linked group selected (or one clip of it) it unlinks instead.
+ */
+export function toggleLink() {
+  const { project, selection } = S()
+  const ids = editableIds(selection)
+  if (!ids.length) return
+  if (selectionLinked(project, ids)) return unlink()
+  if (ids.length < 2) return toast('Select two or more clips to link, such as a video and its audio')
+  S().commit(linkItems(project, ids), 'Link clips')
+  toast(`Linked ${ids.length} clips: they now move, trim, split and delete together`)
+}
+
+export function unlink() {
+  const { project, selection } = S()
+  const ids = editableIds(selection).filter((id) => findItem(project, id)?.item.linkId)
+  if (!ids.length) return toast('These clips are not linked')
+  // unlinking one clip of a group unlinks the whole group, so each part can move on its own
+  S().commit(unlinkItems(project, withLinked(project, ids)), 'Unlink clips')
 }
 
 export function selectAll() {
@@ -151,7 +188,7 @@ const SEPARATE_REFUSED: Record<string, string> = {
 
 const underAt = (i: Item, t: number) => i.type === 'video' && i.start <= t && itemEnd(i) > t
 
-/** Hold the frame under the playhead for 2 s, on the selected (else the main-track) clip. */
+/** Hold the frame under the playhead (for the freeze length), on the selected (else the main-track) clip. */
 export function freeze() {
   const { playhead, project } = S()
   const v = selectedItems().find((i) => underAt(i, playhead)) ?? (mainTrack(project)?.items ?? []).find((i) => underAt(i, playhead))
@@ -172,7 +209,18 @@ export function freezeClip(itemId: string, at: number) {
 function holdFrame(v: Item | undefined, t: number) {
   if (!v) return toast('Put the playhead over a video clip to freeze a frame')
   if (!editableIds([v.id]).length) return
-  S().commit(freezeFrame(S().project, v.id, t, 2), 'Freeze frame')
+  S().commit(freezeFrame(S().project, v.id, t, S().freezeSec), 'Freeze frame')
+}
+
+/** Hold the last frame of a clip after it: the one given, else the selected video, else the one under the playhead. */
+export function freezeEnd(itemId?: string) {
+  const { playhead, project } = S()
+  const isClip = (i: Item | undefined): i is Item => i?.type === 'video' && i.freezeAt === undefined
+  const fromId = itemId ? findItem(project, itemId)?.item : undefined
+  const v = isClip(fromId) ? fromId : selectedItems().find(isClip) ?? (mainTrack(project)?.items ?? []).find((i) => isClip(i) && underAt(i, playhead))
+  if (!v) return toast('Select a video clip to hold its last frame')
+  if (!editableIds([v.id]).length) return
+  S().commit(freezeAtEnd(S().project, v.id, S().freezeSec), 'Freeze last frame')
 }
 
 export function setTransition(itemId: string, type: TransitionType | null, duration = 0.6) {

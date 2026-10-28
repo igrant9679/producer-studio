@@ -69,6 +69,16 @@ export function fitZoom(duration: number, width: number, min = 4, max = 600): nu
   return clamp((width - 40) / (duration * 1.04), min, max)
 }
 
+/**
+ * Where the view scrolls to (px) when the zoom changes, so the playhead stays where it was on screen; a playhead out of
+ * view is brought to the middle. `viewW` is the width of the clip area.
+ */
+export function scrollForZoom(playhead: number, oldZoom: number, newZoom: number, scrollLeft: number, viewW: number): number {
+  let px = playhead * oldZoom - scrollLeft
+  if (px < 0 || px > viewW) px = viewW / 2
+  return Math.max(0, playhead * newZoom - px)
+}
+
 /** Slider position 0..1 <-> zoom (log scale). */
 export function zoomToSlider(z: number, min = 4, max = 600) {
   return Math.log(z / min) / Math.log(max / min)

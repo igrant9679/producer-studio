@@ -5,6 +5,7 @@ import { StageRenderer, editable, evaluate, findItem, resetTransform, textCss, u
 import clsx from 'clsx'
 import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { tipProps } from '../lib/tooltip'
 import * as A from './actions'
 import { Menu, MenuItem, Slider, useThrottledPlayhead } from './controls'
 import { dragPayload, isInternalDrag, makeResolver } from './media'
@@ -302,7 +303,7 @@ export function Canvas() {
         </div>
       )}
       {fullscreen && (
-        <button className="btn sm cv-exit-fs" onClick={() => useEditor.setState({ fullscreen: false })}>
+        <button className="btn sm cv-exit-fs" {...tipProps('Exit full screen', undefined, 'Esc')} onClick={() => useEditor.setState({ fullscreen: false })}>
           <Minimize size={14} /> Exit full screen
         </button>
       )}
@@ -561,8 +562,8 @@ function ObjectToolbar({ geo, margin, boxH }: { geo: Geo; margin: number; boxH: 
   }
   return (
     <div className="cv-toolbar" style={{ left: geo.cx, top }} onPointerDown={(e) => e.stopPropagation()}>
-      <button title="Duplicate (Ctrl+D)" onClick={A.duplicate}><CopyPlus size={15} /></button>
-      <button title="Delete" onClick={() => A.remove()}><Trash2 size={15} /></button>
+      <button {...tipProps('Duplicate', undefined, 'Ctrl+D')} onClick={A.duplicate}><CopyPlus size={15} /></button>
+      <button {...tipProps('Delete', 'Shift+Del also closes the gap it leaves.', 'Del')} onClick={() => A.remove()}><Trash2 size={15} /></button>
       {hasTransform && <button title="Flip horizontal" onClick={() => flip('flipX')}><FlipHorizontal2 size={15} /></button>}
       {isMedia && (
         <button title="Crop" className={clsx(crop && 'on')} onClick={() => setCrop(!crop)}><Crop size={15} /></button>
@@ -578,7 +579,7 @@ function ObjectToolbar({ geo, margin, boxH }: { geo: Geo; margin: number; boxH: 
         </button>
       )}
       {item.type === 'text' && (
-        <button className="txt" title="Edit text (double-click)" onClick={() => useEditor.setState({ editingTextId: item.id })}>Edit</button>
+        <button className="txt" {...tipProps('Edit text', 'Or double-click the text on the canvas.')} onClick={() => useEditor.setState({ editingTextId: item.id })}>Edit</button>
       )}
       <div className="sep" />
       <button title="More" onClick={() => setMore(!more)}><MoreHorizontal size={15} /></button>

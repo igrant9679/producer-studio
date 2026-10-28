@@ -28,11 +28,12 @@ import {
   updateTrack,
 } from '@producer/core'
 import clsx from 'clsx'
-import { AlignCenter, AlignLeft, AlignRight, Bold, CaseUpper, ChevronsRight, FlipHorizontal2, FlipVertical2, Italic, RotateCcw, Snowflake, SplitSquareHorizontal, Trash2, Underline, X, CopyPlus, Copy, RefreshCw } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, Bold, CaseUpper, ChevronsRight, FlipHorizontal2, FlipVertical2, Italic, RotateCcw, SplitSquareHorizontal, Trash2, Underline, X, CopyPlus, Copy, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import * as A from './actions'
 import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
 import { resetDemoProject } from './demo'
+import { FreezeControls, FreezeHold } from './FreezeMenu'
 import { thumbUrl } from './media'
 import { PROJECT_NAME_MAX, useEditor } from './store'
 import { timecode } from './timelineMath'
@@ -551,7 +552,10 @@ function SpeedTab({ item }: { item: VideoItem | AudioItem }) {
     <>
       <Section title="Speed">
         {frozen ? (
-          <p className="ed-note">This is a freeze-frame segment; speed doesn't apply.</p>
+          <>
+            <p className="ed-note">This is a freeze-frame segment; speed doesn't apply.</p>
+            <FreezeHold item={item as VideoItem} />
+          </>
         ) : (
           <>
             <Slider label="Speed" value={item.speed} min={0.25} max={4} step={0.05} suffix="×" neutral={1} onChange={setSpeed} />
@@ -573,8 +577,8 @@ function SpeedTab({ item }: { item: VideoItem | AudioItem }) {
       </Section>
       {item.type === 'video' && !frozen && (
         <Section title="Freeze frame">
-          <p className="ed-note">Holds the frame under the playhead for 2 seconds.</p>
-          <button className="btn sm" onClick={A.freeze}><Snowflake size={13} /> Freeze frame at playhead</button>
+          <p className="ed-note">Holds a frame still: the one under the playhead, or the clip's last frame after it.</p>
+          <FreezeControls />
         </Section>
       )}
     </>
