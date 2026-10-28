@@ -31,12 +31,15 @@ export interface ProbeResult {
   orientation?: number
   /** HDR video (iPhone HLG, PQ): its 10-bit BT.2020 pictures must be tone-mapped before becoming 8-bit SDR. */
   hdr?: 'pq' | 'hlg'
+  /** The picture has transparency (a VP9 WebM with alpha, ProRes 4444, PNG frames): its proxy keeps it. */
+  alpha?: boolean
 }
 
 interface FfStream {
   index: number
   codec_type: string
   codec_name?: string
+  pix_fmt?: string
   width?: number
   height?: number
   color_transfer?: string
@@ -82,6 +85,8 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
   const orientation = kind === 'image' ? exifOrientation(file) : undefined
   if (orientation && orientation >= 5) [width, height] = [height, width]
   const hdr = v?.color_transfer === 'smpte2084' ? 'pq' : v?.color_transfer === 'arib-std-b67' ? 'hlg' : undefined
+  // VP9 keeps its alpha in a side stream the header tags; other codecs say so in the pixel format
+  const alpha = kind === 'video' && (/^(yuva|rgba|argb|bgra|abgr|gbrap|ya)/.test(v?.pix_fmt ?? '') || /^1$/.test(v?.tags?.alpha_mode ?? v?.tags?.ALPHA_MODE ?? ''))
   return {
     kind,
     duration: kind === 'image' ? undefined : duration,
@@ -95,6 +100,7 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
     audioStream: a?.index,
     ...(orientation && orientation > 1 ? { orientation } : {}),
     ...(hdr ? { hdr } : {}),
+    ...(alpha ? { alpha } : {}),
   }
 }
 
@@ -233,6 +239,22 @@ async function sha256File(file: string): Promise<string> {
 }
 
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
+
+/**
+ * An edit proxy that keeps transparency (a background-removed copy): VP9 with alpha in WebM, which browsers play and
+ * the export reads. A VP9 source is decoded with libvpx, the only decoder that reads its alpha.
+ */
+export function alphaProxyArgs(src: string, out: string, o: { vmap: string[]; amap?: string[]; codec?: string; w: number; h: number; fps?: number; gop: string }): string[] {
+  return [
+    ...(o.codec === 'vp9' ? ['-c:v', 'libvpx-vp9'] : []),
+    '-i', src,
+    ...o.vmap, ...(o.amap ?? []),
+    '-vf', `${o.fps ? `fps=${o.fps},` : ''}scale=${o.w}:${o.h},format=yuva420p`,
+    '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-b:v', '0', '-crf', '36', '-deadline', 'realtime', '-cpu-used', '8', '-row-mt', '1', '-g', o.gop, '-auto-alt-ref', '0',
+    ...(o.amap ? ['-c:a', 'libopus', '-b:a', '96k', '-ac', '2'] : ['-an']),
+    out,
+  ]
+}
 
 /**
  * How long a file plays when its header doesn't say: browser and Loom recordings (MediaRecorder WebM) carry no
@@ -437,12 +459,15 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       row = await updateAsset(row.id, { ...keys, meta, kind: 'video' })
       jc.progress(0.25, 'Building edit proxy')
       const { w, h } = proxySize(W, H)
-      const proxy = path.join(work, 'proxy.mp4')
+      if (info.alpha) meta.alpha = true
+      const proxy = path.join(work, info.alpha ? 'proxy.webm' : 'proxy.mp4')
       // slow-motion footage (120/240 fps) is shown at 60: the clip's own rate stays in its metadata for the export
       const fast = (info.fps ?? 30) > PROXY_MAX_FPS
       const gop = String(Math.max(1, Math.round(Math.min(info.fps ?? 30, PROXY_MAX_FPS))))
       await ffmpegProgress(
-        [
+        info.alpha
+          ? alphaProxyArgs(src, proxy, { vmap, amap: info.hasAudio ? amap : undefined, codec: info.codec, w, h, fps: fast ? PROXY_MAX_FPS : undefined, gop })
+          : [
           '-i', src,
           ...vmap, ...(info.hasAudio ? amap : []),
           '-vf', `${fast ? `fps=${PROXY_MAX_FPS},` : ''}scale=${w}:${h}${sdr},format=yuv420p`,
@@ -456,7 +481,7 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
         (f) => jc.progress(0.25 + f * 0.72, 'Building edit proxy'),
         { signal: jc.signal },
       )
-      keys.proxyKey = await put(proxy, 'proxy.mp4', 'video/mp4')
+      keys.proxyKey = info.alpha ? await put(proxy, 'proxy.webm', 'video/webm') : await put(proxy, 'proxy.mp4', 'video/mp4')
       // the proxy's own header always has a length
       if (!meta.duration) meta.duration = (await probe(proxy, jc.signal).catch(() => undefined))?.duration
     } else if (info.kind === 'audio') {

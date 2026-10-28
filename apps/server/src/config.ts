@@ -53,6 +53,13 @@ export interface Config {
   trustProxyHops: number
   /** Pexels API key (stock footage search for videos made without recordings); unset = no stock footage. */
   pexelsApiKey?: string
+  /**
+   * Background removal (E-21): a command run on the server with {in} and {out} in its arguments (a clip's file, and a
+   * folder it fills with an alpha WebM `out.webm` or PNG frames). Unset = the tool is off.
+   */
+  bgRemovalCmd?: string
+  /** An RNNoise model file (.rnnn) for ffmpeg's arnndn voice denoiser; unset = afftdn only. */
+  denoiseModel?: string
   /** Abuse brakes (cloud). In memory per process; 0 turns one off. */
   limits: {
     /** AI writing calls (write, assistant, produce script) per user per day, and per minute. */
@@ -178,6 +185,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hyperframesProtocolTimeout: env.HYPERFRAMES_PROTOCOL_TIMEOUT || undefined,
     trustProxyHops: envInt(env, 'TRUST_PROXY_HOPS', production ? 1 : 0),
     pexelsApiKey: env.PEXELS_API_KEY?.trim() || undefined,
+    bgRemovalCmd: env.BG_REMOVAL_CMD?.trim() || undefined,
+    denoiseModel: env.DENOISE_MODEL?.trim() || undefined,
     limits: {
       aiPerDay: envInt(env, 'AI_CALLS_PER_DAY', 200),
       aiPerMinute: envInt(env, 'AI_CALLS_PER_MINUTE', 20),

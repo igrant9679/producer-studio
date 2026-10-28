@@ -16,6 +16,7 @@ import { voiceRoutes } from './routes/voice'
 import { aiSettingsRoutes } from './routes/ai-settings'
 import { assetRoutes, mediaRoutes, uploadRoutes } from './routes/assets'
 import { sceneRoutes } from './routes/scenes'
+import { smartRoutes, smartToolsRoutes } from './routes/smart'
 import { authRoutes } from './routes/auth'
 import { eventRoutes, jobRoutes } from './routes/jobs'
 import { preferenceRoutes } from './routes/preferences'
@@ -112,6 +113,8 @@ export function createApp() {
   app.route('/api/projects', projectRoutes)
   app.route('/api/uploads', uploadRoutes)
   app.route('/api/assets', sceneRoutes)
+  app.route('/api/assets', smartRoutes)
+  app.route('/api/smart-tools', smartToolsRoutes)
   app.route('/api/assets', assetRoutes)
   app.route('/api/media', mediaRoutes)
   app.route('/api/jobs', jobRoutes)
