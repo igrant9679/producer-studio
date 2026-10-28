@@ -93,7 +93,7 @@ deviceRoutes.post('/', async (c) => {
   let user = c.get('deviceId') ? null : c.get('user')
   if (!user && b.email && b.password) user = await checkCredentials(c, b.email, b.password)
   if (!user) throw c.get('deviceId') ? new HttpError(403, 'forbidden', 'Link a new app with your email and password') : unauthorized()
-  limitDevices(user.id)
+  await limitDevices(user.id)
   const token = `psd_${randomToken(32)}`
   const id = newId('dev')
   await ctx().db.insert(devices).values({ id, userId: user.id, name: b.name, tokenHash: sha256(token), createdAt: Date.now() })

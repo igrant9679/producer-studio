@@ -11,6 +11,7 @@ import { failAssetOfJob, reconcileAssets } from '../services/asset-recovery'
 import { recoverRelays } from '../routes/voice'
 import { assetPrefix, sweepTempDirs } from '../services/assets'
 import { pruneOldRows } from '../services/retention'
+import { pruneUsage, recordJobRun, withActor } from '../services/metering'
 import { publicJobError } from './errors'
 import { type JobRow, cancelJob, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, requeueForShutdown, updateProgress } from './queue'
 
@@ -181,6 +182,18 @@ function untilStopped<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   })
 }
 
+/** How a job ended in this worker: finished, failed, or stopped from outside (StopReason). */
+export type JobOutcome = StopReason['kind'] | 'done' | 'error'
+
+/**
+ * Everything that follows a job ending in this worker, whatever the outcome (the job row already says how it
+ * ended). Runs after the slot is freed and never holds up the next claim. Add follow-ups (notifications) here.
+ */
+async function afterJob(job: JobRow, outcome: JobOutcome, ms: number) {
+  // the machine time was spent either way; a deleted space has nothing left to charge
+  if (outcome !== 'gone') await recordJobRun(job, ms)
+}
+
 async function runJob(job: JobRow, workerId: string) {
   const entry: Running = { ac: new AbortController(), job, startedAt: Date.now(), lastProgress: Date.now() }
   const { ac } = entry
@@ -193,11 +206,12 @@ async function runJob(job: JobRow, workerId: string) {
   const h = handlers.get(job.kind as JobKind)
   let work: Promise<unknown> = Promise.resolve()
   let settled = false
-  let outcome: StopReason['kind'] | 'done' | 'error' = 'error'
+  let outcome: JobOutcome = 'error'
   try {
     if (!h) throw new Error(`No handler for job kind ${job.kind}`)
     const jc = makeContext(entry, workerId)
-    work = Promise.resolve().then(() => h(jc))
+    // AI tokens the handler uses are charged to the person who started the job
+    work = Promise.resolve().then(() => withActor(job.userId, () => h(jc)))
     void work.then(
       () => (settled = true),
       () => (settled = true),
@@ -226,6 +240,7 @@ async function runJob(job: JobRow, workerId: string) {
     }
   } finally {
     clearTimeout(limitTimer)
+    void afterJob(job, outcome, Date.now() - entry.startedAt).catch((err) => log.warn('after-job steps failed', { err, jobId: job.id }))
     running.delete(job.id)
     wakeNow()
     // a job stopped because its clip or space was deleted may have written files since: sweep now, and again when
@@ -359,7 +374,10 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
   const tmpSweeps = setInterval(sweepTmp, 3600_000)
   tmpSweeps.unref()
   // expired sessions, old finished jobs and spent invites
-  const prune = () => void pruneOldRows().catch((err) => log.warn('pruning old rows failed', { err }))
+  const prune = () => {
+    void pruneOldRows().catch((err) => log.warn('pruning old rows failed', { err }))
+    void pruneUsage().catch((err) => log.warn('pruning usage failed', { err }))
+  }
   const firstPrune = setTimeout(prune, 3 * 60_000)
   const pruning = setInterval(prune, 6 * 3600_000)
   hb.unref()

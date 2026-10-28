@@ -34,6 +34,8 @@ export async function setup(): Promise<TestEnv> {
   const { registerHandlers } = await import('../jobs/handlers')
   await initCtx(loadConfig())
   registerHandlers()
+  // a shared Postgres keeps rate-limit windows between runs: each test file starts from empty counters
+  if (process.env.TEST_DATABASE_URL) await (await import('../limits')).resetLimits()
   env = { app: createApp(), dataDir }
   return env
 }
@@ -88,7 +90,7 @@ export async function claimJob(id: string, workerId = 'test-worker') {
   const now = Date.now()
   const rows = await ctx()
     .db.update(jobs)
-    .set({ status: 'running', lockedBy: workerId, lockedAt: now, updatedAt: now, attempts: sql`${jobs.attempts} + 1`, message: 'Starting' })
+    .set({ status: 'running', lockedBy: workerId, lockedAt: now, startedAt: now, updatedAt: now, attempts: sql`${jobs.attempts} + 1`, message: 'Starting' })
     .where(and(eq(jobs.id, id), eq(jobs.status, 'queued')))
     .returning()
   if (!rows[0]) throw new Error(`job ${id} is not queued`)

@@ -11,6 +11,7 @@ import { assetEditable, assetRecord } from '../dto'
 import { checkIfMatch } from '../etag'
 import { HttpError, body, invalid, requireRole } from '../http'
 import { newId } from '../ids'
+import { assertStorageRoom } from '../limits'
 import { cancelJobsOfAsset, enqueue } from '../jobs/queue'
 import { waveformKey } from '../media/process'
 import { assertVariant, serveObject, type Variant } from '../media/serve'
@@ -57,6 +58,7 @@ uploadRoutes.post('/', async (c) => {
   }
   const max = ctx().config.maxUploadBytes
   if (b.size > max) throw new HttpError(413, 'quota', `File is larger than the ${Math.round(max / 1024 / 1024)} MB upload limit`)
+  await assertStorageRoom(b.workspaceId, b.size - (retry?.size ?? 0))
   const mime = uploadMime(b.mime, b.filename)
   if (!mime) throw new HttpError(415, 'invalid', 'Only video, audio and image files can be uploaded')
   if (retry) {

@@ -5,10 +5,15 @@ import Anthropic from '@anthropic-ai/sdk'
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod'
 import type { WriteRequest } from '@producer/core'
 import { HttpError } from '../http'
+import { noteTokens } from '../services/metering'
 import { BETAS, MODEL, aiConfigured, checkStop, getClient, keyClient, mapAiError, textOf, writeRequestParams } from './claude'
 import type { AgentRequest, AiProvider, ProviderStatus, StructuredRequest } from './provider'
 
 const isApiError = (err: unknown) => err instanceof Anthropic.APIError
+
+type Usage = { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }
+/** Tokens a response used, for the space's usage (cached input counted as input: the estimate errs high). */
+const noteUsage = (u: Usage | null | undefined) => noteTokens((u?.input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0), u?.output_tokens)
 
 export interface AnthropicProviderOptions {
   /** User-supplied key; omitted = the server's own credentials (env / profile). */
@@ -60,6 +65,7 @@ export class AnthropicApiProvider implements AiProvider {
       )
       stream.on('text', (d) => onDelta(d))
       const msg = await stream.finalMessage()
+      noteUsage(msg.usage)
       checkStop(msg, 'write this')
       return textOf(msg.content).trim()
     } catch (err) {
@@ -98,6 +104,7 @@ export class AnthropicApiProvider implements AiProvider {
           },
           { signal: req.signal },
         )
+        noteUsage(msg.usage)
         checkStop(msg, 'complete this request')
         parsed = (msg.parsed_output as T | null | undefined) ?? null
       } catch (err) {
@@ -146,6 +153,7 @@ export class AnthropicApiProvider implements AiProvider {
         )
         stream.on('text', (d) => req.onText(d))
         msg = await stream.finalMessage()
+        noteUsage(msg.usage)
       } catch (err) {
         this.fail(err)
       }

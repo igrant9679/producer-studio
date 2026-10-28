@@ -12,6 +12,7 @@ import {
   Clapperboard,
   Film,
   FolderOpen,
+  Gauge,
   Home,
   Image as ImageIcon,
   LayoutGrid,
@@ -47,6 +48,7 @@ import { ThemeSwitcher } from './pages/AppearanceSettings'
 import { DESKTOP_DOWNLOAD_URL, useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, uploadsIn, useJobs, useUploads } from './stores'
 import { StorageBanner } from './StorageBanner'
+import { QueueNote } from './components/QueueNote'
 import { Avatar, Logo, MenuList, Popover, Progress, Spinner, focusables, spaceColor, useClickOutside, useEditGate, useEscapeLayer, useFilePicker } from './ui'
 import { JOB_LABELS, formatDuration, relativeTime } from './util'
 
@@ -435,6 +437,7 @@ function JobsIndicator() {
               <button className="btn ghost sm" onClick={() => api.cancelJob(j.id).then((r) => useJobs.getState().upsert(r)).catch((e) => toastError(e, `Couldn’t cancel ${(JOB_LABELS[j.kind] ?? j.kind).toLowerCase()}`))} aria-label={`Cancel ${JOB_LABELS[j.kind] ?? j.kind}`}>Cancel</button>
             </div>
             <div className="ps-job-msg">{j.message || (j.status === 'queued' ? 'Waiting in queue' : 'Working…')}</div>
+            {j.status === 'queued' && <QueueNote job={j} />}
             <Progress value={j.status === 'queued' ? -1 : j.progress} />
           </div>
         ))}
@@ -461,6 +464,9 @@ function JobsIndicator() {
           <button className="btn ghost sm" onClick={clearUploads}>Clear finished uploads</button>
         </div>
       )}
+      <div style={{ padding: '6px 6px 2px', textAlign: 'right' }}>
+        <NavLink className="btn ghost sm" to="/jobs">Job history</NavLink>
+      </div>
     </Popover>
   )
 }
@@ -608,6 +614,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <div style={{ marginTop: 6 }}>
               <NavItem to="/space" icon={<Users size={18} />} label="Members" />
               <NavItem to="/activity" icon={<Activity size={18} />} label="Activity" />
+              <NavItem to="/usage" icon={<Gauge size={18} />} label="Usage" />
               {!currentWs?.personal && (
                 <button className="ps-nav-link" onClick={() => setModal('invite')} disabled={!canInvite(currentWs)} data-tip={inviteTip} data-tip-side="right" aria-label="Invite members">
                   <UserPlus size={18} />

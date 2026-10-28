@@ -15,6 +15,8 @@ export interface ProviderStatus {
   available: boolean
   detail: string
   model?: string
+  /** builtin-off: the server's own key isn't turned on for this space (its owner can turn it on). */
+  reason?: 'builtin-off'
 }
 
 export interface ScriptImage {
@@ -76,9 +78,11 @@ let override: AiProvider | undefined
 
 /** Provider for a scope + feature (feature undefined = the default provider). */
 export async function getProvider(scope?: AiScope, feature?: AiFeature): Promise<AiProvider> {
-  if (override) return override
+  // every call is metered for the space (services/metering.ts)
+  const { meterAi } = await import('../services/metering')
+  if (override) return meterAi(override, scope, feature)
   const { resolveProvider } = await import('./resolve')
-  return (await resolveProvider(scope, feature)).provider
+  return meterAi((await resolveProvider(scope, feature)).provider, scope, feature)
 }
 
 /** Test hook: force one provider for every scope and feature (undefined restores resolution). */
@@ -94,6 +98,7 @@ export async function requireProvider(scope?: AiScope, feature?: AiFeature): Pro
     const { HttpError } = await import('../http')
     const { notConfigured } = await import('./claude')
     // a chosen provider that isn't usable explains itself (e.g. "Claude isn't signed in"); nothing configured → the generic message
+    if (s.reason === 'builtin-off') throw new HttpError(503, 'server', s.detail)
     throw p.id === 'none' || p.id === 'anthropic-api' ? notConfigured() : new HttpError(503, 'server', s.detail || notConfigured().message)
   }
   return p

@@ -740,6 +740,86 @@ on('DELETE', '/api/assets/([^/]+)', (m) => {
   return json({ ok: true })
 })
 
+// queue, job history and usage (A-9, A-8, A-18, P-1): registered before /api/jobs/:id so they match first
+const memberOf = (wsId: string | null) => (workspaces.some((w) => w.id === wsId) ? null : fail(404, 'Not found', 'not_found'))
+on('GET', '/api/jobs/queue', (_m, q) => {
+  const ws = q.get('workspaceId')
+  const denied = memberOf(ws)
+  if (denied) return denied
+  const waiting = jobs.filter((j) => j.workspaceId === ws && j.status === 'queued').sort((a, b) => a.createdAt - b.createdAt)
+  const out: Json = {}
+  waiting.forEach((j, i) => {
+    const wait = Math.max(0, j.startedAt - Date.now())
+    out[j.id] = i === 0 && wait < 1000 ? { position: 1, waitMs: 0, reason: 'next', detail: 'Starting in a moment' } : { position: i + 1, waitMs: wait, reason: i ? 'behind' : 'lane-full', detail: i ? `${i} job${i === 1 ? '' : 's'} ahead of it` : 'Next in line: waiting for a free slot' }
+  })
+  return json({ jobs: out })
+})
+on('GET', '/api/jobs/history', (_m, q) => {
+  const ws = q.get('workspaceId')
+  const denied = memberOf(ws)
+  if (denied) return denied
+  const status = q.get('status')
+  if (status && !['done', 'error', 'cancelled'].includes(status)) return fail(400, 'status must be done, error or cancelled', 'invalid')
+  const items = jobs
+    .filter((j) => j.workspaceId === ws && ['done', 'error', 'cancelled'].includes(j.status) && (!status || j.status === status))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .map((j) => ({ ...publicJob(j), startedAt: j.startedAt, result: undefined }))
+  return json({ items })
+})
+on('POST', '/api/jobs/([^/]+)/retry', (m) => {
+  const j = jobs.find((x) => x.id === m[1])
+  if (!j) return fail(404, 'Job not found', 'not_found')
+  const denied = editorOnly(j.workspaceId)
+  if (denied) return denied
+  if (j.status !== 'error' && j.status !== 'cancelled') return fail(409, 'Only a failed or cancelled job can be retried.', 'conflict')
+  if (j.kind === 'asset.process') return fail(409, 'Retry this clip from the Library: its Retry button checks the file first.', 'conflict')
+  const again = startJob(j.kind, j.workspaceId, j.runMs, { projectId: j.projectId, message: 'Queued again', onDone: j.onDone })
+  return json(publicJob(again))
+})
+const mockBuiltinAi: Record<string, boolean> = { ws_personal: true, ws_team: true, ws_client: false }
+on('GET', '/api/usage', (_m, q) => {
+  const ws = q.get('workspaceId') ?? ''
+  const denied = memberOf(ws)
+  if (denied) return denied
+  const days = Math.min(400, Math.max(1, Number(q.get('days') ?? 30) || 30))
+  const role = workspaces.find((w) => w.id === ws)?.role
+  const scale = days / 30
+  const providers = [
+    { provider: 'anthropic-api', model: 'claude-opus-5', requests: Math.round(42 * scale), inputTokens: Math.round(310_000 * scale), outputTokens: Math.round(52_000 * scale) },
+    { provider: 'openai', model: 'gpt-5.5', requests: Math.round(9 * scale), inputTokens: Math.round(40_000 * scale), outputTokens: Math.round(8_000 * scale) },
+  ].map((p) => ({ ...p, estCostUsd: (p.inputTokens * (p.provider === 'openai' ? 1.25 : 5) + p.outputTokens * (p.provider === 'openai' ? 10 : 25)) / 1e6 }))
+  const sum = (k: 'requests' | 'inputTokens' | 'outputTokens' | 'estCostUsd') => providers.reduce((t, p) => t + p[k], 0)
+  const bytesOf = (id: string) => assets.filter((a) => a.workspaceId === id).length * 48 * 1024 * 1024
+  return json({
+    workspaceId: ws,
+    from: Date.now() - (days - 1) * DAY,
+    to: Date.now(),
+    days,
+    ai: { providers, requests: sum('requests'), inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), estCostUsd: sum('estCostUsd'), estimate: true },
+    jobs: { minutes: 37.5, byKind: [{ kind: 'export.render', minutes: 31, runs: 6 }, { kind: 'asset.process', minutes: 6.5, runs: 14 }] },
+    storage: { bytes: bytesOf(ws), files: assets.filter((a) => a.workspaceId === ws).length, byKind: [{ kind: 'video', bytes: bytesOf(ws), files: assets.filter((a) => a.workspaceId === ws).length }] },
+    spaces: workspaces.map((w) => ({ id: w.id, name: w.name, bytes: bytesOf(w.id) })),
+    ...(role === 'owner' ? { members: [{ userId: 'u_demo', name: 'Alex Rivera', aiRequests: sum('requests'), tokens: sum('inputTokens') + sum('outputTokens'), jobMinutes: 37.5 }] } : {}),
+    limits: [
+      { label: 'Your AI requests today', used: 12, limit: 200, unit: 'requests' },
+      { label: 'This space’s AI requests today', used: 12, limit: 0, unit: 'requests' },
+      { label: 'This space’s AI tokens this month', used: sum('inputTokens') + sum('outputTokens'), limit: 2_000_000, unit: 'tokens' },
+      { label: 'Your AI tokens this month', used: sum('inputTokens') + sum('outputTokens'), limit: 0, unit: 'tokens' },
+      { label: 'Processing minutes this month', used: 37.5, limit: 0, unit: 'minutes' },
+      { label: 'Exports, voiceovers and AI runs waiting', used: jobs.filter((j) => j.workspaceId === ws && !j.finished).length, limit: 10, unit: 'jobs' },
+      { label: 'Storage', used: bytesOf(ws), limit: 0, unit: 'bytes' },
+    ],
+    builtinAi: { enabled: mockBuiltinAi[ws] ?? false, available: true, canChange: role === 'owner' },
+  })
+})
+on('PUT', '/api/usage/builtin-ai', (_m, _q, b) => {
+  const ws = String(b.workspaceId)
+  const denied = memberOf(ws) ?? ownerOnly(ws)
+  if (denied) return denied
+  mockBuiltinAi[ws] = Boolean(b.enabled)
+  return json({ enabled: mockBuiltinAi[ws] })
+})
+
 on('GET', '/api/jobs/([^/]+)', (m) => {
   const j = jobs.find((x) => x.id === m[1])
   return j ? json(publicJob(j)) : fail(404, 'Job not found', 'not_found')

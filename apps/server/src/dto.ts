@@ -107,6 +107,7 @@ export function jobDto(j: typeof jobs.$inferSelect): Job {
     ...(j.kind === 'asset.process' && typeof (j.input as { assetId?: unknown })?.assetId === 'string' ? { assetId: (j.input as { assetId: string }).assetId } : {}),
     result: j.result ?? undefined,
     error: j.error ?? undefined,
+    ...(j.startedAt != null ? { startedAt: j.startedAt } : {}),
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
   }

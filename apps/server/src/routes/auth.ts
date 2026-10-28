@@ -52,7 +52,7 @@ export const authRoutes = new Hono<AppEnv>()
 
 authRoutes.post('/signup', async (c) => {
   const b = await body(c, z.object({ email: z.string().trim().email().max(254), password: z.string().min(8).max(200), name: z.string().trim().min(1).max(80) }))
-  limitSignup(clientIp(c))
+  await limitSignup(clientIp(c))
   const id = await createUser(b.email, b.password, b.name)
   await createSession(c, id)
   return c.json(await meResponse(id))

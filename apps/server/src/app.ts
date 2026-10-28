@@ -28,8 +28,10 @@ import { exportRoutes, projectExportRoutes, shareRoutes, workspaceShareRoutes } 
 import { activityRoutes, commentRoutes, projectCollabRoutes } from './routes/collab'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { templateRoutes } from './routes/templates'
+import { usageRoutes } from './routes/usage'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
+import { withActor } from './services/metering'
 import { storageHealth } from './services/storage-health'
 import { bodyLimitFor, cloudHeaders } from './security'
 import { serveStatic } from './static'
@@ -106,6 +108,8 @@ export function createApp() {
     return bodyLimit({ maxSize: max, onError: (x) => x.json({ error: 'Request body too large', code: 'quota' }, 413) })(c, next)
   })
   app.use('/api/*', sessionMiddleware)
+  // usage (AI tokens) inside the request is charged to the signed-in person
+  app.use('/api/*', (c, next) => withActor(c.get('user')?.id, next))
   app.use('/api/*', idempotency)
 
   // desktop-only routes first: they shadow signup and (while linked) workspace creation
@@ -129,6 +133,7 @@ export function createApp() {
   app.route('/api/assets', assetRoutes)
   app.route('/api/media', mediaRoutes)
   app.route('/api/jobs', jobRoutes)
+  app.route('/api/usage', usageRoutes)
   app.route('/api/events', eventRoutes)
   app.route('/api/ai', aiSettingsRoutes)
   app.route('/api/ai', aiRoutes)

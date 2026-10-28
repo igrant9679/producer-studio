@@ -22,6 +22,8 @@ const pages = {
   space: () => import('./pages/SpacePage'),
   exports: () => import('./pages/ExportsPage'),
   activity: () => import('./pages/ActivityPage'),
+  usage: () => import('./pages/UsagePage'),
+  jobs: () => import('./pages/JobsPage'),
   settings: () => import('./pages/SettingsPage'),
   invite: () => import('./pages/InvitePage'),
 }
@@ -44,6 +46,8 @@ const BrandPage = lazy(pages.brand)
 const SpacePage = lazy(pages.space)
 const ExportsPage = lazy(pages.exports)
 const ActivityPage = lazy(pages.activity)
+const UsagePage = lazy(pages.usage)
+const JobsPage = lazy(pages.jobs)
 const SettingsPage = lazy(pages.settings)
 const InvitePage = lazy(pages.invite)
 const NotFound = lazy(() => import('./pages/NotFound'))
@@ -120,6 +124,8 @@ export function ShellRoutes() {
             <Route path="space" element={<SpacePage />} />
             <Route path="exports" element={<ExportsPage />} />
             <Route path="activity" element={<ActivityPage />} />
+            <Route path="usage" element={<UsagePage />} />
+            <Route path="jobs" element={<JobsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="invite/:token" element={<InvitePage />} />
             <Route path="*" element={<NotFound />} />

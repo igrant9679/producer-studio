@@ -1,12 +1,16 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { and, eq, gt } from 'drizzle-orm'
+import { and, eq, gt, inArray } from 'drizzle-orm'
+import type { JobKind } from '@producer/core'
+import { requireProvider } from '../ai/provider'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
-import { devices, jobs, sessions } from '../db/schema'
+import { devices, jobs, projects, sessions } from '../db/schema'
 import { jobDto } from '../dto'
 import { HttpError, invalid, memberRole, notFound, requireRole, roleAtLeast } from '../http'
-import { cancelJob, getJob } from '../jobs/queue'
+import { describeQueue } from '../jobs/queue-info'
+import { cancelJob, enqueue, getJob } from '../jobs/queue'
+import { QUEUED_KINDS, assertQueueRoom, limitAi } from '../limits'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 
 export const jobRoutes = new Hono<AppEnv>()
@@ -33,6 +37,64 @@ jobRoutes.get('/', async (c) => {
     .orderBy(...pageOrder(jobs.createdAt, jobs.id))
     .limit(limit + 1)
   return c.json(toPage(rows, limit, (r) => [r.createdAt, r.id], jobDto))
+})
+
+/** A-9: where the space's queued jobs stand: place in line, estimated wait, and why they wait. */
+jobRoutes.get('/queue', async (c) => {
+  const u = requireUser(c)
+  const workspaceId = c.req.query('workspaceId')
+  if (!workspaceId) throw invalid('workspaceId is required')
+  await requireRole(u.id, workspaceId, 'viewer')
+  return c.json({ jobs: await describeQueue(workspaceId) })
+})
+
+const FINISHED = ['done', 'error', 'cancelled'] as const
+
+/** The job history (A-8): finished, failed and cancelled jobs of the space, newest first. */
+jobRoutes.get('/history', async (c) => {
+  const u = requireUser(c)
+  const workspaceId = c.req.query('workspaceId')
+  if (!workspaceId) throw invalid('workspaceId is required')
+  await requireRole(u.id, workspaceId, 'viewer')
+  const status = c.req.query('status')
+  if (status && !(FINISHED as readonly string[]).includes(status)) throw invalid('status must be done, error or cancelled')
+  const { limit, after } = pageQuery(c)
+  const conds = [eq(jobs.workspaceId, workspaceId), status ? eq(jobs.status, status) : inArray(jobs.status, [...FINISHED])]
+  const projectId = c.req.query('projectId')
+  if (projectId) conds.push(eq(jobs.projectId, projectId))
+  // newest first by when it ended: history pages by updated time
+  const from = afterCursor(jobs.updatedAt, jobs.id, after)
+  if (from) conds.push(from)
+  const rows = await ctx()
+    .db.select()
+    .from(jobs)
+    .where(and(...conds))
+    .orderBy(...pageOrder(jobs.updatedAt, jobs.id))
+    .limit(limit + 1)
+  // big results (transcripts, scripts) aren't needed in a list
+  return c.json(toPage(rows, limit, (r) => [r.updatedAt, r.id], (r) => ({ ...jobDto(r), result: undefined })))
+})
+
+/** Retry (A-8): the same work queued again as a new job, by an editor, under the same limits as starting it by hand. */
+jobRoutes.post('/:id/retry', async (c) => {
+  const u = requireUser(c)
+  const j = await getJob(c.req.param('id'))
+  if (!j) throw notFound('Job not found')
+  await requireRole(u.id, j.workspaceId, 'editor')
+  if (j.status !== 'error' && j.status !== 'cancelled') throw new HttpError(409, 'conflict', 'Only a failed or cancelled job can be retried.')
+  if (j.kind === 'asset.process') throw new HttpError(409, 'conflict', 'Retry this clip from the Library: its Retry button checks the file first.', { assetId: (j.input as { assetId?: string }).assetId })
+  if (j.kind.startsWith('voicestudio.')) throw new HttpError(409, 'conflict', 'Run this again from Voice Studio on the desktop.')
+  if (j.projectId) {
+    const p = await ctx().db.select({ id: projects.id }).from(projects).where(eq(projects.id, j.projectId)).limit(1)
+    if (!p.length) throw new HttpError(409, 'conflict', 'The project this job belonged to was deleted.')
+  }
+  if (QUEUED_KINDS.includes(j.kind as JobKind)) await assertQueueRoom(j.workspaceId)
+  if (j.kind === 'ai.produce.script') {
+    await requireProvider(j.workspaceId, 'script')
+    await limitAi(u.id, j.workspaceId)
+  }
+  const row = await enqueue(j.kind as JobKind, j.input, { workspaceId: j.workspaceId, userId: u.id, projectId: j.projectId, message: 'Queued again' })
+  return c.json(jobDto(row))
 })
 
 jobRoutes.get('/:id', async (c) => {

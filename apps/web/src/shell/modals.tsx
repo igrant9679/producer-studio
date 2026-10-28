@@ -335,6 +335,7 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
               <li>Upload recordings from <b>Create new → Upload media</b> or drag files onto the Library.</li>
               <li>Everything in a space — projects, media, brand kit — is shared with its members.</li>
               <li>Exports and share links live under <b>Exports &amp; sharing</b>.</li>
+              <li>What a space used (AI, processing, storage) and its limits are under <b>Usage</b>; finished and failed jobs, with Retry, under <b>Background jobs → Job history</b>.</li>
             </ul>
             <div className="row" style={{ gap: 14, padding: 14, margin: '18px 0 14px', border: '1px solid var(--border)', borderRadius: 12, flexWrap: 'wrap' }}>
               <MonitorDown size={22} style={{ flex: 'none', color: 'var(--accent)' }} />

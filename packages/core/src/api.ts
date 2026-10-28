@@ -328,6 +328,8 @@ export interface Job<R = unknown> {
   assetId?: string
   result?: R
   error?: string
+  /** When its latest run started (absent while queued, and on jobs from before v15). */
+  startedAt?: number
   createdAt: number
   updatedAt: number
 }

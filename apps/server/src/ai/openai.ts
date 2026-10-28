@@ -19,6 +19,7 @@ import type {
 import type { WriteRequest } from '@producer/core'
 import { HttpError } from '../http'
 import { log } from '../log'
+import { noteTokens } from '../services/metering'
 import { writePrompt } from './claude'
 import { adaptJsonSchema, filterOpenAiModels, formatMismatch, jsonSchemaFor, redact, repairPrompt, validateStructured } from './common'
 import type { AgentRequest, AiProvider, ProviderStatus, StructuredRequest } from './provider'
@@ -109,6 +110,7 @@ export class OpenAiProvider implements AiProvider {
       mapOpenAiError(err, this.model)
     }
     if (!final) throw new HttpError(502, 'server', `The OpenAI response ended before it finished (${what}).`)
+    noteTokens(final.usage?.input_tokens, final.usage?.output_tokens)
     const refusal = refusalOf(final.output)
     if (refusal) throw new HttpError(422, 'invalid', `The AI declined to ${what}. Try rephrasing the request.`)
     if (final.status === 'incomplete') {

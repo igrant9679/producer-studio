@@ -60,8 +60,16 @@ export interface Config {
   bgRemovalCmd?: string
   /** An RNNoise model file (.rnnn) for ffmpeg's arnndn voice denoiser; unset = afftdn only. */
   denoiseModel?: string
-  /** Abuse brakes (cloud). In memory per process; 0 turns one off. */
+  /** Abuse brakes and quotas (cloud). Counted in Postgres, so they hold across replicas; 0 turns one off. */
   limits: {
+    /** AI requests in one workspace per day; AI tokens (in + out) per workspace and per user per calendar month (UTC). */
+    aiPerDayPerWorkspace: number
+    aiTokensPerMonthPerWorkspace: number
+    aiTokensPerMonthPerUser: number
+    /** Minutes of job run time one workspace may use per calendar month (UTC). */
+    jobMinutesPerMonthPerWorkspace: number
+    /** Bytes of files one workspace may store. */
+    storageBytesPerWorkspace: number
     /** AI writing calls (write, assistant, produce script) per user per day, and per minute. */
     aiPerDay: number
     aiPerMinute: number
@@ -194,6 +202,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       signupsPerHour: envInt(env, 'SIGNUPS_PER_HOUR', 200),
       devicesPerHour: envInt(env, 'DEVICES_PER_HOUR', 20),
       queuedJobsPerWorkspace: envInt(env, 'QUEUED_JOBS_PER_WORKSPACE', 10),
+      aiPerDayPerWorkspace: envInt(env, 'AI_CALLS_PER_DAY_PER_WORKSPACE', 0),
+      aiTokensPerMonthPerWorkspace: envInt(env, 'AI_TOKENS_PER_MONTH_PER_WORKSPACE', 0),
+      aiTokensPerMonthPerUser: envInt(env, 'AI_TOKENS_PER_MONTH_PER_USER', 0),
+      jobMinutesPerMonthPerWorkspace: envInt(env, 'JOB_MINUTES_PER_MONTH_PER_WORKSPACE', 0),
+      storageBytesPerWorkspace: envInt(env, 'STORAGE_GB_PER_WORKSPACE', 0) * 1024 ** 3,
     },
   }
 }
