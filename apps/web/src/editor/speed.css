@@ -1,0 +1,15 @@
+/* ---------- Speed tab (E-17): speed ramp curve, pitch, smooth slow motion ---------- */
+.ed-speed { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ed-ramp { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 2px; }
+.ed-ramp svg { max-width: 100%; height: auto; background: var(--field-2); border: 1px solid var(--border); border-radius: 8px; touch-action: none; }
+.ed-ramp-box { fill: none; stroke: var(--border-strong, var(--border)); stroke-dasharray: 2 3; }
+.ed-ramp-one { stroke: var(--border-strong, var(--border)); }
+.ed-ramp-lbl { fill: var(--text-3); font: 0.5625rem var(--font-mono); }
+.ed-ramp-ph { stroke: var(--accent); stroke-width: 1; opacity: 0.6; }
+.ed-ramp-line { fill: none; stroke: var(--cyan); stroke-width: 2; }
+.ed-ramp-pt { fill: #fff; stroke: var(--cyan); stroke-width: 2; cursor: grab; }
+.ed-ramp-pt:focus-visible { outline: none; stroke: var(--accent); stroke-width: 3; }
+.ed-ramp-tools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.ed-smooth-badge { animation: ed-smooth-pulse 1.4s ease-in-out infinite; }
+@keyframes ed-smooth-pulse { 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .ed-smooth-badge { animation: none; } }

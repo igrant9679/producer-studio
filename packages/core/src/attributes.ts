@@ -1,5 +1,6 @@
 // Paste attributes: copy one clip's colour, effects, transform, speed or volume onto other clips.
-import { clone, editable, findItem, setItemSpeed, updateItem } from './ops'
+import { clone, editable, findItem, updateItem } from './ops'
+import { rampShape, setItemSpeed, setPitchShift, setSpeedRamp } from './speed'
 import type { AnimProp, Item, Keyframes, Project } from './types'
 import { uid } from './util'
 
@@ -88,7 +89,12 @@ export function pasteAttributes(p0: Project, src: Item, targetIds: string[], gro
     if (kfChanged) patch.keyframes = keyframes
     if (Object.keys(patch).length) p = updateItem(p, id, patch as Partial<Item>)
     // speed last: it rescales the clip's keyframes and fades to the new length
-    if (groups.includes('speed') && hasAttributes(src, 'speed') && hasAttributes(it, 'speed') && 'speed' in src) p = setItemSpeed(p, id, src.speed)
+    if (groups.includes('speed') && hasAttributes(src, 'speed') && hasAttributes(it, 'speed') && 'speed' in src) {
+      // a ramp goes over as its shape, stretched to the target's length
+      const shape = rampShape(src)
+      p = shape ? setSpeedRamp(p, id, shape) : setItemSpeed(p, id, src.speed)
+      p = setPitchShift(p, id, !!src.pitchShift)
+    }
   }
   return p
 }

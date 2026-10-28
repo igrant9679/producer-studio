@@ -31,6 +31,7 @@ import type {
   SmartJobRequest,
   SmartJobResult,
   SmartToolsInfo,
+  SmoothCopyResult,
   ScriptScene,
   ShareLink,
   SyncStatus,
@@ -345,7 +346,9 @@ export const api = {
   detectScenes: (assetId: string, body: { from?: number; to?: number; threshold?: number } = {}) => reqOnce<Job<SceneCuts>>('POST', `/assets/${assetId}/scenes`, body),
   /** Smart tools (E-21): what this server can do, and a job making a processed copy of a clip's media. */
   smartTools: () => req<SmartToolsInfo>('GET', '/smart-tools'),
-  smartTool: (assetId: string, tool: 'stabilise' | 'denoise' | 'remove-background', body: SmartJobRequest = {}) => req<Job<SmartJobResult>>('POST', `/assets/${assetId}/${tool}`, body),
+  smartTool: (assetId: string, tool: 'stabilise' | 'denoise' | 'remove-background', body: SmartJobRequest = {}) => reqOnce<Job<SmartJobResult>>('POST', `/assets/${assetId}/${tool}`, body),
+  /** Smooth slow motion (E-17): a copy of source `from`..`to` with frames made in between, at `fps`. */
+  smoothSlowMotion: (assetId: string, body: { from: number; to: number; fps: number; projectId?: string }) => reqOnce<Job<SmoothCopyResult>>('POST', `/assets/${assetId}/smooth`, body),
   exports: (projectId: string) => req<ExportRecord[]>('GET', `/exports${qs({ projectId })}`),
   share: (id: string, exportId?: string) => req<ShareLink>('POST', `/projects/${id}/share`, { exportId }),
   shares: (id: string) => req<ShareLink[]>('GET', `/projects/${id}/shares`),

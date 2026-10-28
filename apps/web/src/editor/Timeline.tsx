@@ -81,6 +81,8 @@ import { placeAsset, placementFor, uploadToTimeline } from './timelineDrop'
 import { fitTimeline, registerTimelineFit } from './timelineView'
 import { InOutBand, TransportControls } from './TransportControls'
 import { ClipMediaMenuItems, canDropReplace, replaceMedia } from './clipMedia'
+import { SpeedBadge } from './SpeedPanel'
+import { clipSourceAt, sourceOffset, sourceRange } from '@producer/core'
 import { peakBetween, useWaveformPeaks } from './waveform'
 import { openPasteAttributes } from './PasteAttributes'
 import {
@@ -1155,7 +1157,6 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
   }, [item])
   const tr = 'transitionOut' in item ? item.transitionOut : undefined
   const muted = (item.type === 'video' || item.type === 'audio') && item.muted
-  const speed = (item.type === 'video' || item.type === 'audio') && item.speed !== 1 ? item.speed : null
 
   const onDragOver = (e: React.DragEvent) => {
     const p = dragPayload()
@@ -1224,7 +1225,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
           <span className="nm">{label}</span>
           {width > 80 && <span className="du">{shortDuration(item.duration)}</span>}
           {linked && <span className="tl-linked" aria-hidden="true"><Link2 size={10} /></span>}
-          {speed && <span className="badge">{speed}×</span>}
+          <SpeedBadge item={item} />
           {item.type === 'video' && item.freezeAt !== undefined && <span className="badge">Freeze</span>}
           {'effects' in item && item.effects.length > 0 && width > 120 && <span className="badge">FX {item.effects.length}</span>}
           {(item.type === 'video' || item.type === 'image') && item.filter && width > 150 && <span className="badge">{FILTERS.find((f) => f.id === item.filter!.id)?.name ?? 'Filter'}</span>}
@@ -1289,7 +1290,8 @@ function Filmstrip({ asset, item, width, height, zoom, visFrom, visTo }: { asset
   const tiles = []
   for (let i = first; i < last; i++) {
     const local = ((i + 0.5) * tileW) / zoom
-    const src = item.freezeAt ?? (item.reverse ? item.in + (item.duration - local) * item.speed : item.in + local * item.speed)
+    // along a speed ramp too (speed.ts)
+    const src = clipSourceAt(item, local)
     const idx = Math.max(0, Math.min(fs.frames - 1, Math.floor((src / dur) * fs.frames)))
     tiles.push(
       <div
@@ -1307,7 +1309,7 @@ function Waveform({ asset, item, width, height, visFrom, visTo, mini }: { asset:
   // bars 3 px apart across the part near the view (wider apart only if that part is huge), the whole clip long
   const step = Math.max(3, (visTo - visFrom) / 2000)
   // a long clip carries a shortened waveform; zoomed in past it, the full one is fetched
-  const peaks = useWaveformPeaks(asset, (step / (width || 1)) * it.duration * it.speed)
+  const peaks = useWaveformPeaks(asset, (step / (width || 1)) * (sourceRange(it).end - it.in))
   const path = useMemo(() => {
     if (!peaks) return ''
     const vol = Math.min(1.6, Math.max(0.15, it.volume ?? 1))
@@ -1315,15 +1317,16 @@ function Waveform({ asset, item, width, height, visFrom, visTo, mini }: { asset:
     let d = ''
     for (let j = Math.floor(visFrom / step), end = Math.min(width, visTo) / step; j < end; j++) {
       const x = j * step
-      const t0 = it.in + (x / (width || 1)) * it.duration * it.speed
-      const t1 = it.in + ((x + step) / (width || 1)) * it.duration * it.speed
+      // the sound at these moments of the clip, along a speed ramp too (speed.ts)
+      const t0 = it.in + sourceOffset(it, (x / (width || 1)) * it.duration)
+      const t1 = it.in + sourceOffset(it, ((x + step) / (width || 1)) * it.duration)
       const m = peakBetween(peaks, t0, t1)
       const h = Math.max(1, m * vol * (height - 2) * (mini ? 1 : 0.92))
       const y = mini ? height - h : (height - h) / 2
       d += `M${+x.toFixed(1)} ${y.toFixed(1)}h${+bw.toFixed(1)}v${h.toFixed(1)}h-${+bw.toFixed(1)}z`
     }
     return d
-  }, [peaks, width, height, step, visFrom, visTo, it.in, it.duration, it.speed, it.volume, mini])
+  }, [peaks, width, height, step, visFrom, visTo, it.in, it.duration, it.speed, it.speedRamp, it.volume, mini])
   if (!path) return null
   return (
     <svg className={clsx('tl-wave', mini && 'mini')} width={width} height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">

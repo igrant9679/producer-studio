@@ -3,6 +3,7 @@
 // where the copy starts, then replaces the media as Replace media does (one undo step).
 import { clone, findItem } from './ops'
 import { replaceClipMedia, replaceRefusal } from './replace'
+import { sourceRange } from './speed'
 import type { AssetRecord } from './api'
 import type { Asset, Item, Project } from './types'
 import { EPS, round } from './util'
@@ -49,7 +50,7 @@ export interface SmartJobResult {
 export function clipSourceRange(it: Item, handle = 1, fileDuration?: number): { from: number; to: number } | null {
   if (it.type !== 'video' && it.type !== 'audio') return null
   const a = it.in
-  const b = it.type === 'video' && it.freezeAt !== undefined ? it.freezeAt : it.in + it.duration * it.speed
+  const b = it.type === 'video' && it.freezeAt !== undefined ? it.freezeAt : sourceRange(it).end
   const from = round(Math.max(0, Math.min(a, b) - handle), 3)
   let to = round(Math.max(a, b) + handle, 3)
   if (fileDuration !== undefined && fileDuration > 0) to = Math.min(to, fileDuration)

@@ -12,6 +12,8 @@ import {
   mainTrack,
   pastableGroups,
   pasteAttributes,
+  applyRampPreset,
+  rampShape,
   updateItem,
   vectorscope,
   waveform,
@@ -96,6 +98,17 @@ describe('paste attributes', () => {
     // a locked clip takes nothing
     const locked = updateItem<VideoItem>(p, b, { locked: true })
     expect(findItem(pasteAttributes(locked, src, [b], ['colour']), b)!.item).toEqual(findItem(locked, b)!.item)
+  })
+
+  it('pastes a speed ramp as its shape, with the pitch setting', () => {
+    let { p, a, b } = twoClips()
+    p = applyRampPreset(p, a, 'hero')
+    p = updateItem<VideoItem>(p, a, { pitchShift: true })
+    const src = findItem(p, a)!.item as VideoItem
+    const next = pasteAttributes(p, src, [b], ['speed'])
+    const vb = findItem(next, b)!.item as VideoItem
+    expect(rampShape(vb)).toEqual(rampShape(src))
+    expect(vb.pitchShift).toBe(true)
   })
 })
 

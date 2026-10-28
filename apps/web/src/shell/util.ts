@@ -78,6 +78,7 @@ export const JOB_LABELS: Record<JobKind, string> = {
   'media.stabilise': 'Stabilising',
   'media.denoise': 'Denoising',
   'media.bgremove': 'Removing the background',
+  'media.smooth': 'Smooth slow motion',
 }
 
 export function initials(name: string | undefined): string {

@@ -265,6 +265,9 @@ describe('processed copies', () => {
     expect(clipSourceRange({ ...moved, in: 3 }, 1, 10)).toEqual({ from: 2, to: 8 })
     expect(clipSourceRange({ ...moved, in: 0.4, speed: 2, duration: 4 }, 1, 6)).toEqual({ from: 0, to: 6 })
     expect(clipSourceRange({ ...moved, freezeAt: 5 }, 1)).toEqual({ from: 0, to: 6 })
+    // a ramped clip covers the stretch it plays, not its average speed times its length
+    const ramp = [{ t: 0, v: 0.5 }, { t: 4, v: 0.5 }, { t: 4.001, v: 2 }, { t: 8, v: 2 }]
+    expect(clipSourceRange({ ...moved, in: 1, speed: 1, duration: 8, speedRamp: ramp }, 0)?.to).toBeCloseTo(1 + 2 + 8, 1)
   })
 
   it('swaps a copy that starts later in the file in, the clip showing the same frames, in one step', () => {

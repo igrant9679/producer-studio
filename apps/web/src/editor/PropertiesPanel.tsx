@@ -19,7 +19,6 @@ import {
   setAspect,
   setCanvasSize,
   setCaptionText,
-  setItemSpeed,
   setTextContent,
   updateItem,
   updateProject,
@@ -31,7 +30,7 @@ import { useEffect, useState } from 'react'
 import * as A from './actions'
 import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
 import { resetDemoProject } from './demo'
-import { FreezeControls, FreezeHold } from './FreezeMenu'
+import { SpeedTab } from './SpeedPanel'
 import { AlignButtons } from './AlignTools'
 import { AdjustmentLayerTab, ColourTab, EffectsSection } from './ColourPanel'
 import { KeyframesSection } from './KeyframePanel'
@@ -454,52 +453,6 @@ function AnimationTab({ item }: { item: VisualItem }) {
       {mode !== 'combo' && anims[mode] && <Slider label="Duration" value={anims[mode]!.duration} min={0.1} max={maxDur} step={0.05} suffix="s" onChange={setDur} />}
       {mode === 'combo' && anims.combo && <Slider label="Period" value={anims.combo.period} min={0.2} max={4} step={0.05} suffix="s" onChange={setDur} />}
     </Section>
-  )
-}
-
-// ---------- speed ----------
-
-function SpeedTab({ item }: { item: VideoItem | AudioItem }) {
-  const setSpeed = (v: number) => {
-    // keyframes, fades and animations stay on the same frames
-    const s = useEditor.getState()
-    s.commit(setItemSpeed(s.project, item.id, v), 'Speed', { coalesce: `speed:${item.id}` })
-  }
-  const frozen = item.type === 'video' && item.freezeAt !== undefined
-  return (
-    <>
-      <Section title="Speed">
-        {frozen ? (
-          <>
-            <p className="ed-note">This is a freeze-frame segment; speed doesn't apply.</p>
-            <FreezeHold item={item as VideoItem} />
-          </>
-        ) : (
-          <>
-            <Slider label="Speed" value={item.speed} min={0.25} max={4} step={0.05} suffix="×" neutral={1} onChange={setSpeed} />
-            <div className="ed-chiprow">
-              {[0.5, 1, 1.5, 2, 3].map((s) => (
-                <button key={s} className={clsx('chip', Math.abs(item.speed - s) < 0.001 && 'active')} onClick={() => setSpeed(s)}>{s}×</button>
-              ))}
-            </div>
-            <Field label="Duration">
-              <span className="ed-static mono">{item.duration.toFixed(2)} s</span>
-            </Field>
-          </>
-        )}
-        {item.type === 'video' && !frozen && (
-          <Field label="Reverse">
-            <Toggle checked={!!item.reverse} onChange={(v) => up<VideoItem>(item, { reverse: v }, v ? 'Reverse' : 'Un-reverse')} label={<span className="muted">preview is approximate</span>} />
-          </Field>
-        )}
-      </Section>
-      {item.type === 'video' && !frozen && (
-        <Section title="Freeze frame">
-          <p className="ed-note">Holds a frame still: the one under the playhead, or the clip's last frame after it.</p>
-          <FreezeControls />
-        </Section>
-      )}
-    </>
   )
 }
 

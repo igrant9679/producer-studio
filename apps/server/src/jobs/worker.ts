@@ -93,6 +93,7 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'media.stabilise': 'Stabilising',
   'media.denoise': 'Denoising',
   'media.bgremove': 'Removing the background',
+  'media.smooth': 'Smooth slow motion',
 }
 
 /** Short jobs people wait on in the editor: they get slots long exports can't take (QUICK_JOB_CONCURRENCY). */

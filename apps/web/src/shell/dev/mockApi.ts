@@ -942,6 +942,30 @@ on('POST', '/api/assets/([^/]+)/(stabilise|denoise|remove-background)', (m, _q, 
   })
   return json(publicJob(j))
 })
+// smooth slow motion (E-17): editors; a copy of the stretch at the frame rate asked for, added to the library
+on('POST', '/api/assets/([^/]+)/smooth', (m, _q, b) => {
+  const denied = editorOnly(assetWs(m[1]))
+  if (denied) return denied
+  const rec = assets.find((x) => x.asset.id === m[1])
+  const a = rec?.asset
+  if (!a) return fail(404, 'Asset not found', 'not_found')
+  if (a.kind !== 'video') return fail(400, 'Smooth slow motion works on video clips', 'invalid')
+  const from = Number(b.from)
+  const to = Math.min(Number(b.to), a.duration ?? Infinity)
+  const fps = Number(b.fps)
+  if (!(to > from) || to - from > 120) return fail(400, 'The range must end after it starts, and be at most two minutes', 'invalid')
+  if (!(fps >= 2 && fps <= 120)) return fail(400, 'Invalid frame rate', 'invalid')
+  const j = startJob('media.smooth', assetWs(m[1]) ?? 'ws_personal', 3000, {
+    message: `Smoothing the slow motion of ${a.name}`,
+    onDone: () => {
+      const copy = { ...rec!, asset: { ...a, id: nid('as'), name: `${a.name.replace(/\.[^.]+$/, '')} · smooth ${Math.round(fps)} fps`, duration: to - from, fps: Math.round(fps), transcript: undefined }, status: 'ready', origin: 'smooth' } as (typeof assets)[number]
+      assets.push(copy)
+      emit('asset', pub(copy))
+      return { asset: copy.asset, from, to, fps: Math.round(fps) }
+    },
+  })
+  return json(publicJob(j))
+})
 // like the server: one link per export (reused), nothing to share before an export, and links can be stopped
 on('POST', '/api/projects/([^/]+)/share', async (m, _q, b) => {
   await delay(200)

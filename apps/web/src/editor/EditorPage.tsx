@@ -8,6 +8,7 @@ import { Canvas } from './Canvas'
 import { ExportDialog, ShortcutsDialog } from './Dialogs'
 import { ReplaceMediaHost } from './clipMedia'
 import { PasteAttributesHost } from './PasteAttributes'
+import { SmoothJobsHost } from './SpeedPanel'
 import './editor.css'
 import { StorageBanner } from '../shell/StorageBanner'
 import { AssetPanel, LeftRail } from './LeftPanel'
@@ -202,6 +203,7 @@ function EditorShell() {
       {shortcutsOpen && <ShortcutsDialog />}
       <ReplaceMediaHost />
       <PasteAttributesHost />
+      <SmoothJobsHost />
       {fileDrag && (
         <div className="ed-filedrop">
           <div>

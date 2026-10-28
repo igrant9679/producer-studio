@@ -6,6 +6,7 @@ import { detectScenes } from '../media/scenes'
 import { removeBackground } from '../media/bgremove'
 import { denoiseClip } from '../media/denoise'
 import { stabiliseClip } from '../media/stabilise'
+import { makeSmoothCopy } from '../media/smooth'
 import { assetRecord } from '../dto'
 import { exportRender } from '../render/export'
 import { failAsset, reopenAsset } from '../services/asset-recovery'
@@ -47,4 +48,5 @@ export function registerHandlers() {
   registerHandler('media.stabilise', stabiliseClip)
   registerHandler('media.denoise', denoiseClip)
   registerHandler('media.bgremove', removeBackground)
+  registerHandler('media.smooth', makeSmoothCopy)
 }

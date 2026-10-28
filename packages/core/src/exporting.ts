@@ -5,6 +5,7 @@ import type { ExportRequest } from './api'
 import { captionsToText } from './captions'
 import { clone, findItem, itemEnd, packMain, projectDuration, setAspect, splitAt } from './ops'
 import { ASPECT_RATIOS, presetCanvasSize } from './presets'
+import { shiftRamp, sourceOffset, syncAverageSpeed } from './speed'
 import type { CaptionItem, Item, Project, Track } from './types'
 import { EPS, clamp, round } from './util'
 
@@ -83,7 +84,11 @@ export function projectRange(p0: Project, from: number, to: number): Project {
 function trimLeft(it: Item, d: number) {
   it.start = 0
   it.duration = round(Math.max(0, it.duration - d), 4)
-  if ((it.type === 'video' || it.type === 'audio') && !(it.type === 'video' && (it.freezeAt !== undefined || it.reverse))) it.in = round(it.in + d * it.speed, 4)
+  if ((it.type === 'video' || it.type === 'audio') && !(it.type === 'video' && (it.freezeAt !== undefined || it.reverse))) {
+    it.in = round(it.in + sourceOffset(it, d), 4)
+    if (it.speedRamp) it.speedRamp = shiftRamp(it.speedRamp, -d)
+    syncAverageSpeed(it)
+  }
   if ('keyframes' in it && it.keyframes)
     for (const k of Object.keys(it.keyframes) as Array<keyof typeof it.keyframes>) it.keyframes[k] = it.keyframes[k]?.map((kf) => ({ ...kf, t: round(kf.t - d, 4) }))
   if (it.type === 'caption' && it.words) it.words = it.words.filter((w) => w.end > d).map((w) => ({ ...w, start: Math.max(0, round(w.start - d, 4)), end: round(w.end - d, 4) }))

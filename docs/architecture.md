@@ -106,7 +106,20 @@ Postgres-backed queue (`SELECT … FOR UPDATE SKIP LOCKED`), polled by the worke
 `ai.transcribe` (whisper.cpp), `ai.tts` (Kokoro-82M, 24 voices), `ai.produce.script` (Claude),
 `ai.produce.assemble` (TTS per scene + timeline assembly), `export.render` (HyperFrames), `media.scenes` (ffmpeg
 scene score over a clip's proxy in a source range → cut times, for "Split at scene changes"; a quick job,
-`POST /api/assets/:id/scenes`). Progress is pushed to clients over SSE (`/api/events`).
+`POST /api/assets/:id/scenes`), `media.smooth` (smooth slow motion: ffmpeg `minterpolate` over a source range of a
+clip's file → a new library asset with frames made in between, `origin: 'smooth'`, processed like an upload;
+`POST /api/assets/:id/smooth`, editors only; the editor records it on the clip as `smooth`, see `packages/core/src/
+speed.ts`). Progress is pushed to clients over SSE (`/api/events`).
+
+## Speed (`packages/core/src/speed.ts`)
+One mapping from a clip's time to its source time, read by everything: `evaluate` and the preview player, the export
+(a HyperFrames rate lane in `data-automation` on the clip's `<video>` and `<audio>` elements for a speed ramp,
+`data-playback-rate` for a constant speed), trims, splits, J/L cuts, linked sound, freeze frames, the transcript,
+captions, beat markers and replace. A ramp is `speedRamp` points (speed at seconds from the clip's start, log-scale
+between, held outside), presets in `RAMP_PRESETS`. `pitchShift` lets a clip's pitch follow its speed: the preview
+turns the player's `preservesPitch` off, and the export plays a copy resampled to the clip's speed that
+`render/pitch.ts` makes before the render (HyperFrames' own rate keeps the pitch). `smooth` points the clip's picture
+at a `media.smooth` copy (time 0 = source `from`) while it covers what the clip plays; the sound stays the source's.
 
 ### Smart tools (E-21)
 - **Masks and chroma key** live in the document (`masks.ts`, `key.ts`): `item.mask` (rect / ellipse / path, in fractions

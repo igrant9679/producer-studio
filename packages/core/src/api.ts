@@ -312,7 +312,7 @@ export function transcriptRev(t: Transcript): string {
 // GET /api/events?workspaceId=         -> text/event-stream, events: `job` (Job), `asset` (AssetRecord), `project`
 //   ({id, version, deleted?}: created, saved, renamed, trashed/restored, template flag, deleted), `workspace`
 //   ({id, name?, deleted, members?, brand?}: renamed, deleted, members changed, brand kit saved), `sync`
-export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task' | 'media.scenes' | 'media.stabilise' | 'media.denoise' | 'media.bgremove'
+export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task' | 'media.scenes' | 'media.stabilise' | 'media.denoise' | 'media.bgremove' | 'media.smooth'
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
 export interface Job<R = unknown> {
@@ -586,6 +586,15 @@ export interface ExportRecord extends ExportResult {
 export interface SceneCuts {
   assetId: string
   cuts: number[]
+}
+
+// POST /api/assets/:id/smooth {from, to, fps, projectId?} -> Job<SmoothCopyResult> (editor; ffmpeg minterpolate)
+/** media.smooth (E-17): the smooth slow-motion copy, a library asset, and the source range it really covers. */
+export interface SmoothCopyResult {
+  asset: Asset
+  from: number
+  to: number
+  fps: number
 }
 
 // ---- templates ----
