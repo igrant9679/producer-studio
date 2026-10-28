@@ -277,6 +277,7 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Editor — global', [['Play / pause', 'Space'], ['Undo', 'Ctrl Z'], ['Redo', 'Ctrl Shift Z'], ['Select all', 'Ctrl A'], ['Copy / paste', 'Ctrl C / V'], ['Delete', 'Backspace']]],
   ['Editor — timeline', [['Split at playhead', 'Ctrl B'], ['Zoom timeline', 'Ctrl + / −'], ['Previous / next frame', 'Ctrl ← / →'], ['Separate audio', 'Ctrl Shift S']]],
   ['Editor — canvas', [['Move tool', 'V'], ['Hand tool', 'H'], ['Fit canvas', 'Shift F'], ['Nudge 1 px', '↑ ↓ ← →']]],
+  ['Editor — transcript', [['Previous / next word', '← / →'], ['Cut the selected words', 'Delete'], ['Restore struck-through words', 'R']]],
 ]
 
 export function HelpModal({ onClose }: { onClose: () => void }) {

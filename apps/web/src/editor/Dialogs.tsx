@@ -245,6 +245,7 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Timeline', [['Ctrl = / Ctrl -', 'Zoom in / out'], ['Ctrl wheel', 'Zoom at pointer'], ['S', 'Toggle snapping'], ['Alt drag', 'Move without snapping'], ['Ctrl / Shift click', 'Multi-select']]],
   ['Timeline clip focused', [['← → ↑ ↓', 'Next clip / track'], ['Alt ← / →', 'Move a frame (Shift: a second)'], ['Alt ↑ / ↓', 'Move to the track above / below'], ['[ / ]', 'Trim start / end to playhead'], ['Shift F10', 'Clip menu']]],
   ['Canvas', [['V', 'Select tool'], ['H', 'Hand tool'], ['Arrows', 'Nudge 1 px (canvas focused)'], ['Shift arrows', 'Nudge 10 px'], ['Double-click text', 'Edit text inline'], ['Shift drag', 'Constrain / 15° rotate']]],
+  ['Transcript words focused', [['← / →', 'Previous / next word'], ['Shift ← / →', 'Extend the selection'], ['Delete', 'Cut the words (they stay struck through)'], ['R', 'Restore struck-through words']]],
 ]
 
 export function ShortcutsDialog() {
