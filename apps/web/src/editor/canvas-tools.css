@@ -1,0 +1,88 @@
+/* Keyframe lanes, the curve editor, canvas rulers / guides / safe zones, group selection and crop handles, text tools. */
+
+/* ---------- keyframes ---------- */
+.kf-row { display: grid; grid-template-columns: calc(84px * var(--ui-scale, 1)) 1fr; align-items: center; gap: 8px; min-height: 26px; }
+.kf-name { font-size: 0.75rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kf-lane { position: relative; height: 20px; border-radius: 5px; background: var(--field-2); border: 1px solid var(--border); margin: 0 7px; }
+.kf-head { position: absolute; top: -2px; bottom: -2px; width: 1.5px; margin-left: -.75px; background: var(--accent); pointer-events: none; }
+.kf-mark { position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; display: grid; place-items: center; border: 0; padding: 0; border-radius: 4px; background: transparent; color: var(--key, var(--cyan)); cursor: ew-resize; touch-action: none; }
+.kf-mark:hover { color: var(--text); }
+.kf-mark.on { color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan-line, var(--cyan)); }
+.kf-mark.hold svg { transform: scale(.8); }
+.kf-mark:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.kf-actions { gap: 6px; margin: 8px 0 4px; flex-wrap: wrap; }
+.kf-detail { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
+.kf-detail > .btn { margin-top: 6px; }
+
+.cv-curve { display: flex; gap: 10px; align-items: flex-start; margin: 6px 0; flex-wrap: wrap; }
+.cv-curve svg { flex: none; background: var(--field-2); border: 1px solid var(--border); border-radius: 8px; touch-action: none; }
+.cv-curve-box { fill: none; stroke: var(--border-strong, var(--border)); stroke-dasharray: 2 3; }
+.cv-curve-diag { stroke: var(--border); }
+.cv-curve-line { fill: none; stroke: var(--cyan); stroke-width: 2; }
+.cv-curve-arm { stroke: var(--text-3); stroke-width: 1; }
+.cv-curve-pt { fill: #fff; stroke: var(--cyan); stroke-width: 2; cursor: grab; }
+.cv-curve-pt:focus-visible { outline: none; stroke: var(--accent); stroke-width: 3; }
+.cv-curve-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cv-curve-nums { display: grid; grid-template-columns: repeat(2, auto); gap: 4px; }
+.cv-curve-presets { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* ---------- canvas: rulers, guides, safe zones ---------- */
+.cv-ruler { position: absolute; z-index: 7; background: var(--surface); color: var(--text-3); font: 0.5625rem var(--font-mono); overflow: hidden; user-select: none; outline: none; }
+.cv-ruler:focus-visible { box-shadow: 0 0 0 2px var(--cyan); }
+.cv-ruler.top { left: 0; top: -18px; height: 16px; cursor: s-resize; background-image: repeating-linear-gradient(90deg, var(--border-strong, var(--border)) 0 1px, transparent 1px var(--minor)); background-size: 100% 4px; background-position: 0 100%; background-repeat: no-repeat; }
+.cv-ruler.left { top: 0; left: -18px; width: 16px; cursor: e-resize; background-image: repeating-linear-gradient(180deg, var(--border-strong, var(--border)) 0 1px, transparent 1px var(--minor)); background-size: 4px 100%; background-position: 100% 0; background-repeat: no-repeat; }
+.cv-ruler span { position: absolute; pointer-events: none; }
+.cv-ruler.top span { top: 1px; padding-left: 2px; border-left: 1px solid var(--text-3); height: 14px; line-height: 9px; }
+.cv-ruler.left span { left: 1px; padding-top: 2px; border-top: 1px solid var(--text-3); width: 14px; writing-mode: vertical-rl; line-height: 9px; }
+.cv-gline { position: absolute; z-index: 6; outline: none; }
+.cv-gline::after { content: ''; position: absolute; background: #ff4fd8; opacity: .85; }
+.cv-gline.v { top: 0; bottom: 0; width: 9px; margin-left: -4px; cursor: ew-resize; }
+.cv-gline.v::after { left: 4px; top: 0; bottom: 0; width: 1px; }
+.cv-gline.h { left: 0; right: 0; height: 9px; margin-top: -4px; cursor: ns-resize; }
+.cv-gline.h::after { top: 4px; left: 0; right: 0; height: 1px; }
+.cv-gline:focus-visible::after, .cv-gline:hover::after { opacity: 1; box-shadow: 0 0 0 1px #ff4fd8; }
+.cv-gline.dragging { pointer-events: none; }
+.cv-gline.dragging b { position: absolute; left: 6px; top: 6px; font: 600 0.625rem var(--font-mono); color: #fff; background: #b8129b; padding: 1px 4px; border-radius: 3px; }
+.cv-safe { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.cv-safe .shade { position: absolute; background: rgba(255, 70, 110, .18); }
+.cv-safe .area { position: absolute; border: 1px dashed rgba(255, 120, 150, .9); }
+.cv-safe .area span { position: absolute; left: 4px; top: 3px; font-size: 0.625rem; font-weight: 600; color: #fff; background: rgba(160, 20, 60, .75); padding: 1px 5px; border-radius: 3px; }
+.cv-viewbar { position: absolute; left: 10px; top: 10px; z-index: 9; display: flex; gap: 4px; align-items: center; padding: 3px; border-radius: 8px; background: color-mix(in srgb, var(--surface) 92%, transparent); border: 1px solid var(--border); }
+.cv-viewbar button { height: 24px; min-width: 24px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; padding: 0 5px; border: 0; border-radius: 5px; background: transparent; color: var(--text-2); cursor: pointer; font-size: 0.6875rem; }
+.cv-viewbar button:hover { background: var(--surface-3); color: var(--text); }
+.cv-viewbar button.on { color: var(--cyan); background: var(--cyan-soft); }
+.cv-viewbar select { height: 24px; border-radius: 5px; border: 1px solid var(--border); background: var(--field-2); color: var(--text-2); font-size: 0.6875rem; padding: 0 4px; }
+
+/* ---------- canvas: group selection, crop handles, text box height ---------- */
+.cv-sel.group { border-style: dashed; }
+.cv-member { position: absolute; border: 1px solid color-mix(in srgb, var(--canvas-accent) 60%, transparent); pointer-events: none; }
+.cv-align { gap: 2px; flex-wrap: wrap; }
+.cv-toolbar .cv-align { flex-wrap: nowrap; }
+.cv-toolbar .cv-align > button { height: 28px; min-width: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; border-radius: 6px; background: transparent; border: 0; color: var(--text-2); cursor: pointer; }
+.cv-toolbar .cv-align > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.cv-toolbar .cv-align > button:disabled { opacity: .4; cursor: default; }
+.cv-handle.crop { background: #fff; border: 1.5px solid #ffb02e; border-radius: 2px; }
+.cv-handle.crop.top, .cv-handle.crop.bottom { left: 50%; width: 26px; height: 6px; margin-left: -13px; cursor: ns-resize; }
+.cv-handle.crop.top { top: -3px; }
+.cv-handle.crop.bottom { top: 100%; margin-top: -3px; }
+.cv-handle.crop.left, .cv-handle.crop.right { top: 50%; width: 6px; height: 26px; margin-top: -13px; cursor: ew-resize; }
+.cv-handle.crop.left { left: -3px; }
+.cv-handle.crop.right { left: 100%; margin-left: -3px; }
+/* ---------- text tools ---------- */
+.tx-glyphs { margin-top: 6px; }
+.tx-chars { font-family: system-ui, sans-serif; letter-spacing: .08em; color: var(--text); }
+.tx-words { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; max-height: 140px; overflow: auto; }
+.tx-word { min-height: 24px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--field-2); color: var(--text-2); cursor: pointer; font-size: 0.75rem; }
+.tx-word:hover { color: var(--text); border-color: var(--border-strong, var(--border)); }
+.tx-word.on { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); background: var(--cyan-soft); }
+.tx-wordctl { padding-top: 4px; border-top: 1px dashed var(--border); }
+.tx-fxgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: 6px; }
+.tx-fxgrid button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px 6px; border-radius: 8px; border: 1px solid var(--border); background: var(--stage-bg, #10131b); color: var(--text-2); cursor: pointer; }
+.tx-fxgrid button:hover { border-color: var(--border-strong, var(--border)); }
+.tx-fxgrid button.on { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+.tx-fxgrid .aa { font-size: 26px; line-height: 1.1; }
+.tx-fxgrid small { font-size: 0.6563rem; color: var(--text-3); }
+
+.cv-handle.side.n, .cv-handle.side.s { width: 20px; height: 7px; left: 50%; margin: -4px 0 0 -10px; cursor: ns-resize; }
+.cv-handle.side.n { top: 0; }
+.cv-handle.side.s { top: 100%; }

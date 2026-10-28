@@ -1,4 +1,4 @@
-import type { EaseName, Keyframe } from './types'
+import type { Bezier, EaseName, Keyframe } from './types'
 
 let counter = 0
 /** Short unique id; collision-safe enough for client-generated ids within one project. */
@@ -54,6 +54,50 @@ export function ease(name: EaseName | undefined, t: number): number {
   }
 }
 
+/**
+ * y of a CSS cubic-bezier(x1, y1, x2, y2) at x (0..1). A fixed number of Newton steps with a bisection fallback,
+ * so the preview and the export land on the same value.
+ */
+export function cubicBezier(b: Bezier, x: number): number {
+  const x0 = clamp(x, 0, 1)
+  const x1 = clamp(b[0], 0, 1)
+  const x2 = clamp(b[2], 0, 1)
+  const [, y1, , y2] = b
+  const cx = 3 * x1
+  const bx = 3 * (x2 - x1) - cx
+  const ax = 1 - cx - bx
+  const cy = 3 * y1
+  const by = 3 * (y2 - y1) - cy
+  const ay = 1 - cy - by
+  const fx = (s: number) => ((ax * s + bx) * s + cx) * s
+  const fy = (s: number) => ((ay * s + by) * s + cy) * s
+  let s = x0
+  for (let i = 0; i < 8; i++) {
+    const e = fx(s) - x0
+    if (Math.abs(e) < 1e-7) return fy(s)
+    const d = (3 * ax * s + 2 * bx) * s + cx
+    if (Math.abs(d) < 1e-6) break
+    s -= e / d
+  }
+  let lo = 0
+  let hi = 1
+  s = x0
+  for (let i = 0; i < 40; i++) {
+    const v = fx(s)
+    if (Math.abs(v - x0) < 1e-7) break
+    if (v < x0) lo = s
+    else hi = s
+    s = (lo + hi) / 2
+  }
+  return fy(s)
+}
+
+/** Eased progress 0..1 from keyframe `kf` towards the next one. */
+export function easeKeyframe(kf: Keyframe, p: number): number {
+  if (kf.ease === 'bezier' && kf.bezier) return cubicBezier(kf.bezier, p)
+  return ease(kf.ease ?? 'linear', p)
+}
+
 /** Value of a keyframe track at local time t (seconds from item start). */
 export function sampleKeyframes(kfs: Keyframe[] | undefined, t: number, fallback: number): number {
   if (!kfs || kfs.length === 0) return fallback
@@ -67,7 +111,7 @@ export function sampleKeyframes(kfs: Keyframe[] | undefined, t: number, fallback
     if (t >= a.t && t <= b.t) {
       const span = b.t - a.t
       const p = span <= EPS ? 1 : (t - a.t) / span
-      return lerp(a.value, b.value, ease(a.ease ?? 'linear', p))
+      return lerp(a.value, b.value, easeKeyframe(a, p))
     }
   }
   return last.value

@@ -1,6 +1,6 @@
 // Right-hand, context-sensitive properties panel. Tabs depend on the selected item's type; with nothing
 // selected it edits the project. Numeric transform/opacity/volume props carry ◇ keyframe toggles.
-import type { AnimationPreset, AudioItem, BlendMode, CaptionItem, CaptionStyle, ColorAdjust, ImageItem, Item, Project, ShapeItem, TextItem, TextStyle, Track, VideoItem, VisualItem } from '@producer/core'
+import type { AnimProp, AnimationPreset, AudioItem, BlendMode, CaptionItem, CaptionStyle, ColorAdjust, ImageItem, Item, Project, ShapeItem, TextItem, TextStyle, Track, VideoItem, VisualItem } from '@producer/core'
 import {
   ANIMATION_PRESETS,
   ASPECT_RATIOS,
@@ -23,6 +23,7 @@ import {
   setAspect,
   setCanvasSize,
   setItemSpeed,
+  setTextContent,
   updateItem,
   updateProject,
   updateTrack,
@@ -34,6 +35,9 @@ import * as A from './actions'
 import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
 import { resetDemoProject } from './demo'
 import { FreezeControls, FreezeHold } from './FreezeMenu'
+import { AlignButtons } from './AlignTools'
+import { KeyframesSection } from './KeyframePanel'
+import { FitFields, GlyphWarning, TextEffectsSection, WordStyles } from './TextTools'
 import { thumbUrl } from './media'
 import { PROJECT_NAME_MAX, useEditor } from './store'
 import { timecode } from './timelineMath'
@@ -250,7 +254,8 @@ function MultiTab({ items }: { items: Item[] }) {
   return (
     <Section title={`${items.length} items selected`}>
       <p className="ed-note">{[...new Set(items.map((i) => i.type))].join(', ')}</p>
-      <div className="row" style={{ flexWrap: 'wrap' }}>
+      {items.some((i) => 'transform' in i) && <AlignButtons count={items.filter((i) => 'transform' in i).length} />}
+      <div className="row" style={{ flexWrap: 'wrap', marginTop: 8 }}>
         <button className="btn sm" onClick={A.duplicate}><CopyPlus size={13} /> Duplicate</button>
         <button className="btn sm" onClick={A.copy}><Copy size={13} /> Copy</button>
         <button className="btn sm" onClick={() => A.remove()}><Trash2 size={13} /> Delete</button>
@@ -283,6 +288,8 @@ function PropSlider({ item, prop, label, min, max, step, pct, suffix }: { item: 
   )
 }
 
+const VISUAL_KF: AnimProp[] = ['x', 'y', 'scale', 'rotation', 'opacity']
+
 function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
   const W = useEditor((s) => s.project.width)
   const H = useEditor((s) => s.project.height)
@@ -301,6 +308,9 @@ function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
         <PropSlider item={item} prop="y" label="Position Y" min={-H} max={H} step={1} />
         <PropSlider item={item} prop="scale" label="Scale" min={0.05} max={5} step={0.01} pct />
         <PropSlider item={item} prop="rotation" label="Rotation" min={-180} max={180} step={1} suffix="°" />
+        <Field label="Align">
+          <AlignButtons count={1} className="ed-mini" />
+        </Field>
         <Field label="Flip">
           <div className="row" style={{ gap: 4 }}>
             <button className={clsx('ed-iconbtn', item.transform.flipX && 'on')} title="Flip horizontal" onClick={() => up<VisualItem>(item, { transform: { ...item.transform, flipX: !item.transform.flipX } }, 'Flip')}>
@@ -331,6 +341,7 @@ function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
           </select>
         </Field>
       </Section>
+      <KeyframesSection item={item} only={VISUAL_KF} />
       <EffectsSection item={item} />
       {main && media && <p className="ed-note">Main-track clip · letterbox fill lives in the Canvas tab.</p>}
     </>
@@ -599,6 +610,7 @@ function AudioTab({ item }: { item: VideoItem | AudioItem }) {
         <Slider label="Fade in" value={item.fadeIn} min={0} max={maxFade} step={0.05} suffix="s" onChange={(v) => up<VideoItem>(item as VideoItem, { fadeIn: v }, 'Fade in', `fin:${item.id}`)} />
         <Slider label="Fade out" value={item.fadeOut} min={0} max={maxFade} step={0.05} suffix="s" onChange={(v) => up<VideoItem>(item as VideoItem, { fadeOut: v }, 'Fade out', `fout:${item.id}`)} />
       </Section>
+      <KeyframesSection item={item} only={['volume']} />
       {item.type === 'video' && (
         <Section title="Separate">
           <p className="ed-note">Moves this clip's sound to its own audio track (linked, the video is muted).</p>
@@ -636,11 +648,15 @@ function TextTab({ item }: { item: TextItem }) {
           value={text}
           onChange={(e) => {
             setText(e.target.value)
-            up<TextItem>(item, { text: e.target.value, name: e.target.value.split('\n')[0].slice(0, 40) || 'Text' }, 'Edit text', `text:${item.id}`)
+            // word styles stay on the words they were on
+            const s = useEditor.getState()
+            s.commit(setTextContent(s.project, item.id, e.target.value), 'Edit text', { coalesce: `text:${item.id}` })
           }}
           onBlur={() => useEditor.getState().endCoalesce()}
         />
+        <GlyphWarning item={item} />
       </Section>
+      <TextEffectsSection item={item} />
       <Section title="Font">
         <Field label="Family">
           <select className="ed-select" value={st.fontFamily} style={{ fontFamily: st.fontFamily }} onChange={(e) => set({ fontFamily: e.target.value }, 'Font')}>
@@ -676,7 +692,9 @@ function TextTab({ item }: { item: TextItem }) {
         <Slider label="Letter spacing" value={st.letterSpacing} min={-10} max={40} step={0.5} suffix="px" onChange={(v) => set({ letterSpacing: v }, 'Letter spacing', 'ls')} />
         <Slider label="Line height" value={st.lineHeight} min={0.7} max={2.5} step={0.05} onChange={(v) => set({ lineHeight: v }, 'Line height', 'lh')} />
         <Slider label="Box width" value={st.boxWidth} min={100} max={Math.max(3000, st.boxWidth)} step={10} suffix="px" onChange={(v) => set({ boxWidth: v }, 'Text width', 'bw')} />
+        <FitFields item={item} set={set} />
       </Section>
+      <WordStyles item={item} />
       <Section title="Fill & stroke">
         <Field label="Fill">
           <ColorInput value={st.color} onChange={(v) => set({ color: v }, 'Text colour', 'col')} />

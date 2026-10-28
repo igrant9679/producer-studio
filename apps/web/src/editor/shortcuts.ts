@@ -5,6 +5,8 @@
 import { useEffect } from 'react'
 import * as A from './actions'
 import { addMarkerAtPlayhead, jumpToMarker } from './markerActions'
+import { toggleRulers } from './canvasView'
+import { jumpToKeyframe } from './keyframeActions'
 import { flush } from './persistence'
 import { useEditor } from './store'
 import { fitTimeline } from './timelineView'
@@ -99,6 +101,8 @@ export function handleKey(e: KeyboardEvent) {
   // by key position too: Alt+M types another character on a Mac
   if ((lower === 'm' || e.code === 'KeyM') && (e.shiftKey || e.altKey)) return done(), jumpToMarker(e.shiftKey ? 1 : -1)
   if (transportKey(e)) return done()
+  if (e.shiftKey && !e.altKey && lower === 'r') return done(), toggleRulers()
+  if (e.altKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) return done(), void jumpToKeyframe(e.code === 'BracketLeft' ? -1 : 1)
   if (e.shiftKey || e.altKey) return
   if (lower === 'm') return done(), void addMarkerAtPlayhead()
   if (lower === 's') return done(), s.set({ snapping: !s.snapping })

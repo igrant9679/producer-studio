@@ -3,6 +3,7 @@
 import { frameAudio } from './audio'
 import { FILTERS } from './presets'
 import { itemEnd } from './ops'
+import { textGradientCss, textMarkup } from './text'
 import type {
   AnimationSpec,
   CaptionItem,
@@ -243,9 +244,9 @@ function sourceTime(p: Project, it: VideoItem, local: number): number {
 }
 
 function textHtml(it: TextItem, reveal?: number): string {
-  let text = it.style.uppercase ? it.text.toUpperCase() : it.text
-  if (reveal !== undefined && reveal < 1) text = text.slice(0, Math.floor(text.length * clamp(reveal, 0, 1)))
-  return escapeHtml(text).replace(/\n/g, '<br>')
+  if (reveal === undefined || reveal >= 1) return textMarkup(it)
+  const len = it.spans?.length ? it.text.length : (it.style.uppercase ? it.text.toUpperCase() : it.text).length
+  return textMarkup(it, Math.floor(len * clamp(reveal, 0, 1)))
 }
 
 function captionHtml(c: CaptionItem, local: number, mode: 'line' | 'word' | 'karaoke', highlight: string, upper: boolean): string {
@@ -431,6 +432,11 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
     layer.background = track.main ? it.background : undefined
   } else if (it.type === 'text') {
     layer.text = { html: textHtml(it, m.textReveal), style: it.style }
+    // shrink to fit: the box has the fit's height, and a typewriter's size is measured on the whole text
+    if (it.style.fit && it.style.fit.height > 0) {
+      layer.box.height = it.style.fit.height
+      if (m.textReveal !== undefined && m.textReveal < 1) layer.text.full = textHtml(it)
+    }
   } else if (it.type === 'shape') {
     layer.shape = it
   }
@@ -498,6 +504,22 @@ export function textCss(style: TextItem['style']): string {
   if (s.stroke && s.stroke.width > 0) css.push(`-webkit-text-stroke:${s.stroke.width}px ${safeColor(s.stroke.color, '#000000')}`, `paint-order:stroke fill`)
   if (shadows.length) css.push(`text-shadow:${shadows.join(', ')}`)
   return css.join(';')
+}
+
+/**
+ * CSS of a text layer's content element: in normal flow, or (shrink to fit) centred in the layer's fixed-height box
+ * with words kept whole, so a word too long for the box shrinks the text instead of breaking.
+ */
+export function textBoxCss(style: TextItem['style'], fit: boolean): string {
+  return textCss(style) + (fit ? ';position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);overflow-wrap:normal' : ';position:relative;width:100%')
+}
+
+/** A text layer's inner markup: the gradient fill around the words, the background pill around that. */
+export function textInnerHtml(style: TextItem['style'], html: string): string {
+  const grad = textGradientCss(style)
+  const inner = grad ? `<span style="${escapeHtml(grad)}">${html}</span>` : html
+  const bgCss = textBackgroundCss(style)
+  return bgCss ? `<span style="${escapeHtml(bgCss)}">${inner}</span>` : inner
 }
 
 /** CSS for the inline background "pill" behind text lines. */

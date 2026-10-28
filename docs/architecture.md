@@ -35,6 +35,12 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
 - **Draft preview** (`preview: true`): the same pipeline at 360p, 24 fps, draft quality; the file goes to
   `ws/<workspace>/previews/<project>/<job>.mp4` (only the latest per project is kept, no export row, no asset) and
   `GET /api/projects/:id/previews/:jobId` plays it in the export dialog.
+- Anything that changes the picture lives in core so both renderers get it: keyframe easing including custom
+  cubic-bezier curves (`util.cubicBezier`, fixed iterations), per-word text spans and gradient fills
+  (`text.ts`), and shrink-to-fit text, which `StageRenderer` measures in the DOM with a fixed search
+  (`text.fitScale`) and re-measures when a font finishes loading (it also asks for every face the project's text
+  uses up front, so the export's page waits for them). `glyphs.ts` lists which characters the export's fonts
+  cover, for the editor's warning.
 - Verified 23 Sept 2026: lint 0/0, 10 s 720p render in ~22 s with title, captions, push transition, audio.
 
 ## Data

@@ -59,13 +59,19 @@ export interface Asset {
   createdAt?: number
 }
 
-export type EaseName = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' | 'hold'
+/** How a keyframe eases into the next one; `bezier` follows the keyframe's own curve. */
+export type EaseName = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' | 'hold' | 'bezier'
+
+/** CSS-style cubic-bezier control points x1, y1, x2, y2 (x in 0..1; y may overshoot). */
+export type Bezier = [number, number, number, number]
 
 export interface Keyframe {
   /** Seconds from the item's start. */
   t: number
   value: number
   ease?: EaseName
+  /** The curve to the next keyframe when `ease` is 'bezier'. */
+  bezier?: Bezier
 }
 
 /** Every keyframe-able numeric property. */
@@ -279,16 +285,34 @@ export interface TextStyle {
   background?: { color: string; radius: number; padding: number; opacity: number }
   shadow?: { color: string; blur: number; x: number; y: number }
   glow?: { color: string; blur: number }
+  /** A colour gradient filling the letters (in place of `color`), `angle` in degrees as in CSS. */
+  gradient?: { from: string; to: string; angle: number }
   /** Box width in canvas px; text wraps inside it. */
   boxWidth: number
+  /** Shrink to fit: the text is drawn as large as it can be, up to its size, inside boxWidth × height. */
+  fit?: { height: number }
+}
+
+/** Styling for a range of a text's characters (offsets into `text`, end exclusive). */
+export interface TextSpan {
+  start: number
+  end: number
+  color?: string
+  fontWeight?: number
+  italic?: boolean
+  underline?: boolean
 }
 
 export interface TextItem extends ItemBase, VisualProps {
   type: 'text'
   text: string
   style: TextStyle
+  /** Per-word styling: ranges of `text` drawn in another colour or weight, sorted and not overlapping. */
+  spans?: TextSpan[]
   /** Template id this text was created from (for re-styling). */
   template?: string
+  /** The text effect (TEXT_EFFECTS) last applied. */
+  effect?: string
 }
 
 export interface CaptionItem extends ItemBase {
@@ -477,7 +501,8 @@ export interface FrameLayer {
   objectFit?: 'contain' | 'cover' | 'fill'
   crop?: Crop
   background?: BackgroundFill
-  text?: { html: string; style: TextStyle }
+  /** `full`: the whole text's markup when `html` shows part of it (typewriter); a fit is measured on it. */
+  text?: { html: string; style: TextStyle; full?: string }
   shape?: ShapeItem
   z: number
 }

@@ -1,24 +1,27 @@
-// Centre canvas: StageRenderer preview + selection overlay (move / scale / rotate / text width), centre-line
-// snapping, inline text editing, floating object toolbar, hand/zoom, drop target for media.
+// Centre canvas: StageRenderer preview + selection overlay (move / scale / rotate / text width / crop), snapping to
+// the canvas, guides, safe zones and other objects, group transforms, inline text editing, floating object toolbar,
+// rulers, hand/zoom, drop target for media.
 import type { FrameLayer, ImageItem, Item, TextItem, VideoItem, VisualItem } from '@producer/core'
-import { StageRenderer, editable, evaluate, findItem, resetTransform, textCss, updateItem, updateTrack } from '@producer/core'
+import { StageRenderer, editable, evaluate, findItem, resetTransform, setTextContent, textCss, updateItem, updateTrack } from '@producer/core'
 import clsx from 'clsx'
 import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { tipProps } from '../lib/tooltip'
 import * as A from './actions'
+import { AlignButtons } from './AlignTools'
+import { layerBoxes, parseTransform } from './canvasActions'
+import { CanvasRulers, CanvasViewBar, SafeZoneOverlay, SnapLines } from './CanvasGuides'
+import { safeRect, shift, snapBox, snapTargets, union, type Box } from './canvasSnap'
+import { useCanvasView } from './canvasView'
 import { Menu, MenuItem, Slider, useThrottledPlayhead } from './controls'
 import { dragPayload, isInternalDrag, makeResolver } from './media'
 import { applyTransport, setMediaClock } from './playback'
 import { useEditor } from './store'
 import { previewVariant, useTransport } from './transport'
 
-const TRANSFORM_RE = /rotate\(([-\d.e]+)deg\) scale\(([-\d.e]+), ([-\d.e]+)\)/
-
-function parseTransform(t: string) {
-  const m = t.match(TRANSFORM_RE)
-  return m ? { rot: +m[1], sx: +m[2], sy: +m[3] } : { rot: 0, sx: 1, sy: 1 }
-}
+const NO_LINES = { x: [] as number[], y: [] as number[] }
+/** How close (screen px) an edge comes before it snaps. */
+const SNAP_PX = 6
 
 interface Geo {
   layer: FrameLayer
@@ -46,9 +49,11 @@ export function Canvas() {
   const fullQuality = useTransport((t) => t.fullQuality)
   const [avail, setAvail] = useState({ w: 800, h: 450 })
   const [pan, setPan] = useState({ x: 0, y: 0 })
-  const [guides, setGuides] = useState<{ v: boolean; h: boolean }>({ v: false, h: false })
+  const [snapLines, setSnapLines] = useState(NO_LINES)
   const [dropping, setDropping] = useState(false)
   const [loadingMedia, setLoadingMedia] = useState(0)
+  const projectId = useEditor((s) => s.projectId)
+  useEffect(() => useCanvasView.getState().openProject(projectId), [projectId])
 
   useLayoutEffect(() => {
     const el = wrapRef.current
@@ -138,7 +143,7 @@ export function Canvas() {
       return
     }
     if (e.button !== 0) return
-    if ((e.target as HTMLElement).closest('.cv-handle, .cv-toolbar, .cv-textedit, .ed-menu')) return
+    if ((e.target as HTMLElement).closest('.cv-handle, .cv-toolbar, .cv-textedit, .ed-menu, .cv-ruler, .cv-gline, .cv-viewbar')) return
     wrapRef.current?.focus({ preventScroll: true })
     const s = useEditor.getState()
     const id = hitTest(e.clientX, e.clientY)
@@ -151,7 +156,9 @@ export function Canvas() {
       s.select(s.selection.includes(id) ? s.selection.filter((x) => x !== id) : [...s.selection, id])
       return
     }
-    if (!s.selection.includes(id) || s.selection.length > 1) s.select([id])
+    // dragging one of several selected objects moves them all; a click without a drag selects just that one
+    if (s.selection.length > 1 && s.selection.includes(id)) return beginMove(e, id, s.selection)
+    if (!s.selection.includes(id)) s.select([id])
     if (s.editingTextId && s.editingTextId !== id) s.set({ editingTextId: null })
     beginMove(e, id)
   }
@@ -171,55 +178,83 @@ export function Canvas() {
     window.addEventListener('pointerup', up)
   }
 
-  /** Drag an item's position (or a caption track's vertical position). */
-  const beginMove = (e: React.PointerEvent, id: string) => {
+  /**
+   * Drag an item's position (or a caption track's vertical position); with `group`, every movable object of the
+   * group moves together. The moving bounds snap to the canvas edges and centre, guides, the safe area and the other
+   * objects (with snapping on; Alt held moves freely).
+   */
+  const beginMove = (e: React.PointerEvent, id: string, group?: string[]) => {
     const s0 = useEditor.getState()
     const f = findItem(s0.project, id)
-    if (!editable(f)) return
+    if (!editable(f)) {
+      if (group) s0.select([id])
+      return
+    }
     const orig = s0.project
     const it = f.item
     const sx = e.clientX
     const sy = e.clientY
-    const ox = it.type === 'caption' ? 0 : A.readProp(it, 'x')
-    const oy = it.type === 'caption' ? (f.track.captionStyle?.position ?? 0.86) * H : A.readProp(it, 'y')
     const sc = scale
+    const t = s0.playhead
     let moved = false
-    const move = (ev: PointerEvent) => {
+    const finish = (move: (ev: PointerEvent) => void) => {
+      const up = () => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        setSnapLines(NO_LINES)
+        useEditor.getState().endCoalesce()
+        if (!moved && group) useEditor.getState().select([id])
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+    }
+    if (it.type === 'caption') {
+      const oy = (f.track.captionStyle?.position ?? 0.86) * H
+      return finish((ev) => {
+        const dy = (ev.clientY - sy) / sc
+        if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 3) return
+        moved = true
+        const pos = Math.max(0.05, Math.min(0.95, (oy + dy) / H))
+        const cs = f.track.captionStyle
+        if (cs) useEditor.getState().commit(updateTrack(orig, f.track.id, { captionStyle: { ...cs, position: +pos.toFixed(4) } }), 'Move captions', { coalesce: `cmove:${f.track.id}` })
+      })
+    }
+    const ids = (group ?? [id]).filter((x) => {
+      const g = findItem(orig, x)
+      return editable(g) && 'transform' in g.item
+    })
+    const start = new Map(ids.map((x) => [x, { x: A.readProp(findItem(orig, x)!.item, 'x', t), y: A.readProp(findItem(orig, x)!.item, 'y', t) }]))
+    const boxes = layerBoxes(orig, t)
+    const mine: Box | null = union(boxes.filter((b) => start.has(b.id)))
+    const view = useCanvasView.getState()
+    const targets = snapTargets(W, H, boxes.filter((b) => !start.has(b.id)), view.rulers ? view.guides : undefined, view.safeZone ? safeRect(view.safeZone, W, H) : null)
+    finish((ev) => {
       let dx = (ev.clientX - sx) / sc
       let dy = (ev.clientY - sy) / sc
       if (!moved && Math.hypot(dx * sc, dy * sc) < 3) return
       moved = true
+      let lockX = false
+      let lockY = false
       if (ev.shiftKey) {
-        if (Math.abs(dx) > Math.abs(dy)) dy = 0
-        else dx = 0
+        if (Math.abs(dx) > Math.abs(dy)) (dy = 0), (lockY = true)
+        else (dx = 0), (lockX = true)
       }
       const s = useEditor.getState()
-      if (it.type === 'caption') {
-        const pos = Math.max(0.05, Math.min(0.95, (oy + dy) / H))
-        const cs = f.track.captionStyle
-        if (cs) s.commit(updateTrack(orig, f.track.id, { captionStyle: { ...cs, position: +pos.toFixed(4) } }), 'Move captions', { coalesce: `cmove:${f.track.id}` })
-        return
+      let lines = NO_LINES
+      if (mine && s.snapping && !ev.altKey) {
+        const snap = snapBox(shift(mine, dx, dy), targets, SNAP_PX / sc)
+        if (!lockX) dx += snap.dx
+        if (!lockY) dy += snap.dy
+        lines = { x: lockX ? [] : snap.lines.x, y: lockY ? [] : snap.lines.y }
       }
-      let nx = ox + dx
-      let ny = oy + dy
-      const th = 8 / sc
-      const v = Math.abs(nx) < th
-      const h = Math.abs(ny) < th
-      if (v) nx = 0
-      if (h) ny = 0
-      setGuides({ v, h })
-      let p = A.writeProp(orig, id, 'x', Math.round(nx), s.playhead)
-      p = A.writeProp(p, id, 'y', Math.round(ny), s.playhead)
-      s.commit(p, 'Move', { coalesce: `move:${id}` })
-    }
-    const up = () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      setGuides({ v: false, h: false })
-      useEditor.getState().endCoalesce()
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
+      setSnapLines(lines)
+      let p = orig
+      for (const [x, o] of start) {
+        p = A.writeProp(p, x, 'x', Math.round(o.x + dx), t)
+        p = A.writeProp(p, x, 'y', Math.round(o.y + dy), t)
+      }
+      s.commit(p, start.size > 1 ? 'Move objects' : 'Move', { coalesce: `move:${[...start.keys()].join(',')}` })
+    })
   }
 
   const onDoubleClick = (e: React.MouseEvent) => {
@@ -234,17 +269,19 @@ export function Canvas() {
     if (!e.key.startsWith('Arrow') || e.ctrlKey || e.metaKey || e.altKey) return
     if ((e.target as HTMLElement).closest('input, textarea')) return
     const s = useEditor.getState()
-    const f = s.selection.length === 1 ? findItem(s.project, s.selection[0]) : null
-    if (!editable(f) || !('transform' in f.item)) return
+    const items = s.selection.map((id) => findItem(s.project, id)).filter((f) => editable(f) && 'transform' in f.item).map((f) => f!.item)
+    if (!items.length) return
     e.preventDefault()
     e.stopPropagation()
     const d = e.shiftKey ? 10 : 1
     const dx = e.key === 'ArrowLeft' ? -d : e.key === 'ArrowRight' ? d : 0
     const dy = e.key === 'ArrowUp' ? -d : e.key === 'ArrowDown' ? d : 0
     let p = s.project
-    if (dx) p = A.writeProp(p, f.item.id, 'x', A.readProp(f.item, 'x') + dx)
-    if (dy) p = A.writeProp(p, f.item.id, 'y', A.readProp(f.item, 'y') + dy)
-    s.commit(p, 'Nudge', { coalesce: `nudge:${f.item.id}` })
+    for (const it of items) {
+      if (dx) p = A.writeProp(p, it.id, 'x', A.readProp(it, 'x') + dx)
+      if (dy) p = A.writeProp(p, it.id, 'y', A.readProp(it, 'y') + dy)
+    }
+    s.commit(p, 'Nudge', { coalesce: `nudge:${items.map((i) => i.id).join(',')}` })
   }
 
   // ctrl+wheel zoom (native non-passive listener so the browser page zoom is blocked)
@@ -301,10 +338,13 @@ export function Canvas() {
           <div ref={stageRef} className="cv-stage" style={{ width: W, height: H }} />
           {editingTextId && <InlineTextEditor id={editingTextId} />}
         </div>
-        {guides.v && <div className="cv-guide v" />}
-        {guides.h && <div className="cv-guide h" />}
+        {!fullscreen && <SafeZoneOverlay W={W} H={H} scale={scale} />}
+        <SnapLines lines={snapLines} scale={scale} />
+        {!fullscreen && <CanvasRulers W={W} H={H} scale={scale} boxRef={boxRef} />}
         {!fullscreen && <SelectionOverlay scale={scale} boxRef={boxRef} beginMove={beginMove} margin={Math.max(0, (avail.h - H * scale) / 2 + pan.y)} />}
+        {!fullscreen && <GroupOverlay scale={scale} boxRef={boxRef} margin={Math.max(0, (avail.h - H * scale) / 2 + pan.y)} />}
       </div>
+      {!fullscreen && <CanvasViewBar />}
       {(buffering || loadingMedia > 0) && (
         <div className="cv-buffering">
           <Loader2 size={14} className="spin" /> {loadingMedia > 0 ? `Loading media${loadingMedia > 1 ? ` (${loadingMedia})` : ''}…` : 'Buffering'}
@@ -425,8 +465,10 @@ function SelectionOverlay({ scale, boxRef, beginMove, margin }: { scale: number;
   const geo = useLayerGeo(scale)
   const playing = useEditor((s) => s.playing)
   const editing = useEditor((s) => s.editingTextId)
+  const [cropping, setCropping] = useState<string | null>(null)
   if (!geo) return null
   const { item } = geo
+  const crop = cropping === item.id
   const isText = item.type === 'text'
   const isCaption = item.type === 'caption'
   const center = () => {
@@ -495,6 +537,55 @@ function SelectionOverlay({ scale, boxRef, beginMove, margin }: { scale: number;
     track(move)
   }
 
+  /** Shrink to fit: the top and bottom handles set the box's height (both edges move, the centre stays). */
+  const startHeight = (e: React.PointerEvent, side: 1 | -1) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const orig = useEditor.getState().project
+    const it = findItem(orig, item.id)?.item as TextItem | undefined
+    if (!it || it.type !== 'text' || !it.style.fit) return
+    const sx = e.clientX
+    const sy = e.clientY
+    const h0 = it.style.fit.height
+    const rad = (geo.rot * Math.PI) / 180
+    const k = scale * A.readProp(it, 'scale')
+    track((ev) => {
+      const along = (-(ev.clientX - sx) * Math.sin(rad) + (ev.clientY - sy) * Math.cos(rad)) * side
+      const h = Math.max(20, Math.round(h0 + (2 * along) / k))
+      useEditor.getState().commit(updateItem<TextItem>(orig, it.id, { style: { ...it.style, fit: { height: h } } }), 'Text box height', { coalesce: `th:${it.id}` })
+    })
+  }
+
+  /** Drag an edge of the picture inwards to crop it (the Crop panel's sliders do the same by keyboard). */
+  const startCrop = (e: React.PointerEvent, edge: 'left' | 'right' | 'top' | 'bottom') => {
+    e.stopPropagation()
+    e.preventDefault()
+    const orig = useEditor.getState().project
+    const it = findItem(orig, item.id)?.item as VideoItem | ImageItem | undefined
+    if (!it || (it.type !== 'video' && it.type !== 'image')) return
+    const c0 = it.crop ?? { left: 0, top: 0, right: 0, bottom: 0 }
+    const horiz = edge === 'left' || edge === 'right'
+    // a flipped picture shows its right edge on the left
+    const mirror = horiz ? it.transform.flipX : it.transform.flipY
+    const key = mirror ? ({ left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as const)[edge] : edge
+    const other = ({ left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as const)[key]
+    const rad = (geo.rot * Math.PI) / 180
+    const size = Math.max(4, horiz ? geo.w : geo.h)
+    const shown = horiz ? 1 - c0.left - c0.right : 1 - c0.top - c0.bottom
+    const sx = e.clientX
+    const sy = e.clientY
+    track((ev) => {
+      const dx = ev.clientX - sx
+      const dy = ev.clientY - sy
+      const along = horiz ? dx * Math.cos(rad) + dy * Math.sin(rad) : -dx * Math.sin(rad) + dy * Math.cos(rad)
+      const inward = edge === 'left' || edge === 'top' ? along : -along
+      const v = Math.max(0, Math.min(0.95 - c0[other], c0[key] + (inward / size) * shown))
+      const next = { ...c0, [key]: +v.toFixed(4) }
+      const empty = !next.left && !next.top && !next.right && !next.bottom
+      useEditor.getState().commit(updateItem<VideoItem>(orig, it.id, { crop: empty ? undefined : next }), 'Crop', { coalesce: `crop:${it.id}` })
+    })
+  }
+
   const handles = !playing && !isCaption && !editing && !geo.locked
   return (
     <>
@@ -514,16 +605,156 @@ function SelectionOverlay({ scale, boxRef, beginMove, margin }: { scale: number;
               <>
                 <div className="cv-handle side w" onPointerDown={(e) => startWidth(e, -1)} />
                 <div className="cv-handle side e" onPointerDown={(e) => startWidth(e, 1)} />
+                {(item as TextItem).style.fit && (
+                  <>
+                    <div className="cv-handle side n" title="Drag to set the box height" onPointerDown={(e) => startHeight(e, -1)} />
+                    <div className="cv-handle side s" title="Drag to set the box height" onPointerDown={(e) => startHeight(e, 1)} />
+                  </>
+                )}
               </>
             )}
             <div className="cv-rot-stem" />
             <div className="cv-handle rot" onPointerDown={startRotate} title="Rotate (Shift: 15° steps)">
               <RotateCcw size={10} />
             </div>
+            {crop &&
+              (['top', 'right', 'bottom', 'left'] as const).map((edge) => (
+                <div key={edge} className={`cv-handle crop ${edge}`} data-crop={edge} title={`Drag to crop the ${edge} edge`} onPointerDown={(e) => startCrop(e, edge)} />
+              ))}
           </>
         )}
       </div>
-      {!playing && !editing && !geo.locked && <ObjectToolbar geo={geo} margin={margin} boxH={boxRef.current?.offsetHeight ?? 0} />}
+      {!playing && !editing && !geo.locked && <ObjectToolbar geo={geo} margin={margin} boxH={boxRef.current?.offsetHeight ?? 0} crop={crop} setCrop={(on) => setCropping(on ? item.id : null)} />}
+    </>
+  )
+}
+
+/**
+ * Several objects selected: one box around them all. Its corners scale the group about its centre, its handle
+ * rotates it (each object turns and orbits the centre), and its toolbar aligns and distributes.
+ */
+function GroupOverlay({ scale, boxRef, margin }: { scale: number; boxRef: React.RefObject<HTMLDivElement>; margin: number }) {
+  const selection = useEditor((s) => s.selection)
+  const project = useEditor((s) => s.project)
+  const playing = useEditor((s) => s.playing)
+  const playhead = useThrottledPlayhead()
+  const [, bump] = useReducer((x: number) => x + 1, 0)
+  const multi = selection.length > 1
+  const boxes = useMemo(() => {
+    if (!multi) return []
+    const ids = new Set(selection)
+    return layerBoxes(project, playhead).filter((b) => ids.has(b.id))
+  }, [multi, selection, project, playhead])
+  // text heights come from the renderer's DOM: measure again after it has drawn
+  useEffect(() => {
+    if (!multi) return
+    const raf = requestAnimationFrame(() => {
+      const ids = new Set(selection)
+      const now = layerBoxes(useEditor.getState().project, useEditor.getState().playhead).filter((b) => ids.has(b.id))
+      if (now.some((b, i) => Math.abs(b.bottom - b.top - (boxes[i] ? boxes[i].bottom - boxes[i].top : 0)) > 0.5)) bump()
+    })
+    return () => cancelAnimationFrame(raf)
+  })
+  const g = union(boxes)
+  if (!multi || !g) return null
+  const movable = boxes.filter((b) => editable(findItem(project, b.id)) && 'transform' in findItem(project, b.id)!.item)
+  const W = project.width
+  const H = project.height
+  const gcx = (g.left + g.right) / 2
+  const gcy = (g.top + g.bottom) / 2
+  const screenCentre = () => {
+    const r = boxRef.current!.getBoundingClientRect()
+    return { x: r.left + gcx * scale, y: r.top + gcy * scale }
+  }
+  /** Each movable object's position, scale and rotation at the playhead when the drag started. */
+  const starts = () => {
+    const s = useEditor.getState()
+    return movable.map((b) => {
+      const it = findItem(s.project, b.id)!.item
+      return { id: b.id, x: A.readProp(it, 'x', s.playhead), y: A.readProp(it, 'y', s.playhead), scale: A.readProp(it, 'scale', s.playhead), rot: A.readProp(it, 'rotation', s.playhead) }
+    })
+  }
+  // the group's centre relative to the canvas centre (the coordinates item positions use)
+  const ox = gcx - W / 2
+  const oy = gcy - H / 2
+  const startScale = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const s0 = useEditor.getState()
+    const orig = s0.project
+    const t = s0.playhead
+    const from = starts()
+    const c = screenCentre()
+    const d0 = Math.max(4, Math.hypot(e.clientX - c.x, e.clientY - c.y))
+    track((ev) => {
+      const k = Math.max(0.05, Math.hypot(ev.clientX - c.x, ev.clientY - c.y) / d0)
+      let p = orig
+      for (const o of from) {
+        p = A.writeProp(p, o.id, 'scale', +Math.max(0.05, Math.min(20, o.scale * k)).toFixed(3), t)
+        p = A.writeProp(p, o.id, 'x', Math.round(ox + (o.x - ox) * k), t)
+        p = A.writeProp(p, o.id, 'y', Math.round(oy + (o.y - oy) * k), t)
+      }
+      useEditor.getState().commit(p, 'Scale objects', { coalesce: `gscale:${selection.join(',')}` })
+    })
+  }
+  const startRotate = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const s0 = useEditor.getState()
+    const orig = s0.project
+    const t = s0.playhead
+    const from = starts()
+    const c = screenCentre()
+    const a0 = Math.atan2(e.clientY - c.y, e.clientX - c.x)
+    track((ev) => {
+      let deg = ((Math.atan2(ev.clientY - c.y, ev.clientX - c.x) - a0) * 180) / Math.PI
+      if (ev.shiftKey) deg = Math.round(deg / 15) * 15
+      const r = (deg * Math.PI) / 180
+      const cos = Math.cos(r)
+      const sin = Math.sin(r)
+      let p = orig
+      for (const o of from) {
+        const vx = o.x - ox
+        const vy = o.y - oy
+        p = A.writeProp(p, o.id, 'rotation', +(o.rot + deg).toFixed(2), t)
+        p = A.writeProp(p, o.id, 'x', Math.round(ox + vx * cos - vy * sin), t)
+        p = A.writeProp(p, o.id, 'y', Math.round(oy + vx * sin + vy * cos), t)
+      }
+      useEditor.getState().commit(p, 'Rotate objects', { coalesce: `grot:${selection.join(',')}` })
+    })
+  }
+  const w = (g.right - g.left) * scale
+  const h = (g.bottom - g.top) * scale
+  const handles = !playing && movable.length > 0
+  const boxH = boxRef.current?.offsetHeight ?? 0
+  const below = g.bottom * scale + 12
+  const top = below + TOOLBAR_H <= boxH + margin - 4 ? below : Math.max(4 - margin, g.top * scale - 44 - TOOLBAR_H)
+  return (
+    <>
+      <div className={clsx('cv-sel group', playing && 'dim')} data-group-box style={{ left: gcx * scale, top: gcy * scale, width: Math.max(8, w), height: Math.max(8, h), transform: 'translate(-50%,-50%)' }}>
+        {boxes.map((b) => (
+          <div key={b.id} className="cv-member" style={{ left: (b.left - g.left) * scale, top: (b.top - g.top) * scale, width: (b.right - b.left) * scale, height: (b.bottom - b.top) * scale }} />
+        ))}
+        {handles && (
+          <>
+            {(['nw', 'ne', 'sw', 'se'] as const).map((c) => (
+              <div key={c} className={`cv-handle corner ${c}`} onPointerDown={startScale} title="Scale the selection" />
+            ))}
+            <div className="cv-rot-stem" />
+            <div className="cv-handle rot" onPointerDown={startRotate} title="Rotate the selection (Shift: 15° steps)">
+              <RotateCcw size={10} />
+            </div>
+          </>
+        )}
+      </div>
+      {!playing && movable.length > 0 && (
+        <div className="cv-toolbar cv-group-bar" style={{ left: gcx * scale, top }} onPointerDown={(e) => e.stopPropagation()} role="toolbar" aria-label={`${boxes.length} objects selected`}>
+          <AlignButtons count={movable.length} className="" size={15} />
+          <div className="sep" />
+          <button title="Duplicate (Ctrl+D)" aria-label="Duplicate" onClick={A.duplicate}><CopyPlus size={15} /></button>
+          <button title="Delete" aria-label="Delete" onClick={() => A.remove()}><Trash2 size={15} /></button>
+        </div>
+      )}
     </>
   )
 }
@@ -540,9 +771,8 @@ function track(move: (e: PointerEvent) => void) {
 
 const TOOLBAR_H = 36
 
-function ObjectToolbar({ geo, margin, boxH }: { geo: Geo; margin: number; boxH: number }) {
+function ObjectToolbar({ geo, margin, boxH, crop, setCrop }: { geo: Geo; margin: number; boxH: number; crop: boolean; setCrop: (on: boolean) => void }) {
   const [more, setMore] = useState(false)
-  const [crop, setCrop] = useState(false)
   const item = geo.item
   const commit = useEditor((s) => s.commit)
   const project = useEditor((s) => s.project)
@@ -574,7 +804,7 @@ function ObjectToolbar({ geo, margin, boxH }: { geo: Geo; margin: number; boxH: 
       <button {...tipProps('Delete', 'Shift+Del also closes the gap it leaves.', 'Del')} onClick={() => A.remove()}><Trash2 size={15} /></button>
       {hasTransform && <button title="Flip horizontal" onClick={() => flip('flipX')}><FlipHorizontal2 size={15} /></button>}
       {isMedia && (
-        <button title="Crop" className={clsx(crop && 'on')} onClick={() => setCrop(!crop)}><Crop size={15} /></button>
+        <button title="Crop" aria-pressed={crop} className={clsx(crop && 'on')} onClick={() => setCrop(!crop)}><Crop size={15} /></button>
       )}
       {isMedia && (
         <button
@@ -652,7 +882,7 @@ function InlineTextEditor({ id }: { id: string }) {
 
   const done = (save: boolean) => {
     const s = useEditor.getState()
-    if (save && it && text !== it.text) s.commit(updateItem<TextItem>(s.project, id, { text, name: text.split('\n')[0].slice(0, 40) || 'Text' }), 'Edit text')
+    if (save && it && text !== it.text) s.commit(setTextContent(s.project, id, text), 'Edit text')
     s.set({ editingTextId: null })
   }
 
