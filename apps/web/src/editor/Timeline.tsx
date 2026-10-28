@@ -58,6 +58,7 @@ import {
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
+import { TrackSoundButton } from './audio/TrackSound'
 import { Menu, MenuItem, Slider } from './controls'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
 import { useAppearance } from '../lib/appearance'
@@ -1005,6 +1006,7 @@ const TrackHeader = memo(function TrackHeader({ track }: { track: Track }) {
             {track.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
           </button>
         )}
+        <TrackSoundButton track={track} />
         <button title={track.locked ? 'Unlock track' : 'Lock track'} aria-label={`Lock ${track.name}`} aria-pressed={!!track.locked} className={clsx(track.locked && 'off')} onClick={() => up({ locked: !track.locked }, track.locked ? 'Unlock track' : 'Lock track')}>
           {track.locked ? <Lock size={13} /> : <Unlock size={13} />}
         </button>
@@ -1146,8 +1148,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
           {(item.type === 'video' || item.type === 'image') && item.filter && width > 150 && <span className="badge">{FILTERS.find((f) => f.id === item.filter!.id)?.name ?? 'Filter'}</span>}
         </div>
         {(item.type === 'video' || item.type === 'audio') && item.fadeIn > 0 && <div className="tl-fade in" style={{ width: Math.min(width, item.fadeIn * zoom) }} />}
-        {(item.type === 'video' || item.type === 'audio') && item.fadeOut > 0 && <div className="tl-fade out" style={{ width: Math.min(width, item.fadeOut * zoom) }} />}
-        {kfTimes.map((t) => (
+        {(item.type === 'video' || item.type === 'audio') && item.fadeOut > 0 && <div className="tl-fade out" style={{ width: Math.min(width, item.fadeOut * zoom) }} />}        {kfTimes.map((t) => (
           <button
             key={t}
             tabIndex={-1}

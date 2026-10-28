@@ -7,6 +7,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import { downloadUrl } from '../shell/util'
+import { LoudnessField, type Loudness } from './audio/LoudnessField'
 import { Field, Segmented, useFieldIds } from './controls'
 import { saveForExport } from './persistence'
 import { useEditor } from './store'
@@ -87,6 +88,7 @@ export function ExportDialog() {
   const [fps, setFps] = useState<ExportRequest['fps']>(([24, 25, 30, 50, 60].includes(project.fps) ? project.fps : 30) as ExportRequest['fps'])
   const [quality, setQuality] = useState<ExportRequest['quality']>('standard')
   const [format, setFormat] = useState<ExportRequest['format']>('mp4')
+  const [loudness, setLoudness] = useState<Loudness>('off')
   const [job, setJob] = useState<Job<ExportResult> | null>(null)
   const [result, setResult] = useState<ExportResult | null>(null)
   const [running, setRunning] = useState(false)
@@ -128,7 +130,7 @@ export function ExportDialog() {
         setBlocked(why)
         return
       }
-      const j = await api.exportProject(projectId, { resolution, fps, quality, format, name })
+      const j = await api.exportProject(projectId, { resolution, fps, quality, format, name, ...(loudness !== 'off' && format !== 'gif' ? { loudness } : {}) })
       setJob(j)
       const done = await waitForJob<ExportResult>(j.id, setJob)
       setResult(done.result ?? null)
@@ -172,6 +174,7 @@ export function ExportDialog() {
           <Field label="Format">
             <Segmented size="sm" value={format} options={[{ value: 'mp4', label: 'MP4' }, { value: 'webm', label: 'WebM' }, { value: 'gif', label: 'GIF' }]} onChange={setFormat} />
           </Field>
+          <LoudnessField value={loudness} onChange={setLoudness} format={format} />
           <div className="ed-export-sum">
             <span><Film size={13} /> {outW}×{outH}</span>
             <span>{timecode(duration, project.fps)}</span>
