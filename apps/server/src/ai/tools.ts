@@ -14,6 +14,7 @@ import {
   addAsset,
   addItem,
   captionStyleFromPreset,
+  captionTrack,
   createAudioItem,
   createTextItem,
   cutSourceRanges,
@@ -34,6 +35,7 @@ import {
   setAspect,
   setItemSpeed,
   setKeyframe,
+  speechTrack,
   splitAt,
   trimLinked,
   uid,
@@ -348,16 +350,17 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
       for (const aid of [...new Set(sources.map((x) => x.assetId))]) {
         if (!cur.assets[aid]?.transcript && cur.assets[aid]) cur = addAsset(cur, { ...cur.assets[aid], transcript: await env.transcribe(aid) })
       }
-      const style = i.preset ? captionStyleFromPreset(i.preset, cur) : cur.tracks.find((t) => t.kind === 'caption')?.captionStyle
+      const style = i.preset ? captionStyleFromPreset(i.preset, cur) : speechTrack(cur)?.captionStyle
       const next = generateCaptions(cur, { itemIds: i.itemIds, style })
-      const n = next.tracks.find((t) => t.kind === 'caption')?.items.length ?? 0
+      // other languages' tracks are kept: count the one made from speech
+      const n = speechTrack(next)?.items.length ?? 0
       if (!n) throw new ToolError('No speech found to caption')
       s.project = next
       s.changes.push(`Generated ${n} captions`)
       return done(s.changes[s.changes.length - 1])
     }
     case 'set_caption_style': {
-      const track = p.tracks.find((t) => t.kind === 'caption')
+      const track = captionTrack(p)
       if (!track) throw new ToolError('There is no caption track — call generate_captions first')
       const base = i.preset ? captionStyleFromPreset(i.preset, p) : structuredClone(track.captionStyle ?? captionStyleFromPreset('clean', p))
       if (i.position !== undefined) base.position = i.position
@@ -391,7 +394,8 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
         tr = await env.transcribe(it.assetId)
         cur = addAsset(cur, { ...cur.assets[it.assetId], transcript: tr })
       }
-      const ranges = fillerWordRanges(tr)
+      // the project's own filler list when it has one (Transcript panel), else the usual sounds
+      const ranges = fillerWordRanges(tr, cur.fillerWords?.filter((f) => f.on).map((f) => f.w))
       if (!ranges.length) throw new ToolError('No filler words found')
       const next = cutSourceRanges(cur, it.id, ranges)
       s.project = cur

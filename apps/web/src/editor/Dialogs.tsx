@@ -250,6 +250,7 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Marker focused (on the ruler)', [['← / →', 'Previous / next marker'], ['Alt ← / →', 'Move a frame (Shift: a second)'], ['F2', 'Rename'], ['Delete', 'Remove'], ['Shift F10', 'Marker menu']]],
   ['Sound', [['Shift drag audio edge', 'J / L cut: the sound only (the next sound rolls)'], ['Shift [ / ]', 'J / L cut to playhead (audio clip)'], ['Double-click volume line', 'Add a volume keyframe'], ['Double-click keyframe', 'Remove it']]],
   ['Canvas', [['V', 'Select tool'], ['H', 'Hand tool'], ['Arrows', 'Nudge 1 px (canvas focused)'], ['Shift arrows', 'Nudge 10 px'], ['Double-click text', 'Edit text inline'], ['Shift drag', 'Constrain / 15° rotate']]],
+  ['Transcript words focused', [['← / →', 'Previous / next word'], ['Shift ← / →', 'Extend the selection'], ['Delete', 'Cut the words (they stay struck through)'], ['R', 'Restore struck-through words']]],
 ]
 
 export function ShortcutsDialog() {

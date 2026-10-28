@@ -1,0 +1,52 @@
+/* Transcript and Captions panels (E-11, E-12): struck words, speaker labels, filler list, caption line editor. */
+
+/* ---------- transcript ---------- */
+.ed-words del.w { text-decoration: line-through; text-decoration-color: var(--danger); color: var(--text-3); opacity: .75; }
+.ed-words del.w:hover { opacity: 1; }
+.ed-words del.w.sel { opacity: 1; color: var(--on-accent); }
+.ed-words .w.caret { outline: 1px solid var(--cyan); outline-offset: 1px; }
+.ed-words .tr-spk-row { display: block; margin-top: 6px; line-height: 1.4; }
+.ed-words .tr-spk-row:first-child { margin-top: 0; }
+.tr-spk { font: 600 0.6875rem/1.2 var(--font-sans, inherit); color: var(--cyan); background: color-mix(in srgb, var(--cyan) 12%, transparent); border: 0; border-radius: 4px; padding: 2px 6px; cursor: pointer; }
+.tr-spk:hover:not(:disabled), .tr-spk:focus-visible { background: color-mix(in srgb, var(--cyan) 22%, transparent); outline: none; }
+.tr-spk:disabled { cursor: default; }
+.tr-spk-input { width: 16ch; height: 22px; display: inline-block; }
+.tr-split { display: inline-flex; }
+.tr-split > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.tr-split > .btn:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; padding: 0 5px; }
+.tr-fillers { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; margin-bottom: 8px; }
+.tr-fillers-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.tr-filler { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; font-size: 0.6875rem; }
+.tr-filler button { background: transparent; border: 0; color: var(--text-3); cursor: pointer; height: 22px; padding: 0 4px 0 9px; display: inline-flex; align-items: center; gap: 4px; }
+.tr-filler button.x { padding: 0 6px 0 2px; }
+.tr-filler button small { font: 0.5625rem var(--font-mono); color: var(--text-3); }
+.tr-filler.on { border-color: color-mix(in srgb, var(--amber) 55%, transparent); background: color-mix(in srgb, var(--amber) 10%, transparent); }
+.tr-filler.on button:first-child { color: var(--amber); }
+.tr-filler button:hover, .tr-filler button:focus-visible { color: var(--text); outline: none; }
+.tr-assign { gap: 8px; margin: 0 0 8px; font-size: 0.75rem; }
+.tr-assign .ed-select { flex: 1; }
+
+/* ---------- caption tracks and lines ---------- */
+.cap-tracks { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; margin: 10px 0 4px; }
+.cap-trackrow { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; font-size: 0.75rem; margin: 6px 0; }
+.cap-trackrow .ed-input { max-width: 110px; }
+.cap-io { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0; }
+.cap-io .row { gap: 6px; }
+.cap-lines { display: grid; gap: 2px; max-height: 460px; overflow-y: auto; }
+.cap-line { border-radius: 6px; }
+.cap-line.on { background: var(--bg-2); outline: 1px solid var(--border); }
+.cap-line > button.cap-pick { display: flex; gap: 8px; width: 100%; text-align: left; background: transparent; border: 0; padding: 5px 6px; border-radius: 6px; color: var(--text-2); cursor: pointer; font-size: 0.75rem; }
+.cap-line > button.cap-pick:hover, .cap-line > button.cap-pick:focus-visible { background: var(--bg-2); color: var(--text); outline: none; }
+.cap-line .t { font: 0.625rem var(--font-mono); color: var(--text-3); width: 38px; flex: none; padding-top: 2px; }
+.cap-edit { padding: 4px 8px 10px; display: grid; gap: 8px; }
+.cap-edit .cap-times { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 0.6875rem; color: var(--text-3); }
+.cap-edit .cap-times label { display: inline-flex; gap: 6px; align-items: center; }
+.cap-edit .cap-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.cap-words { position: relative; height: 34px; background: var(--field-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.cap-word { position: absolute; top: 3px; bottom: 3px; background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 4px; font-size: 0.625rem; color: var(--text); padding: 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; border: 0; cursor: pointer; }
+.cap-word.on { background: var(--accent-fill); color: var(--on-accent); }
+.cap-edge { position: absolute; top: 0; bottom: 0; width: 8px; margin-left: -4px; cursor: ew-resize; background: transparent; border: 0; padding: 0; z-index: 1; }
+.cap-edge::after { content: ''; position: absolute; left: 3px; top: 4px; bottom: 4px; width: 2px; border-radius: 1px; background: var(--text-3); }
+.cap-edge:hover::after, .cap-edge:focus-visible::after { background: var(--cyan); }
+.cap-edge:focus-visible { outline: none; }
+.cap-wordfields { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 0.6875rem; color: var(--text-3); }

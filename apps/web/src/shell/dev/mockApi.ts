@@ -665,7 +665,8 @@ on('PATCH', '/api/assets/([^/]+)', (m, _q, b) => {
   if (!a) return fail(404, 'Asset not found', 'not_found')
   const denied = editorOnly(a.workspaceId)
   if (denied) return denied
-  a.asset.name = String(b.name)
+  if (b.name !== undefined) a.asset.name = String(b.name)
+  if (b.transcript) a.asset.transcript = b.transcript as AssetRecord['asset']['transcript']
   return json(pub(a))
 })
 on('DELETE', '/api/assets/([^/]+)', (m) => {

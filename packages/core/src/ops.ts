@@ -1,20 +1,18 @@
 // Pure editing operations. Every op takes a project and returns a NEW project (the input is never mutated),
 // so the editor can keep an undo stack of snapshots and the AI assistant can apply the same ops server-side.
-import { createAudioItem, createCaptionItem, createTrack } from './factory'
+import { captionsCut } from './captionLines'
+import { createAudioItem, createTrack } from './factory'
 import { captionStyleFromPreset, scaleTextStyle } from './presets'
 import type {
   AnimProp,
   Asset,
   AudioItem,
-  CaptionItem,
-  CaptionStyle,
   Item,
   Keyframe,
   Keyframes,
   Project,
   Track,
   TrackKind,
-  Transcript,
   TranscriptWord,
   VideoItem,
   VisualItem,
@@ -802,10 +800,14 @@ export function cutSourceRanges(p0: Project, itemId: string, ranges: Array<{ sta
       ids.push(b.rightId)
     }
     // the same stretch of the linked audio goes too; it follows the ripple of the item's own track
-    const link = findItem(p, midId)!.item.linkId
+    const gone = findItem(p, midId)!.item
+    const link = gone.linkId
     const partners = link ? p.tracks.flatMap((t) => t.items).filter((i) => i.linkId === link && i.id !== midId) : []
     if (partners.length) p = deleteItems(p, partners.map((i) => i.id))
-    p = deleteItems(p, [midId], { ripple: true })
+    const cut = deleteItems(p, [midId], { ripple: true })
+    // the captions over the cut lose its words and close up with the picture
+    if (cut !== p) captionsCut(cut, gone.start, itemEnd(gone))
+    p = cut
     ids = ids.filter((id) => id !== midId)
   }
   void it0
@@ -826,153 +828,4 @@ export function removeSilences(p0: Project, itemId: string, minGap = 0.6, pad = 
   }
   const cuts = gaps.filter((g) => g.end - g.start >= minGap).map((g) => ({ start: g.start + pad, end: g.end - pad }))
   return cutSourceRanges(p0, itemId, cuts)
-}
-
-const FILLERS = new Set(['um', 'uh', 'erm', 'er', 'ah', 'hmm', 'mm', 'uhm', 'like,', 'um,', 'uh,'])
-
-export function fillerWordRanges(transcript: Transcript): Array<{ start: number; end: number }> {
-  const out: Array<{ start: number; end: number }> = []
-  for (const seg of transcript.segments)
-    for (const w of seg.words) if (FILLERS.has(w.w.toLowerCase().replace(/[.!?]$/, ''))) out.push({ start: w.start, end: w.end })
-  return out
-}
-
-// ---------- captions ----------
-
-/** Break timed words into caption lines of at most `maxWords` words / 42 chars, split on pauses and punctuation. */
-export function chunkWords(words: TranscriptWord[], maxWords: number): TranscriptWord[][] {
-  const lines: TranscriptWord[][] = []
-  let cur: TranscriptWord[] = []
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i]
-    const prev = cur[cur.length - 1]
-    const chars = cur.reduce((n, x) => n + x.w.length + 1, 0)
-    const pause = prev ? w.start - prev.end > 0.5 : false
-    if (cur.length && (cur.length >= maxWords || chars + w.w.length > 42 || pause)) {
-      lines.push(cur)
-      cur = []
-    }
-    cur.push(w)
-    if (/[.!?]$/.test(w.w) && cur.length >= Math.min(3, maxWords)) {
-      lines.push(cur)
-      cur = []
-    }
-  }
-  if (cur.length) lines.push(cur)
-  return lines
-}
-
-/**
- * Generate a caption track from the transcripts of the given media items (default: every video/audio item that has
- * a transcript). Existing caption tracks are replaced.
- */
-export function generateCaptions(p0: Project, opts: { itemIds?: string[]; style?: CaptionStyle } = {}): Project {
-  const p = clone(p0)
-  const words: TranscriptWord[] = []
-  const sources = p.tracks.flatMap((t) => (t.muted ? [] : t.items)).filter((i) => (i.type === 'video' || i.type === 'audio') && (!opts.itemIds || opts.itemIds.includes(i.id)))
-  for (const it of sources) {
-    if ((it.type === 'video' && it.muted) || (it.type === 'audio' && it.muted)) continue
-    // a reversed clip's speech plays backwards (and not at all in the export), so it gets no captions
-    if (isReversed(it)) continue
-    for (const w of itemWords(p, it.id)) {
-      if (w.start < it.start - EPS || w.end > itemEnd(it) + 0.25) continue
-      words.push({ w: w.w, start: w.start, end: Math.min(w.end, itemEnd(it)) })
-    }
-  }
-  words.sort((a, b) => a.start - b.start)
-  const existing = p.tracks.find((t) => t.kind === 'caption')
-  const style = opts.style ?? existing?.captionStyle
-  p.tracks = p.tracks.filter((t) => t.kind !== 'caption')
-  if (!words.length) return touch(p)
-  const track = insertTrack(p, 'caption')
-  if (style) track.captionStyle = clone(style)
-  track.items.push(...captionLines(words, track.captionStyle!.maxWordsPerLine, 1 / p.fps))
-  return touch(p)
-}
-
-/**
- * Caption items for timed words (timeline seconds), at most `maxWords` a line; no line runs past `until`. A line that
- * would last less than `minDur` (words timed at the same moment) joins the next, so no caption is shorter than a frame.
- */
-function captionLines(words: TranscriptWord[], maxWords: number, minDur: number, until = Infinity): CaptionItem[] {
-  const lines: TranscriptWord[][] = []
-  for (const line of chunkWords(words, maxWords)) {
-    const last = lines[lines.length - 1]
-    if (last && line[0].start - last[0].start < minDur) last.push(...line)
-    else lines.push([...line])
-  }
-  if (lines.length > 1 && until - lines[lines.length - 1][0].start < minDur) lines[lines.length - 2].push(...lines.pop()!)
-  return lines.map((line, i) => {
-    const start = line[0].start
-    const nextStart = lines[i + 1]?.[0].start ?? until
-    const end = Math.max(Math.min(Math.max(line[line.length - 1].end + 0.15, start + 0.6), nextStart), start + minDur)
-    return createCaptionItem(round(start, 4), round(end - start, 4), line.map((w) => w.w).join(' '), line.map((w) => ({ w: w.w, start: round(w.start - start, 4), end: round(w.end - start, 4) })))
-  })
-}
-
-/**
- * Break a caption track's lines again at `maxWords` words. Only lines made from a transcript (they carry word
- * timings) are re-broken; imported, typed and edited captions stay exactly as they are and nothing runs into them.
- */
-export function rechunkCaptions(p0: Project, trackId: string, maxWords: number): Project {
-  const p = clone(p0)
-  const track = findTrack(p, trackId)
-  if (!track || track.kind !== 'caption') return p0
-  sortItems(track)
-  const items: Item[] = []
-  let run: CaptionItem[] = []
-  const flush = (until: number) => {
-    // words a trim cut off the end stay off
-    const words = run.flatMap((c) => c.words!.filter((w) => w.start < c.duration).map((w) => ({ w: w.w, start: round(c.start + w.start, 4), end: round(c.start + w.end, 4) })))
-    if (words.length) items.push(...captionLines(words, maxWords, 1 / p.fps, until))
-    run = []
-  }
-  for (const it of track.items) {
-    if (it.type === 'caption' && it.words?.length) run.push(it)
-    else {
-      flush(it.start)
-      items.push(it)
-    }
-  }
-  flush(Infinity)
-  track.items = items
-  return touch(p)
-}
-
-/** Parse SRT into caption items on a new caption track. */
-export function importSrt(p0: Project, srt: string): Project {
-  const p = clone(p0)
-  const toSec = (ts: string) => {
-    const m = ts.trim().match(/(\d+):(\d+):(\d+)[,.](\d+)/)
-    return m ? +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4] / 1000 : 0
-  }
-  p.tracks = p.tracks.filter((t) => t.kind !== 'caption')
-  const track = insertTrack(p, 'caption')
-  for (const block of srt.replace(/\r/g, '').split(/\n\n+/)) {
-    const lines = block.split('\n').filter(Boolean)
-    const timing = lines.find((l) => l.includes('-->'))
-    if (!timing) continue
-    const [a, b] = timing.split('-->')
-    const text = lines.slice(lines.indexOf(timing) + 1).join(' ').trim()
-    if (!text) continue
-    const start = toSec(a)
-    track.items.push(createCaptionItem(round(start, 3), round(Math.max(0.2, toSec(b) - start), 3), text))
-  }
-  return touch(p)
-}
-
-export function exportSrt(p: Project): string {
-  const track = p.tracks.find((t) => t.kind === 'caption')
-  if (!track) return ''
-  const fmt = (s: number) => {
-    const ms = Math.round(s * 1000)
-    const h = Math.floor(ms / 3600000)
-    const m = Math.floor((ms % 3600000) / 60000)
-    const sec = Math.floor((ms % 60000) / 1000)
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`
-  }
-  return track.items
-    .filter((i) => i.type === 'caption')
-    .map((c, i) => `${i + 1}\n${fmt(c.start)} --> ${fmt(itemEnd(c))}\n${(c as { text: string }).text}\n`)
-    .join('\n')
 }

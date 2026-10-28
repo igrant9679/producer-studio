@@ -215,6 +215,8 @@ export const api = {
   assets: (workspaceId: string, kind?: string) => listAll<AssetRecord>(`/assets${qs({ workspaceId, kind })}`),
   asset: (id: string) => req<AssetRecord>('GET', `/assets/${id}`),
   renameAsset: (id: string, name: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { name }),
+  /** A clip's transcript with its speaker labels changed (editors). */
+  setTranscript: (id: string, transcript: Transcript) => req<AssetRecord>('PATCH', `/assets/${id}`, { transcript }),
   deleteAsset: (id: string) => req<{ ok: true }>('DELETE', `/assets/${id}`),
   /** Upload a File: ticket -> PUT bytes -> complete. onProgress 0..1. */
   async upload(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
