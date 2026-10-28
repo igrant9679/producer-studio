@@ -25,3 +25,49 @@
 .cv-curve-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .cv-curve-nums { display: grid; grid-template-columns: repeat(2, auto); gap: 4px; }
 .cv-curve-presets { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* ---------- canvas: rulers, guides, safe zones ---------- */
+.cv-ruler { position: absolute; z-index: 7; background: var(--surface); color: var(--text-3); font: 0.5625rem var(--font-mono); overflow: hidden; user-select: none; outline: none; }
+.cv-ruler:focus-visible { box-shadow: 0 0 0 2px var(--cyan); }
+.cv-ruler.top { left: 0; top: -18px; height: 16px; cursor: s-resize; background-image: repeating-linear-gradient(90deg, var(--border-strong, var(--border)) 0 1px, transparent 1px var(--minor)); background-size: 100% 4px; background-position: 0 100%; background-repeat: no-repeat; }
+.cv-ruler.left { top: 0; left: -18px; width: 16px; cursor: e-resize; background-image: repeating-linear-gradient(180deg, var(--border-strong, var(--border)) 0 1px, transparent 1px var(--minor)); background-size: 4px 100%; background-position: 100% 0; background-repeat: no-repeat; }
+.cv-ruler span { position: absolute; pointer-events: none; }
+.cv-ruler.top span { top: 1px; padding-left: 2px; border-left: 1px solid var(--text-3); height: 14px; line-height: 9px; }
+.cv-ruler.left span { left: 1px; padding-top: 2px; border-top: 1px solid var(--text-3); width: 14px; writing-mode: vertical-rl; line-height: 9px; }
+.cv-gline { position: absolute; z-index: 6; outline: none; }
+.cv-gline::after { content: ''; position: absolute; background: #ff4fd8; opacity: .85; }
+.cv-gline.v { top: 0; bottom: 0; width: 9px; margin-left: -4px; cursor: ew-resize; }
+.cv-gline.v::after { left: 4px; top: 0; bottom: 0; width: 1px; }
+.cv-gline.h { left: 0; right: 0; height: 9px; margin-top: -4px; cursor: ns-resize; }
+.cv-gline.h::after { top: 4px; left: 0; right: 0; height: 1px; }
+.cv-gline:focus-visible::after, .cv-gline:hover::after { opacity: 1; box-shadow: 0 0 0 1px #ff4fd8; }
+.cv-gline.dragging { pointer-events: none; }
+.cv-gline.dragging b { position: absolute; left: 6px; top: 6px; font: 600 0.625rem var(--font-mono); color: #fff; background: #b8129b; padding: 1px 4px; border-radius: 3px; }
+.cv-safe { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.cv-safe .shade { position: absolute; background: rgba(255, 70, 110, .18); }
+.cv-safe .area { position: absolute; border: 1px dashed rgba(255, 120, 150, .9); }
+.cv-safe .area span { position: absolute; left: 4px; top: 3px; font-size: 0.625rem; font-weight: 600; color: #fff; background: rgba(160, 20, 60, .75); padding: 1px 5px; border-radius: 3px; }
+.cv-viewbar { position: absolute; left: 10px; top: 10px; z-index: 9; display: flex; gap: 4px; align-items: center; padding: 3px; border-radius: 8px; background: color-mix(in srgb, var(--surface) 92%, transparent); border: 1px solid var(--border); }
+.cv-viewbar button { height: 24px; min-width: 24px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; padding: 0 5px; border: 0; border-radius: 5px; background: transparent; color: var(--text-2); cursor: pointer; font-size: 0.6875rem; }
+.cv-viewbar button:hover { background: var(--surface-3); color: var(--text); }
+.cv-viewbar button.on { color: var(--cyan); background: var(--cyan-soft); }
+.cv-viewbar select { height: 24px; border-radius: 5px; border: 1px solid var(--border); background: var(--field-2); color: var(--text-2); font-size: 0.6875rem; padding: 0 4px; }
+
+/* ---------- canvas: group selection, crop handles, text box height ---------- */
+.cv-sel.group { border-style: dashed; }
+.cv-member { position: absolute; border: 1px solid color-mix(in srgb, var(--canvas-accent) 60%, transparent); pointer-events: none; }
+.cv-align { gap: 2px; flex-wrap: wrap; }
+.cv-toolbar .cv-align { flex-wrap: nowrap; }
+.cv-toolbar .cv-align > button { height: 28px; min-width: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; border-radius: 6px; background: transparent; border: 0; color: var(--text-2); cursor: pointer; }
+.cv-toolbar .cv-align > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.cv-toolbar .cv-align > button:disabled { opacity: .4; cursor: default; }
+.cv-handle.crop { background: #fff; border: 1.5px solid #ffb02e; border-radius: 2px; }
+.cv-handle.crop.top, .cv-handle.crop.bottom { left: 50%; width: 26px; height: 6px; margin-left: -13px; cursor: ns-resize; }
+.cv-handle.crop.top { top: -3px; }
+.cv-handle.crop.bottom { top: 100%; margin-top: -3px; }
+.cv-handle.crop.left, .cv-handle.crop.right { top: 50%; width: 6px; height: 26px; margin-top: -13px; cursor: ew-resize; }
+.cv-handle.crop.left { left: -3px; }
+.cv-handle.crop.right { left: 100%; margin-left: -3px; }
+.cv-handle.side.n, .cv-handle.side.s { width: 20px; height: 7px; left: 50%; margin: -4px 0 0 -10px; cursor: ns-resize; }
+.cv-handle.side.n { top: 0; }
+.cv-handle.side.s { top: 100%; }

@@ -4,6 +4,7 @@
 // Delete, Backspace, Escape and Ctrl+A are its own.
 import { useEffect } from 'react'
 import * as A from './actions'
+import { toggleRulers } from './canvasView'
 import { jumpToKeyframe } from './keyframeActions'
 import { flush } from './persistence'
 import { useEditor } from './store'
@@ -92,6 +93,7 @@ export function handleKey(e: KeyboardEvent) {
   if (e.shiftKey && (k === ')' || k === '0')) return done(), s.set({ canvasZoom: 0.5 })
   if (e.shiftKey && (k === '!' || k === '1')) return done(), s.set({ canvasZoom: 1 })
   if (e.shiftKey && (k === '@' || k === '2')) return done(), s.set({ canvasZoom: 2 })
+  if (e.shiftKey && !e.altKey && lower === 'r') return done(), toggleRulers()
   if (e.altKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) return done(), void jumpToKeyframe(e.code === 'BracketLeft' ? -1 : 1)
   if (e.shiftKey || e.altKey) return
   if (lower === 's') return done(), s.set({ snapping: !s.snapping })

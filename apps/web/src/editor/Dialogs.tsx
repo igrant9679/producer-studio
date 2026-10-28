@@ -244,7 +244,7 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Editing', [['Ctrl B', 'Split at playhead'], ['Delete', 'Delete'], ['Shift Delete', 'Ripple delete'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl A', 'Select all'], ['Ctrl Z', 'Undo'], ['Ctrl Shift Z', 'Redo']]],
   ['Timeline', [['Ctrl = / Ctrl -', 'Zoom in / out'], ['Ctrl wheel', 'Zoom at pointer'], ['S', 'Toggle snapping'], ['Alt drag', 'Move without snapping'], ['Ctrl / Shift click', 'Multi-select'], ['Alt [ / Alt ]', 'Previous / next keyframe']]],
   ['Timeline clip focused', [['← → ↑ ↓', 'Next clip / track'], ['Alt ← / →', 'Move a frame (Shift: a second)'], ['Alt ↑ / ↓', 'Move to the track above / below'], ['[ / ]', 'Trim start / end to playhead'], ['Shift F10', 'Clip menu']]],
-  ['Canvas', [['V', 'Select tool'], ['H', 'Hand tool'], ['Arrows', 'Nudge 1 px (canvas focused)'], ['Shift arrows', 'Nudge 10 px'], ['Double-click text', 'Edit text inline'], ['Shift drag', 'Constrain / 15° rotate']]],
+  ['Canvas', [['V', 'Select tool'], ['H', 'Hand tool'], ['Arrows', 'Nudge 1 px (canvas focused)'], ['Shift arrows', 'Nudge 10 px'], ['Double-click text', 'Edit text inline'], ['Shift drag', 'Constrain / 15° rotate'], ['Alt drag', 'Move without snapping'], ['Shift R', 'Rulers and guides'], ['Ctrl / Shift click', 'Select several, then drag, scale or align them']]],
 ]
 
 export function ShortcutsDialog() {

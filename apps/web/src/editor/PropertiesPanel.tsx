@@ -33,6 +33,7 @@ import { useEffect, useState } from 'react'
 import * as A from './actions'
 import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
 import { resetDemoProject } from './demo'
+import { AlignButtons } from './AlignTools'
 import { KeyframesSection } from './KeyframePanel'
 import { thumbUrl } from './media'
 import { PROJECT_NAME_MAX, useEditor } from './store'
@@ -250,7 +251,8 @@ function MultiTab({ items }: { items: Item[] }) {
   return (
     <Section title={`${items.length} items selected`}>
       <p className="ed-note">{[...new Set(items.map((i) => i.type))].join(', ')}</p>
-      <div className="row" style={{ flexWrap: 'wrap' }}>
+      {items.some((i) => 'transform' in i) && <AlignButtons count={items.filter((i) => 'transform' in i).length} />}
+      <div className="row" style={{ flexWrap: 'wrap', marginTop: 8 }}>
         <button className="btn sm" onClick={A.duplicate}><CopyPlus size={13} /> Duplicate</button>
         <button className="btn sm" onClick={A.copy}><Copy size={13} /> Copy</button>
         <button className="btn sm" onClick={() => A.remove()}><Trash2 size={13} /> Delete</button>
@@ -303,6 +305,9 @@ function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
         <PropSlider item={item} prop="y" label="Position Y" min={-H} max={H} step={1} />
         <PropSlider item={item} prop="scale" label="Scale" min={0.05} max={5} step={0.01} pct />
         <PropSlider item={item} prop="rotation" label="Rotation" min={-180} max={180} step={1} suffix="°" />
+        <Field label="Align">
+          <AlignButtons count={1} className="ed-mini" />
+        </Field>
         <Field label="Flip">
           <div className="row" style={{ gap: 4 }}>
             <button className={clsx('ed-iconbtn', item.transform.flipX && 'on')} title="Flip horizontal" onClick={() => up<VisualItem>(item, { transform: { ...item.transform, flipX: !item.transform.flipX } }, 'Flip')}>
