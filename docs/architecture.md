@@ -112,6 +112,31 @@ clip's file → a new library asset with frames made in between, `origin: 'smoot
 `POST /api/assets/:id/smooth`, editors only; the editor records it on the clip as `smooth`, see `packages/core/src/
 speed.ts`). Progress is pushed to clients over SSE (`/api/events`).
 
+**Fair share (P-3).** `claimNext` picks, within the lane it claims for (any job, or the quick lane's kinds), the
+space with the fewest jobs of that lane running, then the oldest job: one space's pile of exports can't make the
+others wait. Every claim stamps `started_at`. **Queue visibility (A-9):** `jobs/queue-info.ts` replays the claim
+order (slots per worker seen, what runs now, the fair-share rule, each kind's average run time over the last week
+from metering) to give each queued job its place in line, an estimated wait (or unknown) and the reason
+(`GET /api/jobs/queue`). **History (A-8):** `GET /api/jobs/history` lists finished, failed and cancelled jobs
+(newest first, by outcome), `POST /api/jobs/:id/retry` queues a failed or cancelled job's work again under the same
+limits. When a job ends in the worker, `afterJob` in `jobs/worker.ts` runs the follow-ups (metering its run time;
+the place to add notifications).
+
+## Usage and limits (P-1, A-18)
+`limits.ts` holds the abuse brakes and quotas (cloud only, every one an env value where 0 = off; see `.env.example`).
+Request rates (AI calls per person per minute and day and per space per day, sign-ups per IP and overall, device
+links) are windows in Postgres (`rate_windows`): one conditional upsert per rule inside one transaction, so every
+replica shares the count and two requests can't both take the last place. `services/metering.ts` adds what was used
+to `usage_daily` (per space, person, UTC day, metric and subject): every AI call (`getProvider` returns a metered
+provider; the Anthropic, OpenAI and Gemini providers report each response's tokens with `noteTokens`), charged to the
+request's signed-in person or the job's starter (`withActor`), and each job run's time by kind. Monthly quotas (AI
+tokens per space and per person, job minutes per space) and storage per space (the sum of its clips' sizes, checked
+when an upload starts) read those totals. On cloud a space uses the server's own Anthropic key only when an owner
+turns it on (`workspace_usage_settings`, `PUT /api/usage/builtin-ai`; spaces from before v15 keep it on); its own keys
+work either way. `GET /api/usage` is the Usage page: AI requests, tokens and an estimated cost per provider and model
+(list prices in `packages/core/src/usage.ts`, labelled as an estimate), job minutes by kind, storage per space, the
+limits with what is used of each, and for owners who used what.
+
 ## Speed (`packages/core/src/speed.ts`)
 One mapping from a clip's time to its source time, read by everything: `evaluate` and the preview player, the export
 (a HyperFrames rate lane in `data-automation` on the clip's `<video>` and `<audio>` elements for a speed ramp,

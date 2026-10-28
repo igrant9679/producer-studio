@@ -11,6 +11,7 @@ import type { Content, FunctionCall, GenerateContentConfig, GenerateContentParam
 import type { WriteRequest } from '@producer/core'
 import { HttpError } from '../http'
 import { log } from '../log'
+import { noteTokens } from '../services/metering'
 import { writePrompt } from './claude'
 import { adaptJsonSchema, filterGeminiModels, formatMismatch, jsonSchemaFor, redact, repairPrompt, validateStructured } from './common'
 import type { AgentRequest, AiProvider, ProviderStatus, StructuredRequest } from './provider'
@@ -101,9 +102,12 @@ export class GeminiProvider implements AiProvider {
     const parts: Part[] = []
     let text = ''
     let finishReason: string | undefined
+    // each chunk carries the running totals: the last one counts
+    let usage: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } | undefined
     try {
       const stream = await this.client.models.generateContentStream({ model: this.model, contents, config: { ...config, abortSignal: signal } })
       for await (const chunk of stream) {
+        if (chunk.usageMetadata) usage = chunk.usageMetadata
         const block = chunk.promptFeedback?.blockReason
         if (block) throw new HttpError(422, 'invalid', `The AI declined to ${what} (${String(block).toLowerCase().replace(/_/g, ' ')}). Try rephrasing the request.`)
         const cand = chunk.candidates?.[0]
@@ -120,6 +124,8 @@ export class GeminiProvider implements AiProvider {
     } catch (err) {
       if (signal?.aborted) throw abortError()
       mapGeminiError(err, this.model)
+    } finally {
+      noteTokens(usage?.promptTokenCount, (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0))
     }
     const calls = parts.map((p) => p.functionCall).filter((c): c is FunctionCall => Boolean(c?.name))
     if (finishReason && BLOCKED.has(finishReason)) throw new HttpError(422, 'invalid', `The AI declined to ${what}. Try rephrasing the request.`)

@@ -147,6 +147,8 @@ export const jobs = pgTable('jobs', {
   cancelRequested: boolean('cancel_requested').notNull().default(false),
   lockedBy: text('locked_by'),
   lockedAt: ms('locked_at'),
+  /** v15: when the latest run was claimed. */
+  startedAt: ms('started_at'),
   createdAt: ms('created_at').notNull(),
   updatedAt: ms('updated_at').notNull(),
 })
@@ -335,4 +337,37 @@ export const idempotencyKeys = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.key] })],
 )
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys }
+/** v15: request counts per key in a time window (limits.ts), shared by every replica. */
+export const rateWindows = pgTable('rate_windows', {
+  key: text('key').primaryKey(),
+  n: integer('n').notNull(),
+  resetAt: ms('reset_at').notNull(),
+})
+
+/**
+ * v15: what a space (and a person in it) used per UTC day (services/metering.ts). `metric`: ai.requests,
+ * ai.input_tokens, ai.output_tokens (subject = "provider|model"), job.ms and job.runs (subject = job kind).
+ */
+export const usageDaily = pgTable(
+  'usage_daily',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    userId: text('user_id').notNull().default(''),
+    day: text('day').notNull(),
+    metric: text('metric').notNull(),
+    subject: text('subject').notNull().default(''),
+    amount: doublePrecision('amount').notNull().default(0),
+    updatedAt: ms('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.day, t.metric, t.subject, t.userId] })],
+)
+
+/** v15: per-space usage settings: may it use the server's own AI key. No row = no. */
+export const workspaceUsageSettings = pgTable('workspace_usage_settings', {
+  workspaceId: text('workspace_id').primaryKey(),
+  builtinAi: boolean('builtin_ai').notNull().default(false),
+  updatedBy: text('updated_by'),
+  updatedAt: ms('updated_at').notNull(),
+})
+
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings }

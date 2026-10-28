@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 15
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -461,6 +461,44 @@ CREATE TABLE IF NOT EXISTS activity (
 CREATE INDEX IF NOT EXISTS activity_ws_idx ON activity(workspace_id, created_at, id);
 `
 
+/**
+ * v15 — usage and limits that hold across replicas. Rate windows (requests per user, IP or space in a time window);
+ * daily usage per space and person (AI requests and tokens per provider and model, job minutes per kind); whether a
+ * space may use the server's own AI key (spaces that existed before v15 keep it, new ones start without it). An index
+ * for the fair claim, which counts each space's running jobs, and when each job's latest run started (queue waits
+ * and the job history). None of these sync to desktops.
+ */
+export const DDL_V15 = `
+CREATE TABLE IF NOT EXISTS rate_windows (
+  key text PRIMARY KEY,
+  n integer NOT NULL,
+  reset_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rate_windows_reset_idx ON rate_windows(reset_at);
+CREATE TABLE IF NOT EXISTS usage_daily (
+  workspace_id text NOT NULL,
+  user_id text NOT NULL DEFAULT '',
+  day text NOT NULL,
+  metric text NOT NULL,
+  subject text NOT NULL DEFAULT '',
+  amount double precision NOT NULL DEFAULT 0,
+  updated_at double precision NOT NULL,
+  PRIMARY KEY (workspace_id, day, metric, subject, user_id)
+);
+CREATE INDEX IF NOT EXISTS usage_daily_user_idx ON usage_daily(user_id, day);
+CREATE TABLE IF NOT EXISTS workspace_usage_settings (
+  workspace_id text PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  builtin_ai boolean NOT NULL DEFAULT false,
+  updated_by text,
+  updated_at double precision NOT NULL
+);
+INSERT INTO workspace_usage_settings (workspace_id, builtin_ai, updated_at)
+  SELECT id, true, extract(epoch from clock_timestamp()) * 1000 FROM workspaces
+  ON CONFLICT (workspace_id) DO NOTHING;
+CREATE INDEX IF NOT EXISTS jobs_ws_status_idx ON jobs(workspace_id, status);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at double precision;
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -476,4 +514,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [9, DDL_V9],
   [10, DDL_V10],
   [11, DDL_V11],
+  [15, DDL_V15],
 ]

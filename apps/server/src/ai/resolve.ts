@@ -93,6 +93,35 @@ class UnreadableKeyProvider implements AiProvider {
   runAgent: AiProvider['runAgent'] = async () => this.refuse()
 }
 
+export const BUILTIN_OFF = 'This space doesn’t use the server’s AI. An owner can turn it on under Usage, or add your own key in Settings → AI.'
+
+/** The server's own key while a space hasn't turned it on (P-1): unavailable, saying how to turn it on. */
+class BuiltinOffProvider implements AiProvider {
+  constructor(private readonly inner: AiProvider) {}
+  get id() {
+    return this.inner.id
+  }
+  async status() {
+    const s = await this.inner.status()
+    // a server without its own key says that instead
+    return s.available ? { ...s, available: false, detail: BUILTIN_OFF, reason: 'builtin-off' as const } : s
+  }
+  private refuse(): never {
+    throw new HttpError(503, 'server', BUILTIN_OFF)
+  }
+  write: AiProvider['write'] = async () => this.refuse()
+  structured: AiProvider['structured'] = async () => this.refuse()
+  runAgent: AiProvider['runAgent'] = async () => this.refuse()
+}
+
+/** On cloud, a space uses the server's own Anthropic key only once an owner has turned it on. */
+async function builtinFor(scope: AiScope): Promise<AiProvider> {
+  const b = await builtinProvider()
+  if (ctx().config.mode !== 'cloud' || b.id !== 'anthropic-api') return b
+  const { builtinAiEnabled } = await import('../services/metering')
+  return (await builtinAiEnabled(scope)) ? b : new BuiltinOffProvider(b)
+}
+
 export interface Resolved {
   provider: AiProvider
   /** Which step picked it. */
@@ -110,13 +139,13 @@ export async function resolveProvider(scope: AiScope, feature?: AiFeature, prelo
   ]
   for (const [source, choice] of candidates) {
     if (!choice) continue
-    if (choice === 'builtin') return { provider: await builtinProvider(), source, choice }
+    if (choice === 'builtin') return { provider: await builtinFor(scoped), source, choice }
     if (!keys.has(choice)) continue
     const p = await keyProvider(scoped, choice, doc)
     // a saved key that can't be opened stops here (503 with the reason), never falls through to the built-in key
     return { provider: p ?? new UnreadableKeyProvider(choice as AiProvider['id']), source, choice }
   }
-  return { provider: await builtinProvider(), source: 'builtin', choice: 'builtin' }
+  return { provider: await builtinFor(scoped), source: 'builtin', choice: 'builtin' }
 }
 
 /** The masked settings document the API returns (no key material, only hasKey + last4). */
@@ -126,7 +155,7 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
   const meta = await keyMeta(scoped)
   const keys = new Set(Object.keys(meta) as AiKeyProvider[])
   const b = await builtinProvider()
-  const bs = await b.status()
+  const bs = await (await builtinFor(scoped)).status()
   const providers: AiSettings['providers'] = {}
   for (const p of KEY_PROVIDERS) {
     const d = doc.providers[p]

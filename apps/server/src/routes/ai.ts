@@ -122,8 +122,9 @@ async function writerScope(userId: string, workspaceId: string | undefined): Pro
 aiRoutes.post('/write', async (c) => {
   const u = requireUser(c)
   const b = await body(c, z.object({ kind: z.enum(['voiceover', 'script', 'headline', 'caption', 'rewrite']), prompt: z.string().min(1).max(20000), context: z.string().max(50000).optional(), maxWords: z.number().int().min(1).max(5000).optional(), workspaceId: z.string().max(100).optional() }))
-  const provider = await requireProvider(await writerScope(u.id, b.workspaceId), 'writer')
-  limitAi(u.id)
+  const scope = await writerScope(u.id, b.workspaceId)
+  const provider = await requireProvider(scope, 'writer')
+  await limitAi(u.id, scope)
   return streamSSE(c, async (stream) => {
     const ac = new AbortController()
     stream.onAbort(() => ac.abort())
@@ -165,7 +166,7 @@ aiRoutes.post('/produce/script', async (c) => {
   await requireRole(u.id, row.workspaceId, 'editor')
   await requireProvider(row.workspaceId, 'script')
   await assertQueueRoom(row.workspaceId)
-  limitAi(u.id)
+  await limitAi(u.id, row.workspaceId)
   const j = await enqueue('ai.produce.script', { ...b, brief: { ...b.brief, voice: validVoice(b.brief.voice) } }, { workspaceId: row.workspaceId, userId: u.id, projectId: row.id, message: 'Writing script' })
   return c.json(jobDto(j))
 })
@@ -251,7 +252,7 @@ aiRoutes.post('/assistant', async (c) => {
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
   const provider = await requireProvider(row.workspaceId, 'assistant')
-  limitAi(u.id)
+  await limitAi(u.id, row.workspaceId)
   const wsId = row.workspaceId
   const req = b as unknown as AssistantRequest
   return streamSSE(c, async (stream) => {
