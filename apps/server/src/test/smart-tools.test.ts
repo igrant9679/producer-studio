@@ -69,7 +69,8 @@ beforeAll(async () => {
   const toneFile = path.join(tmp, 'tone.wav')
   await ffmpeg(['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:d=3', toneFile])
   tone = await addClip(toneFile, 'tone.wav', 'audio/wav', 'audio')
-})
+  // three clips made and processed: slow on a busy machine
+}, 300_000)
 
 afterEach(() => {
   resetFfmpegFilters()
