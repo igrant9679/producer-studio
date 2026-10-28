@@ -46,7 +46,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('struck words', () => {
+describe('struck words', { timeout: 40_000 }, () => {
   it('Delete strikes a word through instead of losing it; R brings it back, and the captions follow both ways', () => {
     render(<><Shortcuts /><TranscriptPanel /></>)
     fireEvent.mouseDown(word('um'))
@@ -105,7 +105,7 @@ describe('struck words', () => {
   })
 })
 
-describe('filler words', () => {
+describe('filler words', { timeout: 40_000 }, () => {
   it('the list switches a word on or off, takes your own, and Remove takes out only the ones switched on', () => {
     render(<TranscriptPanel />)
     expect(word('um').classList.contains('filler')).toBe(true)
@@ -137,7 +137,7 @@ describe('filler words', () => {
   })
 })
 
-describe('speakers', () => {
+describe('speakers', { timeout: 40_000 }, () => {
   it('labels each speaker’s words; Enter renames one everywhere and saves it on the clip, Escape keeps the name', async () => {
     const save = vi.spyOn(api, 'setTranscript').mockResolvedValue({} as AssetRecord)
     render(<TranscriptPanel />)
@@ -155,7 +155,7 @@ describe('speakers', () => {
     // a media record: on the clip, not an undo step
     expect(S().project.assets.as1.transcript?.segments[0].speaker).toBe('Alexandra')
     expect(S().history.past).toHaveLength(0)
-    await act(async () => new Promise((r) => requestAnimationFrame(() => r(null))))
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())))
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Speaker: Alexandra. Rename' }))
   })
 

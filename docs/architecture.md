@@ -35,6 +35,13 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
 - The project document is the `Project` type from core. Asset `src` = storage key; the client resolves media via
   `/api/media/:assetId/:variant` (variant `source|proxy|thumb|filmstrip|audio`), which redirects to a signed URL
   (S3) or streams with Range support (local).
+- Captions and transcripts in the document (core `captions.ts`, `transcript.ts`, `captionLines.ts`): a project holds
+  any number of caption tracks, each with a `language`; the shown ones are what the preview draws and the export burns
+  in (`showOnlyCaptionTrack`), and `captionsToText(project, 'srt'|'vtt'|'ass'|'lrc', {trackId, karaoke, range})` writes
+  one as a subtitle file (`parseCaptions` / `importCaptions` read them). Words cut in the transcript aren't stored: they
+  are the stretch of the recording between two adjacent pieces of a clip (`struckWords`), and `restoreCut` plays it
+  again. Caption tracks follow transcript cuts and restores. `project.fillerWords` is the transcript's filler list;
+  speaker labels live on the clip's transcript segments (`speaker`), saved with `PATCH /api/assets/:id`.
 
 ## Jobs
 Postgres-backed queue (`SELECT … FOR UPDATE SKIP LOCKED`), polled by the worker loop. Kinds:

@@ -32,6 +32,7 @@
 .cap-trackrow .ed-input { max-width: 110px; }
 .cap-io { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0; }
 .cap-io .row { gap: 6px; }
+.cap-lines { display: grid; gap: 2px; max-height: 460px; overflow-y: auto; }
 .cap-line { border-radius: 6px; }
 .cap-line.on { background: var(--bg-2); outline: 1px solid var(--border); }
 .cap-line > button.cap-pick { display: flex; gap: 8px; width: 100%; text-align: left; background: transparent; border: 0; padding: 5px 6px; border-radius: 6px; color: var(--text-2); cursor: pointer; font-size: 0.75rem; }
