@@ -2,13 +2,14 @@
 // "Processing"; a worker that lost its job to stale recovery drops its copy.
 import fs from 'node:fs'
 import path from 'node:path'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { ctx } from '../context'
-import { type AssetMeta, assets, jobs } from '../db/schema'
+import { type AssetMeta, assets, jobs, usageDaily } from '../db/schema'
 import { enqueue, getJob, type JobRow, recoverJob } from '../jobs/queue'
 import { CancelledError, type Handler, registerHandler, runningJobIds, startWorker, stopWorker } from '../jobs/worker'
 import { setMissingMediaFetcher } from '../services/assets'
+import { utcDay } from '../services/metering'
 import { type Client, setup, signup } from './helpers'
 
 let WS = ''
@@ -336,5 +337,28 @@ describe('stale recovery and lost locks (PIP-8)', () => {
     await waitFor(async () => !runningJobIds().includes(j.id))
     expect(await getJob(j.id)).toMatchObject({ status: 'running', lockedBy: 'w_other', error: null })
     await ctx().db.delete(jobs).where(eq(jobs.id, j.id))
+  })
+})
+
+describe('job time is metered (P-1)', () => {
+  it('every run in the worker adds its time to the space and the person who started it, by kind; failures count too', async () => {
+    registerHandler('media.scenes', async () => {
+      await new Promise((r) => setTimeout(r, 120))
+      return { ok: true }
+    })
+    const ok = await enqueue('media.scenes', {}, meta())
+    expect((await ended(ok.id)).status).toBe('done')
+    registerHandler('media.scenes', async () => {
+      throw new Error('broken')
+    })
+    const bad = await enqueue('media.scenes', {}, meta())
+    expect((await ended(bad.id)).status).toBe('error')
+    const rows = () => ctx().db.select().from(usageDaily).where(and(eq(usageDaily.workspaceId, WS), eq(usageDaily.subject, 'media.scenes')))
+    await waitFor(async () => (await rows()).some((r) => r.metric === 'job.runs' && r.amount === 2))
+    const got = await rows()
+    expect(got.every((r) => r.userId === USER && r.day === utcDay())).toBe(true)
+    expect(got.find((r) => r.metric === 'job.ms')!.amount).toBeGreaterThanOrEqual(100)
+    // the job says when its run started
+    expect((await getJob(ok.id))!.startedAt).toBeGreaterThan(0)
   })
 })
