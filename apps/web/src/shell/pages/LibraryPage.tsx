@@ -190,7 +190,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
     <>
       <div className="ps-lib-toolbar">
         {!trash && (
-          <div className="row" style={{ gap: 6 }} role="group" aria-label="Project type">
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }} role="group" aria-label="Project type">
             {PROJECT_FILTERS.map((f) => (
               <button key={f.id} aria-pressed={filter === f.id} className={clsx('chip', filter === f.id && 'active')} onClick={() => setFilter(f.id)}>{f.label}</button>
             ))}
@@ -422,7 +422,7 @@ function AssetsTab({ q }: { q: string }) {
       }}
     >
       <div className="ps-lib-toolbar">
-        <div className="row" style={{ gap: 6 }}>
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           {filters.map((f) => (
             <button key={f.id} aria-pressed={filter === f.id} className={clsx('chip', filter === f.id && 'active')} onClick={() => setFilter(f.id)}>{f.icon}{f.label}</button>
           ))}
