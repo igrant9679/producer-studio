@@ -5,7 +5,7 @@ import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { devices, jobs, sessions } from '../db/schema'
 import { jobDto } from '../dto'
-import { HttpError, invalid, memberRole, notFound, requireRole } from '../http'
+import { HttpError, invalid, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { cancelJob, getJob } from '../jobs/queue'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 
@@ -62,18 +62,26 @@ const MAX_QUEUED_EVENTS = 2000
 const RECHECK_MS = 20_000
 const openStreams = new Map<string, number>()
 
+/**
+ * A workspace's live updates (SSE). Every event has an id; reconnecting with the last one (the browser's
+ * Last-Event-ID header, or `?lastEventId=`) first sends what was missed, or a `resync` event when that can't be told
+ * so the screen reloads. Then `ready`, whose id is the position to resume from even when nothing else has come. The
+ * stream closes when its reader loses access: removed from the space, role lowered, signed out, device revoked.
+ */
 eventRoutes.get('/', async (c) => {
   const u = requireUser(c)
   const workspaceId = c.req.query('workspaceId')
   if (!workspaceId) throw invalid('workspaceId is required')
-  await requireRole(u.id, workspaceId, 'viewer')
+  const openedAs = await requireRole(u.id, workspaceId, 'viewer')
+  const lastId = c.req.header('last-event-id') || c.req.query('lastEventId') || undefined
   if ((openStreams.get(u.id) ?? 0) >= MAX_STREAMS_PER_USER) throw new HttpError(429, 'quota', 'Too many open live-update connections. Close some tabs.')
   const sessionId = c.get('sessionId')
   const deviceId = c.get('deviceId')
   const db = ctx().db
-  /** Still a member, and the session or device token that opened the stream still exists (not signed out or revoked). */
+  /** Still a member with the role the stream opened with (or more), and the session or device token that opened it still exists. */
   const stillAllowed = async () => {
-    if (!(await memberRole(u.id, workspaceId))) return false
+    const role = await memberRole(u.id, workspaceId)
+    if (!role || !roleAtLeast(role, openedAs)) return false
     if (sessionId) return (await db.select({ id: sessions.id }).from(sessions).where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, Date.now()))).limit(1)).length > 0
     if (deviceId) return (await db.select({ id: devices.id }).from(devices).where(eq(devices.id, deviceId)).limit(1)).length > 0
     return true
@@ -82,7 +90,7 @@ eventRoutes.get('/', async (c) => {
   c.header('Cache-Control', 'no-cache, no-transform')
   return streamSSE(c, async (stream) => {
     openStreams.set(u.id, (openStreams.get(u.id) ?? 0) + 1)
-    const queue: Array<{ event: string; data: string }> = []
+    const queue: Array<{ event: string; data: string; id?: string }> = []
     let wake: (() => void) | undefined
     let closed = false
     let recheck = false
@@ -94,11 +102,21 @@ eventRoutes.get('/', async (c) => {
       // membership changes and deletes arrive as workspace events: re-check access as soon as it's sent
       if (e.event === 'workspace') recheck = true
       if (queue.length >= MAX_QUEUED_EVENTS) return close()
-      queue.push({ event: e.event, data: JSON.stringify(e.data) })
+      queue.push({ event: e.event, data: JSON.stringify(e.data), id: e.id })
+      wake?.()
+    })
+    // in the same tick as subscribing: nothing published in between is missed or sent twice
+    const missed = lastId ? ctx().bus.replay(workspaceId, lastId) : []
+    const cursor = ctx().bus.cursor()
+    const unsubAccess = ctx().bus.onAccessChanged(u.id, () => {
+      recheck = true
       wake?.()
     })
     stream.onAbort(close)
     await stream.write(': connected\n\n')
+    if (missed === null) await stream.writeSSE({ event: 'resync', data: '{}', id: cursor })
+    else for (const e of missed) await stream.writeSSE({ event: e.event, data: JSON.stringify(e.data), id: e.id })
+    await stream.writeSSE({ event: 'ready', data: '{}', id: cursor })
     const ka = setInterval(() => {
       void stream.write(': keepalive\n\n').catch(() => undefined)
       recheck = true
@@ -109,7 +127,7 @@ eventRoutes.get('/', async (c) => {
         // send first, then check: someone just removed still gets the workspace event that makes their app move on
         while (queue.length && !closed) {
           const m = queue.shift()!
-          await stream.writeSSE({ event: m.event, data: m.data })
+          await stream.writeSSE({ event: m.event, data: m.data, id: m.id })
         }
         if (recheck) {
           recheck = false
@@ -124,6 +142,7 @@ eventRoutes.get('/', async (c) => {
     } finally {
       clearInterval(ka)
       unsub()
+      unsubAccess()
       const n = (openStreams.get(u.id) ?? 1) - 1
       if (n > 0) openStreams.set(u.id, n)
       else openStreams.delete(u.id)

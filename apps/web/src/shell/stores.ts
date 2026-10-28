@@ -12,8 +12,17 @@ type JobListener = (j: Job) => void
 const assetListeners = new Set<AssetListener>()
 const projectListeners = new Set<ProjectListener>()
 const jobListeners = new Set<JobListener>()
+const resyncListeners = new Set<() => void>()
 
 export const liveBus = {
+  /** The live stream may have missed events it can't replay: reload what's on screen (P-16). */
+  onResync(fn: () => void) {
+    resyncListeners.add(fn)
+    return () => void resyncListeners.delete(fn)
+  },
+  emitResync() {
+    resyncListeners.forEach((f) => f())
+  },
   onAsset(fn: AssetListener) {
     assetListeners.add(fn)
     return () => void assetListeners.delete(fn)

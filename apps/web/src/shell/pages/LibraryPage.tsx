@@ -80,6 +80,7 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
 
   useEffect(() => setSel(new Set()), [workspaceId, trash])
   useEffect(() => liveBus.onProject(() => reload()), [reload])
+  useEffect(() => liveBus.onResync(() => reload()), [reload])
 
   const setView = (v: 'grid' | 'list') => {
     setViewState(v)
@@ -405,6 +406,7 @@ function AssetsTab({ q }: { q: string }) {
     [workspaceId, setData],
   )
   useEffect(() => liveBus.onAsset(upsert), [upsert])
+  useEffect(() => liveBus.onResync(() => reload()), [reload])
   const upload = (files: File[]) => workspaceId && gate.canEdit && files.length && void uploadFiles(workspaceId, files)
   const pick = useFilePicker('video/*,audio/*,image/*', true, upload)
   const list = useMemo(() => filterAssets(data ?? [], { filter, q, sort }), [data, filter, q, sort])

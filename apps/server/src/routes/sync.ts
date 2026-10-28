@@ -110,6 +110,7 @@ deviceRoutes.delete('/:id', async (c) => {
   const u = requireUser(c)
   const rows = await ctx().db.delete(devices).where(and(eq(devices.id, c.req.param('id')), eq(devices.userId, u.id))).returning()
   if (!rows.length) throw notFound('Device not found')
+  ctx().bus.accessChanged(u.id)
   return c.json({ ok: true })
 })
 

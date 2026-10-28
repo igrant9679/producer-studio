@@ -359,16 +359,74 @@ export function subscribeEvents(
     project?: (p: { id: string; version: number }) => void
     sync?: (s: SyncStatus) => void
     workspace?: (w: { id: string; name?: string; deleted: boolean }) => void
+    /**
+     * Events may have been missed and can't be replayed (the stream was away too long, or another server answered):
+     * reload what the screen shows.
+     */
+    resync?: () => void
+    /** Any other event by name (data parsed from JSON). */
+    on?: Record<string, (data: unknown) => void>
   },
 ): () => void {
-  const es = new EventSource(`/api/events?workspaceId=${encodeURIComponent(workspaceId)}`, { withCredentials: true })
-  if (handlers.sync) es.addEventListener('sync', (e) => handlers.sync!(JSON.parse((e as MessageEvent).data)))
-  if (handlers.job) es.addEventListener('job', (e) => handlers.job!(JSON.parse((e as MessageEvent).data)))
-  if (handlers.asset) es.addEventListener('asset', (e) => handlers.asset!(JSON.parse((e as MessageEvent).data)))
-  if (handlers.project) es.addEventListener('project', (e) => handlers.project!(JSON.parse((e as MessageEvent).data)))
-  if (handlers.workspace) es.addEventListener('workspace', (e) => handlers.workspace!(JSON.parse((e as MessageEvent).data)))
-  return () => es.close()
+  const named: Record<string, ((data: never) => void) | undefined> = { sync: handlers.sync, job: handlers.job, asset: handlers.asset, project: handlers.project, workspace: handlers.workspace, ...handlers.on }
+  let es: EventSource | undefined
+  let lastId: string | undefined
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let backoff = LIVE_RETRY_MS
+  const open = () => {
+    if (stopped) return
+    // the browser resumes on its own with Last-Event-ID; a reconnect made here sends it in the URL
+    const url = `/api/events?workspaceId=${encodeURIComponent(workspaceId)}${lastId ? `&lastEventId=${encodeURIComponent(lastId)}` : ''}`
+    const src = (es = new EventSource(url, { withCredentials: true }))
+    const seen = (e: Event) => {
+      const id = (e as MessageEvent).lastEventId
+      if (id) lastId = id
+    }
+    for (const [name, fn] of Object.entries(named)) {
+      if (!fn) continue
+      src.addEventListener(name, (e) => {
+        seen(e)
+        let data: unknown
+        try {
+          data = JSON.parse((e as MessageEvent).data)
+        } catch {
+          return
+        }
+        ;(fn as (d: unknown) => void)(data)
+      })
+    }
+    src.addEventListener('ready', (e) => {
+      seen(e)
+      backoff = LIVE_RETRY_MS
+    })
+    src.addEventListener('resync', (e) => {
+      seen(e)
+      handlers.resync?.()
+    })
+    src.onerror = () => {
+      // still CONNECTING: the browser is retrying by itself. CLOSED: the server refused (signed out, no longer in the
+      // space) or isn't there; asking who we are tells a sign-out apart (its 401 signs the tab out), then try again
+      if (src.readyState !== 2 || stopped) return
+      src.close()
+      void api.me().catch((e) => {
+        if (e instanceof HttpError && e.status === 401) onUnauthorized?.()
+      })
+      timer = setTimeout(open, backoff)
+      backoff = Math.min(backoff * 2, LIVE_RETRY_MAX_MS)
+    }
+  }
+  open()
+  return () => {
+    stopped = true
+    clearTimeout(timer)
+    es?.close()
+  }
 }
+
+/** First wait before reopening a live-update stream the server closed; doubles up to the max. */
+export const LIVE_RETRY_MS = 2000
+export const LIVE_RETRY_MAX_MS = 60_000
 
 /** Poll/await a job until it finishes (uses GET; SSE listeners update UI in parallel). */
 export async function waitForJob<R>(id: string, onUpdate?: (j: Job<R>) => void, intervalMs = 1000): Promise<Job<R>> {

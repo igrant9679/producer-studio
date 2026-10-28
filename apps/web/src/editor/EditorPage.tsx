@@ -11,7 +11,7 @@ import './editor.css'
 import { StorageBanner } from '../shell/StorageBanner'
 import { AssetPanel, LeftRail } from './LeftPanel'
 import { isFileDrag } from './media'
-import { flush, keepBoth, loadInto, onProjectEvent, overwriteServer, reloadTheirs, startAutosave } from './persistence'
+import { flush, keepBoth, loadInto, onProjectEvent, overwriteServer, reloadTheirs, resyncProject, startAutosave } from './persistence'
 import { startPlaybackClock } from './playback'
 import { PropertiesPanel } from './PropertiesPanel'
 import { useShortcuts } from './shortcuts'
@@ -63,7 +63,7 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   useEffect(() => {
     if (demo || !workspaceId) return
     void loadLibrary(workspaceId)
-    return subscribeWorkspace(workspaceId, (ev) => void onProjectEvent(ev))
+    return subscribeWorkspace(workspaceId, (ev) => void onProjectEvent(ev), () => void resyncProject())
   }, [demo, workspaceId])
 
   if (error)

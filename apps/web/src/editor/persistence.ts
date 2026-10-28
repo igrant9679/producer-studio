@@ -219,6 +219,18 @@ export async function onProjectEvent(ev: { id: string; version: number }) {
   }
 }
 
+/** The live stream missed events it can't replay: look at the server's version, as the missed event would have. */
+export async function resyncProject() {
+  const s = useEditor.getState()
+  if (s.demo || !s.loaded) return
+  try {
+    const res = await api.project(s.projectId)
+    if (useEditor.getState().session === s.session && res.version > useEditor.getState().version) await onProjectEvent({ id: s.projectId, version: res.version })
+  } catch {
+    /* the next event or save sorts it out */
+  }
+}
+
 export function startAutosave(): () => void {
   const unsub = useEditor.subscribe((s, prev) => {
     if (s.project !== prev.project && s.loaded && prev.loaded && s.projectId === prev.projectId && s.saveState === 'dirty') schedule()
