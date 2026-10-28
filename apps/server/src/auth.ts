@@ -43,6 +43,8 @@ export interface AppEnv {
     sessionId: string | null
     /** Set when the request authenticated with a device token (Authorization: Bearer). */
     deviceId: string | null
+    /** P-7: this request's id (request-id.ts). */
+    requestId: string
   }
 }
 

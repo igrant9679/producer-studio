@@ -22,6 +22,7 @@ import { userDto } from '../dto'
 import { HttpError, body } from '../http'
 import { newId } from '../ids'
 import { limitSignup } from '../limits'
+import { countSigninFailure } from '../metrics'
 import { mailEnabled, sendMail } from '../mail'
 import { emailChangedNotice, passwordChangedNotice, resetMail, verifyMail } from '../mail/messages'
 import { checkTokenIpRate, consumeToken, issueToken, peekToken } from '../services/account'
@@ -147,6 +148,7 @@ export async function checkCredentials(c: Context, emailIn: string, password: st
   const ok = u ? await verifyPassword(password, u.passwordHash) : (await hashPassword(password), false)
   if (!u || !ok) {
     recordLoginFailure(ip, email)
+    countSigninFailure()
     throw new HttpError(401, 'unauthorized', 'Email or password is incorrect')
   }
   clearLoginFailures(ip, email)

@@ -58,7 +58,9 @@ export class HttpError extends Error {
   status: number
   body: ApiError
   constructor(status: number, body: ApiError) {
-    super(body.error || `HTTP ${status}`)
+    // a server failure names the request, so the person can quote it (P-7); the server's own 500 sentence already does
+    const msg = body.error || `HTTP ${status}`
+    super(status >= 500 && body.requestId && !msg.includes(body.requestId) ? `${msg} (reference ${body.requestId})` : msg)
     this.status = status
     this.body = body
   }

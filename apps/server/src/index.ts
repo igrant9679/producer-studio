@@ -35,14 +35,19 @@ if (config.role === 'all' || config.role === 'api') {
   s.requestTimeout = config.s3 ? 10 * 60_000 : 0
   s.headersTimeout = 120_000
 } else {
-  // worker-only services still expose health for the platform's checks
+  // worker-only services still expose health (with the worker's own state: a stuck worker answers 503) and metrics
   const { Hono } = await import('hono')
+  const { healthRoutes } = await import('./routes/health')
+  const { metricsRoute } = await import('./metrics')
   const h = new Hono()
-  h.get('/api/health', (x) => x.json({ ok: true, role: 'worker' }))
+  h.route('/api/health', healthRoutes())
+  h.get('/api/metrics', metricsRoute)
   server = serve({ fetch: h.fetch, port: config.port })
 }
 if (config.role === 'all' || config.role === 'worker') {
   startWorker({ concurrency: config.workerConcurrency })
+  // WORKER_STUCK_EXIT_MINUTES: a worker stuck that long exits so the platform restarts it
+  ;(await import('./routes/health')).startWorkerWatchdog()
   // a fresh server fetches the voice model now, not during someone's first voiceover
   void tts.prepare()
 }

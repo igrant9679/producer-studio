@@ -12,6 +12,7 @@ import { describeQueue } from '../jobs/queue-info'
 import { cancelJob, enqueue, getJob } from '../jobs/queue'
 import { QUEUED_KINDS, assertQueueRoom, limitAi } from '../limits'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
+import { sseClosed, sseOpened } from '../metrics'
 
 export const jobRoutes = new Hono<AppEnv>()
 
@@ -152,6 +153,7 @@ eventRoutes.get('/', async (c) => {
   c.header('Cache-Control', 'no-cache, no-transform')
   return streamSSE(c, async (stream) => {
     openStreams.set(u.id, (openStreams.get(u.id) ?? 0) + 1)
+    sseOpened()
     const queue: Array<{ event: string; data: string; id?: string }> = []
     let wake: (() => void) | undefined
     let closed = false
@@ -203,6 +205,7 @@ eventRoutes.get('/', async (c) => {
       }
     } finally {
       clearInterval(ka)
+      sseClosed()
       unsub()
       unsubAccess()
       const n = (openStreams.get(u.id) ?? 1) - 1
