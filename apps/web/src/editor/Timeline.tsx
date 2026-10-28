@@ -65,6 +65,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import * as A from './actions'
 import { Menu, MenuItem, Slider } from './controls'
 import { FreezeButton } from './FreezeMenu'
+import { HistoryButton } from './HistoryPanel'
 import { addMarkerAtPlayhead, clearBeatMarkers, detectBeatsOn } from './markerActions'
 import { MarkerFlags, MarkerLines } from './Markers'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
@@ -830,6 +831,7 @@ function TimelineToolbar() {
           disabled={!hasVideo}
         />
         <div className="tl-sep" />
+        <HistoryButton />
         <ToolBtn
           icon={<Magnet size={15} />}
           title={`Snapping ${snapping ? 'on' : 'off'}`}

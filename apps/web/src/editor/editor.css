@@ -695,6 +695,9 @@
 .tl-ctx { min-width: 220px; }
 .tl-transpop { width: 280px; padding: 12px; }
 .tl-freezepop { width: 280px; padding: 12px; }
+.tl-history { width: 260px; }
+.tl-history-list { max-height: min(50vh, 420px); overflow-y: auto; }
+.tl-history .undone { color: var(--text-3); }
 .ed-freeze-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .tl-transgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 8px; }
 .tl-transgrid button { min-height: 26px; border-radius: 6px; background: var(--field-2); border: 1px solid var(--border); color: var(--text-2); cursor: pointer; font-size: 0.7188rem; }
