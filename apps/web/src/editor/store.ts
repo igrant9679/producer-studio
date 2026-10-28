@@ -49,6 +49,8 @@ export interface EditorState {
   /** Timeline zoom in px per second. */
   zoom: number
   snapping: boolean
+  /** How long a new freeze frame holds (seconds). */
+  freezeSec: number
   clipboard: Item[]
   /** Media records the clipboard's clips need, and the space they were copied in (another space can't load them). */
   clipboardMedia: { workspaceId?: string; assets: Record<string, Asset> }
@@ -191,6 +193,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   playing: false,
   zoom: 80,
   snapping: true,
+  freezeSec: 2,
   clipboard: [],
   clipboardMedia: { assets: {} },
   activeLeftTab: 'media',

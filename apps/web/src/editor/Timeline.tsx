@@ -64,6 +64,7 @@ import {
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
 import { Menu, MenuItem, Slider } from './controls'
+import { FreezeButton } from './FreezeMenu'
 import { addMarkerAtPlayhead, clearBeatMarkers, detectBeatsOn } from './markerActions'
 import { MarkerFlags, MarkerLines } from './Markers'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
@@ -819,7 +820,7 @@ function TimelineToolbar() {
           onClick={() => A.remove()}
           disabled={!selection.length}
         />
-        <ToolBtn icon={<Snowflake size={15} />} title="Freeze frame" desc="Hold the frame under the playhead still for 2 seconds." onClick={A.freeze} />
+        <FreezeButton />
         <ToolBtn icon={<CopyPlus size={15} />} title="Duplicate" desc={`Make a copy of the selected clips.${selection.length ? '' : '\nSelect a clip first.'}`} kbd="Ctrl+D" onClick={A.duplicate} disabled={!selection.length} />
         <ToolBtn
           icon={<SplitSquareHorizontal size={15} />}
@@ -1355,7 +1356,12 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
             <>
               <div className="ed-menu-sep" />
               <MenuItem icon={<SplitSquareHorizontal size={14} />} label="Separate audio" onClick={run(A.separate)} />
-              <MenuItem icon={<Snowflake size={14} />} label="Freeze frame" onClick={run(() => A.freezeClip(it.id, ctx.time))} />
+              {it.freezeAt === undefined && (
+                <>
+                  <MenuItem icon={<Snowflake size={14} />} label="Freeze frame" onClick={run(() => A.freezeClip(it.id, ctx.time))} />
+                  <MenuItem icon={<Snowflake size={14} />} label="Freeze last frame" onClick={run(() => A.freezeEnd(it.id))} />
+                </>
+              )}
             </>
           )}
           {(it.type === 'audio' || (it.type === 'video' && it.freezeAt === undefined)) && (

@@ -12,6 +12,7 @@ import {
   deleteItems,
   duplicateItems,
   findItem,
+  freezeAtEnd,
   freezeFrame,
   insertTrack,
   isEditable,
@@ -187,7 +188,7 @@ const SEPARATE_REFUSED: Record<string, string> = {
 
 const underAt = (i: Item, t: number) => i.type === 'video' && i.start <= t && itemEnd(i) > t
 
-/** Hold the frame under the playhead for 2 s, on the selected (else the main-track) clip. */
+/** Hold the frame under the playhead (for the freeze length), on the selected (else the main-track) clip. */
 export function freeze() {
   const { playhead, project } = S()
   const v = selectedItems().find((i) => underAt(i, playhead)) ?? (mainTrack(project)?.items ?? []).find((i) => underAt(i, playhead))
@@ -208,7 +209,18 @@ export function freezeClip(itemId: string, at: number) {
 function holdFrame(v: Item | undefined, t: number) {
   if (!v) return toast('Put the playhead over a video clip to freeze a frame')
   if (!editableIds([v.id]).length) return
-  S().commit(freezeFrame(S().project, v.id, t, 2), 'Freeze frame')
+  S().commit(freezeFrame(S().project, v.id, t, S().freezeSec), 'Freeze frame')
+}
+
+/** Hold the last frame of a clip after it: the one given, else the selected video, else the one under the playhead. */
+export function freezeEnd(itemId?: string) {
+  const { playhead, project } = S()
+  const isClip = (i: Item | undefined): i is Item => i?.type === 'video' && i.freezeAt === undefined
+  const fromId = itemId ? findItem(project, itemId)?.item : undefined
+  const v = isClip(fromId) ? fromId : selectedItems().find(isClip) ?? (mainTrack(project)?.items ?? []).find((i) => isClip(i) && underAt(i, playhead))
+  if (!v) return toast('Select a video clip to hold its last frame')
+  if (!editableIds([v.id]).length) return
+  S().commit(freezeAtEnd(S().project, v.id, S().freezeSec), 'Freeze last frame')
 }
 
 export function setTransition(itemId: string, type: TransitionType | null, duration = 0.6) {

@@ -20,6 +20,7 @@ import {
   deleteItems,
   fillerWordRanges,
   findItem,
+  freezeAtEnd,
   freezeFrame,
   generateCaptions,
   itemEnd,
@@ -147,7 +148,7 @@ export const TOOL_SCHEMAS = {
   set_aspect_ratio: z.object({ ratio: z.enum(ids(ASPECT_RATIOS)) }).describe('Change the canvas aspect ratio.'),
   add_voiceover: z.object({ text: z.string().min(1).max(4000), voice: z.string().max(80).optional().describe(`Voice id: a built-in voice (${ids(VOICES).join(', ')}) or a cloned/designed voice of this space (vs:<id>, see the brief or get_project). Default: the brand kit voice.`), start: Time.optional(), speed: z.number().min(0.5).max(2).optional() }).describe('Generate a TTS voiceover and place it on an audio track.'),
   separate_audio: z.object({ itemId: ItemId }).describe('Detach a video’s audio onto its own linked audio item.'),
-  freeze_frame: z.object({ itemId: ItemId, time: Time.describe('Timeline seconds'), hold: z.number().min(0.2).max(30).optional() }).describe('Insert a freeze frame into a video item at a timeline time.'),
+  freeze_frame: z.object({ itemId: ItemId, time: Time.optional().describe('Timeline seconds (not needed with atEnd)'), atEnd: z.boolean().optional().describe("Hold the clip's last frame, right after it"), hold: z.number().min(0.2).max(30).optional() }).describe('Insert a freeze frame into a video item at a timeline time, or after it holding its last frame.'),
 } as const
 
 export type ToolName = keyof typeof TOOL_SCHEMAS
@@ -425,6 +426,8 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
     }
     case 'freeze_frame': {
       const it = need(p, i.itemId)
+      if (i.atEnd) return done(set(s, freezeAtEnd(p, it.id, i.hold ?? 2), `Held the last frame of ${label(it)} for ${i.hold ?? 2}s`))
+      if (i.time === undefined) throw new ToolError('freeze_frame needs a time, or atEnd: true')
       return done(set(s, freezeFrame(p, it.id, i.time, i.hold ?? 2), `Inserted a ${i.hold ?? 2}s freeze frame at ${r2(i.time)}s`))
     }
   }

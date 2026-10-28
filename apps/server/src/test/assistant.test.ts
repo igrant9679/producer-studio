@@ -130,6 +130,13 @@ describe('assistant tools', () => {
     await runTool(s, 'freeze_frame', { itemId: 'v_1', time: 5, hold: 1.5 }, env)
     const frozen = s.project.tracks.find((t) => t.main)!.items.find((i) => (i as { freezeAt?: number }).freezeAt !== undefined)
     expect(frozen).toMatchObject({ duration: 1.5, freezeAt: 5 })
+    // E-24: hold a clip's last frame after it
+    const last = s.project.tracks.find((t) => t.main)!.items.at(-1)!
+    await runTool(s, 'freeze_frame', { itemId: last.id, atEnd: true, hold: 3 }, env)
+    const held = s.project.tracks.find((t) => t.main)!.items.at(-1)!
+    expect(held).toMatchObject({ start: last.start + last.duration, duration: 3 })
+    expect((held as { freezeAt?: number }).freezeAt).toBeGreaterThan(9.9)
+    await expect(runTool(s, 'freeze_frame', { itemId: last.id }, env)).rejects.toThrow(/atEnd/)
   })
 
   it('trims, moves and deletes a video with its separated audio, and links and unlinks items (E-1)', async () => {

@@ -694,6 +694,8 @@
 .tl-gapline { position: absolute; height: 2px; background: var(--playhead); box-shadow: 0 0 8px var(--playhead); border-radius: 2px; }
 .tl-ctx { min-width: 220px; }
 .tl-transpop { width: 280px; padding: 12px; }
+.tl-freezepop { width: 280px; padding: 12px; }
+.ed-freeze-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .tl-transgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 8px; }
 .tl-transgrid button { min-height: 26px; border-radius: 6px; background: var(--field-2); border: 1px solid var(--border); color: var(--text-2); cursor: pointer; font-size: 0.7188rem; }
 .tl-transgrid button:hover { color: var(--text); border-color: var(--border-strong); }
