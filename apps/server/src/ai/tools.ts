@@ -8,13 +8,16 @@ import {
   EFFECTS,
   FILTERS,
   FONTS,
+  RAMP_PRESETS,
   TEXT_TEMPLATES,
   TRANSITIONS,
   VOICES,
   addAsset,
   addItem,
+  applyRampPreset,
   captionStyleFromPreset,
   captionTrack,
+  captionTracks,
   createAudioItem,
   createTextItem,
   cutSourceRanges,
@@ -34,7 +37,10 @@ import {
   separateAudio,
   setAspect,
   setItemSpeed,
+  rampPresetOf,
   setKeyframe,
+  setSpeedRamp,
+  showOnlyCaptionTrack,
   speechTrack,
   splitAt,
   trimLinked,
@@ -48,6 +54,7 @@ import {
   type Item,
   type Project,
   type TextItem,
+  type Track,
   type Transcript,
   type VideoItem,
 } from '@producer/core'
@@ -72,6 +79,9 @@ const ids = <T extends readonly { id: string }[]>(list: T) => list.map((x) => x.
 
 const Time = z.number().min(0).max(36000)
 const ItemId = z.string().min(1).describe('Item id from get_timeline')
+const CaptionTrackId = z.string().min(1).describe('Caption track id from get_timeline (default: the shown caption track)')
+const CaptionLanguage = z.string().min(2).max(20).describe('Pick the caption track by its language code (e.g. "es"), instead of trackId')
+const RAMP_IDS = RAMP_PRESETS.map((r) => r.id) as [string, ...string[]]
 
 export const TOOL_SCHEMAS = {
   get_timeline: z.object({}).describe('Compact summary of the edit: canvas, duration, playhead, selection, tracks and items (ids, types, times, text), assets.'),
@@ -121,20 +131,29 @@ export const TOOL_SCHEMAS = {
       volume: z.number().min(0).max(4).optional(),
       muted: z.boolean().optional(),
       speed: z.number().min(0.1).max(10).optional(),
+      ramp: z
+        .enum([...RAMP_IDS, 'none'])
+        .optional()
+        .describe(`Speed ramp preset for a video/audio item (${RAMP_PRESETS.map((r) => `${r.id}: ${r.hint.toLowerCase()}`).join('; ')}); none removes a ramp. Ignored when speed is given.`),
       filter: z.object({ id: z.enum(ids(FILTERS)), intensity: z.number().min(0).max(100) }).nullable().optional(),
       adjust: z.object({ brightness: z.number(), contrast: z.number(), saturation: z.number(), exposure: z.number(), temperature: z.number(), tint: z.number(), hue: z.number(), sharpen: z.number(), vignette: z.number() }).partial().optional(),
       fit: z.enum(['contain', 'cover']).optional(),
     })
-    .describe('Set transform/opacity/volume/speed/filter/colour adjust on an item.'),
+    .describe('Set transform/opacity/volume/speed (or a speed ramp preset)/filter/colour adjust on an item.'),
   add_transition: z.object({ itemId: ItemId.describe('Item BEFORE the cut'), type: z.enum(ids(TRANSITIONS)), duration: z.number().min(0.1).max(3).default(0.5) }).describe('Add a transition across the cut after an item (to the next adjacent item on its track).'),
   add_animation: z.object({ itemId: ItemId, which: z.enum(['in', 'out', 'combo']), preset: z.string(), duration: z.number().min(0.1).max(10).optional() }).describe(`Set an in/out animation (${ANIMATION_PRESETS.map((a) => a.id).join(', ')}) or a looping combo (pulse, float, shake, swing, none).`),
   add_effect: z.object({ itemId: ItemId, type: z.enum(ids(EFFECTS)), intensity: z.number().min(0).max(100).default(60) }).describe('Add a visual effect to an item.'),
   set_keyframe: z
     .object({ itemId: ItemId, prop: z.enum(['x', 'y', 'scale', 'rotation', 'opacity', 'volume']), time: Time.describe('TIMELINE seconds'), value: z.number(), ease: z.enum(['linear', 'easeIn', 'easeOut', 'easeInOut', 'hold']).optional() })
     .describe('Set a keyframe on an item property at a timeline time.'),
-  generate_captions: z.object({ itemIds: z.array(ItemId).optional(), preset: z.enum(ids(CAPTION_PRESETS)).optional() }).describe('Generate a caption track from speech (transcribes media first if needed). Replaces existing captions.'),
+  generate_captions: z
+    .object({ itemIds: z.array(ItemId).optional(), preset: z.enum(ids(CAPTION_PRESETS)).optional(), trackId: CaptionTrackId.optional(), language: CaptionLanguage.optional() })
+    .describe('Generate captions from speech (transcribes media first if needed) onto a caption track: the one named by trackId or language, else the speech track. Replaces that track’s captions; other language tracks are kept.'),
   set_caption_style: z
     .object({
+      trackId: CaptionTrackId.optional(),
+      language: CaptionLanguage.optional(),
+      show: z.boolean().optional().describe('Make this the caption track shown (the others are hidden)'),
       preset: z.enum(ids(CAPTION_PRESETS)).optional(),
       position: z.number().min(0).max(1).optional().describe('Vertical position, 0 top .. 1 bottom'),
       mode: z.enum(['line', 'word', 'karaoke']).optional(),
@@ -144,7 +163,7 @@ export const TOOL_SCHEMAS = {
       color: z.string().optional(),
       highlightColor: z.string().optional(),
     })
-    .describe('Restyle the caption track.'),
+    .describe('Restyle a caption track (pick it by trackId or language; default the shown one), and optionally make it the one shown.'),
   remove_silences: z.object({ itemId: ItemId, minGap: z.number().min(0.2).max(10).optional() }).describe('Cut pauses longer than minGap seconds out of a video/audio item.'),
   remove_filler_words: z.object({ itemId: ItemId }).describe('Cut filler words (um, uh, …) out of a video/audio item using its transcript.'),
   cut_transcript_ranges: z.object({ itemId: ItemId, ranges: z.array(z.object({ start: Time, end: Time })).min(1).describe('TIMELINE time ranges to remove') }).describe('Remove time ranges (e.g. words from get_transcript) from a media item; the edit ripples.'),
@@ -183,6 +202,8 @@ export function timelineSummary(s: ToolState) {
       ...(t.main ? { main: true } : {}),
       ...(t.muted ? { muted: true } : {}),
       ...(t.captionStyle ? { captionPreset: t.captionStyle.preset } : {}),
+      ...(t.kind === 'caption' && t.language ? { language: t.language } : {}),
+      ...(t.kind === 'caption' && t.hidden ? { hidden: true } : {}),
       items: t.items.map((it) => ({
         id: it.id,
         type: it.type,
@@ -190,7 +211,7 @@ export function timelineSummary(s: ToolState) {
         end: r2(itemEnd(it)),
         ...(it.name ? { name: it.name } : {}),
         ...(it.type === 'text' || it.type === 'caption' ? { text: it.text.slice(0, 120) } : {}),
-        ...(it.type === 'video' || it.type === 'audio' ? { assetId: it.assetId, in: r2(it.in), speed: it.speed, ...(it.muted ? { muted: true } : {}) } : {}),
+        ...(it.type === 'video' || it.type === 'audio' ? { assetId: it.assetId, in: r2(it.in), speed: it.speed, ...(it.speedRamp ? { ramp: rampPresetOf(it) ?? 'custom' } : {}), ...(it.muted ? { muted: true } : {}) } : {}),
         ...(it.type === 'image' ? { assetId: it.assetId } : {}),
         ...(it.type === 'video' && it.freezeAt !== undefined ? { freezeAt: it.freezeAt } : {}),
         ...(it.linkId ? { linkId: it.linkId } : {}),
@@ -207,6 +228,21 @@ function set(s: ToolState, p: Project, change: string) {
   s.project = p
   s.changes.push(change)
   return change
+}
+
+/** The caption track a tool means: by id, else by language code (the base language matches: "es" finds "es-MX"). */
+function pickCaptionTrack(p: Project, trackId?: string, language?: string): Track | undefined {
+  if (trackId) {
+    const t = captionTrack(p, trackId)
+    if (!t) throw new ToolError(`No caption track with id ${trackId}`)
+    return t
+  }
+  if (!language) return undefined
+  const base = (l: string) => l.toLowerCase().split('-')[0]
+  const all = captionTracks(p)
+  const t = all.find((x) => x.language?.toLowerCase() === language.toLowerCase()) ?? all.find((x) => x.language && base(x.language) === base(language))
+  if (!t) throw new ToolError(`No caption track in ${language} (tracks: ${all.map((x) => x.language ?? 'no language').join(', ') || 'none'})`)
+  return t
 }
 
 function positionY(p: Project, pos: string | undefined): number {
@@ -308,12 +344,20 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
       // speed goes through its own op, which rescales keyframes, fades and animations with it
       const speed = (it.type === 'video' || it.type === 'audio') && i.speed !== undefined ? (i.speed as number) : undefined
       if (speed !== undefined) bits.push(`speed ${speed}×`)
+      const ramp = (it.type === 'video' || it.type === 'audio') && speed === undefined && i.ramp !== undefined ? (i.ramp as string) : undefined
+      if (ramp !== undefined) bits.push(ramp === 'none' ? 'no speed ramp' : `${RAMP_PRESETS.find((r) => r.id === ramp)!.name.toLowerCase()} speed ramp`)
       if ((it.type === 'video' || it.type === 'image') && i.filter !== undefined) (patch.filter = i.filter ?? undefined), bits.push(i.filter ? `filter ${i.filter.id}` : 'no filter')
       if ((it.type === 'video' || it.type === 'image') && i.adjust) (patch.adjust = { ...it.adjust, ...i.adjust }), bits.push('colour adjust')
       if ((it.type === 'video' || it.type === 'image') && i.fit) (patch.fit = i.fit), bits.push(`fit ${i.fit}`)
       if (!bits.length) throw new ToolError('None of those properties apply to this item type')
       let next = Object.keys(patch).length ? updateItem(p, it.id, patch as Partial<Item>) : p
       if (speed !== undefined) next = setItemSpeed(next, it.id, speed)
+      if (ramp !== undefined) {
+        if (it.type === 'video' && (it.freezeAt !== undefined || it.reverse)) throw new ToolError('Frozen or reversed clips can’t take a speed ramp')
+        const ramped = ramp === 'none' ? setSpeedRamp(next, it.id, null) : applyRampPreset(next, it.id, ramp as (typeof RAMP_PRESETS)[number]['id'])
+        if (ramp === 'none' && ramped === next && bits.length === 1) throw new ToolError('That item has no speed ramp')
+        next = ramped
+      }
       return done(set(s, next, `Set ${bits.join(', ')} on ${label(it)}`))
     }
     case 'add_transition': {
@@ -351,17 +395,18 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
       for (const aid of [...new Set(sources.map((x) => x.assetId))]) {
         if (!cur.assets[aid]?.transcript && cur.assets[aid]) cur = addAsset(cur, { ...cur.assets[aid], transcript: await env.transcribe(aid) })
       }
-      const style = i.preset ? captionStyleFromPreset(i.preset, cur) : speechTrack(cur)?.captionStyle
-      const next = generateCaptions(cur, { itemIds: i.itemIds, style })
-      // other languages' tracks are kept: count the one made from speech
-      const n = speechTrack(next)?.items.length ?? 0
+      const target = pickCaptionTrack(cur, i.trackId, i.language)
+      const style = i.preset ? captionStyleFromPreset(i.preset, cur) : (target ?? speechTrack(cur))?.captionStyle
+      const next = generateCaptions(cur, { itemIds: i.itemIds, style, trackId: target?.id })
+      // other languages' tracks are kept: count the one captioned
+      const n = (target ? captionTrack(next, target.id) : speechTrack(next))?.items.length ?? 0
       if (!n) throw new ToolError('No speech found to caption')
       s.project = next
-      s.changes.push(`Generated ${n} captions`)
+      s.changes.push(`Generated ${n} captions${target?.language ? ` on the ${target.language} track` : ''}`)
       return done(s.changes[s.changes.length - 1])
     }
     case 'set_caption_style': {
-      const track = captionTrack(p)
+      const track = pickCaptionTrack(p, i.trackId, i.language) ?? captionTrack(p)
       if (!track) throw new ToolError('There is no caption track — call generate_captions first')
       const base = i.preset ? captionStyleFromPreset(i.preset, p) : structuredClone(track.captionStyle ?? captionStyleFromPreset('clean', p))
       if (i.position !== undefined) base.position = i.position
@@ -371,7 +416,11 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
       if (i.fontFamily) base.style.fontFamily = i.fontFamily
       if (i.fontSize) base.style.fontSize = i.fontSize
       if (i.color) base.style.color = i.color
-      return done(set(s, updateTrack(p, track.id, { captionStyle: base }), `Restyled captions${i.preset ? ` (${i.preset})` : ''}`))
+      const restyle = Object.keys(i).some((k) => !['trackId', 'language', 'show'].includes(k) && i[k] !== undefined)
+      let next = restyle ? updateTrack(p, track.id, { captionStyle: base }) : p
+      if (i.show) next = showOnlyCaptionTrack(next, track.id)
+      const what = [restyle ? `Restyled captions${i.preset ? ` (${i.preset})` : ''}` : '', i.show ? 'showing this caption track' : ''].filter(Boolean).join(', ')
+      return done(set(s, next, `${what || 'Captions unchanged'}${track.language ? ` (${track.language} track)` : ''}`))
     }
     case 'remove_silences': {
       const it = need(p, i.itemId)

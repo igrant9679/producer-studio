@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addAsset, addItem, createAudioItem, createProject, createVideoItem, findItem, projectDuration, type Asset, type Project, type Transcript } from '@producer/core'
+import { addAsset, addCaptionTrack, addItem, captionTrack, createAudioItem, createProject, createVideoItem, findItem, projectDuration, rampPresetOf, showOnlyCaptionTrack, type Asset, type Project, type Transcript } from '@producer/core'
 import { ASSISTANT_SYSTEM, toolSpecs } from '../ai/assistant'
 import { writeRequestParams } from '../ai/claude'
 import { buildScriptPrompt, syntheticTranscript, validateScript } from '../ai/produce'
@@ -165,6 +165,52 @@ describe('assistant tools', () => {
     await expect(runTool(s, 'set_caption_style', { position: 0.2 }, env)).rejects.toThrow(/generate_captions/)
     await expect(runTool(s, 'no_such_tool', {}, env)).rejects.toThrow(/Unknown tool/)
     expect(s.changes).toHaveLength(0)
+  })
+
+  it('set_item_properties sets a speed ramp preset, shows it in the summary and removes it with none', async () => {
+    const s = makeState()
+    await runTool(s, 'set_item_properties', { itemId: 'v_1', ramp: 'hero' }, env)
+    const v = findItem(s.project, 'v_1')!.item as { speedRamp?: unknown[]; speed: number }
+    expect(v.speedRamp?.length).toBeGreaterThan(2)
+    expect(rampPresetOf(v as never)).toBe('hero')
+    expect(s.changes[0]).toMatch(/hero speed ramp/)
+    expect(timelineSummary(s).tracks[0].items[0]).toMatchObject({ ramp: 'hero' })
+    // a constant speed wins over a ramp in the same call
+    const s2 = makeState()
+    await runTool(s2, 'set_item_properties', { itemId: 'v_1', ramp: 'bullet', speed: 2 }, env)
+    expect((findItem(s2.project, 'v_1')!.item as { speedRamp?: unknown }).speedRamp).toBeUndefined()
+    await runTool(s, 'set_item_properties', { itemId: 'v_1', ramp: 'none' }, env)
+    expect((findItem(s.project, 'v_1')!.item as { speedRamp?: unknown }).speedRamp).toBeUndefined()
+    await expect(runTool(s, 'set_item_properties', { itemId: 'v_1', ramp: 'none' }, env)).rejects.toThrow(/no speed ramp/)
+    await expect(runTool(s, 'set_item_properties', { itemId: 'v_1', ramp: 'warp' }, env)).rejects.toBeInstanceOf(ToolError)
+  })
+
+  it('caption tools pick a caption track by id or language and can make it the one shown', async () => {
+    const s = makeState()
+    await runTool(s, 'generate_captions', {}, env)
+    const english = s.project.tracks.find((t) => t.kind === 'caption')!
+    // an imported Spanish track alongside
+    let { project, trackId: es } = addCaptionTrack(s.project, { language: 'es-MX', name: 'Subtítulos' })
+    project = showOnlyCaptionTrack(project, english.id)
+    s.project = project
+    const sum = timelineSummary(s).tracks.filter((t) => t.kind === 'caption')
+    expect(sum.map((t) => t.language)).toEqual(['en', 'es-MX'])
+    expect(sum[1]).toMatchObject({ hidden: true })
+
+    await runTool(s, 'set_caption_style', { language: 'es', color: '#ffcc00', show: true }, env)
+    expect(captionTrack(s.project, es)!.captionStyle!.style.color).toBe('#ffcc00')
+    expect(captionTrack(s.project, english.id)!.captionStyle!.style.color).not.toBe('#ffcc00')
+    expect(captionTrack(s.project)!.id).toBe(es) // the shown one
+    expect(s.changes.at(-1)).toMatch(/showing this caption track \(es-MX track\)/)
+
+    // generate onto the named track: English captions stay as they were
+    const before = captionTrack(s.project, english.id)!.items.length
+    await runTool(s, 'generate_captions', { trackId: es }, env)
+    expect(captionTrack(s.project, es)!.items.length).toBeGreaterThan(0)
+    expect(captionTrack(s.project, english.id)!.items.length).toBe(before)
+
+    await expect(runTool(s, 'set_caption_style', { language: 'fr', color: '#fff' }, env)).rejects.toThrow(/No caption track in fr/)
+    await expect(runTool(s, 'generate_captions', { trackId: 'nope' }, env)).rejects.toThrow(/No caption track with id/)
   })
 
   it('tool definitions are valid JSON-schema tools covering every schema', () => {
