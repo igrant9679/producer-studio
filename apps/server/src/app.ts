@@ -25,6 +25,7 @@ import { preferenceRoutes } from './routes/preferences'
 import { projectRoutes } from './routes/projects'
 import { versionRoutes } from './routes/versions'
 import { exportRoutes, projectExportRoutes, shareRoutes, workspaceShareRoutes } from './routes/share'
+import { searchRoutes, spaceExportRoutes } from './routes/library'
 import { activityRoutes, commentRoutes, projectCollabRoutes } from './routes/collab'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { templateRoutes } from './routes/templates'
@@ -133,7 +134,9 @@ export function createApp() {
   app.route('/api/ai', aiSettingsRoutes)
   app.route('/api/ai', aiRoutes)
   app.route('/api/voice', voiceRoutes)
+  app.route('/api/exports', spaceExportRoutes)
   app.route('/api/exports', exportRoutes)
+  app.route('/api/search', searchRoutes)
   app.route('/api/share', shareRoutes)
   app.route('/api/templates', templateRoutes)
   app.route('/api/system', systemRoutes)

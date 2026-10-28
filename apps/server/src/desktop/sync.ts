@@ -277,8 +277,8 @@ export class SyncEngine {
     const local = await ctx().db.select({ id: projects.id, workspaceId: projects.workspaceId, version: projects.version, trashedAt: projects.trashedAt, isTemplate: projects.isTemplate }).from(projects)
     let n = local.filter((p) => syncs(p.workspaceId) && pr.get(p.id)?.conflictVersion == null && isDirty(p, pr.get(p.id)) && !skipped.has(failureKey('project', p.id))).length
     const ar = await syncRows('asset')
-    const la = await ctx().db.select({ id: assets.id, workspaceId: assets.workspaceId, origin: assets.origin, status: assets.status }).from(assets)
-    n += la.filter((a) => syncs(a.workspaceId) && a.origin !== 'render' && a.status !== 'uploading' && !ar.get(a.id)?.uploaded && !ar.get(a.id)?.remote && !skipped.has(failureKey('asset', a.id))).length
+    const la = await ctx().db.select({ id: assets.id, workspaceId: assets.workspaceId, origin: assets.origin, status: assets.status, trashedAt: assets.trashedAt }).from(assets)
+    n += la.filter((a) => syncs(a.workspaceId) && a.origin !== 'render' && a.status !== 'uploading' && a.trashedAt == null && !ar.get(a.id)?.uploaded && !ar.get(a.id)?.remote && !skipped.has(failureKey('asset', a.id))).length
     return n
   }
 
@@ -784,12 +784,21 @@ export class SyncEngine {
         const [saved] = await db.update(assets).set({ name: take.name, meta: { ...(row.meta ?? {}), transcript: take.transcript }, updatedAt: Date.now() }).where(eq(assets.id, a.id)).returning()
         this.quietly(() => emitAsset(saved))
       }
+      // put in the trash in the cloud: here too (a trash made here isn't sent up; emptying it here is)
+      if (rec.trashedAt != null && row.trashedAt == null) {
+        const [saved] = await db.update(assets).set({ trashedAt: rec.trashedAt, updatedAt: Date.now() }).where(eq(assets.id, a.id)).returning()
+        this.quietly(() => emitAsset(saved))
+      }
       await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...cloudFields } })
       return
     }
     // ours to keep: a name or transcript changed here and not pushed yet
     const take = row ? mergeClipFields(row, s?.base, cloudFields, a.transcript, false) : undefined
     const prefix = assetPrefix(rec.workspaceId, a.id)
+    // its file was replaced in the cloud (A-14): what this computer fetched of the old one goes, and is fetched again
+    const replaced = !!row && !!row.sha256 && !!rec.sha256 && row.sha256 !== rec.sha256
+    if (replaced) for (const dir of assetDirs(row)) await ctx().storage.deletePrefix(dir).catch(() => undefined)
+    const kept = replaced ? undefined : row
     const meta: AssetMeta = {
       duration: a.duration,
       width: a.width,
@@ -814,14 +823,16 @@ export class SyncEngine {
       status: rec.status,
       origin: rec.origin,
       error: rec.error ?? null,
-      sourceKey: row?.sourceKey ?? `${prefix}/source${extFor(a.name, a.mime ?? '')}`,
+      sourceKey: kept?.sourceKey ?? `${prefix}/source${extFor(a.name, a.mime ?? '')}`,
       // a picture's proxy is a PNG (a TIFF's copy): the export names its file by this key's extension
-      proxyKey: a.proxySrc ? (row?.proxyKey ?? `${prefix}/${a.kind === 'image' ? 'display.png' : 'proxy.mp4'}`) : null,
-      thumbKey: a.thumbnail ? (row?.thumbKey ?? `${prefix}/thumb.jpg`) : null,
-      filmstripKey: a.filmstrip ? (row?.filmstripKey ?? `${prefix}/filmstrip.jpg`) : null,
+      proxyKey: a.proxySrc ? (kept?.proxyKey ?? `${prefix}/${a.kind === 'image' ? 'display.png' : 'proxy.mp4'}`) : null,
+      thumbKey: a.thumbnail ? (kept?.thumbKey ?? `${prefix}/thumb.jpg`) : null,
+      filmstripKey: a.filmstrip ? (kept?.filmstripKey ?? `${prefix}/filmstrip.jpg`) : null,
       audioKey: null,
       meta,
       sha256: rec.sha256 ?? null,
+      // the media trash follows the cloud's (A-14)
+      trashedAt: rec.trashedAt ?? null,
       updatedAt: Date.now(),
     }
     // the sync record first: a crash before the row is written leaves nothing that looks like a clip made here
@@ -1035,7 +1046,8 @@ export class SyncEngine {
         else await this.item('asset', a.id, a.name, () => this.pushClipFields(c, a, s))
         continue
       }
-      if (a.origin === 'render' || a.status === 'uploading') continue
+      // a clip put in the trash here before it was ever sent up stays here (emptying the trash removes it)
+      if (a.origin === 'render' || a.status === 'uploading' || a.trashedAt != null) continue
       await this.item('asset', a.id, a.name, () => this.pushAsset(c, a))
     }
   }

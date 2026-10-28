@@ -291,7 +291,9 @@ describe('one item that keeps failing never blocks the rest (DSK-5)', () => {
     // once the cause is gone, the item syncs and leaves the list
     await desk.json('PATCH', `/api/projects/${takenProject}`, { trashed: true })
     await desk.json('DELETE', `/api/projects/${takenProject}`)
+    const taken = (await desk.json('GET', `/api/assets/${takenAsset}`)).body
     await desk.json('DELETE', `/api/assets/${takenAsset}`)
+    await desk.json('POST', '/api/assets/trash/empty', { workspaceId: taken.workspaceId, ids: [takenAsset] })
     expect((await sync()).failures).toEqual([])
   })
 })

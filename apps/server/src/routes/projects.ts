@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 import type { PgUpdateSetSource } from 'drizzle-orm/pg-core'
 import * as z from 'zod/v4'
-import { createProject, uid, type Project, type ProjectDocResponse } from '@producer/core'
+import { createProject, normalizeTags, uid, type Project, type ProjectDocResponse } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { comments, projects } from '../db/schema'
@@ -14,6 +14,7 @@ import { recordVersion } from '../services/versions'
 import { recordActivity } from '../services/activity'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 import { getBrand } from './workspaces'
+import { copyProjectTo } from '../services/library'
 
 export const projectRoutes = new Hono<AppEnv>()
 
@@ -53,12 +54,13 @@ projectRoutes.get('/', async (c) => {
       createdAt: projects.createdAt,
       updatedAt: projects.updatedAt,
       changeSeq: projects.changeSeq,
+      tags: sql<string[] | null>`${projects.doc} -> 'tags'`,
     })
     .from(projects)
     .where(and(...conds))
     .orderBy(...pageOrder(projects.updatedAt, projects.id))
     .limit(limit + 1)
-  return c.json(toPage(rows, limit, (r) => [r.updatedAt, r.id], (r) => projectSummary({ ...r, doc: undefined as never })))
+  return c.json(toPage(rows, limit, (r) => [r.updatedAt, r.id], ({ tags, ...r }) => projectSummary({ ...r, doc: undefined as never }, { tags: Array.isArray(tags) ? tags : null })))
 })
 
 export const ID_RE = /^[A-Za-z0-9_-]{6,80}$/
@@ -145,15 +147,21 @@ projectRoutes.patch('/:id', async (c) => {
   const id = c.req.param('id')
   const row = await loadProjectRow(id)
   await requireRole(u.id, row.workspaceId, 'editor')
-  const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), trashed: z.boolean().optional(), isTemplate: z.boolean().optional(), baseVersion: z.number().int().optional() }))
+  const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), trashed: z.boolean().optional(), isTemplate: z.boolean().optional(), tags: z.array(z.string().max(100)).max(50).optional(), baseVersion: z.number().int().optional() }))
   // a rename made from a stale screen (the project was saved or renamed since it was listed) must not win unseen
   if (b.baseVersion !== undefined && b.baseVersion !== row.version) throw staleProject(row)
   const now = Date.now()
   const set: PgUpdateSetSource<typeof projects> = { updatedAt: now }
+  // name and tags live in the document too: one statement on the stored row, so a save landing after our read is
+  // kept, and its version is never reused
+  let doc = sql`${projects.doc}`
   if (b.name !== undefined) {
-    // one statement on the stored row: a save landing after our read is kept, and its version is never reused
     set.name = b.name
-    set.doc = sql`jsonb_set(jsonb_set(${projects.doc}, '{name}', to_jsonb(${b.name}::text)), '{updatedAt}', to_jsonb(${now}::bigint))`
+    doc = sql`jsonb_set(${doc}, '{name}', to_jsonb(${b.name}::text))`
+  }
+  if (b.tags !== undefined) doc = sql`jsonb_set(${doc}, '{tags}', ${JSON.stringify(normalizeTags(b.tags))}::jsonb)`
+  if (b.name !== undefined || b.tags !== undefined) {
+    set.doc = sql`jsonb_set(${doc}, '{updatedAt}', to_jsonb(${now}::bigint))`
     set.version = sql`${projects.version} + 1`
   }
   if (b.trashed !== undefined) set.trashedAt = b.trashed ? now : null
@@ -183,6 +191,27 @@ projectRoutes.post('/:id/duplicate', async (c) => {
   announce(copy)
   await recordActivity({ workspaceId: copy.workspaceId, projectId: copy.id, actorId: u.id, kind: 'project.created', data: { project: copy.name, copyOf: row.name } })
   return c.json(projectSummary(copy))
+})
+
+/**
+ * Copy a project into another space the person edits (A-13), with copies of the clips it uses (a project only plays
+ * its own space's media). `move` also puts the original in this space's trash, where it can still be restored.
+ */
+projectRoutes.post('/:id/copy', async (c) => {
+  const u = requireUser(c)
+  const row = await loadProjectRow(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const b = await body(c, z.object({ workspaceId: z.string().min(1), move: z.boolean().optional() }))
+  await requireRole(u.id, b.workspaceId, 'editor')
+  if (b.workspaceId === row.workspaceId) throw invalid('Pick another space to copy it to')
+  const { copy, missing } = await copyProjectTo(row, b.workspaceId, u.id)
+  announce(copy)
+  await recordActivity({ workspaceId: copy.workspaceId, projectId: copy.id, actorId: u.id, kind: 'project.created', data: { project: copy.name, copyOf: row.name } })
+  if (b.move) {
+    const [trashed] = await ctx().db.update(projects).set({ trashedAt: Date.now(), updatedAt: Date.now() }).where(eq(projects.id, row.id)).returning()
+    if (trashed) announce(trashed)
+  }
+  return c.json({ ...projectSummary(copy), missingMedia: missing })
 })
 
 projectRoutes.delete('/:id', async (c) => {

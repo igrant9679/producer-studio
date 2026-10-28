@@ -1,9 +1,9 @@
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { Hono } from 'hono'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import * as z from 'zod/v4'
-import type { UploadTicket } from '@producer/core'
+import type { EmptyTrashResult, TrashResult, UploadTicket } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
@@ -20,6 +20,7 @@ import { UploadTooLargeError } from '../storage'
 import { abortUpload } from '../services/asset-recovery'
 import { assertProjectInWorkspace } from '../services/projects'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
+import { assetUsage, copyAssetTo, removeAssets, setAssetTrashed, trashedAssets } from '../services/library'
 
 export const uploadRoutes = new Hono<AppEnv>()
 
@@ -125,6 +126,20 @@ uploadRoutes.put('/:assetId/data', async (c) => {
 
 export const assetRoutes = new Hono<AppEnv>()
 
+/**
+ * Empty the media trash (A-14): the only way clips are removed for good by hand. All trashed clips of the space, or
+ * only `ids` (each must be in the trash). Exports made of them go too.
+ */
+assetRoutes.post('/trash/empty', async (c) => {
+  const u = requireUser(c)
+  const b = await body(c, z.object({ workspaceId: z.string().min(1), ids: z.array(z.string().max(100)).max(1000).optional() }))
+  await requireRole(u.id, b.workspaceId, 'editor')
+  const rows = await trashedAssets(b.workspaceId, b.ids)
+  if (b.ids && rows.length !== new Set(b.ids).size) throw new HttpError(409, 'conflict', 'Only clips in the trash can be deleted for good. Move them to the trash first.')
+  const res: EmptyTrashResult = await removeAssets(rows)
+  return c.json(res)
+})
+
 assetRoutes.post('/:id/complete', async (c) => {
   const u = requireUser(c)
   const row = await loadAsset(c.req.param('id'))
@@ -176,7 +191,8 @@ assetRoutes.get('/', async (c) => {
   await requireRole(u.id, workspaceId, 'viewer')
   const kind = c.req.query('kind')
   const { limit, after } = pageQuery(c)
-  const conds = [eq(assets.workspaceId, workspaceId)]
+  // the library, or (?trashed=1) the media trash
+  const conds = [eq(assets.workspaceId, workspaceId), c.req.query('trashed') === '1' ? isNotNull(assets.trashedAt) : isNull(assets.trashedAt)]
   if (kind) conds.push(eq(assets.kind, kind))
   const from = afterCursor(assets.createdAt, assets.id, after)
   if (from) conds.push(from)
@@ -227,15 +243,121 @@ assetRoutes.patch('/:id', async (c) => {
   return c.json(rec)
 })
 
+/** Delete = into the media trash (A-14): nothing is removed, and projects using the clip keep playing it. */
 assetRoutes.delete('/:id', async (c) => {
   const u = requireUser(c)
   const row = await loadAsset(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'editor')
-  // its processing and transcription stop first; whatever they write after this is swept when they end
+  const saved = row.trashedAt != null ? row : await setAssetTrashed(row, true)
+  const usage = await assetUsage(row.id, row.workspaceId)
+  const res: TrashResult = { ok: true, trashedAt: saved.trashedAt!, usedIn: usage.projects.length }
+  return c.json(res)
+})
+
+assetRoutes.post('/:id/restore', async (c) => {
+  const u = requireUser(c)
+  const row = await loadAsset(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'editor')
+  return c.json(assetRecord(row.trashedAt == null ? row : await setAssetTrashed(row, false), { light: true }))
+})
+
+/** Which of the space's projects use the clip (shown before it is deleted, and in the trash). */
+assetRoutes.get('/:id/usage', async (c) => {
+  const u = requireUser(c)
+  const row = await loadAsset(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'viewer')
+  return c.json(await assetUsage(row.id, row.workspaceId))
+})
+
+/** A ready clip copied (or moved: the original goes in the trash) into another space the person edits. */
+assetRoutes.post('/:id/copy', async (c) => {
+  const u = requireUser(c)
+  const row = await loadAsset(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const b = await body(c, z.object({ workspaceId: z.string().min(1), move: z.boolean().optional() }))
+  await requireRole(u.id, b.workspaceId, 'editor')
+  if (b.workspaceId === row.workspaceId) throw invalid('Pick another space to copy it to')
+  const copy = await copyAssetTo(row, b.workspaceId, u.id)
+  if (b.move) await setAssetTrashed(row, true)
+  return c.json(assetRecord(copy, { light: true }))
+})
+
+/**
+ * Replace a clip's file in place (A-14): the clip keeps its id and name, so every project using it plays the new
+ * file. The new file is uploaded beside the old one; only `replace/complete` swaps them and processes it again. It
+ * must be the same kind of media (a video for a video), or the projects' clips would no longer fit.
+ */
+assetRoutes.post('/:id/replace', async (c) => {
+  const u = requireUser(c)
+  const row = await loadAsset(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const b = await body(c, z.object({ filename: z.string().min(1).max(300), mime: z.string().max(120).default('application/octet-stream'), size: z.number().int().min(0), sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional() }))
+  if (row.status === 'uploading' || row.status === 'processing') throw new HttpError(409, 'conflict', 'This clip is still being uploaded or processed. Replace it once it’s ready.')
+  const max = ctx().config.maxUploadBytes
+  if (b.size > max) throw new HttpError(413, 'quota', `File is larger than the ${Math.round(max / 1024 / 1024)} MB upload limit`)
+  const mime = uploadMime(b.mime, b.filename)
+  if (!mime) throw new HttpError(415, 'invalid', 'Only video, audio and image files can be uploaded')
+  const kind = kindFromMime(mime, b.filename)
+  if (kind !== row.kind) throw new HttpError(400, 'invalid', `Replace a ${row.kind} with another ${row.kind}: projects use this clip as one.`)
+  const key = `${assetPrefix(row.workspaceId, row.id)}/source-${Date.now().toString(36)}${extFor(b.filename, mime)}`
+  await updateAsset(row.id, { meta: { replacing: { key, mime, name: path.basename(b.filename).slice(0, 200), size: b.size, sha256: b.sha256?.toLowerCase(), startedAt: Date.now() } } })
+  const storage = ctx().storage
+  const ticket: UploadTicket = storage.presignPut
+    ? { assetId: row.id, url: await storage.presignPut(key, mime, { size: b.size }), method: 'PUT', headers: { 'content-type': mime } }
+    : { assetId: row.id, url: `/api/assets/${row.id}/replace/data`, method: 'PUT', headers: { 'content-type': mime } }
+  return c.json(ticket)
+})
+
+// Local-storage target for a replacement file.
+assetRoutes.put('/:id/replace/data', async (c) => {
+  const u = requireUser(c)
+  const row = await loadAsset(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const next = row.meta?.replacing
+  if (!next) throw new HttpError(409, 'conflict', 'Start the replacement first')
+  const raw = c.req.raw.body
+  if (!raw) throw invalid('Empty upload body')
+  try {
+    const { size } = await ctx().storage.put(next.key, Readable.fromWeb(raw as import('node:stream/web').ReadableStream), { contentType: next.mime, maxBytes: ctx().config.maxUploadBytes })
+    return c.json({ ok: true, size })
+  } catch (err) {
+    if (err instanceof UploadTooLargeError) throw new HttpError(413, 'quota', err.message)
+    throw err
+  }
+})
+
+assetRoutes.post('/:id/replace/complete', async (c) => {
+  const u = requireUser(c)
+  const row = await loadAsset(c.req.param('id'))
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const next = row.meta?.replacing
+  if (!next) throw new HttpError(409, 'conflict', 'Start the replacement first')
+  const storage = ctx().storage
+  const st = await storage.stat(next.key)
+  if (!st) throw new HttpError(409, 'conflict', 'The new file has not arrived yet — PUT it to the ticket URL first')
+  const max = ctx().config.maxUploadBytes
+  if (st.size > max) {
+    await storage.delete(next.key).catch(() => undefined)
+    throw new HttpError(413, 'quota', `This file is larger than the ${Math.round(max / 1024 / 1024)} MB upload limit`)
+  }
+  let hash = next.sha256 ?? null
+  if (storage.localPath) {
+    const actual = await hashObject(next.key)
+    if (hash && hash !== actual) throw new HttpError(400, 'invalid', 'Uploaded bytes do not match the declared sha256')
+    hash = actual
+  }
+  // the old file's processing stops; the clip then points at the new file with nothing derived from the old one
   await cancelJobsOfAsset(row.id)
-  await ctx().db.delete(assets).where(eq(assets.id, row.id))
-  for (const dir of assetDirs(row)) await ctx().storage.deletePrefix(dir).catch(() => undefined)
-  return c.json({ ok: true })
+  const old = [row.sourceKey, row.proxyKey, row.thumbKey, row.filmstripKey, row.audioKey, row.meta?.waveformFull ? waveformKey(row) : null].filter((k): k is string => !!k && k !== next.key)
+  const [saved] = await ctx()
+    .db.update(assets)
+    .set({ sourceKey: next.key, mime: next.mime, size: st.size, sha256: hash, status: 'processing', error: null, proxyKey: null, thumbKey: null, filmstripKey: null, audioKey: null, meta: {}, updatedAt: Date.now() })
+    .where(eq(assets.id, row.id))
+    .returning()
+  for (const k of old) await storage.delete(k).catch(() => undefined)
+  emitAsset(saved)
+  await enqueue('asset.process', { assetId: row.id }, { workspaceId: row.workspaceId, userId: u.id, projectId: row.projectId, message: 'Processing the new file' })
+  return c.json(assetRecord(saved))
 })
 
 /** Storage key + content type for a media variant, with the documented fallbacks. */

@@ -502,6 +502,8 @@ export interface Project {
   fillerWords?: Array<{ w: string; on: boolean }>
   /** LUTs loaded into this project (.cube files), by id. */
   luts?: Record<Id, Lut>
+  /** Library tags (A-12): a big space's projects grouped by the words people give them. */
+  tags?: string[]
   createdAt: number
   updatedAt: number
 }

@@ -10,7 +10,8 @@ export function userDto(u: typeof users.$inferSelect): User {
   return { id: u.id, email: u.email, name: u.name, avatarColor: u.avatarColor, createdAt: u.createdAt }
 }
 
-export function projectSummary(p: typeof projects.$inferSelect): ProjectSummary {
+export function projectSummary(p: typeof projects.$inferSelect, extra: { tags?: string[] | null } = {}): ProjectSummary {
+  const tags = extra.tags ?? p.doc?.tags
   return {
     id: p.id,
     workspaceId: p.workspaceId,
@@ -26,6 +27,7 @@ export function projectSummary(p: typeof projects.$inferSelect): ProjectSummary 
     createdAt: p.createdAt,
     createdBy: p.createdBy,
     version: p.version,
+    ...(Array.isArray(tags) && tags.length ? { tags } : {}),
   }
 }
 
@@ -82,6 +84,7 @@ export function assetRecord(a: typeof assets.$inferSelect, opts: { light?: boole
     origin: a.origin,
     createdAt: a.createdAt,
     etag: etagOf(assetEditable(a)),
+    ...(a.trashedAt != null ? { trashedAt: a.trashedAt } : {}),
   }
   if (!opts.light) return rec
   const { transcript, ...rest } = doc

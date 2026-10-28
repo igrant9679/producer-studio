@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 13
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -461,6 +461,16 @@ CREATE TABLE IF NOT EXISTS activity (
 CREATE INDEX IF NOT EXISTS activity_ws_idx ON activity(workspace_id, created_at, id);
 `
 
+/**
+ * v13 — the media trash (a deleted clip keeps its files until the trash is emptied or its time there runs out) and
+ * the space-wide exports list (every export of a space, newest first).
+ */
+export const DDL_V13 = `
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS trashed_at double precision;
+CREATE INDEX IF NOT EXISTS assets_ws_trashed_idx ON assets(workspace_id, trashed_at);
+CREATE INDEX IF NOT EXISTS exports_ws_idx ON exports(workspace_id, created_at, id);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -476,4 +486,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [9, DDL_V9],
   [10, DDL_V10],
   [11, DDL_V11],
+  [13, DDL_V13],
 ]
