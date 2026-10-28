@@ -1,6 +1,6 @@
 // APP-38: menus, tab strips and card pickers work from the keyboard; Library list rows open; icon links are named.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { ExportRecord, ProjectSummary, Workspace } from '@producer/core'
+import type { ProjectSummary, SpaceExport, Workspace } from '@producer/core'
 import { useState } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -42,9 +42,7 @@ describe('the Library list view', () => {
 describe('the Exports page', () => {
   it('names its open-in-a-new-tab link', async () => {
     useSession.setState({ status: 'ready', workspaces: [ws], workspaceId: ws.id })
-    vi.spyOn(api, 'projects').mockResolvedValue([project])
-    vi.spyOn(api, 'exports').mockResolvedValue([{ exportId: 'ex_1', projectId: 'p_1', name: 'Launch cut', url: '/x.mp4', resolution: '1080p', fps: 30, createdAt: 0, sizeBytes: 1, duration: 30 } as unknown as ExportRecord])
-    vi.spyOn(api, 'shares').mockResolvedValue([])
+    vi.spyOn(api, 'spaceExports').mockResolvedValue({ items: [{ exportId: 'ex_1', projectId: 'p_1', projectName: 'Launch', name: 'Launch cut', url: '/x.mp4', resolution: '1080p', fps: 30, createdAt: 0, sizeBytes: 1, duration: 30, assetId: 'as_x', shares: 0 } as SpaceExport] })
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', { status: 404 }))
     render(
       <MemoryRouter>

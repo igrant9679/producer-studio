@@ -462,6 +462,16 @@ CREATE INDEX IF NOT EXISTS activity_ws_idx ON activity(workspace_id, created_at,
 `
 
 /**
+ * v13 — the media trash (a deleted clip keeps its files until the trash is emptied or its time there runs out) and
+ * the space-wide exports list (every export of a space, newest first).
+ */
+export const DDL_V13 = `
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS trashed_at double precision;
+CREATE INDEX IF NOT EXISTS assets_ws_trashed_idx ON assets(workspace_id, trashed_at);
+CREATE INDEX IF NOT EXISTS exports_ws_idx ON exports(workspace_id, created_at, id);
+`
+
+/**
  * v15 — usage and limits that hold across replicas. Rate windows (requests per user, IP or space in a time window);
  * daily usage per space and person (AI requests and tokens per provider and model, job minutes per kind); whether a
  * space may use the server's own AI key (spaces that existed before v15 keep it, new ones start without it). An index
@@ -514,5 +524,6 @@ export const MIGRATIONS: Array<[number, string]> = [
   [9, DDL_V9],
   [10, DDL_V10],
   [11, DDL_V11],
+  [13, DDL_V13],
   [15, DDL_V15],
 ]

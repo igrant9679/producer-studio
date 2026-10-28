@@ -69,7 +69,8 @@ export function ProjectCard({ p, onOpen, menu, selectable, selected, onToggleSel
   selectable?: boolean
   selected?: boolean
   selecting?: boolean
-  onToggleSelect?: () => void
+  /** `shift`: select the range from the last one clicked (A-13). */
+  onToggleSelect?: (how?: { shift: boolean }) => void
   renaming?: boolean
   onRename?: (name: string) => void
   onRenameCancel?: () => void
@@ -80,27 +81,29 @@ export function ProjectCard({ p, onOpen, menu, selectable, selected, onToggleSel
   return (
     <div
       className={clsx('ps-pcard', selected && 'selected', selecting && 'selecting')}
-      onClick={() => (selecting && onToggleSelect ? onToggleSelect() : onOpen())}
+      // a shift- or Ctrl-click selects, even before anything is selected
+      onClick={(e) => (onToggleSelect && (selecting || e.shiftKey || e.ctrlKey || e.metaKey) ? onToggleSelect({ shift: e.shiftKey }) : onOpen())}
       role="button"
       tabIndex={0}
+      data-card={p.id}
       aria-label={`Open ${p.name}`}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return
         if (e.key === 'Enter') onOpen()
         if (e.key === ' ' && onToggleSelect) {
           e.preventDefault()
-          onToggleSelect()
+          onToggleSelect({ shift: e.shiftKey })
         }
       }}
     >
       {selectable && (
         <button
           className={clsx('ps-check', selected && 'on')}
-          aria-label={selected ? 'Deselect' : 'Select'}
-          aria-pressed={selected}
+          aria-label={`Select ${p.name}`}
+          aria-pressed={!!selected}
           onClick={(e) => {
             e.stopPropagation()
-            onToggleSelect?.()
+            onToggleSelect?.({ shift: e.shiftKey })
           }}
         >
           {selected && <Check size={14} strokeWidth={3} />}
@@ -118,6 +121,12 @@ export function ProjectCard({ p, onOpen, menu, selectable, selected, onToggleSel
             <KindPill p={p} />
             <span>{sub ?? `Edited ${relativeTime(p.updatedAt)}`}</span>
           </div>
+          {p.tags?.length ? (
+            <div className="ps-pcard-tags" aria-label="Tags">
+              {p.tags.slice(0, 3).map((t) => <span key={t} className="ps-tag">{t}</span>)}
+              {p.tags.length > 3 && <span className="ps-tag">+{p.tags.length - 3}</span>}
+            </div>
+          ) : null}
         </div>
         {menu && (
           <Popover

@@ -212,14 +212,17 @@ describe('deleting a space or a clip stops its jobs (SEC-8)', () => {
     expect(await getJob(j.id)).toBeNull()
   })
 
-  it('deleting a clip cancels its transcription, and what it wrote afterwards is swept', async () => {
+  it('deleting a clip for good cancels its transcription, and what it wrote afterwards is swept', async () => {
     const id = await clip('ready')
     const seen: { aborted?: boolean } = {}
     const late = `ws/${WS}/assets/${id}/transcript.json`
     registerHandler('ai.transcribe', lateWriter(late, seen))
     const j = await enqueue('ai.transcribe', { assetId: id }, meta())
     await runningHere(j.id)
+    // into the trash (nothing stops), then out of it for good
     expect((await client.json('DELETE', `/api/assets/${id}`)).status).toBe(200)
+    expect(seen.aborted).toBeFalsy()
+    expect((await client.json('POST', '/api/assets/trash/empty', { workspaceId: WS, ids: [id] })).status).toBe(200)
     await waitFor(async () => seen.aborted)
     expect(await getJob(j.id)).toMatchObject({ status: 'cancelled', error: 'The clip was deleted' })
     await waitFor(async () => (await ctx().storage.stat(late)) === null)

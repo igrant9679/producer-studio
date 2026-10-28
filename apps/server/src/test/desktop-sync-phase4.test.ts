@@ -123,8 +123,12 @@ describe('what was made before the first link', () => {
     const v = (await ctx().db.select().from(voiceProfiles).where(eq(voiceProfiles.id, 'vp_before01')))[0]
     expect(v.consent.attestedBy).toBe(A.userId)
 
-    // DSK-21: deleting it removes its files, which stayed under the first space's folder
+    // DSK-21: deleting it removes its files, which stayed under the first space's folder (a delete puts it in the
+    // trash; emptying the trash removes it)
     expect((await desk.json('DELETE', `/api/assets/${clip}`)).status).toBe(200)
+    expect(fs.existsSync(file)).toBe(true)
+    const trashed = (await ctx().db.select().from(assets).where(eq(assets.id, clip)))[0]
+    expect((await desk.json('POST', '/api/assets/trash/empty', { workspaceId: trashed.workspaceId, ids: [clip] })).status).toBe(200)
     expect(fs.existsSync(file)).toBe(false)
   })
 })

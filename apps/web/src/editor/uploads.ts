@@ -240,7 +240,7 @@ export async function retryAsset(id: string) {
   }
 }
 
-/** Remove a clip from the workspace library (and its stored files). */
+/** Remove a clip from the workspace library: into the media trash (its files stay until the trash is emptied). */
 export async function removeAsset(id: string) {
   try {
     await api.deleteAsset(id)

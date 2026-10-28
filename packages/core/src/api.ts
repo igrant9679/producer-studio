@@ -190,6 +190,8 @@ export interface ProjectSummary {
   createdBy: string
   /** The saved version this summary describes: the base for a rename from a list (PATCH baseVersion). */
   version?: number
+  /** Library tags (A-12; PATCH /api/projects/:id {tags}). */
+  tags?: string[]
 }
 
 export interface CreateProjectRequest {
@@ -293,6 +295,8 @@ export interface AssetRecord {
   transcriptRev?: string
   /** Base version of its name and transcript: send as If-Match with PATCH /api/assets/:id (412 if changed since). */
   etag?: string
+  /** In the media trash since (A-14; library.ts): its files stay until the trash is emptied. */
+  trashedAt?: number
 }
 
 /** Tells one transcript from another without sending it (cheap: no hashing of what can be an hour of words). */
@@ -660,6 +664,8 @@ export interface SystemInfo {
   storage?: StorageHealth
   /** What this server accepts (MAX_UPLOAD_MB), for screens that state a limit. Optional: older servers omit it. */
   limits?: { uploadBytes: number }
+  /** How long trashed media and exports are kept, in days (0 = until removed by hand). Optional: older servers omit it. */
+  retention?: { mediaTrashDays: number; exportDays: number }
 }
 
 /** Result of the server's storage self-check: write, read back and delete a small object. */

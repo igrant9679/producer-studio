@@ -272,7 +272,8 @@ export function InviteModal({ onClose }: { onClose: () => void }) {
 }
 
 const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
-  ['Anywhere', [['Search projects & media', 'Ctrl K'], ['Show this help', '?'], ['Cycle theme (system / dark / light)', 'Ctrl Shift L'], ['Close dialogs & menus', 'Esc']]],
+  ['Anywhere', [['Search everything, run a command, jump to a page', 'Ctrl K'], ['Show this help', '?'], ['Cycle theme (system / dark / light)', 'Ctrl Shift L'], ['Close dialogs & menus', 'Esc']]],
+  ['Library', [['Select a card', 'Space'], ['Select a range', 'Shift click / Shift Space'], ['Select all shown', 'Ctrl A'], ['Clear the selection', 'Esc'], ['Move between cards', '↑ ↓ ← → Home End'], ['Previous / next clip in the preview', '← / →']]],
   ['Dictation (desktop)', [['Dictate into the focused text box', 'Ctrl Shift Space'], ['Insert / cancel', 'Ctrl Shift Space / Esc'], ['Dictate into any app', 'Ctrl Alt D (Settings → Dictation)']]],
   ['Keyboard', [['Skip to the page (the first stop)', 'Tab, Enter'], ['Leave a menu without choosing', 'Tab'], ['Next / previous tab in a tab row', '← / →']]],
   ['Editor — global', [['Play / pause', 'Space'], ['Undo', 'Ctrl Z'], ['Redo', 'Ctrl Shift Z'], ['Select all', 'Ctrl A'], ['Copy / paste', 'Ctrl C / V'], ['Paste attributes (colour, effects, transform, speed, volume)', 'Ctrl Alt V'], ['Delete', 'Backspace']]],

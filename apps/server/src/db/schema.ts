@@ -105,6 +105,8 @@ export interface AssetMeta {
   alpha?: boolean
   /** A smart tool's copy of another clip (E-21): which, by which tool, and where in that file it starts (seconds). */
   derivedFrom?: { assetId: string; tool: string; offset: number; settings?: Record<string, unknown> }
+  /** A new file being uploaded to replace this one (A-14): where it goes, until replace/complete swaps it in. */
+  replacing?: { key: string; mime: string; name: string; size: number; sha256?: string; startedAt: number }
 }
 
 export const assets = pgTable('assets', {
@@ -128,6 +130,8 @@ export const assets = pgTable('assets', {
   createdBy: text('created_by').notNull(),
   createdAt: ms('created_at').notNull(),
   updatedAt: ms('updated_at').notNull(),
+  /** v13: in the media trash since (its files stay until the trash is emptied). */
+  trashedAt: ms('trashed_at'),
   changeSeq: seq(),
 })
 

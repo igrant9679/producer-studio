@@ -43,7 +43,7 @@ describe('Library media cards', () => {
     show('/library?tab=assets')
     const card = await screen.findByRole('button', { name: 'Preview Interview.mov' })
     fireEvent.click(screen.getByRole('button', { name: 'More actions for Interview.mov' }))
-    const del = screen.getByRole('menuitem', { name: /Delete/ })
+    const del = screen.getByRole('menuitem', { name: /Move to trash/ })
     fireEvent.keyDown(del, { key: 'Enter' })
     expect(screen.queryByRole('dialog')).toBeNull()
     fireEvent.click(screen.getByRole('menuitem', { name: /Rename/ }))

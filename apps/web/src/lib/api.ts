@@ -4,7 +4,16 @@ import type {
   AssetRecord,
   AssistantRequest,
   AssistantResult,
+  AssetUsage,
   BrandKitDoc,
+  CopyAssetRequest,
+  CopyProjectRequest,
+  DeleteExportResult,
+  EmptyTrashResult,
+  SearchResults,
+  SpaceExport,
+  TrashResult,
+  UploadTicket,
   CreateProjectRequest,
   DesktopSettings,
   Device,
@@ -78,6 +87,7 @@ const pathOnly = (path: string) => path.split('?')[0]
 interface ReqOpts {
   ifMatch?: string | null
   idempotencyKey?: string
+  signal?: AbortSignal
 }
 
 async function req<T>(method: string, path: string, body?: unknown, opts: ReqOpts = {}): Promise<T> {
@@ -91,6 +101,7 @@ async function req<T>(method: string, path: string, body?: unknown, opts: ReqOpt
     credentials: 'include',
     headers: Object.keys(headers).length ? headers : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    ...(opts.signal ? { signal: opts.signal } : {}),
   })
   noteStatus(path, res.status)
   const tag = res.headers?.get?.('etag')
@@ -141,7 +152,7 @@ const qs = (o: Record<string, string | number | boolean | undefined>) => {
  * A whole list from a paged route: each page asks for the next (`cursor` = the last page's `nextCursor`) until there is
  * none, so a long list never quietly stops at the first page. (A plain array, from an older server, is the whole list.)
  */
-async function listAll<T>(path: string): Promise<T[]> {
+async function listAll<T>(path: string, onPage?: (soFar: T[]) => void): Promise<T[]> {
   const out: T[] = []
   let cursor: string | undefined
   for (let pages = 0; pages < 1000; pages++) {
@@ -149,6 +160,8 @@ async function listAll<T>(path: string): Promise<T[]> {
     const page = await req<Page<T> | T[]>('GET', `${path}${sep}limit=${LIST_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)
     if (Array.isArray(page)) return page
     out.push(...page.items)
+    // a big library shows its first page while the rest arrives (A-15)
+    if (page.nextCursor) onPage?.(out.slice())
     if (!page.nextCursor || page.nextCursor === cursor) break
     cursor = page.nextCursor
   }
@@ -251,14 +264,16 @@ export const api = {
   saveBrand: (id: string, doc: BrandKitDoc) => req<BrandKitDoc>('PUT', `/workspaces/${id}/brand`, doc),
 
   // projects
-  projects: (workspaceId: string, opts: { trashed?: boolean; templates?: boolean } = {}) =>
-    listAll<ProjectSummary>(`/projects${qs({ workspaceId, trashed: opts.trashed ? 1 : 0, templates: opts.templates ? 1 : undefined })}`),
+  projects: (workspaceId: string, opts: { trashed?: boolean; templates?: boolean; onPage?: (soFar: ProjectSummary[]) => void } = {}) =>
+    listAll<ProjectSummary>(`/projects${qs({ workspaceId, trashed: opts.trashed ? 1 : 0, templates: opts.templates ? 1 : undefined })}`, opts.onPage),
   createProject: (body: CreateProjectRequest) => req<ProjectDocResponse>('POST', '/projects', body),
   project: (id: string) => req<ProjectDocResponse>('GET', `/projects/${id}`),
   saveProject: (id: string, project: Project, baseVersion: number) => req<{ version: number; updatedAt: number }>('PUT', `/projects/${id}`, { project, baseVersion }),
   /** `baseVersion`: the version the screen showed; a save or rename made since is refused (409). */
-  patchProject: (id: string, patch: { name?: string; trashed?: boolean; isTemplate?: boolean; baseVersion?: number }) => req<ProjectSummary>('PATCH', `/projects/${id}`, patch),
+  patchProject: (id: string, patch: { name?: string; trashed?: boolean; isTemplate?: boolean; tags?: string[]; baseVersion?: number }) => req<ProjectSummary>('PATCH', `/projects/${id}`, patch),
   duplicateProject: (id: string) => req<ProjectSummary>('POST', `/projects/${id}/duplicate`),
+  /** Into another space, with copies of its clips (A-13); `move` also trashes the original. */
+  copyProject: (id: string, body: CopyProjectRequest) => req<ProjectSummary & { missingMedia: number }>('POST', `/projects/${id}/copy`, body),
   deleteProject: (id: string) => req<{ ok: true }>('DELETE', `/projects/${id}`),
   // version history (P-15)
   versions: (id: string) => req<ProjectVersionSummary[]>('GET', `/projects/${id}/versions`),
@@ -271,13 +286,35 @@ export const api = {
 
   // assets
   /** Light records (no transcripts): `asset(id)` has the full one. */
-  assets: (workspaceId: string, kind?: string) => listAll<AssetRecord>(`/assets${qs({ workspaceId, kind })}`),
+  assets: (workspaceId: string, kind?: string, opts: { trashed?: boolean; onPage?: (soFar: AssetRecord[]) => void } = {}) =>
+    listAll<AssetRecord>(`/assets${qs({ workspaceId, kind, trashed: opts.trashed ? 1 : undefined })}`, opts.onPage),
   asset: (id: string) => req<AssetRecord>('GET', `/assets/${id}`),
   /** `etag`: the record's base (AssetRecord.etag); a change made elsewhere since is refused (412). */
   renameAsset: (id: string, name: string, etag?: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { name }, { ifMatch: etag }),
   /** A clip's transcript with its speaker labels changed (editors). */
   setTranscript: (id: string, transcript: Transcript, etag?: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { transcript }, { ifMatch: etag }),
-  deleteAsset: (id: string) => req<{ ok: true }>('DELETE', `/assets/${id}`),
+  /** Into the media trash (A-14): nothing is removed until the trash is emptied. */
+  deleteAsset: (id: string) => req<TrashResult>('DELETE', `/assets/${id}`),
+  restoreAsset: (id: string) => req<AssetRecord>('POST', `/assets/${id}/restore`),
+  assetUsage: (id: string) => req<AssetUsage>('GET', `/assets/${id}/usage`),
+  /** Remove trashed clips for good: all of the space's, or only `ids`. */
+  emptyTrash: (workspaceId: string, ids?: string[]) => req<EmptyTrashResult>('POST', '/assets/trash/empty', { workspaceId, ids }),
+  copyAsset: (id: string, body: CopyAssetRequest) => req<AssetRecord>('POST', `/assets/${id}/copy`, body),
+  /** A new file for a clip, kept under its id (every project using it follows). onProgress 0..1. */
+  async replaceAsset(id: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
+    const ticket = await req<UploadTicket>('POST', `/assets/${id}/replace`, { filename: file.name, mime: file.type || 'application/octet-stream', size: file.size })
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('PUT', ticket.url)
+      xhr.withCredentials = ticket.url.startsWith('/')
+      for (const [k, v] of Object.entries(ticket.headers)) xhr.setRequestHeader(k, v)
+      xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total)
+      xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(`${file.name}: ${storageRefusal(xhr)}`)))
+      xhr.onerror = () => reject(new Error(`${file.name}: the file couldn't be sent to storage`))
+      xhr.send(file)
+    })
+    return req<AssetRecord>('POST', `/assets/${id}/replace/complete`)
+  },
   /** Upload a File: ticket -> PUT bytes -> complete. onProgress 0..1. */
   async upload(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
     const ticket = await req<{ assetId: string; url: string; method: 'PUT'; headers: Record<string, string> }>('POST', '/uploads', {
@@ -350,6 +387,12 @@ export const api = {
   /** Smooth slow motion (E-17): a copy of source `from`..`to` with frames made in between, at `fps`. */
   smoothSlowMotion: (assetId: string, body: { from: number; to: number; fps: number; projectId?: string }) => reqOnce<Job<SmoothCopyResult>>('POST', `/assets/${assetId}/smooth`, body),
   exports: (projectId: string) => req<ExportRecord[]>('GET', `/exports${qs({ projectId })}`),
+  /** Every export of a space, newest first, a page at a time (A-19). */
+  spaceExports: (workspaceId: string, opts: { q?: string; format?: string; cursor?: string; limit?: number } = {}) =>
+    req<Page<SpaceExport>>('GET', `/exports${qs({ workspaceId, q: opts.q || undefined, format: opts.format || undefined, cursor: opts.cursor, limit: opts.limit })}`),
+  deleteExport: (id: string) => req<DeleteExportResult>('DELETE', `/exports/${encodeURIComponent(id)}`),
+  /** Search a space (A-11). */
+  search: (workspaceId: string, q: string, signal?: AbortSignal) => req<SearchResults>('GET', `/search${qs({ workspaceId, q })}`, undefined, { signal }),
   share: (id: string, exportId?: string) => req<ShareLink>('POST', `/projects/${id}/share`, { exportId }),
   shares: (id: string) => req<ShareLink[]>('GET', `/projects/${id}/shares`),
   unshare: (token: string) => req<{ ok: true }>('DELETE', `/share/${encodeURIComponent(token)}`),

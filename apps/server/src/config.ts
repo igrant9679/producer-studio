@@ -33,6 +33,10 @@ export interface Config {
   pgliteDir: string
   publicUrl?: string
   maxUploadBytes: number
+  /** Days trashed media is kept before it is removed for good (0 = until the trash is emptied). */
+  mediaTrashDays: number
+  /** Days exports are kept (0 = forever); one that a working share link shows is kept while the link works. */
+  exportRetentionDays: number
   workerConcurrency: number
   /** Slots only quick jobs (processing, voiceovers, transcription) may use, on top of workerConcurrency. */
   quickJobConcurrency: number
@@ -169,6 +173,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pgliteDir: env.PGLITE_DIR ?? path.join(dataDir, 'pg'),
     publicUrl: env.PUBLIC_URL || undefined,
     maxUploadBytes: envInt(env, 'MAX_UPLOAD_MB', 4096, 1) * 1024 * 1024,
+    mediaTrashDays: envInt(env, 'MEDIA_TRASH_DAYS', 30),
+    exportRetentionDays: envInt(env, 'EXPORT_RETENTION_DAYS', 0),
     workerConcurrency: envInt(env, 'WORKER_CONCURRENCY', 2, 1),
     quickJobConcurrency: envInt(env, 'QUICK_JOB_CONCURRENCY', 1),
     jobLimits: {
