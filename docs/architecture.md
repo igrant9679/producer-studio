@@ -20,6 +20,12 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   HyperFrames media element (`data-start`, `data-duration`, `data-media-start`, `data-playback-rate`,
   `data-automation` volume lanes) and one paused GSAP timeline calls `StageRenderer.render(t)` in `export` mode.
   `hyperframes render` produces the MP4. Freeze frames → ffmpeg-extracted stills; reverse → pre-reversed proxy.
+- Anything that changes the picture lives in core so both renderers get it: keyframe easing including custom
+  cubic-bezier curves (`util.cubicBezier`, fixed iterations), per-word text spans and gradient fills
+  (`text.ts`), and shrink-to-fit text, which `StageRenderer` measures in the DOM with a fixed search
+  (`text.fitScale`) and re-measures when a font finishes loading (it also asks for every face the project's text
+  uses up front, so the export's page waits for them). `glyphs.ts` lists which characters the export's fonts
+  cover, for the editor's warning.
 - Verified 23 Sept 2026: lint 0/0, 10 s 720p render in ~22 s with title, captions, push transition, audio.
 
 ## Data
