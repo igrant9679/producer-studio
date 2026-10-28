@@ -20,6 +20,7 @@ import { authRoutes } from './routes/auth'
 import { eventRoutes, jobRoutes } from './routes/jobs'
 import { preferenceRoutes } from './routes/preferences'
 import { projectRoutes } from './routes/projects'
+import { versionRoutes } from './routes/versions'
 import { exportRoutes, projectExportRoutes, shareRoutes } from './routes/share'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { templateRoutes } from './routes/templates'
@@ -109,6 +110,7 @@ export function createApp() {
   app.route('/api/workspaces', workspaceRoutes)
   app.route('/api/invites', inviteRoutes)
   app.route('/api/projects', projectExportRoutes)
+  app.route('/api/projects', versionRoutes)
   app.route('/api/projects', projectRoutes)
   app.route('/api/uploads', uploadRoutes)
   app.route('/api/assets', sceneRoutes)

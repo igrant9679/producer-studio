@@ -37,7 +37,7 @@ import { type AssetRow, createAssetFromFile, localSource, tmpDir } from '../serv
 import { processAsset } from '../media/process'
 import { log } from '../log'
 import { getLook, headlineStyle, labelStyle, lookPalette, sizeForAspect } from '../services/looks'
-import { insertProject, loadProjectRow, saveProjectDoc, withFreshIds } from '../services/projects'
+import { insertProject, loadProjectRow, saveProjectDoc, withFreshIds, type SaveOptions } from '../services/projects'
 import { getBrand } from '../routes/workspaces'
 import { requireProvider } from './provider'
 import { houseRules } from './rules'
@@ -54,12 +54,12 @@ export type Brief = NonNullable<ProducerMeta['brief']>
  * again on the newer one. Jobs that write the project (script, assembly, wizard drafts) never save over edits made
  * while they ran.
  */
-export async function saveOnLatest(id: string, next: (cur: Project) => Project, tries = 5): Promise<Awaited<ReturnType<typeof saveProjectDoc>>> {
+export async function saveOnLatest(id: string, next: (cur: Project) => Project, tries = 5, opts?: SaveOptions): Promise<Awaited<ReturnType<typeof saveProjectDoc>>> {
   for (let i = 0; ; i++) {
     const row = await loadProjectRow(id)
     const doc = next(row.doc)
     try {
-      return await saveProjectDoc(id, doc, row.version)
+      return await saveProjectDoc(id, doc, row.version, opts)
     } catch (err) {
       if (!(err instanceof HttpError && err.status === 409) || i >= tries - 1) throw err
     }
@@ -630,10 +630,15 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const notes = made.notes.length ? { notes: made.notes } : {}
   const done = made.notes.length ? `Assembled · ${made.notes.length} scene${made.notes.length === 1 ? '' : 's'} used animated text instead` : 'Assembled'
   try {
-    const saved = await saveOnLatest(row.id, (cur) => {
-      if (timelineFingerprint(cur) !== base) throw new EditedMeanwhile()
-      return build(cur)
-    })
+    const saved = await saveOnLatest(
+      row.id,
+      (cur) => {
+        if (timelineFingerprint(cur) !== base) throw new EditedMeanwhile()
+        return build(cur)
+      },
+      5,
+      { userId: jc.job.userId, before: 'before-ai', note: 'Producer AI assembly' },
+    )
     jc.progress(1, done)
     return { version: saved.version, ...notes }
   } catch (err) {

@@ -209,6 +209,36 @@ export interface ProjectDocResponse {
   version: number
 }
 
+// ---- version history (P-15) ----
+// GET  /api/projects/:id/versions                  -> ProjectVersionSummary[] (newest first; viewers)
+// GET  /api/projects/:id/versions/:vid             -> ProjectVersionResponse (viewers)
+// GET  /api/projects/:id/versions/at/:version      -> ProjectVersionResponse (the version holding that project version)
+// POST /api/projects/:id/versions {name}           -> ProjectVersionSummary (name what's saved now; editors)
+// PATCH /api/projects/:id/versions/:vid {name}     -> ProjectVersionSummary (name or unname one; editors)
+// POST /api/projects/:id/versions/:vid/restore {baseVersion?} -> { version, updatedAt } (a new save; editors)
+export type ProjectVersionLabel = 'autosave' | 'named' | 'before-restore' | 'before-ai'
+
+export interface ProjectVersionSummary {
+  id: string
+  /** The project version this is a copy of. */
+  version: number
+  label: ProjectVersionLabel
+  name?: string
+  /** What made it ("Restored from …", "Producer AI assembly"). */
+  note?: string
+  sizeBytes: number
+  createdAt: number
+  createdBy?: string
+  authorName?: string
+  /** It is what's saved now. */
+  current?: true
+}
+
+export interface ProjectVersionResponse {
+  summary: ProjectVersionSummary
+  project: Project
+}
+
 export interface SaveProjectRequest {
   project: Project
   baseVersion: number

@@ -255,4 +255,40 @@ export const userPreferences = pgTable('user_preferences', {
   updatedAt: ms('updated_at').notNull(),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences }
+/** v10: saved versions of a project (services/versions.ts). Not synced. */
+export const projectVersions = pgTable('project_versions', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull(),
+  workspaceId: text('workspace_id').notNull(),
+  version: integer('version').notNull(),
+  doc: jsonb('doc').$type<Project>().notNull(),
+  /** autosave | named | before-restore | before-ai */
+  label: text('label').notNull(),
+  /** What the person called it. */
+  name: text('name'),
+  /** What made it, in words ("Restored from 3 May, 14:02", "Producer AI assembly"). */
+  note: text('note'),
+  sizeBytes: integer('size_bytes').notNull(),
+  createdBy: text('created_by'),
+  createdAt: ms('created_at').notNull(),
+})
+
+/** v10: answers to POSTs sent with an Idempotency-Key (security/idempotency.ts), kept for a day. Not synced. */
+export const idempotencyKeys = pgTable(
+  'idempotency_keys',
+  {
+    userId: text('user_id').notNull(),
+    key: text('key').notNull(),
+    method: text('method').notNull(),
+    path: text('path').notNull(),
+    bodyHash: text('body_hash').notNull(),
+    /** null while the first request is still running. */
+    status: integer('status'),
+    response: text('response'),
+    contentType: text('content_type'),
+    createdAt: ms('created_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.key] })],
+)
+
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys }

@@ -10,6 +10,7 @@ import { projectSummary } from '../dto'
 import { HttpError, body, invalid, notFound, requireRole } from '../http'
 import { getLook, starterProject } from '../services/looks'
 import { hydrateAssets, insertProject, loadProjectRow, saveProjectDoc, validateProject, withFreshIds } from '../services/projects'
+import { recordVersion } from '../services/versions'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 import { getBrand } from './workspaces'
 
@@ -132,7 +133,7 @@ projectRoutes.put('/:id', async (c) => {
   // Producer AI's draft and assembly record are written by the wizard and its jobs; an editor's copy of them can be
   // older (a draft saved while the editor was open, then "Keep mine"), so a save keeps the stored ones
   if (row.doc.ai) doc.ai = row.doc.ai
-  const r = await saveProjectDoc(id, doc, b.baseVersion)
+  const r = await saveProjectDoc(id, doc, b.baseVersion, { userId: u.id })
   return c.json({ version: r.version, updatedAt: r.updatedAt })
 })
 
@@ -153,6 +154,7 @@ projectRoutes.patch('/:id', async (c) => {
   if (b.trashed !== undefined) set.trashedAt = b.trashed ? now : null
   if (b.isTemplate !== undefined) set.isTemplate = b.isTemplate
   const [updated] = await ctx().db.update(projects).set(set).where(eq(projects.id, id)).returning()
+  if (b.name !== undefined) await recordVersion(updated, { userId: u.id, note: 'Renamed' })
   // trash, restore and template changes keep the version but still change what other screens list
   announce(updated)
   return c.json({ ...projectSummary(updated), version: updated.version })

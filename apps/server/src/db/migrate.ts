@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -380,6 +380,41 @@ export const DDL_V9 = `
 ALTER TABLE voice_profiles ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 `
 
+/**
+ * v10 — project version history (the last saves of every project, thinned with age; services/versions.ts) and
+ * idempotency keys for POSTs (a retried request answers with the first one's response instead of running again).
+ * Neither is synced to desktops.
+ */
+export const DDL_V10 = `
+CREATE TABLE IF NOT EXISTS project_versions (
+  id text PRIMARY KEY,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  workspace_id text NOT NULL,
+  version integer NOT NULL,
+  doc jsonb NOT NULL,
+  label text NOT NULL,
+  name text,
+  note text,
+  size_bytes integer NOT NULL,
+  created_by text,
+  created_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_versions_project_idx ON project_versions(project_id, created_at);
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  user_id text NOT NULL,
+  key text NOT NULL,
+  method text NOT NULL,
+  path text NOT NULL,
+  body_hash text NOT NULL,
+  status integer,
+  response text,
+  content_type text,
+  created_at double precision NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+CREATE INDEX IF NOT EXISTS idempotency_keys_created_idx ON idempotency_keys(created_at);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -393,4 +428,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [7, DDL_V7],
   [8, DDL_V8],
   [9, DDL_V9],
+  [10, DDL_V10],
 ]
