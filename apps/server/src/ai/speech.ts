@@ -7,7 +7,8 @@ import type { JobContext } from '../jobs/worker'
 import { processAsset } from '../media/process'
 import { type AssetRow, createAssetFromFile, loadAsset, localSource, mergeAssetMeta, tmpDir } from '../services/assets'
 import { silentTranscript, transcribeFile } from './whisper'
-import { tts, validVoice } from './tts'
+import { validVoice } from './tts'
+import { speakScript } from './voiceScript'
 import { synthesizeProfileToAsset } from '../services/voice'
 
 type Step = Pick<JobContext, 'signal' | 'progress' | 'check'>
@@ -68,7 +69,8 @@ export async function synthesizeToAsset(input: TtsInput, jc: Step): Promise<{ as
     jc.progress(0.05, 'Generating voice')
     const out = path.join(work, 'voice.wav')
     // a fresh server may still be fetching the voice model: the job shows its download
-    const r = await tts.synthesize(input.text, out, { voice, speed, signal: jc.signal, progress: (f, m) => jc.progress(0.05 + 0.6 * f, m) })
+    // the space's pronunciations, pauses and emphasis (A-20); the asset keeps the script as written
+    const r = await speakScript(input.text, out, { voice, speed, workspaceId: input.workspaceId, signal: jc.signal, progress: (f, m) => jc.progress(0.05 + 0.6 * f, m) })
     jc.check()
     const name = input.name || `Voiceover · ${input.text.replace(/\s+/g, ' ').slice(0, 40)}${input.text.length > 40 ? '…' : ''}`
     const created = await createAssetFromFile({

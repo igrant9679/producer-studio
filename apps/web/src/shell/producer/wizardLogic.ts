@@ -47,6 +47,8 @@ export interface WizardState {
     interrupted?: boolean
     /** Assembly is waiting for the person: the timeline was edited since it was assembled (message says so). */
     confirm?: 'edited'
+    /** The scenes that assembly was to narrate again (kept for the person's answer). */
+    renarrate?: string[]
   }
   /** Brief and script edits saved to the project (ai.brief, ai.script) as they're typed. */
   draft?: { state: 'pending' | 'saving' | 'saved' | 'error'; error?: string }

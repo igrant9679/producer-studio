@@ -59,7 +59,7 @@ export function hitPath(h: SearchHit): string {
     case 'project':
       return h.project ? projectPath(h.project) : `/edit/${h.id}`
     case 'template':
-      return `/templates?template=${encodeURIComponent(h.id)}`
+      return `/templates?t=${encodeURIComponent(h.id)}`
     case 'media':
       return `/library?tab=assets&preview=${encodeURIComponent(h.id)}${h.at ? `&at=${Math.floor(h.at * 10) / 10}` : ''}`
     case 'voice':

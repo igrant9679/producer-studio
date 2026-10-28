@@ -546,6 +546,8 @@ export interface ScriptScene {
   /** What fills the screen (videos made from an idea); absent = footage windows as before. */
   visual?: SceneVisual
   voice?: { assetId: Id; duration: number }
+  /** This scene narrated in another voice or at another speed than the brief's (re-narrating one scene, A-7). */
+  narrator?: { voice?: string; speed?: number }
 }
 
 export interface ProducerMeta {
@@ -566,6 +568,8 @@ export interface ProducerMeta {
     lengthSec?: number
     /** Scene visuals the writer may use (source = idea); AI images and clips also need a key that can make them. */
     visualKinds?: VisualKind[]
+    /** The space's brand kit the video uses (absent: the default kit). */
+    brandKitId?: string
   }
   script?: {
     scenes: ScriptScene[]

@@ -27,6 +27,7 @@ import type {
   Workspace,
 } from '@producer/core'
 import { INVITE_TTL_MS, VOICES, createProject as coreCreateProject, normalizeTags, searchSnippet, searchWords, type SearchHit } from '@producer/core'
+import { registerR3cMocks } from './mockR3c'
 
 type Json = Record<string, unknown>
 
@@ -435,6 +436,8 @@ on('POST', '/api/workspaces', async (_m, _q, b) => {
   const u = currentUser() ?? demoUser
   members[w.id] = [{ userId: u.id, name: u.name, email: u.email, role: 'owner' }]
   brands[w.id] = { name: w.name, colors: ['#ff5a5f', '#35e0ff'], fonts: { headline: 'Space Grotesk', body: 'Inter' } }
+  // like the server: a new space starts with a sample project (A-6)
+  projects.unshift(mkProject({ name: 'Sample project', workspaceId: w.id, width: 1920, height: 1080, duration: 11, updatedAt: Date.now(), createdAt: Date.now() }))
   return json(w)
 })
 on('PATCH', '/api/workspaces/([^/]+)', async (m, _q, b) => {
@@ -553,6 +556,35 @@ on('PUT', '/api/workspaces/([^/]+)/brand', async (m, _q, b) => {
   if (denied) return denied
   brands[m[1]] = b as unknown as BrandKitDoc
   return json(brands[m[1]])
+})
+// brand kits, templates, onboarding, Voice Studio and Producer additions (R3-C)
+registerR3cMocks({
+  on,
+  json,
+  fail,
+  delay,
+  editorOnly,
+  memberOf: (ws) => workspaces.some((w) => w.id === ws),
+  brands,
+  templates,
+  addTemplate: (ws, name, width, height) => {
+    const p = mkProject({ name, workspaceId: ws, width, height, isTemplate: true, duration: 11, updatedAt: Date.now(), createdAt: Date.now() })
+    projects.unshift(p)
+    return { id: p.id, name, category: 'Team', aspect: width === height ? '1:1' : width > height ? '16:9' : '9:16', duration: p.duration, builtIn: false, clipCount: 0, textCount: 4 }
+  },
+  spaceFacts: (ws) => ({
+    uploads: assets.filter((a) => a.workspaceId === ws && a.origin === 'upload').length,
+    members: workspaces.find((w) => w.id === ws)?.memberCount ?? 1,
+    producerVideos: projects.filter((p) => p.workspaceId === ws && p.kind === 'producer' && !p.trashed).length,
+    sampleProjectId: projects.find((p) => p.workspaceId === ws && p.name === 'Sample project' && !p.trashed)?.id,
+  }),
+  scriptOf: (id) => {
+    const p = projects.find((x) => x.id === id)
+    if (!p) return undefined
+    const scenes = p.doc?.ai?.script?.scenes
+    if (!scenes?.length) return null
+    return { versionId: `pv_${p.id}_${p.version}`, version: p.version, createdAt: p.updatedAt, label: 'autosave', ...(p.doc?.ai?.brief ? { brief: p.doc.ai.brief } : {}), scenes, words: scenes.reduce((t, s) => t + s.narration.split(/\s+/).filter(Boolean).length, 0) }
+  },
 })
 
 on('GET', '/api/projects', async (_m, q) => {

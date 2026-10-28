@@ -155,6 +155,8 @@ export interface BrandKitDoc {
   /** Default caption preset id, default voice id. */
   captionPreset?: string
   voice?: string
+  /** Families among `fonts` that are fonts uploaded to the space (brand.ts BrandFont), set by the server on save. */
+  customFonts?: string[]
 }
 
 // ---- lists ----
@@ -202,6 +204,9 @@ export interface CreateProjectRequest {
   fps?: number
   /** Start from a template project (built-in id `tpl:<look>` or a workspace template project id). */
   templateId?: string
+  /** A built-in look in another aspect than its own ('16:9' | '9:16' | '1:1'), with this brand kit (A-21/A-22). */
+  aspect?: string
+  brandKitId?: string
   kind?: 'edit' | 'producer'
   /** Client-generated project id (desktop-created projects keep their id in the cloud). */
   id?: string
@@ -469,6 +474,23 @@ export interface ProduceAssembleRequest {
   replace?: boolean
   /** Assemble into a copy of the project and leave this one as it is (the job's projectId is the copy). */
   intoCopy?: boolean
+  /** Scene ids to narrate again with a fresh take, even where a voice for the same words exists (A-7). */
+  renarrate?: string[]
+}
+
+// GET /api/ai/produce/:projectId/script-versions -> ScriptVersion[]: the brief and script as the project's saved
+// versions hold them (version history, R2), newest first, one per change of the script (A-7).
+export interface ScriptVersion {
+  versionId: string
+  version: number
+  createdAt: number
+  authorName?: string | null
+  /** A named version's name. */
+  name?: string | null
+  label: string
+  brief?: NonNullable<ProducerMeta['brief']>
+  scenes: ScriptScene[]
+  words: number
 }
 
 // PUT /api/ai/produce/draft -> { version }: the wizard's brief and script edits, saved to the project's `ai` as you type

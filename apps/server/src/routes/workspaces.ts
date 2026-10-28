@@ -17,6 +17,9 @@ export async function createWorkspace(userId: string, name: string, personal = f
   const db = ctx().db
   await db.insert(workspaces).values({ id, name, personal, createdBy: userId, createdAt: now })
   await db.insert(memberships).values({ workspaceId: id, userId, role: 'owner', createdAt: now })
+  // a new space starts with a sample project to open (A-6)
+  const { addSampleProject } = await import('../services/onboarding')
+  await addSampleProject(id, userId)
   return { id, name, role: 'owner', personal, memberCount: 1, etag: etagOf({ name }) }
 }
 
@@ -90,14 +93,30 @@ export async function getBrand(workspaceId: string): Promise<BrandKitDoc> {
 }
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{3,8}$/, 'must be a hex colour')
-const BrandSchema = z.object({
+export const BrandSchema = z.object({
   name: z.string().trim().min(1).max(80),
   colors: z.array(hex).max(12),
   fonts: z.object({ headline: z.string().min(1).max(60), body: z.string().min(1).max(60) }),
   logoAssetId: z.string().max(80).optional(),
   captionPreset: z.string().max(40).optional(),
   voice: z.string().max(80).optional(),
+  customFonts: z.array(z.string().max(60)).max(4).optional(),
 })
+
+/** Save the space's default kit (fonts: bundled or uploaded to the space, see services/brand.ts). */
+export async function saveDefaultKit(workspaceId: string, raw: BrandKitDoc): Promise<BrandKitDoc> {
+  const { checkKitDoc } = await import('../services/brand')
+  const doc = await checkKitDoc(workspaceId, raw)
+  const now = Date.now()
+  await ctx()
+    .db.insert(brandKits)
+    .values({ workspaceId, doc, updatedAt: now })
+    .onConflictDoUpdate({ target: brandKits.workspaceId, set: { doc, updatedAt: now } })
+  // open Brand kit pages and editors reload it
+  const ev = { id: workspaceId, deleted: false, brand: true }
+  ctx().bus.publish(workspaceId, 'workspace', ev, { id: workspaceId, inline: ev })
+  return doc
+}
 
 export const workspaceRoutes = new Hono<AppEnv>()
 
@@ -264,18 +283,9 @@ workspaceRoutes.put('/:id/brand', async (c) => {
   const u = requireUser(c)
   const id = c.req.param('id')
   await requireRole(u.id, id, 'editor')
-  const doc = (await body(c, BrandSchema)) as BrandKitDoc
+  const raw = (await body(c, BrandSchema)) as BrandKitDoc
   checkIfMatch(c, await getBrand(id), 'The brand kit')
-  const known = new Set<string>(FONTS)
-  for (const f of [doc.fonts.headline, doc.fonts.body]) if (!known.has(f)) throw new HttpError(400, 'invalid', `Unknown font "${f}". Available: ${FONTS.join(', ')}`)
-  const now = Date.now()
-  await ctx()
-    .db.insert(brandKits)
-    .values({ workspaceId: id, doc, updatedAt: now })
-    .onConflictDoUpdate({ target: brandKits.workspaceId, set: { doc, updatedAt: now } })
-  // open Brand kit pages and editors reload it
-  const ev = { id, deleted: false, brand: true }
-  ctx().bus.publish(id, 'workspace', ev, { id, inline: ev })
+  const doc = await saveDefaultKit(id, raw)
   setEtag(c, doc)
   return c.json(doc)
 })

@@ -76,6 +76,8 @@ const CreateSchema = z.object({
   height: z.number().int().min(16).max(8192).optional(),
   fps: z.number().min(1).max(120).optional(),
   templateId: z.string().max(100).optional(),
+  aspect: z.enum(['16:9', '9:16', '1:1']).optional(),
+  brandKitId: z.string().max(80).optional(),
   kind: z.enum(['edit', 'producer']).optional(),
 })
 
@@ -100,7 +102,9 @@ projectRoutes.post('/', async (c) => {
   } else if (b.templateId?.startsWith('tpl:')) {
     const look = getLook(b.templateId.slice(4))
     if (look.id !== b.templateId.slice(4)) throw notFound('Template not found')
-    doc = starterProject(look, { name: b.name || look.name, brand: await getBrand(b.workspaceId) })
+    // a look in the aspect picked, with the brand kit picked (A-22, A-21)
+    const { getBrandKit } = await import('../services/brand')
+    doc = starterProject(look, { name: b.name || look.name, brand: await getBrandKit(b.workspaceId, b.brandKitId), aspect: b.aspect })
     doc.id = id
     if (b.fps) doc.fps = b.fps
   } else if (b.templateId) {

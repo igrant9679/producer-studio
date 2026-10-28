@@ -1,9 +1,10 @@
 // Brand kit: a kit that fails to load is never replaced by defaults with Save enabled (APP-2); unsaved edits stay with
 // their space, bad hex colours are said, and closing the tab asks first (APP-27).
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { BrandKitDoc, Workspace } from '@producer/core'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { BrandKitDoc, BrandKitSummary, Workspace } from '@producer/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, HttpError } from '../../lib/api'
+import { brandApi } from '../../lib/brandApi'
 import { useSession } from '../../lib/session'
 import BrandPage from '../pages/BrandPage'
 
@@ -15,6 +16,9 @@ const kit: BrandKitDoc = { name: 'Northwind', colors: ['#123456', '#abcdef'], fo
 beforeEach(() => {
   useSession.setState({ status: 'ready', workspaces: [team], workspaceId: team.id })
   vi.spyOn(api, 'voices').mockResolvedValue([])
+  // a server with one kit, unless a test lists more
+  vi.spyOn(brandApi, 'kits').mockRejectedValue(new HttpError(404, { error: 'Not found' }))
+  vi.spyOn(brandApi, 'fonts').mockResolvedValue([])
 })
 afterEach(() => {
   cleanup()
@@ -86,6 +90,64 @@ describe('<BrandPage>', () => {
     window.dispatchEvent(dirty)
     expect(dirty.defaultPrevented).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: /Discard/ }))
+  })
+
+  it('keeps several kits: switching with unsaved edits asks to save or discard first, and an extra kit saves with its base (A-21)', async () => {
+    const extra: BrandKitSummary = { id: 'bk_retail', default: false, doc: { ...kit, name: 'Northwind Retail' }, updatedAt: 1, etag: '"e1"' }
+    vi.spyOn(api, 'brand').mockResolvedValue(kit)
+    vi.spyOn(brandApi, 'kits').mockResolvedValue({ items: [{ id: 'default', default: true, doc: kit, updatedAt: 1 }, extra] })
+    vi.spyOn(brandApi, 'fonts').mockResolvedValue([])
+    const saveKit = vi.spyOn(brandApi, 'saveKit').mockImplementation(async (_w, id, d) => ({ ...extra, id, doc: d, etag: '"e2"' }))
+    render(<BrandPage />)
+    const picker = (await screen.findByLabelText('Kit')) as HTMLSelectElement
+    expect([...picker.options].map((o) => o.textContent)).toEqual(['Northwind (default)', 'Northwind Retail'])
+    fireEvent.change(screen.getByLabelText('Brand name'), { target: { value: 'Northwind Labs' } })
+    fireEvent.change(picker, { target: { value: 'bk_retail' } })
+    const ask = await screen.findByRole('dialog', { name: /Save your changes first/ })
+    expect(ask.textContent).toMatch(/unsaved changes to “Northwind”/)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect((screen.getByLabelText('Brand name') as HTMLInputElement).value).toBe('Northwind Labs')
+    fireEvent.change(screen.getByLabelText('Kit'), { target: { value: 'bk_retail' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard changes' }))
+    await waitFor(() => expect((screen.getByLabelText('Brand name') as HTMLInputElement).value).toBe('Northwind Retail'))
+    expect(screen.getByRole('button', { name: /Make default/ })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Brand name'), { target: { value: 'Retail 2027' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(saveKit).toHaveBeenCalledWith('ws_team', 'bk_retail', expect.objectContaining({ name: 'Retail 2027' }), '"e1"'))
+    // the default's edits were discarded, never saved
+    expect(screen.queryByText(/unsaved changes from earlier/)).toBeNull()
+  })
+
+  it('checks contrast between the kit’s colours, and pulls colours from the logo (A-21)', async () => {
+    vi.spyOn(api, 'brand').mockResolvedValue({ ...kit, colors: ['#ffffff', '#000000', '#777777'] })
+    const palette = vi.spyOn(brandApi, 'palette').mockResolvedValue({ colors: ['#ff5a5f', '#0b1830'] })
+    render(<BrandPage />)
+    const list = await screen.findByRole('list', { name: /Contrast of text colours/ })
+    const rows = within(list).getAllByRole('listitem').map((r) => r.getAttribute('aria-label'))
+    expect(rows[0]).toMatch(/^#ffffff on #000000: 21 to 1, AAA/)
+    expect(rows.some((r) => /#777777 on #ffffff: 4\.48 to 1, AA large \(headlines and captions only\)/.test(r ?? ''))).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /Colours from the logo/ }))
+    const found = await screen.findByRole('group', { name: 'Colours found in the logo' })
+    expect(palette).toHaveBeenCalledWith('ws_team', 'as_logo')
+    expect(within(found).getAllByRole('img').map((i) => i.getAttribute('aria-label'))).toEqual(['#ff5a5f', '#0b1830'])
+    fireEvent.click(within(found).getByRole('button', { name: 'Use these colours' }))
+    expect((screen.getByLabelText('Hex for colour 1') as HTMLInputElement).value).toBe('#ff5a5f')
+    expect(screen.queryByLabelText('Hex for colour 3')).toBeNull()
+    expect(screen.getByRole('button', { name: /Save changes/ })).toBeTruthy()
+  })
+
+  it('offers fonts uploaded to the space for headline and body, and a viewer can’t upload or make kits (A-21)', async () => {
+    useSession.setState({ workspaces: [{ ...team, role: 'viewer' }] })
+    vi.spyOn(api, 'brand').mockResolvedValue(kit)
+    vi.spyOn(brandApi, 'kits').mockResolvedValue({ items: [{ id: 'default', default: true, doc: kit, updatedAt: 1 }] })
+    vi.spyOn(brandApi, 'fonts').mockResolvedValue([{ id: 'bf_1', family: 'Acme Sans', format: 'woff2', weight: 700, italic: false, sizeBytes: 10, url: '/api/x' }])
+    render(<BrandPage />)
+    await screen.findByRole('list', { name: 'Uploaded fonts' })
+    const headline = screen.getByLabelText('Headline font') as HTMLSelectElement
+    expect(within(headline).getByRole('group', { name: 'Uploaded to this space' }).textContent).toBe('Acme Sans')
+    expect((screen.getByRole('button', { name: /Upload a font/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /New kit/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Remove the font file Acme Sans 700' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('shows the kit the server returns (its defaults when the space has none) as saved', async () => {

@@ -97,6 +97,39 @@ describe('the dev mock API', () => {
     expect((await call('GET', '/api/search?workspaceId=ws_personal&q=launch')).body.hits.map((h: { title: string }) => h.title)).toEqual(expect.arrayContaining(['Spring launch — product tour']))
   })
 
+  it('keeps several brand kits with the server’s rules (A-21)', async () => {
+    expect((await call('POST', '/api/workspaces/ws_client/brand-kits', {})).status).toBe(403)
+    expect((await call('GET', '/api/workspaces/ws_client/brand-kits')).status).toBe(200)
+    const made = await call('POST', '/api/workspaces/ws_team/brand-kits', {})
+    expect(made.body).toMatchObject({ default: false, doc: { name: 'Northwind copy' } })
+    expect((await call('DELETE', '/api/workspaces/ws_team/brand-kits/default')).status).toBe(409)
+    const list = (await call('POST', `/api/workspaces/ws_team/brand-kits/${made.body.id}/default`)).body.items
+    expect(list[0]).toMatchObject({ default: true, doc: { name: 'Northwind copy' } })
+    expect((await call('POST', '/api/workspaces/ws_team/brand/palette', { assetId: 'as_logo' })).body.colors.length).toBeGreaterThan(1)
+    expect((await fetch('/api/workspaces/ws_client/brand/fonts?family=Acme', { method: 'POST', body: 'x' })).status).toBe(403)
+  })
+
+  it('has the onboarding checklist and templates from a kit (A-6, A-22)', async () => {
+    const w = (await call('POST', '/api/workspaces', { name: 'Fresh' })).body
+    const s = (await call('GET', `/api/workspaces/${w.id}/onboarding`)).body
+    expect(s).toMatchObject({ dismissed: false, sampleProjectId: expect.any(String), steps: { upload: false, invite: false } })
+    expect((await call('PUT', `/api/workspaces/${w.id}/onboarding`, { dismissed: true })).body.dismissed).toBe(true)
+    expect((await call('GET', '/api/templates/tpl:studio/doc?aspect=9:16')).body).toMatchObject({ width: 1080, height: 1920 })
+    expect((await call('POST', '/api/templates/from-brand', { workspaceId: 'ws_client', lookId: 'studio' })).status).toBe(403)
+    const made = await call('POST', '/api/templates/from-brand', { workspaceId: 'ws_team', lookId: 'studio', aspect: '1:1' })
+    expect(made.body).toMatchObject({ builtIn: false, aspect: '1:1' })
+  })
+
+  it('has the Voice Studio settings and the script versions (A-20, A-7)', async () => {
+    expect((await call('PUT', '/api/workspaces/ws_client/voice-settings', { pronunciations: [] })).status).toBe(403)
+    expect((await call('PUT', '/api/workspaces/ws_team/voice-settings', { pronunciations: [{ word: 'SQL', say: 'sequel' }] })).body.pronunciations).toHaveLength(1)
+    expect((await call('PUT', '/api/workspaces/ws_client/voice-studio', { favourites: ['af_heart'] })).body.favourites).toEqual(['af_heart'])
+    const wav = await fetch('/api/workspaces/ws_team/voice-preview', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'af_heart' }), headers: { 'content-type': 'application/json' } })
+    expect(wav.headers.get('content-type')).toBe('audio/wav')
+    expect((await call('POST', '/api/workspaces/ws_client/voice-preview', { text: 'Hi', voice: 'af_heart' })).status).toBe(403)
+    expect((await call('GET', '/api/ai/produce/p_nope/script-versions')).status).toBe(404)
+  })
+
   it('lets only owners invite', async () => {
     expect((await call('POST', '/api/workspaces/ws_team/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(403)
     expect((await call('POST', '/api/workspaces/ws_personal/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(200)

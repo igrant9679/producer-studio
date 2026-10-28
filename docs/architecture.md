@@ -65,7 +65,8 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   status, progress, message, input jsonb, result jsonb, error, project_id, workspace_id, user_id,
   timestamps, locked_by, locked_at)`, `exports`, `share_links(token, project_id, export_id, expires_at,
   password_hash, allow_download, allow_comments, views, last_viewed_at)`, `brand_kits(workspace_id, doc jsonb)`,
-  `project_versions` (saved versions, v10), `idempotency_keys` (v10), `comments`, `activity` (v11, see Collaboration).
+  `project_versions` (saved versions, v10), `idempotency_keys` (v10), `comments`, `activity` (v11, see Collaboration),
+  `extra_brand_kits`, `brand_fonts`, `space_settings`, `member_settings` (v14, see Brand kits, voice and onboarding).
 - **Object storage**: S3-compatible (`S3_*` env; R2/Railway buckets) with presigned PUT uploads and signed GET;
   dev falls back to local disk `.data/storage` with the same interface.
 - The project document is the `Project` type from core. Asset `src` = storage key; the client resolves media via
@@ -251,6 +252,40 @@ and comment.
   previews stay still, and `lib/motion.ts` holds any `<video autoPlay>` until Play.
 - Below 760 px the editor's side panels are sheets (`editor/phone.ts`, the phone block in editor.css).
 - `editor/__tests__/audit.test.tsx` and `shell/__tests__/audit.test.tsx` fail on any control without a name.
+
+## Brand kits, voice and onboarding (migration v14; contract in `packages/core/src/brand.ts`)
+- **Several kits per space** (`services/brand.ts`, `routes/brand.ts`): `brand_kits` stays the space's default kit
+  (synced to desktops, read by `GET/PUT /api/workspaces/:id/brand`); `extra_brand_kits` holds the others
+  (`/api/workspaces/:id/brand-kits[/:kitId]`, If-Match on save). "Make default" moves a kit's settings into the default
+  row and keeps the old default as another kit. Producer briefs, `POST /api/projects {templateId, brandKitId}` and
+  `POST /api/templates/from-brand` take a kit id (`getBrandKit`; a deleted kit falls back to the default).
+- **Colours from a logo** (`services/palette.ts`): a raster logo already in the space is shrunk by ffmpeg to 64×64 RGBA
+  and quantised in JS (opaque pixels binned, near bins merged, most used first); an SVG gives the colours written in
+  it. Nothing is fetched from the web.
+- **Font files** (`brand_fonts`, stored under `ws/<id>/brand-fonts/`): sniffed by content (WOFF2, WOFF, TTF, OTF,
+  ≤ 5 MB), usable as a kit's headline or body font (`customFonts` on the kit lists them, so `lookPalette` keeps them).
+  The editor registers the space's fonts with the FontFace API; the export copies the files a project uses and declares
+  them next to the bundled faces (`render/brandFonts.ts`).
+- **Onboarding** (`services/onboarding.ts`, `routes/onboarding.ts`): `GET /api/workspaces/:id/onboarding` reads the
+  Home checklist from the space's real state (an uploaded asset, a saved kit, an assembled Producer project, a second
+  member or a pending invite); `PUT {dismissed}` hides it for that person (`member_settings`). `createWorkspace` adds a
+  sample project (a look's starter) to each new cloud space and records it in `space_settings` (`SAMPLE_PROJECT=0`
+  turns this off; the test harness does).
+- **Voice scripts** (`packages/core/src/voice.ts`, `ai/voiceScript.ts`, `routes/voiceStudio.ts`): every TTS made in a
+  space (Voice Studio, Producer narration, the assistant's voiceovers) goes through `speakScript`: the space's
+  pronunciation dictionary (`space_settings.pronunciations`, whole words, longest first), then the markup —
+  `[pause]` / `[pause 2s]` become real silence and `*words*` are voiced slower and 2.5 dB louder, a part at a time,
+  joined by one ffmpeg concat. A plain script is one TTS call as before; the asset keeps the script as written, so
+  Producer's voice reuse still matches. Cloned/designed voices (VoiceStudio) get the plain words (`spokenPlain`).
+  `member_settings.voice` keeps each person's Voice Studio draft and favourite voices per space;
+  `POST /api/workspaces/:id/voice-preview` voices a line (≤ 300 chars, built-in voices) without saving it, for the
+  side-by-side comparison. Batch voiceovers from a CSV are parsed in the browser (`parseVoiceCsv`) and sent as
+  ordinary TTS jobs, one at a time.
+- **Producer AI** (`routes/producer.ts`): `GET /api/ai/produce/:projectId/script-versions` reads the brief and script out
+  of the project's saved versions (`doc->'ai'`), newest first, one per change. A scene's `narrator` (voice, speed)
+  overrides the brief's for that scene, and `renarrate: [sceneIds]` on assemble makes fresh takes of those scenes while
+  the others reuse theirs; `brief.brandKitId` picks the kit.
+- None of the v14 tables sync to desktops: a desktop sees the default kit only.
 
 ## Two products, one codebase
 

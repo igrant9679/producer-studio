@@ -28,6 +28,7 @@ import { loadLibrary, subscribeWorkspace, uploadFiles } from './uploads'
 import { isReadOnly, refuseReadOnly, startViewerMode } from './viewer'
 import { loadComments, onCommentEvent, resetComments } from './collab/comments'
 import { onPresenceEvent, startPresence } from './collab/presence'
+import { useBrandFamilies } from './brandFonts'
 
 export function EditorPage({ demo = false }: { demo?: boolean }) {
   const params = useParams()
@@ -35,6 +36,8 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   const loaded = useEditor((s) => s.loaded && s.projectId === id)
   const name = useEditor((s) => s.project.name)
   const workspaceId = useEditor((s) => s.workspaceId)
+  // the space's uploaded brand fonts, so text in them previews as it exports (A-21)
+  useBrandFamilies()
   const [error, setError] = useState<{ msg: string; code?: number } | null>(null)
 
   useEffect(() => {

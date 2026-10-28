@@ -19,6 +19,7 @@ import { ffmpeg, run } from '../media/proc'
 import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAsset } from '../services/assets'
 import { recordActivity } from '../services/activity'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
+import { brandFontFaces } from './brandFonts'
 import { buildFontFaces, fontsUsed } from './fonts'
 import { normalizeLoudness } from './loudness'
 import { makePitchShiftCopies } from './pitch'
@@ -205,6 +206,9 @@ export async function prepareRenderDir(
   files.push('runtime.js', 'gsap.min.js')
   const fonts = buildFontFaces(fontsUsed(project), dir)
   files.push(...fonts.files)
+  // fonts uploaded to the space for a brand kit (A-21)
+  const brand = await brandFontFaces(workspaceId, fontsUsed(project), dir)
+  files.push(...brand.files)
   const html = compileToHyperFrames(project, {
     assetPath: (id) => rel.get(id) ?? '',
     freezeFramePath: (id) => freeze.get(id),
@@ -213,7 +217,7 @@ export async function prepareRenderDir(
     pitchShiftPath: (id) => pitch.get(id),
     runtimePath: 'runtime.js',
     gsapPath: 'gsap.min.js',
-    fontFaceCss: fonts.css,
+    fontFaceCss: [fonts.css, brand.css].filter(Boolean).join('\n'),
     outputWidth: opts.output?.w,
     outputHeight: opts.output?.h,
     title: project.name,

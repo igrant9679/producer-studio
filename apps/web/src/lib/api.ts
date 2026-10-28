@@ -90,7 +90,7 @@ interface ReqOpts {
   signal?: AbortSignal
 }
 
-async function req<T>(method: string, path: string, body?: unknown, opts: ReqOpts = {}): Promise<T> {
+export async function req<T>(method: string, path: string, body?: unknown, opts: ReqOpts = {}): Promise<T> {
   const headers: Record<string, string> = {}
   if (body !== undefined) headers['content-type'] = 'application/json'
   const ifMatch = opts.ifMatch === null ? undefined : opts.ifMatch ?? (method === 'PUT' || method === 'PATCH' ? etags.get(pathOnly(path)) : undefined)
@@ -128,7 +128,7 @@ export const IDEMPOTENT_RETRY_MS = [1000, 3000]
  * answer is lost (network down, the proxy gave up) sent again with the same key, so the server answers with the job
  * it already made instead of making a second one.
  */
-async function reqOnce<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function reqOnce<T>(method: string, path: string, body?: unknown): Promise<T> {
   const key = newKey()
   for (let attempt = 0; ; attempt++) {
     try {

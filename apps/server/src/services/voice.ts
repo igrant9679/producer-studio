@@ -90,7 +90,9 @@ export async function synthesizeProfileToAsset(input: ProfileTtsInput, jc: Step,
   try {
     jc.progress(0.05, `Generating with ${prof.name}`)
     const out = path.join(work, 'voice.wav')
-    const r = await generateToFile(prof.vsProfileId, out, { text: input.text, speed: input.speed, language: prof.language ?? undefined, engine: prof.engine || undefined, signal: jc.signal })
+    // VoiceStudio can't pause or stress on cue: the dictionary applied, the markup said plainly (A-20)
+    const { spokenPlain } = await import('../ai/voiceScript')
+    const r = await generateToFile(prof.vsProfileId, out, { text: await spokenPlain(input.text, input.workspaceId), speed: input.speed, language: prof.language ?? undefined, engine: prof.engine || undefined, signal: jc.signal })
     jc.check()
     const created = await createAssetFromFile({
       ...(assetId ? { id: assetId } : {}),

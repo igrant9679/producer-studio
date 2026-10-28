@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { projectPath, useCreateAndOpen, type EditorTab } from '../actions'
+import { OnboardingChecklist } from '../components/Onboarding'
 import { ProjectCard } from '../components/ProjectCard'
 import { AspectPickerModal } from '../modals'
 import { setProducerHandoff } from '../producer/handoff'
@@ -133,6 +134,8 @@ export default function HomePage() {
           ))}
         </div>
       </section>
+
+      <OnboardingChecklist />
 
       <section className="ps-section">
         <div className="ps-section-head">

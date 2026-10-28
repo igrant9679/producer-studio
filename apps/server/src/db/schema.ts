@@ -341,6 +341,50 @@ export const idempotencyKeys = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.key] })],
 )
 
+/** v14: a space's brand kits besides its default (brand_kits). Not synced. */
+export const extraBrandKits = pgTable('extra_brand_kits', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  doc: jsonb('doc').$type<import('@producer/core').BrandKitDoc>().notNull(),
+  createdBy: text('created_by'),
+  createdAt: ms('created_at').notNull(),
+  updatedAt: ms('updated_at').notNull(),
+})
+
+/** v14: font files uploaded to a space for its brand kits (stored under ws/<id>/brand-fonts/). Not synced. */
+export const brandFonts = pgTable('brand_fonts', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  family: text('family').notNull(),
+  format: text('format').notNull(),
+  weight: integer('weight').notNull().default(400),
+  italic: boolean('italic').notNull().default(false),
+  storageKey: text('storage_key').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  createdBy: text('created_by'),
+  createdAt: ms('created_at').notNull(),
+})
+
+/** v14: a space's own settings (the pronunciation dictionary, its sample project). Not synced. */
+export const spaceSettings = pgTable('space_settings', {
+  workspaceId: text('workspace_id').primaryKey(),
+  doc: jsonb('doc').$type<Record<string, unknown>>().notNull(),
+  updatedAt: ms('updated_at').notNull(),
+})
+
+/** v14: one member's own settings in a space (Voice Studio draft, favourite voices, onboarding). Not synced. */
+export const memberSettings = pgTable(
+  'member_settings',
+  {
+    userId: text('user_id').notNull(),
+    workspaceId: text('workspace_id').notNull(),
+    doc: jsonb('doc').$type<Record<string, unknown>>().notNull(),
+    updatedAt: ms('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.workspaceId] })],
+)
+
+
 /** v15: request counts per key in a time window (limits.ts), shared by every replica. */
 export const rateWindows = pgTable('rate_windows', {
   key: text('key').primaryKey(),
@@ -374,4 +418,4 @@ export const workspaceUsageSettings = pgTable('workspace_usage_settings', {
   updatedAt: ms('updated_at').notNull(),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings }
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings }

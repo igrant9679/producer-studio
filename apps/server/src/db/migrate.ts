@@ -472,6 +472,51 @@ CREATE INDEX IF NOT EXISTS exports_ws_idx ON exports(workspace_id, created_at, i
 `
 
 /**
+ * v14 — brand kits and voice (R3-C): a space's other brand kits (brand_kits stays its default, the one desktops sync),
+ * font files uploaded for them, the space's own settings (pronunciation dictionary, its sample project), and each member's own settings
+ * in a space (Voice Studio draft, favourite voices, the onboarding checklist). None of these sync to desktops.
+ */
+export const DDL_V14 = `
+CREATE TABLE IF NOT EXISTS extra_brand_kits (
+  id text PRIMARY KEY,
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  doc jsonb NOT NULL,
+  created_by text,
+  created_at double precision NOT NULL,
+  updated_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS extra_brand_kits_ws_idx ON extra_brand_kits(workspace_id, created_at);
+
+CREATE TABLE IF NOT EXISTS brand_fonts (
+  id text PRIMARY KEY,
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  family text NOT NULL,
+  format text NOT NULL,
+  weight integer NOT NULL DEFAULT 400,
+  italic boolean NOT NULL DEFAULT false,
+  storage_key text NOT NULL,
+  size_bytes integer NOT NULL,
+  created_by text,
+  created_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS brand_fonts_ws_idx ON brand_fonts(workspace_id, family);
+
+CREATE TABLE IF NOT EXISTS space_settings (
+  workspace_id text PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  doc jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at double precision NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS member_settings (
+  user_id text NOT NULL,
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  doc jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at double precision NOT NULL,
+  PRIMARY KEY (user_id, workspace_id)
+);
+`
+
+/**
  * v15 — usage and limits that hold across replicas. Rate windows (requests per user, IP or space in a time window);
  * daily usage per space and person (AI requests and tokens per provider and model, job minutes per kind); whether a
  * space may use the server's own AI key (spaces that existed before v15 keep it, new ones start without it). An index
@@ -525,5 +570,6 @@ export const MIGRATIONS: Array<[number, string]> = [
   [10, DDL_V10],
   [11, DDL_V11],
   [13, DDL_V13],
+  [14, DDL_V14],
   [15, DDL_V15],
 ]

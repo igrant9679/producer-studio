@@ -123,12 +123,14 @@ export function sizeForAspect(aspect: string): { width: number; height: number }
 /** Palette of a look with brand-kit overrides (brand colours: [canvas, accent, ink, ...]). */
 export function lookPalette(look: Look, brand?: BrandKitDoc | null) {
   const c = brand?.colors ?? []
+  // a font uploaded to the space for this kit is kept as it is (the export embeds its file)
+  const font = (f: string, fallback?: string) => (brand?.customFonts?.includes(f) ? f : mapFont(f, fallback))
   return {
     canvas: c[0] ?? look.canvas,
     accent: c[1] ?? look.accent,
     ink: c[2] ?? look.ink,
-    headlineFont: brand?.fonts?.headline ? mapFont(brand.fonts.headline) : look.headlineFont,
-    bodyFont: brand?.fonts?.body ? mapFont(brand.fonts.body, 'Inter') : 'Inter',
+    headlineFont: brand?.fonts?.headline ? font(brand.fonts.headline) : look.headlineFont,
+    bodyFont: brand?.fonts?.body ? font(brand.fonts.body, 'Inter') : 'Inter',
     labelFont: look.labelFont,
   }
 }

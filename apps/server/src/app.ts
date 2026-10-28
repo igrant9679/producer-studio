@@ -28,6 +28,10 @@ import { exportRoutes, projectExportRoutes, shareRoutes, workspaceShareRoutes } 
 import { searchRoutes, spaceExportRoutes } from './routes/library'
 import { activityRoutes, commentRoutes, projectCollabRoutes } from './routes/collab'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
+import { brandRoutes } from './routes/brand'
+import { onboardingRoutes } from './routes/onboarding'
+import { voiceStudioRoutes } from './routes/voiceStudio'
+import { producerRoutes } from './routes/producer'
 import { templateRoutes } from './routes/templates'
 import { usageRoutes } from './routes/usage'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
@@ -119,6 +123,9 @@ export function createApp() {
   app.route('/api/me', preferenceRoutes)
   app.route('/api/workspaces', workspaceShareRoutes)
   app.route('/api/workspaces', activityRoutes)
+  app.route('/api/workspaces', brandRoutes)
+  app.route('/api/workspaces', onboardingRoutes)
+  app.route('/api/workspaces', voiceStudioRoutes)
   app.route('/api/workspaces', workspaceRoutes)
   app.route('/api/invites', inviteRoutes)
   app.route('/api/projects', projectExportRoutes)
@@ -137,6 +144,7 @@ export function createApp() {
   app.route('/api/usage', usageRoutes)
   app.route('/api/events', eventRoutes)
   app.route('/api/ai', aiSettingsRoutes)
+  app.route('/api/ai', producerRoutes)
   app.route('/api/ai', aiRoutes)
   app.route('/api/voice', voiceRoutes)
   app.route('/api/exports', spaceExportRoutes)

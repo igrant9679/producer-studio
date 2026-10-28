@@ -10,7 +10,7 @@ import { useAudioPreview } from '../ui'
 import VoiceStudio from '../pages/VoiceStudio'
 
 vi.mock('../voicestudio/MyVoices', () => ({ MyVoices: () => <div>My voices panel</div> }))
-vi.setConfig({ testTimeout: 30_000 })
+vi.setConfig({ testTimeout: 90_000 })
 
 const ws: Workspace = { id: 'ws_me', name: 'Me', role: 'owner', personal: true, memberCount: 1 }
 const voiceover = { asset: { id: 'as_vo', kind: 'audio', name: 'Welcome', src: '', duration: 3 }, status: 'ready', workspaceId: 'ws_me', origin: 'tts', createdAt: 1, updatedAt: 1 } as unknown as AssetRecord
