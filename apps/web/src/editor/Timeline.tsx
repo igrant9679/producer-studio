@@ -70,6 +70,7 @@ import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
 import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
+import { fitTimeline, registerTimelineFit } from './timelineView'
 import { peakBetween, useWaveformPeaks } from './waveform'
 import {
   HEADER_W,
@@ -81,6 +82,7 @@ import {
   layoutRows,
   marqueeHits,
   rulerLabel,
+  scrollForZoom,
   shortDuration,
   sliderToZoom,
   snapAt,
@@ -254,22 +256,43 @@ function TimelineBody() {
   }, [viewW])
   useLayoutEffect(updateView, [updateView, zoom])
 
+  // fit the whole project into the view, from the start (Shift+Z, the Fit button, on opening)
+  const fit = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const s = useEditor.getState()
+    const z = fitZoom(projectDuration(s.project), el.clientWidth - HEADER_W)
+    if (Math.abs(z - s.zoom) < 1e-9) el.scrollLeft = 0
+    else {
+      zoomAnchor.current = { t: 0, px: 0 }
+      s.setZoom(z)
+    }
+  }, [])
+  useEffect(() => {
+    registerTimelineFit(fit)
+    return () => registerTimelineFit(null)
+  }, [fit])
+
   // initial fit
   const fitted = useRef(false)
   useEffect(() => {
     if (fitted.current || !scrollRef.current || duration <= 0) return
     fitted.current = true
-    useEditor.getState().setZoom(fitZoom(duration, scrollRef.current.clientWidth - HEADER_W))
-  }, [duration])
+    fit()
+  }, [duration, fit])
 
-  // keep the time under the pointer fixed while ctrl+wheel zooming
+  // zooming keeps the playhead where it is on screen (keys, buttons, slider, Ctrl+wheel); a fit starts at 0
+  const zoomWas = useRef(zoom)
   useLayoutEffect(() => {
-    const a = zoomAnchor.current
     const el = scrollRef.current
-    if (!a || !el) return
-    el.scrollLeft = Math.max(0, a.t * zoom - a.px)
+    const old = zoomWas.current
+    zoomWas.current = zoom
+    if (!el || old === zoom) return
+    const a = zoomAnchor.current
     zoomAnchor.current = null
-  }, [zoom])
+    el.scrollLeft = a ? Math.max(0, a.t * zoom - a.px) : scrollForZoom(useEditor.getState().playhead, old, zoom, el.scrollLeft, el.clientWidth - HEADER_W)
+    updateView()
+  }, [zoom, updateView])
 
   // playback follow: page the view when the playhead leaves it
   useEffect(() => {
@@ -290,17 +313,18 @@ function TimelineBody() {
 
   const onWheel = (e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey)) return
-    const el = scrollRef.current!
-    const { x } = toContent(e.clientX, e.clientY)
-    const t = x / zoom
-    zoomAnchor.current = { t, px: x - el.scrollLeft }
     useEditor.getState().setZoom(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15))
   }
   useEffect(() => {
-    // React's onWheel is passive; block browser zoom on ctrl+wheel over the timeline
+    // React's onWheel is passive; block browser zoom on ctrl+wheel over the timeline, and Shift+wheel scrolls sideways
     const el = scrollRef.current
     if (!el) return
-    const h = (e: WheelEvent) => (e.ctrlKey || e.metaKey) && e.preventDefault()
+    const h = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) return e.preventDefault()
+      if (!e.shiftKey) return
+      e.preventDefault()
+      el.scrollLeft = Math.max(0, el.scrollLeft + (e.deltaY || e.deltaX))
+    }
     el.addEventListener('wheel', h, { passive: false })
     return () => el.removeEventListener('wheel', h)
   }, [])
@@ -655,7 +679,7 @@ function TimelineBody() {
 
   return (
     <>
-      <TimelineToolbar viewW={viewW} />
+      <TimelineToolbar />
       <div className="tl-scroll" ref={scrollRef} onWheel={onWheel} onScroll={updateView}>
         <div className="tl-inner" style={{ width: HEADER_W + contentW }}>
           <div className="tl-ruler-row" style={{ height: RULER_H }}>
@@ -773,7 +797,7 @@ function DragGhosts({ drag, rows, zoom, primaryRowOf }: { drag: MoveDrag; rows: 
 
 // ---------- toolbar ----------
 
-function TimelineToolbar({ viewW }: { viewW: number }) {
+function TimelineToolbar() {
   const playing = useEditor((s) => s.playing)
   const snapping = useEditor((s) => s.snapping)
   const zoom = useEditor((s) => s.zoom)
@@ -827,7 +851,7 @@ function TimelineToolbar({ viewW }: { viewW: number }) {
         </div>
       </div>
       <div className="row tl-zoom">
-        <ToolBtn icon={<ZoomOut size={15} />} title="Zoom out" desc="See more of the timeline at once." kbd="Ctrl+-" onClick={() => useEditor.getState().setZoom(zoom / 1.4)} />
+        <ToolBtn icon={<ZoomOut size={15} />} title="Zoom out" desc="See more of the timeline at once. The playhead stays where it is." kbd="Ctrl+-" onClick={() => useEditor.getState().setZoom(zoom / 1.4)} />
         <input
           type="range"
           className="ed-range"
@@ -839,8 +863,8 @@ function TimelineToolbar({ viewW }: { viewW: number }) {
           onChange={(e) => useEditor.getState().setZoom(sliderToZoom(parseFloat(e.target.value)))}
           {...tipProps('Timeline zoom', 'Drag to zoom the timeline in or out.')}
         />
-        <ToolBtn icon={<ZoomIn size={15} />} title="Zoom in" desc="See more detail, for precise cuts." kbd="Ctrl+=" onClick={() => useEditor.getState().setZoom(zoom * 1.4)} />
-        <ToolBtn icon={<Maximize2 size={14} />} title="Fit timeline" desc="Zoom so the whole project fits the view." onClick={() => useEditor.getState().setZoom(fitZoom(duration, viewW - HEADER_W))} />
+        <ToolBtn icon={<ZoomIn size={15} />} title="Zoom in" desc="See more detail, for precise cuts. The playhead stays where it is." kbd="Ctrl+=" onClick={() => useEditor.getState().setZoom(zoom * 1.4)} />
+        <ToolBtn icon={<Maximize2 size={14} />} title="Fit timeline" desc="Zoom so the whole project fits the view." kbd="Shift+Z" onClick={fitTimeline} />
       </div>
     </div>
   )
