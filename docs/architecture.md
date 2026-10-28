@@ -41,6 +41,20 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   (`text.fitScale`) and re-measures when a font finishes loading (it also asks for every face the project's text
   uses up front, so the export's page waits for them). `glyphs.ts` lists which characters the export's fonts
   cover, for the editor's warning.
+- **Colour grading** (`colour.ts`, `gradeRuntime.ts`): a clip's `grade` (tone curves, HSL by eight hue ranges, a
+  3D LUT from a `.cube` file) is pixel work the CSS filter can't do. `StageRenderer` runs it in one WebGL context
+  per renderer (a fragment shader that is `colour.gradePixel` line for line; the CPU fallback and the tests call
+  `gradePixel` itself) and copies the result into a 2D canvas laid over the clip, the plain picture hidden under
+  it. LUTs are kept in the project document (`project.luts`, at most 33³ points, bytes in base64), so they travel
+  inside the export's composition with nothing else to ship. In the export, HyperFrames shows each video frame as
+  an `<img class="__render_frame__">` next to the `<video>` after the timeline has been seeked; the renderer
+  listens for `load` (capture) on its stage and grades that frame before the screenshot. Adjustment layers
+  (`type: 'adjustment'` on an overlay track) draw a full-canvas element with `backdrop-filter` (their basic colour,
+  filter and colour effects reach everything beneath, text included) and add their curves/HSL/LUT to every clip
+  and image beneath (`spreadAdjustments`). The blurred letterbox fill behind a main-track clip is not graded.
+  Verified 28 Oct 2026 with a real 1 s, 320×180 HyperFrames render (curves + HSL + LUT on colour bars, then an
+  adjustment layer at saturation -100): every bar came out within 6 levels of `gradePixel` (an ungraded render
+  shows the same few levels of encoder offset), and the adjustment layer's half was grey.
 - Verified 23 Sept 2026: lint 0/0, 10 s 720p render in ~22 s with title, captions, push transition, audio.
 
 ## Data

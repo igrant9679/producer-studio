@@ -82,6 +82,7 @@ import { fitTimeline, registerTimelineFit } from './timelineView'
 import { InOutBand, TransportControls } from './TransportControls'
 import { ClipMediaMenuItems, canDropReplace, replaceMedia } from './clipMedia'
 import { peakBetween, useWaveformPeaks } from './waveform'
+import { openPasteAttributes } from './PasteAttributes'
 import {
   HEADER_W,
   RULER_H,
@@ -1356,6 +1357,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
           <MenuItem icon={<Copy size={14} />} label="Copy" kbd="Ctrl C" onClick={run(A.copy)} />
           <MenuItem icon={<Scissors size={14} />} label="Cut" kbd="Ctrl X" onClick={run(A.cut)} />
           <MenuItem icon={<ClipboardPaste size={14} />} label="Paste" kbd="Ctrl V" onClick={run(A.paste)} disabled={!clipboard.length} />
+          <MenuItem icon={<ClipboardPaste size={14} />} label="Paste attributes…" kbd="Ctrl Alt V" onClick={run(openPasteAttributes)} disabled={!clipboard.length} />
           <MenuItem icon={<CopyPlus size={14} />} label="Duplicate" kbd="Ctrl D" onClick={run(A.duplicate)} />
           <div className="ed-menu-sep" />
           {(selection.length > 1 || it.linkId) && (
