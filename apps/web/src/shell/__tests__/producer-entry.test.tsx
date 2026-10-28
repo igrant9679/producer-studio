@@ -5,7 +5,9 @@ import { PRODUCE_LIMITS, type AssetRecord, type ScriptScene, type SystemInfo, ty
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
+import { brandApi } from '../../lib/brandApi'
 import { useSession } from '../../lib/session'
+import { voiceApi } from '../../lib/studioApi'
 import ProducerWizard from '../producer/ProducerWizard'
 import { canAdvance, initialState, validateScenes, type WizardAsset, type WizardState } from '../producer/wizardLogic'
 import { markDraftSaved, useWizard } from '../producer/wizardStore'
@@ -57,6 +59,9 @@ beforeEach(() => {
   vi.spyOn(api, 'brand').mockResolvedValue({ name: 'A', colors: [], fonts: { headline: 'Inter', body: 'Inter' } })
   vi.spyOn(api, 'saveProducerDraft').mockResolvedValue({ version: 2 })
   vi.spyOn(api, 'assets').mockResolvedValue([] as AssetRecord[])
+  // the brief's brand kits and favourite voices (A-7, A-20): not what these count
+  vi.spyOn(brandApi, 'kits').mockResolvedValue({ items: [] })
+  vi.spyOn(voiceApi, 'prefs').mockResolvedValue({ favourites: [] })
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
