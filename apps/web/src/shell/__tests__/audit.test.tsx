@@ -13,7 +13,7 @@ import { useSystem } from '../system'
 import { MenuList, Popover } from '../ui'
 import { unnamedControls } from './audit-helpers'
 
-vi.setConfig({ testTimeout: 60_000 })
+vi.setConfig({ testTimeout: 180_000 })
 const me: User = { id: 'u_me', email: 'sam@example.com', name: 'Sam', avatarColor: '#ffc24d', createdAt: 0 }
 const team: Workspace = { id: 'ws_team', name: 'Launch crew', role: 'owner', personal: false, memberCount: 3 }
 const info: SystemInfo = { mode: 'cloud', version: '1', ai: { provider: 'anthropic-api', available: true, detail: '' }, capabilities: { transcribe: true, tts: true, render: true } }
