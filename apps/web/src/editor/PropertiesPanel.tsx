@@ -22,6 +22,7 @@ import {
   resetTransform,
   setAspect,
   setCanvasSize,
+  setCaptionText,
   setItemSpeed,
   setTextContent,
   updateItem,
@@ -886,8 +887,9 @@ function CaptionTab({ item, track }: { item: CaptionItem; track: Track }) {
           value={text}
           onChange={(e) => {
             setText(e.target.value)
-            // editing text drops per-word timing (it no longer matches)
-            up<CaptionItem>(item, { text: e.target.value, words: undefined }, 'Edit caption', `cap:${item.id}`)
+            // words that survive the edit keep their karaoke timing (setCaptionText)
+            const st = useEditor.getState()
+            st.commit(setCaptionText(st.project, item.id, e.target.value), 'Edit caption', { coalesce: `cap:${item.id}` })
           }}
           onBlur={() => useEditor.getState().endCoalesce()}
         />

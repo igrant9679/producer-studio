@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { addAsset, addItem, captionTracks, createProject, createVideoItem, generateCaptions, type Asset, type CaptionItem, type Project } from '@producer/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CaptionsPanel } from '../panels/CaptionsPanel'
+import { PropertiesPanel } from '../PropertiesPanel'
 import { useEditor } from '../store'
 
 const S = () => useEditor.getState()
@@ -169,5 +170,25 @@ describe('caption tracks and files', { timeout: 40_000 }, () => {
     expect(captionTracks(S().project)).toHaveLength(2)
     expect(lines(1).map((c) => c.text)).toEqual(['la la'])
     expect(S().history.past.at(-1)?.label).toBe('Replace captions')
+  })
+})
+
+describe('the Properties caption tab', { timeout: 40_000 }, () => {
+  it('keeps the karaoke timing of the words that survive a text edit', () => {
+    globalThis.ResizeObserver ??= class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+    const line = lines()[0]
+    expect(line.words?.length).toBeGreaterThan(1)
+    S().select([line.id])
+    S().set({ activeRightTab: 'caption' })
+    render(<PropertiesPanel />)
+    const box = screen.getByDisplayValue(line.text)
+    fireEvent.change(box, { target: { value: line.text.replace('two', 'too') } })
+    const after = lines()[0]
+    expect(after.text).toContain('too')
+    expect(after.words?.map((w) => w.start)).toEqual(line.words?.map((w) => w.start))
   })
 })
