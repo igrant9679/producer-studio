@@ -23,6 +23,7 @@ import { useEditor } from '../store'
 import { Timeline } from '../Timeline'
 
 const S = () => useEditor.getState()
+// These tests count work (renders, evaluates), never time; the long timeouts only keep a loaded machine from failing them.
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class {
@@ -50,7 +51,7 @@ function show(p: Project, zoom: number) {
   return r
 }
 
-describe('the timeline re-renders only what changed (EDT-27)', { timeout: 30_000 }, () => {
+describe('the timeline re-renders only what changed (EDT-27)', { timeout: 120_000 }, () => {
   function sixty() {
     let p = createProject({ id: 'p1' })
     p = addAsset(p, music('m', 600))
@@ -100,7 +101,7 @@ describe('the timeline re-renders only what changed (EDT-27)', { timeout: 30_000
   })
 })
 
-describe('long clips show their whole waveform and filmstrip (EDT-28)', { timeout: 30_000 }, () => {
+describe('long clips show their whole waveform and filmstrip (EDT-28)', { timeout: 120_000 }, () => {
   /** Largest x a waveform path draws a bar at. */
   const lastBar = (svg: Element | null) => Math.max(...[...(svg?.querySelector('path')?.getAttribute('d') ?? '').matchAll(/M([\d.]+) /g)].map((m) => +m[1]))
 
@@ -129,20 +130,33 @@ describe('long clips show their whole waveform and filmstrip (EDT-28)', { timeou
   })
 })
 
-describe('the preview overlay and the transcript during playback (EDT-27)', { timeout: 30_000 }, () => {
+describe('the preview overlay and the transcript during playback (EDT-27)', { timeout: 120_000 }, () => {
   it('a selected clip does not make the canvas evaluate the whole project every frame', () => {
-    let p = createProject({ id: 'p1' })
-    p = addAsset(p, { id: 'v', kind: 'video', name: 'v.mp4', src: '/api/media/v/source', duration: 60, width: 1920, height: 1080 })
-    p = addItem(p, createVideoItem(p.assets.v, 0))
-    S().load({ project: p, version: 1, projectId: 'p1', demo: true })
-    S().select([p.tracks[0].items[0].id])
-    render(<Canvas />)
-    act(() => S().setPlaying(true))
-    spies.evaluate = 0
-    // a frame at a time, as the clock does
-    for (let f = 1; f <= 60; f++) act(() => S().setPlayhead(f / 60))
-    expect(spies.evaluate).toBeLessThanOrEqual(3)
-    act(() => S().setPlaying(false))
+    // The overlay follows the playhead about six times a second (useThrottledPlayhead, by the clock). The clock is
+    // simulated here, so the count is the same however loaded the machine is: one second of frames at 60 fps.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'Date'] })
+    try {
+      let p = createProject({ id: 'p1' })
+      p = addAsset(p, { id: 'v', kind: 'video', name: 'v.mp4', src: '/api/media/v/source', duration: 60, width: 1920, height: 1080 })
+      p = addItem(p, createVideoItem(p.assets.v, 0))
+      S().load({ project: p, version: 1, projectId: 'p1', demo: true })
+      S().select([p.tracks[0].items[0].id])
+      render(<Canvas />)
+      act(() => S().setPlaying(true))
+      act(() => void vi.advanceTimersByTime(1000))
+      spies.evaluate = 0
+      // a frame at a time, as the clock does
+      for (let f = 1; f <= 60; f++) {
+        act(() => S().setPlayhead(f / 60))
+        act(() => void vi.advanceTimersByTime(1000 / 60))
+      }
+      // at most one evaluate per 160 ms window (and the trailing update), never one per frame
+      expect(spies.evaluate).toBeGreaterThan(0)
+      expect(spies.evaluate).toBeLessThanOrEqual(8)
+      act(() => S().setPlaying(false))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('the transcript marks the spoken word without re-rendering every word', () => {
