@@ -89,10 +89,11 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'ai.produce.script': 'Producer AI',
   'ai.produce.assemble': 'Producer AI',
   'voicestudio.install': 'Installing VoiceStudio',
+  'media.scenes': 'Finding scene changes',
 }
 
 /** Short jobs people wait on in the editor: they get slots long exports can't take (QUICK_JOB_CONCURRENCY). */
-export const QUICK_KINDS: readonly JobKind[] = ['asset.process', 'ai.transcribe', 'ai.tts']
+export const QUICK_KINDS: readonly JobKind[] = ['asset.process', 'ai.transcribe', 'ai.tts', 'media.scenes']
 
 /** The longest a job of this kind may run: renders long, processing medium, voice short. */
 export function maxRunMs(kind: string): number {
