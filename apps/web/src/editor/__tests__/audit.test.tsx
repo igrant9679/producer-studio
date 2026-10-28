@@ -28,7 +28,7 @@ import { useEditor, type LeftTab } from '../store'
 import { Timeline } from '../Timeline'
 import { TopBar } from '../TopBar'
 
-vi.setConfig({ testTimeout: 180_000 })
+vi.setConfig({ testTimeout: 120_000 })
 const S = () => useEditor.getState()
 const video: Asset = { id: 'a', kind: 'video', name: 'talk.mp4', src: '/api/media/a/source', duration: 30, width: 1920, height: 1080, hasAudio: true }
 const still: Asset = { id: 'img', kind: 'image', name: 'logo.png', src: '/api/media/img/source', width: 400, height: 400 }
@@ -79,41 +79,43 @@ describe('every editor control has a name', () => {
     expect(unnamedControls()).toHaveLength(3)
   })
 
-  it('in every Properties tab of every kind of clip', () => {
+  // one test per kind of clip and per panel, so none of them takes minutes on a loaded machine
+  it.each(['project', 'video', 'image', 'text', 'shape', 'audio', 'caption', 'adjustment'])('in every Properties tab: %s', (kind) => {
     const { project, ids } = everything()
     S().load({ project, version: 1, projectId: 'p1', demo: true })
+    if (kind !== 'project') S().select([ids[kind]])
     render(<PropertiesPanel />)
     const missing: string[] = []
-    const check = (where: string) => missing.push(...unnamedControls().map((m) => `${where}: ${m}`))
-    check('project')
-    for (const [kind, id] of Object.entries(ids)) {
-      act(() => S().select([id]))
-      for (const name of within(screen.getByRole('tablist', { name: 'Properties' })).getAllByRole('tab').map((t) => t.textContent!)) {
-        fireEvent.click(screen.getByRole('tab', { name }))
-        check(`${kind} · ${name}`)
-      }
+    for (const name of within(screen.getByRole('tablist', { name: 'Properties' })).getAllByRole('tab').map((t) => t.textContent!)) {
+      fireEvent.click(screen.getByRole('tab', { name }))
+      missing.push(...unnamedControls().map((m) => `${name}: ${m}`))
     }
     expect(missing).toEqual([])
   })
 
-  it('in every left panel, the top bar and the timeline', () => {
+  it.each<LeftTab>(['media', 'audio', 'text', 'captions', 'transcript', 'effects', 'transitions', 'filters', 'brand', 'comments', 'ai'])('in the %s panel', (tab) => {
+    const { project } = everything()
+    S().load({ project, version: 1, projectId: 'p1', demo: true })
+    useEditor.setState({ activeLeftTab: tab, leftCollapsed: false })
+    render(
+      <>
+        <LeftRail />
+        <AssetPanel />
+      </>,
+    )
+    expect(unnamedControls()).toEqual([])
+  })
+
+  it('in the top bar and the timeline', () => {
     const { project } = everything()
     S().load({ project, version: 1, projectId: 'p1', demo: true })
     render(
       <MemoryRouter>
         <TopBar />
-        <LeftRail />
-        <AssetPanel />
         <Timeline />
       </MemoryRouter>,
     )
-    const missing: string[] = unnamedControls().map((m) => `start: ${m}`)
-    const tabs: LeftTab[] = ['media', 'audio', 'text', 'captions', 'transcript', 'effects', 'transitions', 'filters', 'brand', 'comments', 'ai']
-    for (const tab of tabs) {
-      act(() => useEditor.setState({ activeLeftTab: tab, leftCollapsed: false }))
-      missing.push(...unnamedControls().map((m) => `${tab}: ${m}`))
-    }
-    expect(missing).toEqual([])
+    expect(unnamedControls()).toEqual([])
   })
 })
 
