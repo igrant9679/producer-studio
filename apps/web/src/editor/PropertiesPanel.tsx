@@ -1,18 +1,14 @@
 // Right-hand, context-sensitive properties panel. Tabs depend on the selected item's type; with nothing
 // selected it edits the project. Numeric transform/opacity/volume props carry ◇ keyframe toggles.
-import type { AnimProp, AnimationPreset, AudioItem, BlendMode, CaptionItem, CaptionStyle, ColorAdjust, ImageItem, Item, Project, ShapeItem, TextItem, TextStyle, Track, VideoItem, VisualItem } from '@producer/core'
+import type { AnimProp, AnimationPreset, AudioItem, BlendMode, CaptionItem, CaptionStyle, ImageItem, Item, Project, ShapeItem, TextItem, TextStyle, Track, VideoItem, VisualItem } from '@producer/core'
 import {
   ANIMATION_PRESETS,
   ASPECT_RATIOS,
   CANVAS_RESOLUTIONS,
   CAPTION_PRESETS,
   COMBO_PRESETS,
-  EFFECTS,
   EXPORT_FPS,
-  FILTERS,
   FONTS,
-  NEUTRAL_ADJUST,
-  adjustToFilter,
   captionStyleFromPreset,
   editable,
   findItem,
@@ -30,13 +26,14 @@ import {
   updateTrack,
 } from '@producer/core'
 import clsx from 'clsx'
-import { AlignCenter, AlignLeft, AlignRight, Bold, CaseUpper, ChevronsRight, FlipHorizontal2, FlipVertical2, Italic, RotateCcw, SplitSquareHorizontal, Trash2, Underline, X, CopyPlus, Copy, RefreshCw } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, Bold, CaseUpper, ChevronsRight, FlipHorizontal2, FlipVertical2, Italic, RotateCcw, SplitSquareHorizontal, Trash2, Underline, CopyPlus, Copy, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import * as A from './actions'
 import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
 import { resetDemoProject } from './demo'
 import { FreezeControls, FreezeHold } from './FreezeMenu'
 import { AlignButtons } from './AlignTools'
+import { AdjustmentLayerTab, ColourTab, EffectsSection } from './ColourPanel'
 import { KeyframesSection } from './KeyframePanel'
 import { FitFields, GlyphWarning, TextEffectsSection, WordStyles } from './TextTools'
 import { thumbUrl } from './media'
@@ -71,7 +68,7 @@ export function PropertiesPanel() {
   else if (item.type === 'video')
     tabs = [
       { id: 'basic', label: 'Basic' },
-      { id: 'adjust', label: 'Adjust' },
+      { id: 'adjust', label: 'Colour' },
       ...(f?.track.main ? [{ id: 'background', label: 'Canvas' }] : []),
       { id: 'animation', label: 'Animation' },
       { id: 'speed', label: 'Speed' },
@@ -80,7 +77,7 @@ export function PropertiesPanel() {
   else if (item.type === 'image')
     tabs = [
       { id: 'basic', label: 'Basic' },
-      { id: 'adjust', label: 'Adjust' },
+      { id: 'adjust', label: 'Colour' },
       ...(f?.track.main ? [{ id: 'background', label: 'Canvas' }] : []),
       { id: 'animation', label: 'Animation' },
     ]
@@ -88,6 +85,7 @@ export function PropertiesPanel() {
   else if (item.type === 'shape') tabs = [{ id: 'shape', label: 'Shape' }, { id: 'basic', label: 'Transform' }, { id: 'animation', label: 'Animation' }]
   else if (item.type === 'audio') tabs = [{ id: 'audio', label: 'Audio' }, { id: 'speed', label: 'Speed' }]
   else if (item.type === 'caption') tabs = [{ id: 'caption', label: 'Captions' }]
+  else if (item.type === 'adjustment') tabs = [{ id: 'adjust', label: 'Colour' }, { id: 'layer', label: 'Layer' }]
   const tab = tabs.find((t) => t.id === activeTab)?.id ?? tabs[0].id
 
   if (collapsed) return null
@@ -111,7 +109,8 @@ export function PropertiesPanel() {
         {tab === 'multi' && <MultiTab items={items} />}
         <fieldset disabled={locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           {item && tab === 'basic' && 'transform' in item && <BasicTab item={item as VisualItem} main={!!f?.track.main} />}
-          {item && tab === 'adjust' && (item.type === 'video' || item.type === 'image') && <AdjustTab item={item} />}
+          {item && tab === 'adjust' && (item.type === 'video' || item.type === 'image' || item.type === 'adjustment') && <ColourTab item={item} />}
+          {item && tab === 'layer' && item.type === 'adjustment' && <AdjustmentLayerTab item={item} />}
           {item && tab === 'background' && (item.type === 'video' || item.type === 'image') && <BackgroundTab item={item} project={project} />}
           {item && tab === 'animation' && 'animations' in item && <AnimationTab item={item as VisualItem} />}
           {item && tab === 'speed' && (item.type === 'video' || item.type === 'audio') && <SpeedTab item={item} />}
@@ -345,103 +344,6 @@ function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
       <KeyframesSection item={item} only={VISUAL_KF} />
       <EffectsSection item={item} />
       {main && media && <p className="ed-note">Main-track clip · letterbox fill lives in the Canvas tab.</p>}
-    </>
-  )
-}
-
-function EffectsSection({ item }: { item: VisualItem }) {
-  if (!item.effects.length) return null
-  return (
-    <Section title={`Effects (${item.effects.length})`}>
-      {item.effects.map((fx) => (
-        <div key={fx.id} className="ed-fxrow">
-          <Slider
-            label={EFFECTS.find((e) => e.id === fx.type)?.name ?? fx.type}
-            value={fx.intensity}
-            min={0}
-            max={100}
-            step={1}
-            onChange={(v) => {
-              const cur = live<VisualItem>(item.id)
-              if (cur) up<VisualItem>(cur, { effects: cur.effects.map((e) => (e.id === fx.id ? { ...e, intensity: v } : e)) }, 'Effect intensity', `fx:${fx.id}`)
-            }}
-            keyframe={
-              <button className="ed-kf" title="Remove effect" onClick={() => up<VisualItem>(item, { effects: item.effects.filter((e) => e.id !== fx.id) }, 'Remove effect')}>
-                <X size={12} />
-              </button>
-            }
-          />
-        </div>
-      ))}
-    </Section>
-  )
-}
-
-// ---------- adjust ----------
-
-const ADJ: Array<{ k: keyof ColorAdjust; label: string }> = [
-  { k: 'brightness', label: 'Brightness' },
-  { k: 'contrast', label: 'Contrast' },
-  { k: 'saturation', label: 'Saturation' },
-  { k: 'exposure', label: 'Exposure' },
-  { k: 'temperature', label: 'Temperature' },
-  { k: 'tint', label: 'Tint' },
-  { k: 'hue', label: 'Hue' },
-  { k: 'sharpen', label: 'Sharpen' },
-  { k: 'vignette', label: 'Vignette' },
-]
-
-function AdjustTab({ item }: { item: VideoItem | ImageItem }) {
-  const asset = useEditor((s) => s.project.assets[item.assetId])
-  const th = asset ? thumbUrl(asset) : undefined
-  const css = adjustToFilter(item.adjust, item.filter?.id, item.filter?.intensity ?? 100).filter
-  return (
-    <>
-      <Section title="Filter">
-        {th && (
-          <div className="ed-adjpreview">
-            <img src={th} alt="" style={{ filter: css || undefined }} />
-            <span>Preview</span>
-          </div>
-        )}
-        <Field label="Preset">
-          <select
-            className="ed-select"
-            value={item.filter?.id ?? ''}
-            onChange={(e) => up<VideoItem>(item as VideoItem, { filter: e.target.value ? { id: e.target.value, intensity: item.filter?.intensity ?? 80 } : undefined }, 'Filter')}
-          >
-            <option value="">None</option>
-            {FILTERS.map((f) => (
-              <option key={f.id} value={f.id}>{f.category} · {f.name}</option>
-            ))}
-          </select>
-        </Field>
-        {item.filter && (
-          <Slider label="Intensity" value={item.filter.intensity} min={0} max={100} onChange={(v) => up<VideoItem>(item as VideoItem, { filter: { id: item.filter!.id, intensity: v } }, 'Filter intensity', `fi:${item.id}`)} suffix="%" />
-        )}
-      </Section>
-      <Section
-        title="Colour"
-        right={
-          <button className="ed-mini" title="Reset colour" onClick={() => up<VideoItem>(item as VideoItem, { adjust: { ...NEUTRAL_ADJUST } }, 'Reset colour')}>
-            <RotateCcw size={12} />
-          </button>
-        }
-      >
-        {ADJ.map(({ k, label }) => (
-          <Slider
-            key={k}
-            label={label}
-            value={item.adjust[k]}
-            min={k === 'sharpen' || k === 'vignette' ? 0 : -100}
-            max={100}
-            onChange={(v) => {
-              const cur = live<VideoItem>(item.id)
-              if (cur) up<VideoItem>(cur, { adjust: { ...cur.adjust, [k]: v } }, label, `adj:${k}:${item.id}`)
-            }}
-          />
-        ))}
-      </Section>
     </>
   )
 }
