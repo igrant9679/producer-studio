@@ -3,7 +3,7 @@
 // playhead scrub, keyframe diamonds, transition markers, context menu and drops from the asset panels.
 import type { Asset, Item, Project, Track, TransitionType, VideoItem, VisualItem } from '@producer/core'
 import {
-
+  ADJUSTMENT_EFFECTS,
   FILTERS,
   TRANSITIONS,
   acceptsItem,
@@ -60,6 +60,7 @@ import {
   Unlink,
   Diamond,
   X,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
@@ -1143,7 +1144,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
   const [dropOn, setDropOn] = useState(false)
   const label =
     item.type === 'text' ? item.text : item.type === 'caption' ? item.text : item.name ?? asset?.name ?? item.type
-  const Icon = item.type === 'video' ? Film : item.type === 'image' ? ImageIcon : item.type === 'audio' ? AudioLines : item.type === 'text' ? Type : item.type === 'shape' ? Shapes : Subtitles
+  const Icon = item.type === 'video' ? Film : item.type === 'image' ? ImageIcon : item.type === 'audio' ? AudioLines : item.type === 'text' ? Type : item.type === 'shape' ? Shapes : item.type === 'adjustment' ? SlidersHorizontal : Subtitles
   const kfTimes = useMemo(() => {
     if (!('keyframes' in item) || !item.keyframes) return []
     const s = new Set<number>()
@@ -1160,7 +1161,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
     if (!p || !isInternalDrag(e)) return
     const visual = item.type === 'video' || item.type === 'image' || item.type === 'text' || item.type === 'shape'
     // Alt+drop of library media onto a clip replaces the clip's media (E-10)
-    if ((p.kind === 'effect' && visual) || (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) || (p.kind === 'transition' && visual) || (p.kind === 'asset' && e.altKey && canDropReplace(item.id, p.asset))) {
+    if ((p.kind === 'effect' && (visual || (item.type === 'adjustment' && (ADJUSTMENT_EFFECTS as readonly string[]).includes(p.type)))) || (p.kind === 'filter' && (item.type === 'video' || item.type === 'image' || item.type === 'adjustment')) || (p.kind === 'transition' && visual) || (p.kind === 'asset' && e.altKey && canDropReplace(item.id, p.asset))) {
       e.preventDefault()
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
@@ -1176,8 +1177,8 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
     const s = useEditor.getState()
     if (p.kind === 'effect' && 'effects' in item) {
       s.commit(updateItem<VisualItem>(s.project, item.id, { effects: [...item.effects, { id: uid('fx'), type: p.type as never, intensity: 60 }] }), 'Add effect', { selection: [item.id] })
-      s.set({ activeRightTab: 'basic' })
-    } else if (p.kind === 'filter' && (item.type === 'video' || item.type === 'image')) {
+      s.set({ activeRightTab: item.type === 'adjustment' ? 'layer' : 'basic' })
+    } else if (p.kind === 'filter' && (item.type === 'video' || item.type === 'image' || item.type === 'adjustment')) {
       s.commit(updateItem<VideoItem>(s.project, item.id, { filter: { id: p.id, intensity: 80 } }), 'Apply filter', { selection: [item.id] })
     } else if (p.kind === 'asset' && e.altKey) {
       replaceMedia(item.id, p.asset)
