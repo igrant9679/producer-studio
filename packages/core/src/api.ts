@@ -188,6 +188,8 @@ export interface ProjectSummary {
   updatedAt: number
   createdAt: number
   createdBy: string
+  /** The saved version this summary describes: the base for a rename from a list (PATCH baseVersion). */
+  version?: number
 }
 
 export interface CreateProjectRequest {

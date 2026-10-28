@@ -25,6 +25,7 @@ export function projectSummary(p: typeof projects.$inferSelect): ProjectSummary 
     updatedAt: p.updatedAt,
     createdAt: p.createdAt,
     createdBy: p.createdBy,
+    version: p.version,
   }
 }
 
