@@ -314,6 +314,8 @@ export function subscribeEvents(
     project?: (p: { id: string; version: number }) => void
     sync?: (s: SyncStatus) => void
     workspace?: (w: { id: string; name?: string; deleted: boolean }) => void
+    /** Other events by name (`presence`, `comment`: see packages/core/src/collab.ts). */
+    on?: Record<string, (data: any) => void>
   },
 ): () => void {
   const es = new EventSource(`/api/events?workspaceId=${encodeURIComponent(workspaceId)}`, { withCredentials: true })
@@ -322,6 +324,7 @@ export function subscribeEvents(
   if (handlers.asset) es.addEventListener('asset', (e) => handlers.asset!(JSON.parse((e as MessageEvent).data)))
   if (handlers.project) es.addEventListener('project', (e) => handlers.project!(JSON.parse((e as MessageEvent).data)))
   if (handlers.workspace) es.addEventListener('workspace', (e) => handlers.workspace!(JSON.parse((e as MessageEvent).data)))
+  for (const [name, fn] of Object.entries(handlers.on ?? {})) es.addEventListener(name, (e) => fn(JSON.parse((e as MessageEvent).data)))
   return () => es.close()
 }
 

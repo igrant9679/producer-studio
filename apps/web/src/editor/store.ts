@@ -8,7 +8,7 @@ import { toast } from '../lib/toast'
 
 /** `offline`: the server couldn't be reached (retries on its own). `error`: the server refused the save (see saveError). */
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'error'
-export type LeftTab = 'media' | 'audio' | 'text' | 'captions' | 'transcript' | 'effects' | 'transitions' | 'filters' | 'brand' | 'ai'
+export type LeftTab = 'media' | 'audio' | 'text' | 'captions' | 'transcript' | 'effects' | 'transitions' | 'filters' | 'brand' | 'ai' | 'comments'
 export type CanvasTool = 'select' | 'hand'
 
 export interface HistoryEntry {

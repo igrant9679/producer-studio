@@ -20,6 +20,8 @@ import { Timeline } from './Timeline'
 import { SaveErrorBanner, TopBar } from './TopBar'
 import { loadLibrary, subscribeWorkspace, uploadFiles } from './uploads'
 import { isReadOnly, refuseReadOnly, startViewerMode } from './viewer'
+import { loadComments, onCommentEvent, resetComments } from './collab/comments'
+import { onPresenceEvent, startPresence } from './collab/presence'
 
 export function EditorPage({ demo = false }: { demo?: boolean }) {
   const params = useParams()
@@ -48,7 +50,7 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   }, [loaded, exportParam])
   useEffect(() => {
     if (!loaded || !tabParam) return
-    const tabs: LeftTab[] = ['media', 'audio', 'text', 'captions', 'transcript', 'effects', 'transitions', 'filters', 'brand', 'ai']
+    const tabs: LeftTab[] = ['media', 'audio', 'text', 'captions', 'transcript', 'effects', 'transitions', 'filters', 'brand', 'ai', 'comments']
     if ((tabs as string[]).includes(tabParam)) useEditor.setState({ activeLeftTab: tabParam as LeftTab, leftCollapsed: false })
   }, [loaded, tabParam])
 
@@ -65,8 +67,19 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   useEffect(() => {
     if (demo || !workspaceId) return
     void loadLibrary(workspaceId)
-    return subscribeWorkspace(workspaceId, (ev) => void onProjectEvent(ev))
+    return subscribeWorkspace(workspaceId, (ev) => void onProjectEvent(ev), { comment: onCommentEvent, presence: onPresenceEvent })
   }, [demo, workspaceId])
+
+  // review comments and who else is here (E-22, A-23)
+  useEffect(() => {
+    if (!loaded || demo) return
+    void loadComments(id)
+    const stop = startPresence(id)
+    return () => {
+      stop()
+      resetComments()
+    }
+  }, [loaded, demo, id])
 
   if (error)
     return (

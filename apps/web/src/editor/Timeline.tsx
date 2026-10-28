@@ -77,6 +77,7 @@ import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { useEditor } from './store'
 import { isReadOnly, ViewOnly } from './viewer'
+import { CommentMarks } from './collab/CommentMarks'
 import { placeAsset, placementFor, uploadToTimeline } from './timelineDrop'
 import { fitTimeline, registerTimelineFit } from './timelineView'
 import { InOutBand, TransportControls } from './TransportControls'
@@ -946,6 +947,7 @@ const Ruler = memo(function Ruler({ width, zoom, fps, duration, onPointerDown }:
         </span>
       ))}
       <MarkerFlags zoom={zoom} fps={fps} />
+      <CommentMarks zoom={zoom} />
       <PlayheadHead onPointerDown={onPointerDown} />
     </div>
   )

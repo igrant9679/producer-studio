@@ -18,6 +18,7 @@ import { dragPayload, isInternalDrag, makeResolver } from './media'
 import { applyTransport, setMediaClock } from './playback'
 import { useEditor } from './store'
 import { isReadOnly } from './viewer'
+import { CanvasCommentPins } from './collab/CommentMarks'
 import { previewVariant, useTransport } from './transport'
 
 const NO_LINES = { x: [] as number[], y: [] as number[] }
@@ -144,7 +145,7 @@ export function Canvas() {
       return
     }
     if (e.button !== 0) return
-    if ((e.target as HTMLElement).closest('.cv-handle, .cv-toolbar, .cv-textedit, .ed-menu, .cv-ruler, .cv-gline, .cv-viewbar')) return
+    if ((e.target as HTMLElement).closest('.cv-handle, .cv-toolbar, .cv-textedit, .ed-menu, .cv-ruler, .cv-gline, .cv-viewbar, .ps-cm-pins')) return
     wrapRef.current?.focus({ preventScroll: true })
     const s = useEditor.getState()
     const id = hitTest(e.clientX, e.clientY)
@@ -342,6 +343,7 @@ export function Canvas() {
           <div ref={stageRef} className="cv-stage" style={{ width: W, height: H }} />
           {editingTextId && <InlineTextEditor id={editingTextId} />}
         </div>
+        {!fullscreen && <CanvasCommentPins />}
         {!fullscreen && <SafeZoneOverlay W={W} H={H} scale={scale} />}
         <SnapLines lines={snapLines} scale={scale} />
         {!fullscreen && <CanvasRulers W={W} H={H} scale={scale} boxRef={boxRef} />}

@@ -1,0 +1,19 @@
+/* Collaboration in the editor: the Comments panel, comment marks on the ruler, presence avatars in the top bar. */
+.ed-comments { display: flex; flex-direction: column; gap: 10px; }
+.ed-comments-head { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; }
+.ed-comments-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--text-2); }
+.ed-cm-marks { position: absolute; left: 0; right: 0; bottom: 0; height: 0; z-index: 3; }
+.ed-cm-mark {
+  position: absolute; bottom: 1px; width: 12px; height: 12px; margin-left: -6px; padding: 0;
+  border-radius: 6px 6px 6px 1px; border: 1px solid rgba(0, 0, 0, 0.35); color: #0c0e14;
+  font: 700 0.5625rem/1 var(--font-mono); display: grid; place-items: center; cursor: pointer;
+  box-shadow: 0 1px 2px var(--shadow-drop);
+}
+.ed-cm-mark.on, .ed-cm-mark:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.ed-presence { display: flex; align-items: center; flex: none; padding-left: 2px; }
+.ed-presence-av {
+  width: 24px; height: 24px; margin-left: -6px; border-radius: 50%; border: 2px solid var(--bg-2);
+  display: grid; place-items: center; font: 700 0.6875rem/1 var(--font-display); color: #0c0e14;
+}
+.ed-presence-av:first-child { margin-left: 0; }
+.ed-presence-more { background: var(--surface-3); color: var(--text-2); }

@@ -200,7 +200,11 @@ const exportsByProject: Record<string, ExportRecord[]> = {
   p_reel: [{ exportId: 'ex_3', projectId: 'p_reel', name: 'Behind the scenes reel', url: DEMO.clips[1].file, sizeBytes: 22_000_000, duration: 42, resolution: '1080p', fps: 60, createdAt: now - 3 * HOUR }],
   p_team1: [{ exportId: 'ex_4', projectId: 'p_team1', name: 'Q3 feature recap', url: DEMO.clips[2].file, sizeBytes: 64_000_000, duration: 128, resolution: '1080p', fps: 30, createdAt: now - 2 * HOUR }],
 }
-const shares: Record<string, { projectId: string; exportId?: string }> = { demo: { projectId: 'p_launch', exportId: 'ex_1' } }
+const shares: Record<string, { projectId: string; exportId?: string; createdAt?: number; createdBy?: string; views?: number; lastViewedAt?: number; expiresAt?: number | null; password?: string; allowDownload?: boolean; allowComments?: boolean }> = {
+  demo: { projectId: 'p_launch', exportId: 'ex_1', views: 3, lastViewedAt: now - 2 * HOUR, allowComments: true },
+}
+/** The request being answered (the share page sends its unlock key as X-Share-Key). */
+let requestHeaders = new Headers()
 
 // ---------------- jobs ----------------
 interface MockJob extends Job {
@@ -851,36 +855,172 @@ on('POST', '/api/assets/([^/]+)/scenes', (m, _q, b) => {
   const j = startJob('media.scenes', assetWs(m[1]) ?? 'ws_personal', 1500, { message: `Finding scene changes in ${a.name}`, onDone: () => ({ assetId: a.id, cuts }) })
   return json(publicJob(j))
 })
-// like the server: one link per export (reused), nothing to share before an export, and links can be stopped
+// like the server: one link per export (reused unless `new`), nothing to share before an export; links have
+// settings (expiry, password, downloads, comments), views, and can be changed or revoked by editors (A-16)
+const linkDto = (token: string) => {
+  const s = shares[token]
+  const p = projects.find((x) => x.id === s.projectId)
+  const ex = (exportsByProject[s.projectId] ?? []).find((e) => e.exportId === s.exportId)
+  return {
+    token,
+    url: `${location.origin}/r/${token}`,
+    exportId: s.exportId,
+    createdAt: s.createdAt ?? now - HOUR,
+    projectId: s.projectId,
+    projectName: p?.name ?? '',
+    exportName: ex?.name,
+    createdBy: { id: s.createdBy ?? demoUser.id, name: users.find((u) => u.id === (s.createdBy ?? demoUser.id))?.name ?? demoUser.name },
+    views: s.views ?? 0,
+    lastViewedAt: s.lastViewedAt,
+    expiresAt: s.expiresAt ?? null,
+    expired: s.expiresAt != null && s.expiresAt <= Date.now(),
+    hasPassword: !!s.password,
+    allowDownload: s.allowDownload ?? true,
+    allowComments: s.allowComments ?? false,
+  }
+}
+const activityLog: Array<Json & { id: string; workspaceId: string; createdAt: number }> = []
+const logActivity = (workspaceId: string, kind: string, data: Json = {}, actor = currentUser()?.name ?? 'Someone') =>
+  activityLog.unshift({ id: nid('act'), workspaceId, kind, data, actor: { name: actor }, createdAt: Date.now() })
+const applySettings = (token: string, b: Json) => {
+  const s = shares[token]
+  if (b.expiresAt !== undefined) s.expiresAt = b.expiresAt as number | null
+  if (b.password !== undefined) s.password = (b.password as string | null) ?? undefined
+  if (b.allowDownload !== undefined) s.allowDownload = !!b.allowDownload
+  if (b.allowComments !== undefined) s.allowComments = !!b.allowComments
+}
 on('POST', '/api/projects/([^/]+)/share', async (m, _q, b) => {
   await delay(200)
   const denied = editorOnly(projectWs(m[1]))
   if (denied) return denied
   const exportId = (b.exportId as string | undefined) ?? exportsByProject[m[1]]?.[0]?.exportId
   if (!exportId) return fail(409, 'Export the video first: a share link shows a finished export.', 'conflict')
-  let token = Object.keys(shares).find((t) => shares[t].projectId === m[1] && shares[t].exportId === exportId)
+  let token = b.new ? undefined : Object.keys(shares).find((t) => shares[t].projectId === m[1] && shares[t].exportId === exportId)
   if (!token) {
     token = Math.random().toString(36).slice(2, 10)
-    shares[token] = { projectId: m[1], exportId }
+    shares[token] = { projectId: m[1], exportId, createdAt: Date.now(), createdBy: currentUser()?.id }
+    applySettings(token, b)
+    logActivity(projectWs(m[1]) ?? '', 'share.created', { project: projects.find((p) => p.id === m[1])?.name })
   }
-  return json({ token, url: `${location.origin}/r/${token}`, exportId, createdAt: Date.now() })
+  return json(linkDto(token))
 })
-on('GET', '/api/projects/([^/]+)/shares', (m) =>
-  json(Object.entries(shares).filter(([, s]) => s.projectId === m[1] && s.exportId).map(([token, s]) => ({ token, url: `${location.origin}/r/${token}`, exportId: s.exportId, createdAt: Date.now() }))),
-)
+on('GET', '/api/projects/([^/]+)/shares', (m) => json(Object.keys(shares).filter((t) => shares[t].projectId === m[1] && shares[t].exportId).map(linkDto)))
+on('GET', '/api/workspaces/([^/]+)/shares', (m) => json(Object.keys(shares).filter((t) => shares[t].exportId && projectWs(shares[t].projectId) === m[1]).map(linkDto)))
+on('PATCH', '/api/share/([^/]+)', (m, _q, b) => {
+  if (!shares[m[1]]) return fail(404, 'This link is invalid or has been removed', 'not_found')
+  const denied = editorOnly(projectWs(shares[m[1]].projectId))
+  if (denied) return denied
+  if (typeof b.password === 'string' && b.password.length < 4) return fail(400, 'password: A password needs at least 4 characters', 'invalid')
+  applySettings(m[1], b)
+  logActivity(projectWs(shares[m[1]].projectId) ?? '', 'share.changed', { project: projects.find((p) => p.id === shares[m[1]].projectId)?.name })
+  return json(linkDto(m[1]))
+})
 on('DELETE', '/api/share/([^/]+)', (m) => {
   if (!shares[m[1]]) return fail(404, 'This link is invalid or has been removed', 'not_found')
+  const denied = editorOnly(projectWs(shares[m[1]].projectId))
+  if (denied) return denied
+  logActivity(projectWs(shares[m[1]].projectId) ?? '', 'share.revoked', { project: projects.find((p) => p.id === shares[m[1]].projectId)?.name })
   delete shares[m[1]]
   return json({ ok: true })
 })
+/** The public page: expired → 410, a password → 401 until /unlock's key comes back as X-Share-Key. */
+const shareGate = (token: string, key: string | null) => {
+  const s = shares[token]
+  const p = s && projects.find((x) => x.id === s.projectId)
+  if (!p) return { error: fail(404, 'This link has expired or does not exist', 'not_found') }
+  if (s.expiresAt != null && s.expiresAt <= Date.now()) return { error: fail(410, 'This link has expired. Ask whoever sent it for a new one.', 'not_found') }
+  if (s.password && key !== `key:${s.password}`) return { error: json({ error: 'This video is protected by a password.', code: 'unauthorized', details: { password: true } }, 401) }
+  return { s, p }
+}
+on('POST', '/api/share/([^/]+)/unlock', (m, _q, b) => {
+  const s = shares[m[1]]
+  if (!s) return fail(404, 'This link is invalid or has been removed', 'not_found')
+  if (s.password && b.password !== s.password) return fail(403, 'That password isn’t right.', 'forbidden')
+  return json({ key: s.password ? `key:${s.password}` : '' })
+})
 on('GET', '/api/share/([^/]+)', async (m) => {
   await delay(300)
-  const s = shares[m[1]]
-  const p = s && projects.find((x) => x.id === s.projectId)
-  if (!p) return fail(404, 'This link has expired or does not exist', 'not_found')
+  const g = shareGate(m[1], requestHeaders.get('x-share-key'))
+  if (g.error) return g.error
+  const { s, p } = g
+  s.views = (s.views ?? 0) + 1
+  s.lastViewedAt = Date.now()
   const ex = (exportsByProject[p.id] ?? []).find((e) => e.exportId === s.exportId) ?? exportsByProject[p.id]?.[0]
   const sp = summary(p)
-  return json({ project: { name: sp.name, width: sp.width, height: sp.height, duration: sp.duration, updatedAt: sp.updatedAt }, videoUrl: ex?.url })
+  return json({
+    project: { name: sp.name, width: sp.width, height: sp.height, duration: sp.duration, updatedAt: sp.updatedAt },
+    videoUrl: ex?.url,
+    allowDownload: s.allowDownload ?? true,
+    allowComments: s.allowComments ?? false,
+    ...(ex && (s.allowDownload ?? true) ? { downloadUrl: ex.url } : {}),
+  })
+})
+
+// review comments (E-22): members (viewers too) and, when the link allows, share-page visitors with a name
+const mockComments: Array<Json & { id: string; projectId: string; createdAt: number }> = []
+const commentEvent = (projectId: string, data: Json) => {
+  const ws = projectWs(projectId)
+  for (const src of sources) if (src.workspaceId === ws) src.dispatch('comment', { projectId, ...data })
+}
+const newComment = (projectId: string, b: Json, author: Json) => {
+  const parent = b.parentId ? mockComments.find((c) => c.id === b.parentId) : undefined
+  const root = parent ? ((parent.parentId as string | undefined) ?? parent.id) : undefined
+  const c = { id: nid('cm'), projectId, ...(root ? { parentId: root } : { at: b.at, x: b.x, y: b.y }), author, body: String(b.body ?? '').trim(), createdAt: Date.now(), updatedAt: Date.now(), canEdit: !!author.id, canDelete: !!author.id }
+  mockComments.push(c)
+  logActivity(projectWs(projectId) ?? '', 'comment.added', { project: projects.find((p) => p.id === projectId)?.name, reply: !!root, guest: !author.id }, String(author.name))
+  commentEvent(projectId, { comment: c })
+  return c
+}
+on('GET', '/api/projects/([^/]+)/comments', (m) => json(mockComments.filter((c) => c.projectId === m[1])))
+on('POST', '/api/projects/([^/]+)/comments', (m, _q, b) => {
+  if (!String(b.body ?? '').trim()) return fail(400, 'body: Write something first', 'invalid')
+  const u = currentUser()
+  return json(newComment(m[1], b, { id: u?.id, name: u?.name ?? 'You', color: u?.avatarColor, guest: false }))
+})
+on('PATCH', '/api/comments/([^/]+)', (m, _q, b) => {
+  const c = mockComments.find((x) => x.id === m[1])
+  if (!c) return fail(404, 'This comment was removed', 'not_found')
+  const mine = (c.author as Json).id === currentUser()?.id
+  if (b.resolved !== undefined && !mine && editorOnly(projectWs(c.projectId))) return fail(403, 'Only editors of this space, or whoever wrote it, can resolve a comment.', 'forbidden')
+  if (b.body !== undefined) c.body = b.body
+  if (b.resolved !== undefined) c.resolved = b.resolved ? { at: Date.now(), by: currentUser()?.name } : undefined
+  c.updatedAt = Date.now()
+  commentEvent(c.projectId, { comment: c })
+  return json(c)
+})
+on('DELETE', '/api/comments/([^/]+)', (m) => {
+  const c = mockComments.find((x) => x.id === m[1])
+  if (!c) return fail(404, 'This comment was removed', 'not_found')
+  if ((c.author as Json).id !== currentUser()?.id && editorOnly(projectWs(c.projectId))) return fail(403, 'Only editors of this space, or whoever wrote it, can remove a comment.', 'forbidden')
+  const removed = mockComments.filter((x) => x.id === c.id || x.parentId === c.id).map((x) => x.id)
+  for (const id of removed) mockComments.splice(mockComments.findIndex((x) => x.id === id), 1)
+  commentEvent(c.projectId, { removed })
+  return json({ ok: true, removed })
+})
+const shareComments = (m: RegExpMatchArray, b?: Json) => {
+  const g = shareGate(m[1], requestHeaders.get('x-share-key'))
+  if (g.error) return g.error
+  if (!(g.s.allowComments ?? false)) return fail(403, 'Comments are turned off for this link.', 'forbidden')
+  if (!b) return json(mockComments.filter((c) => c.projectId === g.p.id).map((c) => ({ ...c, canEdit: false, canDelete: false })))
+  if (!String(b.name ?? '').trim()) return fail(400, 'Add your name so the team knows who commented.', 'invalid')
+  return json({ ...newComment(g.p.id, b, { name: String(b.name).trim(), color: '#ffc24d', guest: true }), canEdit: false, canDelete: false })
+}
+on('GET', '/api/share/([^/]+)/comments', (m) => shareComments(m))
+on('POST', '/api/share/([^/]+)/comments', (m, _q, b) => shareComments(m, b))
+
+// presence and activity (A-23): in the mock you are the only one here
+on('GET', '/api/projects/([^/]+)/presence', (m) => json({ projectId: m[1], people: [] }))
+on('POST', '/api/projects/([^/]+)/presence', (m, _q, b) => {
+  const u = currentUser()
+  const role = workspaces.find((w) => w.id === projectWs(m[1]))?.role
+  return json({ projectId: m[1], people: b.open === false || !u ? [] : [{ userId: u.id, name: u.name, color: u.avatarColor, role, since: Date.now() }] })
+})
+on('GET', '/api/workspaces/([^/]+)/activity', (m, q) => {
+  const all = activityLog.filter((e) => e.workspaceId === m[1])
+  const start = Number(q.get('cursor') ?? 0)
+  const limit = Number(q.get('limit') ?? 50)
+  const items = all.slice(start, start + limit)
+  return json({ items, ...(start + limit < all.length ? { nextCursor: String(start + limit) } : {}) })
 })
 on('GET', '/api/templates', async (_m, q) => {
   await delay(300)
@@ -1040,6 +1180,7 @@ function rewriteMedia(url: string): string {
         /* not JSON */
       }
     }
+    requestHeaders = new Headers(init?.headers)
     for (const [m, re, h] of routes) {
       if (m !== method) continue
       const match = u.pathname.match(re)

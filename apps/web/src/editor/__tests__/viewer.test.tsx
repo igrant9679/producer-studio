@@ -317,7 +317,7 @@ describe('the top bar', () => {
     expect(screen.getByRole('status').textContent).toMatch(/View only/)
     const name = screen.getByRole('textbox', { name: 'Project name' }) as HTMLInputElement
     expect(name.readOnly).toBe(true)
-    for (const label of [/^Undo|Nothing to undo/, /^Share/, /^Export/, /^Aspect ratio/]) {
+    for (const label of [/^Undo|Nothing to undo/, /^Export/, /^Aspect ratio/]) {
       const b = screen.getByRole('button', { name: label })
       expect(b.matches(':disabled')).toBe(true)
       expect(b.getAttribute('data-tip')).toBe(TIP)

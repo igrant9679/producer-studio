@@ -4,15 +4,15 @@ import type { ThemePreference } from '@producer/core'
 import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, Keyboard, Loader2, Monitor, Moon, MousePointer2, Redo2, Share2, Sun, TriangleAlert, Undo2, Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, HttpError } from '../lib/api'
 import { themeLabel, useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
-import { toast, toastError } from '../lib/toast'
 import * as A from './actions'
 import { Menu, MenuItem } from './controls'
 import { flush } from './persistence'
 import { PROJECT_NAME_MAX, redoLabel, undoLabel, useEditor } from './store'
 import { useEditorGate, ViewOnlyBadge } from './viewer'
+import { ShareLinksDialog } from '../shell/components/ShareLinks'
+import { PresenceAvatars } from './collab/presence'
 
 export function TopBar() {
   const nav = useNavigate()
@@ -35,21 +35,12 @@ export function TopBar() {
     s.commit(updateProject(s.project, { name: v }), 'Rename project')
   }
 
-  const share = async () => {
+  // review links: this project's, each with its own settings (A-16)
+  const [shareOpen, setShareOpen] = useState(false)
+  const share = () => {
     if (A.demoBlocked('sharing')) return
-    try {
-      await flush()
-      const r = await api.share(useEditor.getState().projectId)
-      const url = r.url.startsWith('http') ? r.url : `${location.origin}${r.url}`
-      await navigator.clipboard.writeText(url).catch(() => undefined)
-      toast('Review link copied to clipboard')
-    } catch (e) {
-      // nothing exported yet: a link would show "No finished video yet", so export first
-      if (e instanceof HttpError && e.status === 409) {
-        useEditor.setState({ exportOpen: true, playing: false })
-        toast('Export the video first: a share link shows a finished export')
-      } else toastError(e)
-    }
+    void flush().catch(() => undefined)
+    setShareOpen(true)
   }
 
   return (
@@ -102,17 +93,29 @@ export function TopBar() {
         <RatioMenu />
       </div>
       <div className="row ed-top-r">
+        <PresenceAvatars />
         <ThemeMenu />
         <button className="ed-tbtn" {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
           <Keyboard size={16} />
         </button>
-        <button className="btn sm" onClick={share} {...tipProps('Share', 'Create a review link to this project that you can send to others.')} {...gate.props}>
+        <button className="btn sm" onClick={share} {...tipProps('Share', 'Review links to this project: make one, copy it, and set its expiry, password, downloads and comments.')}>
           <Share2 size={14} /> Share
         </button>
         <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the video or a part of it (MP4, WebM or GIF, 720p to 4K), or just its sound (MP3, WAV). It renders in the background while you keep working.')} {...gate.props}>
           <Upload size={14} /> Export
         </button>
       </div>
+      {shareOpen && (
+        <ShareLinksDialog
+          projectId={useEditor.getState().projectId}
+          gate={gate}
+          onClose={() => setShareOpen(false)}
+          onExportFirst={() => {
+            setShareOpen(false)
+            useEditor.setState({ exportOpen: true, playing: false })
+          }}
+        />
+      )}
     </header>
   )
 }
