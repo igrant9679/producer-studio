@@ -1,7 +1,7 @@
 // Replace a clip's media (from the clip menu, or Alt+drop from the library onto the clip) and split a clip at its
 // scene changes (E-10).
 import type { Asset, Item, ReplaceRefusal, SceneCuts } from '@producer/core'
-import { findItem, isEditable, replaceClipMedia, replaceRefusal, splitAtSourceTimes } from '@producer/core'
+import { findItem, isEditable, replaceClipMedia, replaceRefusal, sourceRange, splitAtSourceTimes } from '@producer/core'
 import { Film, Image as ImageIcon, Music, Replace, ScanLine } from 'lucide-react'
 import { create } from 'zustand'
 import { api, waitForJob } from '../lib/api'
@@ -52,7 +52,7 @@ export async function splitAtScenes(itemId: string) {
   if (it.freezeAt !== undefined) return toast('A freeze frame shows one picture: there are no scene changes to split at')
   const session = s.session
   const from = it.in
-  const to = it.in + it.duration * it.speed
+  const to = sourceRange(it).end
   try {
     toast('Looking for scene changes…')
     const job = await api.detectScenes(it.assetId, { from, to })

@@ -32,6 +32,13 @@ describe('the dev mock API', () => {
     expect((await call('POST', '/api/projects', { workspaceId: 'ws_team', name: 'x' })).status).toBe(200)
   })
 
+  it('makes smooth slow motion of a video, refusing a bad range (E-17)', async () => {
+    const job = await call('POST', '/api/assets/as_rec1/smooth', { from: 0, to: 2, fps: 60 })
+    expect(job).toMatchObject({ status: 200, body: { kind: 'media.smooth' } })
+    expect((await call('POST', '/api/assets/as_rec1/smooth', { from: 2, to: 1, fps: 60 })).status).toBe(400)
+    expect([403, 404]).toContain((await call('POST', '/api/assets/as_nope/smooth', { from: 0, to: 1, fps: 60 })).status)
+  })
+
   it('lets only owners invite', async () => {
     expect((await call('POST', '/api/workspaces/ws_team/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(403)
     expect((await call('POST', '/api/workspaces/ws_personal/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(200)

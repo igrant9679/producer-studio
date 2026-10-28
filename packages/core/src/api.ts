@@ -552,6 +552,15 @@ export interface SceneCuts {
   cuts: number[]
 }
 
+// POST /api/assets/:id/smooth {from, to, fps, projectId?} -> Job<SmoothCopyResult> (editor; ffmpeg minterpolate)
+/** media.smooth (E-17): the smooth slow-motion copy, a library asset, and the source range it really covers. */
+export interface SmoothCopyResult {
+  asset: Asset
+  from: number
+  to: number
+  fps: number
+}
+
 // ---- templates ----
 // GET /api/templates?workspaceId=&cursor=&limit= -> Page<TemplateSummary>   (the built-in Producer looks on the first
 //     page, then the workspace's templates)

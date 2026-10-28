@@ -26,6 +26,7 @@ import type {
   ProjectDocResponse,
   ProjectSummary,
   SceneCuts,
+  SmoothCopyResult,
   ScriptScene,
   ShareLink,
   SyncStatus,
@@ -285,6 +286,8 @@ export const api = {
   exportProject: (id: string, body: ExportRequest) => req<Job<ExportResult>>('POST', `/projects/${id}/export`, body),
   /** Scene changes in a video clip's file (E-10): a short job; `from`/`to` are seconds into the file. */
   detectScenes: (assetId: string, body: { from?: number; to?: number; threshold?: number } = {}) => req<Job<SceneCuts>>('POST', `/assets/${assetId}/scenes`, body),
+  /** Smooth slow motion (E-17): a copy of source `from`..`to` with frames made in between, at `fps`. */
+  smoothSlowMotion: (assetId: string, body: { from: number; to: number; fps: number; projectId?: string }) => req<Job<SmoothCopyResult>>('POST', `/assets/${assetId}/smooth`, body),
   exports: (projectId: string) => req<ExportRecord[]>('GET', `/exports${qs({ projectId })}`),
   share: (id: string, exportId?: string) => req<ShareLink>('POST', `/projects/${id}/share`, { exportId }),
   shares: (id: string) => req<ShareLink[]>('GET', `/projects/${id}/shares`),

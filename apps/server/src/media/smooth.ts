@@ -4,7 +4,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { and, eq } from 'drizzle-orm'
-import { SMOOTH_MAX_FPS, type Asset } from '@producer/core'
+import { SMOOTH_MAX_FPS, type SmoothCopyResult } from '@producer/core'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
 import { assetDoc } from '../dto'
@@ -25,12 +25,7 @@ export interface SmoothInput {
   fps: number
 }
 
-export interface SmoothResult {
-  asset: Asset
-  from: number
-  to: number
-  fps: number
-}
+export type SmoothResult = SmoothCopyResult
 
 /** The copy is made no larger than this on its short side: in-between frames cost a lot per pixel. */
 export const SMOOTH_SHORT = 1080

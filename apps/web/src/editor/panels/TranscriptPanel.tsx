@@ -2,7 +2,7 @@
 // to jump to it, select + Delete to cut it (it stays, struck through) and R to restore it; filler words from an
 // editable list; speaker labels; pauses; search.
 import type { Item, Project, StruckWord, Transcript as TranscriptT, TranscriptWord } from '@producer/core'
-import { assignSpeaker, cutNeighbour, cutSourceRanges, fillerKey, fillerList, findItem, isEditable, itemWords, mainTrack, matchFillers, removeSilences, renameSpeaker, restoreCut, setFillerWords, speakerAt, speakersOf, struckWords } from '@producer/core'
+import { assignSpeaker, cutNeighbour, cutSourceRanges, fillerKey, fillerList, findItem, isEditable, itemWords, mainTrack, matchFillers, removeSilences, renameSpeaker, restoreCut, setFillerWords, sourceRange, speakerAt, speakersOf, struckWords } from '@producer/core'
 import clsx from 'clsx'
 import { ChevronDown, Eraser, FileText, Loader2, Plus, RotateCcw, Scissors, Search, Timer, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -58,7 +58,7 @@ function wordsFor(p: Project, items: Item[]): W[] {
     if (!isMedia(it)) continue
     let prevEnd: number | null = null
     const lo = it.in
-    const hi = it.in + it.duration * it.speed
+    const hi = sourceRange(it).end
     const tr = p.assets[it.assetId]?.transcript
     for (const w of itemWords(p, it.id)) {
       // a word straddling a cut belongs to the piece holding its midpoint (no duplicates after a split)

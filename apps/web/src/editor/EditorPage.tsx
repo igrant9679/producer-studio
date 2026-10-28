@@ -7,6 +7,7 @@ import { toast, toastError } from '../lib/toast'
 import { Canvas } from './Canvas'
 import { ExportDialog, ShortcutsDialog } from './Dialogs'
 import { ReplaceMediaHost } from './clipMedia'
+import { SmoothJobsHost } from './SpeedPanel'
 import './editor.css'
 import { StorageBanner } from '../shell/StorageBanner'
 import { AssetPanel, LeftRail } from './LeftPanel'
@@ -194,6 +195,7 @@ function EditorShell() {
       {exportOpen && <ExportDialog />}
       {shortcutsOpen && <ShortcutsDialog />}
       <ReplaceMediaHost />
+      <SmoothJobsHost />
       {fileDrag && (
         <div className="ed-filedrop">
           <div>
