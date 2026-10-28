@@ -155,8 +155,16 @@ export interface BrandKitDoc {
   voice?: string
 }
 
+// ---- lists ----
+// The list routes page: `?limit=` (default 200, at most 500) and `?cursor=` (the previous page's `nextCursor`), newest
+// first. No `nextCursor`: that was the last page.
+export interface Page<T> {
+  items: T[]
+  nextCursor?: string
+}
+
 // ---- projects ----
-// GET    /api/projects?workspaceId=&trashed=0|1&templates=0|1  -> ProjectSummary[]
+// GET    /api/projects?workspaceId=&trashed=0|1&templates=0|1&cursor=&limit=  -> Page<ProjectSummary>
 // POST   /api/projects  CreateProjectRequest                    -> ProjectDocResponse
 // GET    /api/projects/:id                                     -> ProjectDocResponse
 // PUT    /api/projects/:id  SaveProjectRequest                 -> {version, updatedAt} | 409 {error, code:'conflict', details:{version}}
@@ -209,9 +217,9 @@ export interface SaveProjectRequest {
 // ---- assets ----
 // POST /api/uploads  UploadRequest            -> UploadTicket   (then PUT bytes to ticket.url with ticket.headers)
 // POST /api/assets/:id/complete               -> AssetRecord    (queues asset.process)
-// GET  /api/assets?workspaceId=&kind=         -> AssetRecord[]
-// GET  /api/assets/:id                        -> AssetRecord
-// PATCH /api/assets/:id {name}                -> AssetRecord
+// GET  /api/assets?workspaceId=&kind=&cursor=&limit= -> Page<AssetRecord>  (light records: no transcripts)
+// GET  /api/assets/:id                        -> AssetRecord   (the full record)
+// PATCH /api/assets/:id {name?, transcript?}  -> AssetRecord
 // DELETE /api/assets/:id                      -> {ok}
 // GET  /api/media/:assetId/:variant           -> 302 signed URL | 200/206 stream   variant: source|proxy|thumb|filmstrip|audio
 export interface UploadRequest {
@@ -242,11 +250,24 @@ export interface AssetRecord {
   origin: string
   sha256?: string
   createdAt: number
+  /**
+   * A copy from a list or a live update: the clip's transcript is left out (its waveform is the inline one, as
+   * always). GET /api/assets/:id has the full record.
+   */
+  light?: true
+  /** On a light copy of a transcribed clip: which transcript it has (a different value means a different one). */
+  transcriptRev?: string
+}
+
+/** Tells one transcript from another without sending it (cheap: no hashing of what can be an hour of words). */
+export function transcriptRev(t: Transcript): string {
+  const words = t.segments.reduce((n, s) => n + s.words.length, 0)
+  return `${t.language}:${t.engine}:${t.segments.length}:${words}:${t.segments[t.segments.length - 1]?.end ?? 0}`
 }
 
 // ---- jobs ----
 // GET /api/jobs/:id                    -> Job
-// GET /api/jobs?projectId=&workspaceId= -> Job[]
+// GET /api/jobs?projectId=&workspaceId=&cursor=&limit= -> Page<Job>
 // POST /api/jobs/:id/cancel            -> Job
 // GET /api/events?workspaceId=         -> text/event-stream, events: `job` (Job), `asset` (AssetRecord), `project`
 //   ({id, version, deleted?}: created, saved, renamed, trashed/restored, template flag, deleted), `workspace`
@@ -332,6 +353,8 @@ export interface VoiceProfile {
   createdBy: string
   createdAt: number
   updatedAt: number
+  /** Stamped by the server that holds it: +1 on every change it accepts (replicas compare these, not clocks). */
+  version?: number
 }
 
 export interface VoiceStudioStatus {
@@ -491,7 +514,8 @@ export interface ExportRecord extends ExportResult {
 }
 
 // ---- templates ----
-// GET /api/templates?workspaceId=   -> TemplateSummary[]   (built-in Producer looks + workspace templates)
+// GET /api/templates?workspaceId=&cursor=&limit= -> Page<TemplateSummary>   (the built-in Producer looks on the first
+//     page, then the workspace's templates)
 export interface TemplateSummary {
   id: string
   name: string

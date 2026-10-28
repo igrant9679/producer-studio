@@ -23,15 +23,22 @@ export async function trackedBatches(): Promise<TrackedBatch[]> {
   return (await kvGet<TrackedBatch[]>(KEY)) ?? []
 }
 
+let lock: Promise<unknown> = Promise.resolve()
+
+/** Change the tracked list: one change at a time, each on the list as it is then (never on a copy read earlier). */
+function changeTracked(fn: (list: TrackedBatch[]) => TrackedBatch[]): Promise<void> {
+  const run = lock.then(async () => kvSet(KEY, fn(await trackedBatches())))
+  lock = run.catch(() => undefined)
+  return run
+}
+
 export async function trackBatch(t: Omit<TrackedBatch, 'trackedAt'>) {
-  const list = (await trackedBatches()).filter((x) => x.jobId !== t.jobId)
-  list.push({ ...t, trackedAt: Date.now() })
-  await kvSet(KEY, list)
+  await changeTracked((list) => [...list.filter((x) => x.jobId !== t.jobId), { ...t, trackedAt: Date.now() }])
   startBatchWatcher()
 }
 
 export async function untrackBatch(jobId: string) {
-  await kvSet(KEY, (await trackedBatches()).filter((x) => x.jobId !== jobId))
+  await changeTracked((list) => list.filter((x) => x.jobId !== jobId))
 }
 
 interface VsBatchJob {
@@ -41,30 +48,40 @@ interface VsBatchJob {
   filename?: string
 }
 
-/** One pass: import finished jobs, drop failed/cancelled/vanished ones. Exported for tests. */
-export async function pollBatches(): Promise<number> {
+/**
+ * One pass: import finished jobs, drop failed/cancelled/vanished ones. Jobs tracked or untracked while it runs stay
+ * as they were left (only what this pass finished with is taken off). Exported for tests.
+ */
+export function pollBatches(): Promise<number> {
+  // one pass at a time: two at once would import a finished job twice
+  polling ??= pollOnce().finally(() => (polling = undefined))
+  return polling
+}
+
+let polling: Promise<number> | undefined
+
+async function pollOnce(): Promise<number> {
   const list = await trackedBatches()
   if (!list.length || voiceStudio.status().state !== 'running') return 0
   let imported = 0
-  const keep: TrackedBatch[] = []
+  const done = new Set<string>()
   for (const t of list) {
     let job: VsBatchJob | undefined
     try {
       const res = await vs(`/batch/jobs/${encodeURIComponent(t.jobId)}`, { timeoutMs: 15_000 })
-      if (res.status === 404) continue // gone (VoiceStudio restarted without it): forget
-      if (!res.ok) {
-        keep.push(t)
+      if (res.status === 404) {
+        done.add(t.jobId) // gone (VoiceStudio restarted without it): forget
         continue
       }
+      if (!res.ok) continue
       job = (await res.json()) as VsBatchJob
     } catch {
-      keep.push(t)
       continue
     }
-    if (job.status === 'queued' || job.status === 'running') {
-      keep.push(t)
-      continue
-    }
+    if (job.status === 'queued' || job.status === 'running') continue
+    // untracked meanwhile (cancelled from Voice Studio): nothing to import
+    if (!(await trackedBatches()).some((x) => x.jobId === t.jobId)) continue
+    done.add(t.jobId)
     if (job.status === 'done') {
       for (const lang of Object.keys(job.outputs ?? {})) {
         await enqueue(
@@ -77,7 +94,7 @@ export async function pollBatches(): Promise<number> {
       log.info('voicestudio: batch job imported', { jobId: t.jobId, langs: Object.keys(job.outputs ?? {}) })
     }
   }
-  await kvSet(KEY, keep)
+  if (done.size) await changeTracked((cur) => cur.filter((x) => !done.has(x.jobId)))
   return imported
 }
 

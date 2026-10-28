@@ -181,7 +181,7 @@ export function createApp() {
     }
     if (event === 'asset') {
       const a = (await db.select().from(assets).where(eq(assets.id, id)).limit(1))[0]
-      return a ? { workspaceId: a.workspaceId, data: assetRecord(a) } : null
+      return a ? { workspaceId: a.workspaceId, data: assetRecord(a, { light: true }) } : null
     }
     const p = (await db.select({ id: projects.id, ws: projects.workspaceId, version: projects.version }).from(projects).where(eq(projects.id, id)).limit(1))[0]
     return p ? { workspaceId: p.ws, data: { id: p.id, version: p.version } } : null

@@ -23,6 +23,8 @@ interface ProducerDesktopBridge {
   platform: string
   openExternal(url: string): Promise<boolean>
   showItemInFolder(path: string): Promise<boolean>
+  /** Desktop apps from phase 4 on: copy the data folder elsewhere, check it, switch, remove the old one. */
+  moveDataFolder?(): Promise<{ ok: boolean; dataDir?: string; error?: string }>
 }
 const desktopBridge = (): ProducerDesktopBridge | undefined => (window as unknown as { producerDesktop?: ProducerDesktopBridge }).producerDesktop
 
@@ -349,12 +351,47 @@ function DesktopAi({ settings, onSettings, builtin, refresh }: { settings?: Desk
   )
 }
 
-function DesktopStorage({ settings, onSettings }: { settings?: DesktopSettings; onSettings: (p: Partial<DesktopSettings>) => Promise<void> }) {
+export function DesktopStorage({ settings, onSettings }: { settings?: DesktopSettings; onSettings: (p: Partial<DesktopSettings>) => Promise<void> }) {
   const [dir, setDir] = useState('')
   const [saving, setSaving] = useState(false)
   useEffect(() => {
     if (settings) setDir(settings.dataDir)
   }, [settings])
+  const move = desktopBridge()?.moveDataFolder
+  if (move)
+    return (
+      <div>
+        <div className="ps-field">
+          <label className="label" htmlFor="st-dir">Data folder</label>
+          <div className="row">
+            <input id="st-dir" className="input mono" value={settings?.dataDir ?? ''} readOnly spellCheck={false} />
+            <button
+              className="btn"
+              disabled={!settings || saving}
+              onClick={async () => {
+                setSaving(true)
+                try {
+                  // the app asks where, confirms, and restarts its engine on the new folder (this page reloads)
+                  const r = await move()
+                  if (r.ok) toast('Data folder moved')
+                } finally {
+                  setSaving(false)
+                }
+              }}
+            >
+              {saving ? <Spinner /> : <FolderOpen size={14} />} Move data folder…
+            </button>
+            {settings?.dataDir && (
+              <button className="btn ghost" onClick={() => void desktopBridge()!.showItemInFolder(settings.dataDir)}>
+                <FolderOpen size={14} /> Open data folder
+              </button>
+            )}
+          </div>
+          <div className="ps-hint">Local media, proxies and renders live here. Moving copies everything to the new folder, checks the copy, switches to it and then removes the old one.</div>
+        </div>
+        <MediaSyncRow settings={settings} onSettings={onSettings} />
+      </div>
+    )
   return (
     <div>
       <div className="ps-field">
@@ -383,15 +420,21 @@ function DesktopStorage({ settings, onSettings }: { settings?: DesktopSettings; 
         </div>
         <div className="ps-hint">Local media, proxies and renders live here. Changing it takes effect after restarting the app.</div>
       </div>
-      <div className="ps-set-row">
-        <div>
-          <strong>Cloud media</strong>
-          <span>Download everything for offline editing, or fetch media the first time a project opens.</span>
-        </div>
-        <div className="ps-seg">
-          <button className={settings?.mediaSync === 'all' ? 'on' : ''} disabled={!settings} onClick={() => void onSettings({ mediaSync: 'all' })}>Download all</button>
-          <button className={settings?.mediaSync === 'on-demand' ? 'on' : ''} disabled={!settings} onClick={() => void onSettings({ mediaSync: 'on-demand' })}>On demand</button>
-        </div>
+      <MediaSyncRow settings={settings} onSettings={onSettings} />
+    </div>
+  )
+}
+
+function MediaSyncRow({ settings, onSettings }: { settings?: DesktopSettings; onSettings: (p: Partial<DesktopSettings>) => Promise<void> }) {
+  return (
+    <div className="ps-set-row">
+      <div>
+        <strong>Cloud media</strong>
+        <span>Download everything for offline editing, or fetch media the first time a project opens.</span>
+      </div>
+      <div className="ps-seg">
+        <button className={settings?.mediaSync === 'all' ? 'on' : ''} disabled={!settings} onClick={() => void onSettings({ mediaSync: 'all' })}>Download all</button>
+        <button className={settings?.mediaSync === 'on-demand' ? 'on' : ''} disabled={!settings} onClick={() => void onSettings({ mediaSync: 'on-demand' })}>On demand</button>
       </div>
     </div>
   )

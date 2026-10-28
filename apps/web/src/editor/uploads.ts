@@ -1,7 +1,7 @@
 // Workspace media library + uploads. Server: api.upload with progress, then SSE `asset` events (with a polling
 // fallback) until status 'ready'. Demo: files become local blob: assets probed in the browser.
 import type { Asset, AssetRecord, Job } from '@producer/core'
-import { addAsset, uid } from '@producer/core'
+import { addAsset, transcriptRev, uid } from '@producer/core'
 import { create } from 'zustand'
 import { api, subscribeEvents } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
@@ -44,9 +44,49 @@ function upsertRecord(r: AssetRecord) {
   useLibrary.setState({
     uploads: useLibrary.getState().uploads.map((u) => (u.assetId === r.asset.id ? { ...u, status: r.status === 'uploading' ? 'processing' : r.status, error: r.error } : u)),
   })
-  // refresh metadata of assets the project uses (waveform, filmstrip, transcript arrive later), outside undo history
-  if (r.status === 'ready') useEditor.getState().updateMedia(r.asset)
+  // refresh metadata of assets the project uses (waveform, filmstrip, transcript arrive later), outside undo history;
+  // a light record has no transcript, so a clip this editor knows fetches it when the record says it has a new one
+  if (r.status === 'ready') {
+    useEditor.getState().updateMedia(r.asset)
+    if (r.light && r.transcriptRev) void fetchTranscript(r.asset.id, r.transcriptRev)
+  }
 }
+
+const fetching = new Map<string, Promise<void>>()
+
+/**
+ * Lists and live updates carry light clip records (no transcript). A clip the editor uses gets its full record
+ * (GET /api/assets/:id) when the light one names a transcript the editor doesn't have: once per clip and transcript.
+ */
+export function fetchTranscript(id: string, rev: string): Promise<void> {
+  const s = useEditor.getState()
+  // only clips this visit uses (the document, or media it has seen), not the whole library
+  const known = s.project.assets[id] ?? s.media[id]
+  if (!known || (known.transcript && transcriptRev(known.transcript) === rev)) return Promise.resolve()
+  const key = `${id}\n${rev}`
+  let p = fetching.get(key)
+  if (!p) {
+    p = api
+      .asset(id)
+      .then((full) => {
+        if (full.asset.transcript) useEditor.getState().updateMedia({ id, transcript: full.asset.transcript })
+      })
+      .catch(() => undefined)
+      .finally(() => fetching.delete(key))
+    fetching.set(key, p)
+  }
+  return p
+}
+
+// a clip put into the project from the library (a light record) brings its transcript along
+useEditor.subscribe((s, prev) => {
+  if (s.project.assets === prev.project.assets || s.demo) return
+  for (const id of Object.keys(s.project.assets)) {
+    if (prev.project.assets[id] || s.project.assets[id].transcript) continue
+    const rec = useLibrary.getState().records.find((r) => r.asset.id === id)
+    if (rec?.light && rec.transcriptRev) void fetchTranscript(id, rec.transcriptRev)
+  }
+})
 
 export async function loadLibrary(workspaceId: string) {
   useLibrary.setState({ loading: true })

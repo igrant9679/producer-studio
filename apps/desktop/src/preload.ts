@@ -11,6 +11,11 @@ const api = Object.freeze({
   openExternal: (url: string): Promise<boolean> => ipcRenderer.invoke('desktop:open-external', String(url)),
   /** Reveal a file (or open the folder) inside the Producer data folder. Resolves false for any other path. */
   showItemInFolder: (p: string): Promise<boolean> => ipcRenderer.invoke('desktop:show-item', String(p)),
+  /**
+   * Move the data folder: the app asks where, confirms, stops its engine, copies and checks everything, switches and
+   * restarts. Resolves when done (ok false: cancelled or failed, with the reason).
+   */
+  moveDataFolder: (): Promise<{ ok: boolean; dataDir?: string; error?: string }> => ipcRenderer.invoke('desktop:move-data-folder'),
   /** Make the native window frame and menus follow the app theme ('system' | 'dark' | 'light'). */
   setNativeTheme: (mode: string): Promise<boolean> => ipcRenderer.invoke('desktop:set-native-theme', String(mode)),
   /** System-wide dictation (global shortcut + floating widget + paste into the focused app). */

@@ -14,6 +14,7 @@ import type {
   InviteInfo,
   Job,
   MeResponse,
+  Page,
   PendingInvite,
   PreferencesResponse,
   Member,
@@ -74,6 +75,27 @@ const qs = (o: Record<string, string | number | boolean | undefined>) => {
   const s = p.toString()
   return s ? `?${s}` : ''
 }
+
+/**
+ * A whole list from a paged route: each page asks for the next (`cursor` = the last page's `nextCursor`) until there is
+ * none, so a long list never quietly stops at the first page. (A plain array, from an older server, is the whole list.)
+ */
+async function listAll<T>(path: string): Promise<T[]> {
+  const out: T[] = []
+  let cursor: string | undefined
+  for (let pages = 0; pages < 1000; pages++) {
+    const sep = path.includes('?') ? '&' : '?'
+    const page = await req<Page<T> | T[]>('GET', `${path}${sep}limit=${LIST_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)
+    if (Array.isArray(page)) return page
+    out.push(...page.items)
+    if (!page.nextCursor || page.nextCursor === cursor) break
+    cursor = page.nextCursor
+  }
+  return out
+}
+
+/** Items per page when reading a whole list (the server's largest page). */
+export const LIST_PAGE = 500
 
 /** Stream an SSE response from a POST endpoint; calls onEvent for each `event:`/`data:` pair. */
 export async function postStream(path: string, body: unknown, onEvent: (event: string, data: unknown) => void, signal?: AbortSignal): Promise<void> {
@@ -166,7 +188,7 @@ export const api = {
 
   // projects
   projects: (workspaceId: string, opts: { trashed?: boolean; templates?: boolean } = {}) =>
-    req<ProjectSummary[]>('GET', `/projects${qs({ workspaceId, trashed: opts.trashed ? 1 : 0, templates: opts.templates ? 1 : undefined })}`),
+    listAll<ProjectSummary>(`/projects${qs({ workspaceId, trashed: opts.trashed ? 1 : 0, templates: opts.templates ? 1 : undefined })}`),
   createProject: (body: CreateProjectRequest) => req<ProjectDocResponse>('POST', '/projects', body),
   project: (id: string) => req<ProjectDocResponse>('GET', `/projects/${id}`),
   saveProject: (id: string, project: Project, baseVersion: number) => req<{ version: number; updatedAt: number }>('PUT', `/projects/${id}`, { project, baseVersion }),
@@ -175,7 +197,8 @@ export const api = {
   deleteProject: (id: string) => req<{ ok: true }>('DELETE', `/projects/${id}`),
 
   // assets
-  assets: (workspaceId: string, kind?: string) => req<AssetRecord[]>('GET', `/assets${qs({ workspaceId, kind })}`),
+  /** Light records (no transcripts): `asset(id)` has the full one. */
+  assets: (workspaceId: string, kind?: string) => listAll<AssetRecord>(`/assets${qs({ workspaceId, kind })}`),
   asset: (id: string) => req<AssetRecord>('GET', `/assets/${id}`),
   renameAsset: (id: string, name: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { name }),
   deleteAsset: (id: string) => req<{ ok: true }>('DELETE', `/assets/${id}`),
@@ -211,7 +234,7 @@ export const api = {
 
   // jobs
   job: <R = unknown>(id: string) => req<Job<R>>('GET', `/jobs/${id}`),
-  jobs: (opts: { projectId?: string; workspaceId?: string }) => req<Job[]>('GET', `/jobs${qs(opts)}`),
+  jobs: (opts: { projectId?: string; workspaceId?: string }) => listAll<Job>(`/jobs${qs(opts)}`),
   cancelJob: (id: string) => req<Job>('POST', `/jobs/${id}/cancel`),
 
   // ai
@@ -247,7 +270,7 @@ export const api = {
   share: (id: string, exportId?: string) => req<ShareLink>('POST', `/projects/${id}/share`, { exportId }),
   shares: (id: string) => req<ShareLink[]>('GET', `/projects/${id}/shares`),
   unshare: (token: string) => req<{ ok: true }>('DELETE', `/share/${encodeURIComponent(token)}`),
-  templates: (workspaceId: string) => req<TemplateSummary[]>('GET', `/templates${qs({ workspaceId })}`),
+  templates: (workspaceId: string) => listAll<TemplateSummary>(`/templates${qs({ workspaceId })}`),
 
   // system / desktop / sync
   system: () => req<SystemInfo>('GET', '/system'),
@@ -267,6 +290,7 @@ export function subscribeEvents(
   workspaceId: string,
   handlers: {
     job?: (j: Job) => void
+    /** A light record (no transcript; see AssetRecord.light). */
     asset?: (a: AssetRecord) => void
     project?: (p: { id: string; version: number }) => void
     sync?: (s: SyncStatus) => void

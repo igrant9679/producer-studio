@@ -1,12 +1,13 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { and, desc, eq, gt } from 'drizzle-orm'
+import { and, eq, gt } from 'drizzle-orm'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { devices, jobs, sessions } from '../db/schema'
 import { jobDto } from '../dto'
 import { HttpError, invalid, memberRole, notFound, requireRole } from '../http'
 import { cancelJob, getJob } from '../jobs/queue'
+import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 
 export const jobRoutes = new Hono<AppEnv>()
 
@@ -20,10 +21,18 @@ jobRoutes.get('/', async (c) => {
     workspaceId = (await loadProjectRow(projectId)).workspaceId
   }
   await requireRole(u.id, workspaceId!, 'viewer')
+  const { limit, after } = pageQuery(c)
   const conds = [eq(jobs.workspaceId, workspaceId!)]
   if (projectId) conds.push(eq(jobs.projectId, projectId))
-  const rows = await ctx().db.select().from(jobs).where(and(...conds)).orderBy(desc(jobs.createdAt)).limit(100)
-  return c.json(rows.map(jobDto))
+  const from = afterCursor(jobs.createdAt, jobs.id, after)
+  if (from) conds.push(from)
+  const rows = await ctx()
+    .db.select()
+    .from(jobs)
+    .where(and(...conds))
+    .orderBy(...pageOrder(jobs.createdAt, jobs.id))
+    .limit(limit + 1)
+  return c.json(toPage(rows, limit, (r) => [r.createdAt, r.id], jobDto))
 })
 
 jobRoutes.get('/:id', async (c) => {

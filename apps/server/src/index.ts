@@ -55,12 +55,15 @@ async function shutdown(sig: string) {
   if (closing) return
   closing = true
   log.info('shutting down', { sig })
-  setTimeout(() => process.exit(0), 6000).unref()
+  // past this, exit anyway (the desktop app waits a little longer than this before it ends the process itself)
+  setTimeout(() => process.exit(0), 10_000).unref()
   stopStorageMonitor()
-  desktop?.stopDesktopServices()
+  // desktop: VoiceStudio gets a bounded stop of its own, awaited before the database closes
+  const desktopStopped = desktop?.stopDesktopServices()
   server?.close()
   // running jobs go back in the queue (not a failed attempt), then their processes are stopped
   await stopWorker().catch((err) => log.warn('stopping the worker failed', { err }))
+  await desktopStopped?.catch((err) => log.warn('stopping desktop services failed', { err }))
   tts.stop()
   await c.database.close().catch(() => undefined)
   process.exit(0)

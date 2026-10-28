@@ -12,7 +12,8 @@ import { newId } from '../ids'
 export type AssetRow = typeof assets.$inferSelect
 
 export function emitAsset(a: AssetRow) {
-  ctx().bus.publish(a.workspaceId, 'asset', assetRecord(a), { id: a.id })
+  // a light record: every open screen gets each change, so no transcript rides along (GET /api/assets/:id has it)
+  ctx().bus.publish(a.workspaceId, 'asset', assetRecord(a, { light: true }), { id: a.id })
 }
 
 export async function loadAsset(id: string): Promise<AssetRow> {
@@ -42,6 +43,16 @@ export async function mergeAssetMeta(id: string, patch: Partial<AssetMeta>): Pro
 }
 
 export const assetPrefix = (workspaceId: string, assetId: string) => `ws/${workspaceId}/assets/${assetId}`
+
+/**
+ * The folders that hold a clip's files: its space's, and the one its stored source sits in when that differs (a desktop
+ * merges spaces made before linking into the cloud's without moving files, so those clips keep their first space's).
+ */
+export function assetDirs(row: Pick<AssetRow, 'id' | 'workspaceId' | 'sourceKey'>): string[] {
+  const own = `${assetPrefix(row.workspaceId, row.id)}/`
+  const stored = `${path.posix.dirname(row.sourceKey)}/`
+  return stored !== own && /^ws\/[^/]+\/assets\/[^/]+\/$/.test(stored) && stored.endsWith(`/assets/${row.id}/`) ? [own, stored] : [own]
+}
 
 export function extFor(filename: string, mime: string): string {
   const fromName = path.extname(filename).toLowerCase().replace(/[^a-z0-9.]/g, '')

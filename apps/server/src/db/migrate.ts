@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -372,6 +372,14 @@ BEGIN
 END $$;
 `
 
+/**
+ * v9 — voice profiles carry a server-stamped version (1 on create, +1 on every change the cloud accepts), so replicas
+ * order edits by what the cloud saw, never by each computer's clock.
+ */
+export const DDL_V9 = `
+ALTER TABLE voice_profiles ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -384,4 +392,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [6, DDL_V6],
   [7, DDL_V7],
   [8, DDL_V8],
+  [9, DDL_V9],
 ]

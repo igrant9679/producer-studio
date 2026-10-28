@@ -39,6 +39,10 @@ beforeAll(async () => {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true, bytes: n }))
       })
+    } else if (req.url === '/portal') {
+      // a captive portal answering for every address
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end('<html><body>Sign in to Hotel Wi-Fi</body></html>')
     } else {
       res.writeHead(404).end()
     }
@@ -75,5 +79,14 @@ describe('cloud client on a slow link (DSK-12)', () => {
     expect(err).toBeInstanceOf(CloudError)
     expect((err as CloudError).offline).toBe(true)
     expect(Date.now() - t0).toBeLessThan(5000)
+  })
+})
+
+describe('cloud client behind a Wi-Fi sign-in page (DSK-32)', () => {
+  it('takes a success that isn’t JSON as offline, not as an answer', async () => {
+    const err = await new CloudClient(base).json('GET', '/portal').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(CloudError)
+    expect((err as CloudError).offline).toBe(true)
+    expect((err as CloudError).message).toMatch(/Wi-Fi sign-in/)
   })
 })

@@ -1,5 +1,5 @@
 // Row -> API DTO mappers (shapes from packages/core/src/api.ts).
-import type { Asset, AssetRecord, AssetStatus, ExportRecord, Job, JobKind, JobStatus, ProjectSummary, User } from '@producer/core'
+import { transcriptRev, type Asset, type AssetRecord, type AssetStatus, type ExportRecord, type Job, type JobKind, type JobStatus, type ProjectSummary, type User } from '@producer/core'
 import type { AssetMeta, assets, exportsTable, jobs, projects, users } from './db/schema'
 import { WAVEFORM_RATE, inlineWaveform } from './media/waveform'
 
@@ -66,16 +66,25 @@ export function assetDoc(a: typeof assets.$inferSelect): Asset {
   }
 }
 
-export function assetRecord(a: typeof assets.$inferSelect): AssetRecord {
-  return {
-    asset: assetDoc(a),
+/**
+ * A clip's record. `light` (lists and live updates): no transcript, only a mark of which one it has (`transcriptRev`),
+ * and the waveform at its inline size as always; GET /api/assets/:id answers the full record.
+ */
+export function assetRecord(a: typeof assets.$inferSelect, opts: { light?: boolean } = {}): AssetRecord {
+  const doc = assetDoc(a)
+  const rec: AssetRecord = {
+    asset: doc,
     workspaceId: a.workspaceId,
     status: a.status as AssetStatus,
     error: a.error ?? undefined,
     origin: a.origin,
     createdAt: a.createdAt,
   }
+  if (!opts.light) return rec
+  const { transcript, ...rest } = doc
+  return { ...rec, asset: rest, light: true, ...(transcript ? { transcriptRev: transcriptRev(transcript) } : {}) }
 }
+
 
 export function jobDto(j: typeof jobs.$inferSelect): Job {
   return {
