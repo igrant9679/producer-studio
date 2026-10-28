@@ -3,7 +3,7 @@ import type { AnimProp, Item } from '@producer/core'
 import { isSafeColor, removeKeyframe, setKeyframe } from '@producer/core'
 import clsx from 'clsx'
 import { ChevronDown, ChevronRight, Diamond } from 'lucide-react'
-import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { localTime, readProp } from './actions'
 import { useEditor } from './store'
 
@@ -40,10 +40,17 @@ export function useFieldIds() {
 export function Field({ label, children, keyframe, className }: { label: ReactNode; children: ReactNode; keyframe?: ReactNode; className?: string }) {
   const id = useId()
   const ids = useMemo(() => ({ control: `${id}c`, label: `${id}l` }), [id])
+  const ctl = useRef<HTMLDivElement>(null)
+  // a plain input or select put straight in a field (not one of the controls above) is named by the field's label
+  useLayoutEffect(() => {
+    ctl.current?.querySelectorAll('input, select, textarea').forEach((el) => {
+      if (!el.id && !el.hasAttribute('aria-label') && !el.hasAttribute('aria-labelledby') && el.closest('.ed-field-ctl') === ctl.current) el.setAttribute('aria-labelledby', ids.label)
+    })
+  })
   return (
     <div className={clsx('ed-field', className)}>
       <label id={ids.label} htmlFor={ids.control}>{label}</label>
-      <div className="ed-field-ctl" role="group" aria-labelledby={ids.label}>
+      <div ref={ctl} className="ed-field-ctl" role="group" aria-labelledby={ids.label}>
         <FieldIds.Provider value={ids}>{children}</FieldIds.Provider>
       </div>
       <div className="ed-field-kf">{keyframe}</div>

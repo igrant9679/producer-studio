@@ -355,6 +355,22 @@ export function Popover({ trigger, children, align = 'left', className, style, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
   const side = flip.side ?? align
+  // Tab on a menu item closes the menu (WAI-ARIA menu pattern), choosing nothing; focus moves on from the trigger
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key === 'Tab' && (e.target as HTMLElement).matches(MENU_ITEM)) {
+      const trig = focusables(ref.current).find((el) => !popRef.current?.contains(el))
+      const page = focusables(document.body).filter((el) => !popRef.current?.contains(el))
+      const i = trig ? page.indexOf(trig) : -1
+      const next = i >= 0 ? (page[i + (e.shiftKey ? -1 : 1)] ?? trig) : undefined
+      setOpen(false)
+      if (next) {
+        e.preventDefault()
+        next.focus()
+      }
+      return
+    }
+    onMenuKeyDown(e)
+  }
   return (
     <div ref={ref} className="ps-popover-root" style={{ position: 'relative', display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
       {trigger({ open, toggle: () => setOpen(!open) })}
@@ -362,7 +378,7 @@ export function Popover({ trigger, children, align = 'left', className, style, o
         <div
           ref={popRef}
           className={clsx('ps-pop', className)}
-          onKeyDown={onMenuKeyDown}
+          onKeyDown={onKeyDown}
           style={{ top: 'calc(100% + 6px)', [side]: 0, ...style, ...(flip.side ? { [side === 'left' ? 'right' : 'left']: 'auto', [side]: 0 } : {}), ...(flip.up ? { top: 'auto', bottom: 'calc(100% + 6px)' } : {}) }}
         >
           {typeof children === 'function' ? children(close) : children}

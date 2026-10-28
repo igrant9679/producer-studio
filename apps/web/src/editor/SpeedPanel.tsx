@@ -28,6 +28,7 @@ import {
 import clsx from 'clsx'
 import { Plus, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useAnnounceChange } from '../lib/announce'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import { useEditGate } from '../shell/ui'
@@ -327,15 +328,17 @@ function SmoothSection({ item }: { item: VideoItem }) {
   const fps = smoothFps(project, item)
   const progress = useJobProgress(item.smooth?.jobId)
   const off = () => commit((p) => setSmoothJob(p, item.id, null), 'Original frames')
+  // said once when it starts and when it's ready, not each percent
+  useAnnounceChange(state === 'making' ? 'Making smooth slow motion' : state === 'ready' ? 'Smooth slow motion ready' : undefined)
   return (
     <Section title="Smooth slow motion">
       {state === 'making' && (
-        <p className="ed-note" role="status">
+        <p className="ed-note">
           Making the in-between frames{progress !== undefined ? ` (${Math.round(progress * 100)}%)` : ''}… The clip plays its original frames until they are ready.
         </p>
       )}
-      {state === 'ready' && <p className="ed-note" role="status">Playing the smooth copy ({item.smooth!.fps} fps), with frames made in between.</p>}
-      {state === 'stale' && <p className="ed-note" role="status">The smooth copy no longer covers this clip (it was made longer), so it plays its original frames.</p>}
+      {state === 'ready' && <p className="ed-note">Playing the smooth copy ({item.smooth!.fps} fps), with frames made in between.</p>}
+      {state === 'stale' && <p className="ed-note">The smooth copy no longer covers this clip (it was made longer), so it plays its original frames.</p>}
       {state === 'none' && <p className="ed-note">{fps ? `Slowed down, this clip shows each frame for longer. Make the frames in between (${fps} fps) for smooth motion.` : 'For a clip slowed below 1×: makes the frames in between so slow motion plays smoothly.'}</p>}
       <div className="ed-ramp-tools">
         {(state === 'none' || state === 'stale') && (

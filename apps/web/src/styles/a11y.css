@@ -10,6 +10,9 @@
 .ps-skip:focus { transform: none; outline: 2px solid var(--cyan); outline-offset: 2px; }
 .ps-content:focus, .ps-content:focus-visible { outline: none; }
 
+/* read by screen readers, not shown (the app's live region, lib/announce.ts) */
+.ps-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
 /* ---------- keyboard focus on cards: a ring with a gap (selection is a plain 2px line) ---------- */
 :root .ps-pcard:focus-visible { outline: none; background: var(--surface); }
 :root .ps-pcard:focus-visible .ps-thumb,

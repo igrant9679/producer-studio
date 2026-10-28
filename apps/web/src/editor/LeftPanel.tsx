@@ -579,9 +579,9 @@ export function VoiceoverBox() {
         <b style={{ fontSize: '0.8125rem' }}>Voiceover</b>
         <span className="muted" style={{ fontSize: '0.6875rem' }}>text to speech</span>
       </div>
-      <textarea className="ed-textarea" rows={4} placeholder="Type what the narrator should say…" value={text} onChange={(e) => setText(e.target.value)} />
+      <textarea className="ed-textarea" rows={4} aria-label="Narration" placeholder="Type what the narrator should say…" value={text} onChange={(e) => setText(e.target.value)} />
       <div className="row" style={{ gap: 6, marginTop: 8 }}>
-        <select className="ed-select" value={voice} onChange={(e) => setVoice(e.target.value)} style={{ flex: 1 }}>
+        <select className="ed-select" aria-label="Voice" value={voice} onChange={(e) => setVoice(e.target.value)} style={{ flex: 1 }}>
           {custom.length > 0 && (
             <optgroup label="My voices">
               {custom.map((x) => (

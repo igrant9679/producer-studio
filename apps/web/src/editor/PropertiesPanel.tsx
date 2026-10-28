@@ -503,6 +503,7 @@ function TextTab({ item }: { item: TextItem }) {
         <textarea
           className="ed-textarea"
           rows={3}
+          aria-label="Text"
           value={text}
           onChange={(e) => {
             setText(e.target.value)
@@ -741,6 +742,7 @@ function CaptionTab({ item, track }: { item: CaptionItem; track: Track }) {
         <textarea
           className="ed-textarea"
           rows={2}
+          aria-label="Caption text"
           value={text}
           onChange={(e) => {
             setText(e.target.value)

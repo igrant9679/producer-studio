@@ -16,6 +16,7 @@ import { AssetPanel, LeftRail } from './LeftPanel'
 import { isFileDrag } from './media'
 import { flush, keepBoth, loadInto, onProjectEvent, overwriteServer, reloadTheirs, resyncProject, startAutosave } from './persistence'
 import { startPhoneSheets } from './phone'
+import { startSaveAnnouncements } from './saveAnnounce'
 import { startPlaybackClock } from './playback'
 import { PropertiesPanel } from './PropertiesPanel'
 import { useShortcuts } from './shortcuts'
@@ -60,6 +61,7 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
   }, [loaded, tabParam])
 
   useEffect(() => startPhoneSheets(), [])
+  useEffect(() => startSaveAnnouncements(), [])
   useEffect(() => startPlaybackClock(), [])
   useEffect(() => startAutosave(), [])
   useEffect(() => startViewerMode(), [])

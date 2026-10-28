@@ -4,6 +4,7 @@ import type { AudioItem, ImageItem, MaskProp, MaskShape, VideoItem } from '@prod
 import { DEFAULT_KEY, KEY_PRESETS, MASK_PROPS, readMaskProp } from '@producer/core'
 import { Brush, Circle, Loader2, Pipette, RectangleHorizontal, SquareDashedMousePointer, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useAnnounceChange } from '../lib/announce'
 import { useEditGate } from '../shell/ui'
 import { localTime } from './actions'
 import { ColorInput, Field, KeyframeToggle, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
@@ -154,6 +155,8 @@ function CleanUpSection({ item }: { item: VideoItem | AudioItem }) {
   const frozen = item.type === 'video' && item.freezeAt !== undefined
   const [strength, setStrength] = useState(50)
   const [smoothing, setSmoothing] = useState(50)
+  // said once as a run starts; the finish is a toast
+  useAnnounceChange(running ? `${TOOL_LABEL[running.tool]}: started` : undefined)
   const choices: ToolChoice[] = item.type === 'audio' ? ['denoiseAudio'] : ['stabilise', ...(hasAudio ? (['denoiseAudio'] as const) : []), 'denoiseVideo', 'removeBackground']
   return (
     <Section title="Clean up">
@@ -166,10 +169,10 @@ function CleanUpSection({ item }: { item: VideoItem | AudioItem }) {
       )}
       {!tools && !toolsError && <p className="ed-note">Asking the server what it can do…</p>}
       {running ? (
-        <div className="ed-smart-run" role="status" aria-label={`${TOOL_LABEL[running.tool]}: ${Math.round(running.progress * 100)}%`}>
+        <div className="ed-smart-run">
           <Loader2 size={13} className="spin" aria-hidden />
           <span className="msg">{TOOL_LABEL[running.tool]} · {running.message || 'Working'}</span>
-          <progress max={1} value={Math.max(0, running.progress)} aria-hidden />
+          <progress max={1} value={Math.max(0, running.progress)} aria-label={TOOL_LABEL[running.tool]} />
           <button type="button" className="ed-mini" aria-label={`Stop: ${TOOL_LABEL[running.tool]}`} title="Stop" disabled={!running.jobId} onClick={() => void cancelSmartTool(item.id)}>
             <X size={12} />
           </button>
