@@ -121,7 +121,7 @@ export function VersionsPanel() {
           <X size={15} />
         </button>
       </div>
-      <p className="ed-versions-note">Every save is kept for a while: the latest ones, one an hour for a week, one a day for a month. Named versions are kept for good.</p>
+      <p className="ed-versions-note">Every save is kept for a while: the latest ones, one every 10 minutes for a day, one an hour for a week, one a day for a month. Named versions are kept for good.</p>
       {naming === 'current' ? (
         <NameForm value={draft} onChange={setDraft} busy={busy === 'name'} onSave={() => saveName('current')} onCancel={() => setNaming(null)} label="Name for what’s on screen now" />
       ) : (
