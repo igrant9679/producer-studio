@@ -1,7 +1,7 @@
 // Live updates that resume after a reconnect and close when access changes (P-16).
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { ctx } from '../context'
-import { REPLAY_MAX_EVENTS } from '../events'
+import { REPLAY_MAX_EVENTS, REPLAY_MAX_MS } from '../events'
 import { type Client, setup, signup, type TestEnv } from './helpers'
 
 let t: TestEnv
@@ -106,6 +106,21 @@ describe('live updates after a reconnect', () => {
     expect(late.events[0].event).toBe('resync')
     expect(late.events.filter((x) => x.event === 'sync')).toHaveLength(0)
     late.stop()
+  })
+
+  it('a quiet workspace lets go of old events, and a resume from before them is told to resync', () => {
+    const bus = ctx().bus
+    const at = bus.cursor()
+    bus.publish('ws_quiet', 'sync', { n: 1 })
+    expect(bus.replay('ws_quiet', at)).toHaveLength(1)
+    const now = Date.now()
+    const later = vi.spyOn(Date, 'now').mockReturnValue(now + REPLAY_MAX_MS + 1000)
+    try {
+      bus.publish('ws_busy', 'sync', { n: 2 })
+      expect(bus.replay('ws_quiet', at)).toBeNull()
+    } finally {
+      later.mockRestore()
+    }
   })
 
   it('momentary events are sent live but not replayed', async () => {

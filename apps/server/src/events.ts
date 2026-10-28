@@ -47,6 +47,7 @@ export class EventBus {
   private em = new EventEmitter()
   private loader?: Loader
   private seq = 0
+  private sweptAt = 0
   private recent = new Map<string, { events: Kept[]; droppedThrough: number }>()
 
   constructor(
@@ -95,6 +96,11 @@ export class EventBus {
       if (!r) this.recent.set(e.workspaceId, (r = { events: [], droppedThrough: 0 }))
       r.events.push({ seq, at: now, ev })
       while (r.events.length > REPLAY_MAX_EVENTS || (r.events.length && now - r.events[0].at > REPLAY_MAX_MS)) r.droppedThrough = r.events.shift()!.seq
+      // quiet workspaces let go of their old events too (what was dropped is remembered, so a resume still knows)
+      if (now - this.sweptAt > REPLAY_MAX_MS / 10) {
+        this.sweptAt = now
+        for (const k of this.recent.values()) while (k.events.length && now - k.events[0].at > REPLAY_MAX_MS) k.droppedThrough = k.events.shift()!.seq
+      }
     }
     this.em.emit(e.workspaceId, ev)
     if (!remote) this.em.emit('*', ev)
