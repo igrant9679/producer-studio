@@ -47,6 +47,8 @@ import { ThemeSwitcher } from './pages/AppearanceSettings'
 import { DESKTOP_DOWNLOAD_URL, useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, uploadsIn, useJobs, useUploads } from './stores'
 import { StorageBanner } from './StorageBanner'
+import { useJobNotices } from './jobNotices'
+import { CircleUser } from 'lucide-react'
 import { Avatar, Logo, MenuList, Popover, Progress, Spinner, focusables, spaceColor, useClickOutside, useEditGate, useEscapeLayer, useFilePicker } from './ui'
 import { JOB_LABELS, formatDuration, relativeTime } from './util'
 
@@ -505,6 +507,7 @@ function AvatarMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
               { label: 'New video', icon: <Wand2 size={15} />, className: 'ps-narrow-only', disabled: !gate.canEdit, tip: gate.tip, onClick: () => openModal('aspect') },
               { label: 'Brand kit', icon: <Palette size={15} />, onClick: () => navigate('/brand') },
               { label: 'Space members', icon: <Users size={15} />, onClick: () => navigate('/space') },
+              { label: 'Your account', icon: <CircleUser size={15} />, onClick: () => navigate('/account') },
               { label: 'Settings', icon: <Settings size={15} />, onClick: () => navigate('/settings') },
               { label: 'Help & shortcuts', icon: <CircleHelp size={15} />, onClick: () => openModal('help') },
               ...(desktop ? [] : [{ label: 'Get the Windows app', icon: <MonitorDown size={15} />, onClick: () => window.open(DESKTOP_DOWNLOAD_URL, '_blank', 'noopener') }]),
@@ -533,6 +536,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const loc = useLocation()
   const contentRef = useRef<HTMLDivElement>(null)
   useWorkspaceEvents(workspaceId)
+  useJobNotices()
   useSyncPolling(workspaceId)
   const loadSystem = useSystem((s) => s.load)
   // the AI chip reflects the current workspace's AI settings (cloud)
