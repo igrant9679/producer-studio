@@ -424,8 +424,10 @@ export class GradeLayers {
       s.drawn = key
       this.show(s)
     } catch (e) {
-      if ((e as { name?: string })?.name === 'SecurityError') this.unreadable(s)
-      else throw e
+      if ((e as { name?: string })?.name === 'SecurityError') return this.unreadable(s)
+      // a GPU that fails mid-draw: the CPU draws it from the next frame on
+      if (gl) this.gl = null
+      this.hide(s, true)
     }
   }
 
