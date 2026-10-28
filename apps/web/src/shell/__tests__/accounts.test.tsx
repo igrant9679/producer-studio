@@ -225,7 +225,7 @@ describe('the Account page (A-17)', () => {
     expect(screen.queryByRole('button', { name: /Delete account/ })).toBeNull()
     cleanup()
     routes(account())
-    const logout = vi.spyOn(useSession.getState(), 'logout').mockResolvedValue()
+    const logout = vi.fn(async () => undefined)
     useSession.setState({ logout })
     open()
     fireEvent.change(await screen.findByLabelText('Password to delete your account'), { target: { value: 'pw-123456' } })
