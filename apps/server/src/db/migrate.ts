@@ -462,6 +462,32 @@ CREATE INDEX IF NOT EXISTS activity_ws_idx ON activity(workspace_id, created_at,
 `
 
 /**
+ * v12 — accounts and mail. Single-use tokens for password reset and email verification (only their sha256 is kept),
+ * when an account's address was confirmed, its notification choices, when a session was last used, and when an
+ * invite was last emailed.
+ */
+export const DDL_V12 = `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at double precision;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen_at double precision;
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS sent_at double precision;
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS sends integer NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  id text PRIMARY KEY,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose text NOT NULL,
+  email text NOT NULL,
+  ip text,
+  created_at double precision NOT NULL,
+  expires_at double precision NOT NULL,
+  used_at double precision
+);
+CREATE INDEX IF NOT EXISTS auth_tokens_user_idx ON auth_tokens(user_id, purpose, created_at);
+CREATE INDEX IF NOT EXISTS auth_tokens_ip_idx ON auth_tokens(ip, created_at);
+`
+
+/**
  * v13 — the media trash (a deleted clip keeps its files until the trash is emptied or its time there runs out) and
  * the space-wide exports list (every export of a space, newest first).
  */
@@ -569,6 +595,7 @@ export const MIGRATIONS: Array<[number, string]> = [
   [9, DDL_V9],
   [10, DDL_V10],
   [11, DDL_V11],
+  [12, DDL_V12],
   [13, DDL_V13],
   [14, DDL_V14],
   [15, DDL_V15],

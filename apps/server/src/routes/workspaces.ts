@@ -1,8 +1,10 @@
-import { Hono } from 'hono'
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { type Context, Hono } from 'hono'
+import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import { FONTS, INVITE_TTL_MS, type BrandKitDoc, type InviteInfo, type InviteStatus, type Member, type PendingInvite, type Role, type Workspace } from '@producer/core'
-import { type AppEnv, requireUser } from '../auth'
+import { type AppEnv, appUrl, requireUser } from '../auth'
+import { mailEnabled, sendMail } from '../mail'
+import { inviteMail } from '../mail/messages'
 import { ctx } from '../context'
 import { activity, brandKits, comments, exportsTable, invites, jobs, memberships, projects, shareLinks, users, workspaces } from '../db/schema'
 import { recordActivity } from '../services/activity'
@@ -62,10 +64,15 @@ export async function renameWorkspace(userId: string, id: string, name: string):
  */
 export async function deleteWorkspace(userId: string, id: string): Promise<void> {
   await requireRole(userId, id, 'owner')
-  const db = ctx().db
-  const ws = (await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]
+  const ws = (await ctx().db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]
   if (!ws) throw notFound()
   if (ws.personal) throw new HttpError(409, 'conflict', 'Personal spaces can’t be deleted')
+  await purgeWorkspace(id)
+}
+
+/** Delete a workspace and everything in it, no questions asked (deleteWorkspace, and deleting an account). */
+export async function purgeWorkspace(id: string): Promise<void> {
+  const db = ctx().db
   const removed = await db.transaction(async (tx) => {
     await tx.delete(shareLinks).where(inArray(shareLinks.projectId, tx.select({ id: projects.id }).from(projects).where(eq(projects.workspaceId, id))))
     await tx.delete(exportsTable).where(eq(exportsTable.workspaceId, id))
@@ -219,6 +226,28 @@ workspaceRoutes.delete('/:id/members/:userId', async (c) => {
   return c.json({ ok: true })
 })
 
+/**
+ * Hand the space over (owner): the member becomes an owner and the one asking steps down to editor, in one go, so the
+ * space is never without an owner. A personal space stays its creator's.
+ */
+workspaceRoutes.post('/:id/members/:userId/transfer', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  const target = c.req.param('userId')
+  await requireRole(u.id, id, 'owner')
+  if (target === u.id) throw new HttpError(400, 'invalid', 'Choose someone else to hand the space to')
+  const ws = (await ctx().db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]
+  if (ws?.personal) throw new HttpError(409, 'conflict', 'A personal space can’t be handed over. Create a team space to share work.')
+  if (!(await memberRole(target, id))) throw notFound('This person is not a member of the space')
+  await ctx().db.transaction(async (tx) => {
+    await tx.update(memberships).set({ role: 'owner' }).where(and(eq(memberships.workspaceId, id), eq(memberships.userId, target)))
+    await tx.update(memberships).set({ role: 'editor' }).where(and(eq(memberships.workspaceId, id), eq(memberships.userId, u.id)))
+  })
+  membersChanged(id)
+  await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: 'owner' } })
+  return c.json({ ok: true })
+})
+
 const inviteUrl = (token: string) => `${ctx().config.publicUrl ?? ''}/invite/${token}`
 
 type InviteRow = typeof invites.$inferSelect
@@ -233,6 +262,39 @@ function inviteStatus(inv: InviteRow, now = Date.now()): InviteStatus {
   return 'pending'
 }
 
+/** Invite mails one owner can send in an hour; past it the invite is still made, and its link is copied by hand. */
+export const INVITE_MAILS_PER_HOUR = 50
+/** Resend waits this long after the last send. */
+export const RESEND_AFTER_MS = 60_000
+/** Expired invites stay in the owner's list this long, so they can be sent again. */
+const EXPIRED_LISTED_MS = 30 * 24 * 3600 * 1000
+
+const pendingDto = (r: InviteRow, now = Date.now()): PendingInvite => ({
+  token: r.token,
+  email: r.email,
+  role: r.role as Role,
+  createdAt: r.createdAt,
+  expiresAt: inviteExpiry(r),
+  inviteUrl: inviteUrl(r.token),
+  status: inviteStatus(r, now) === 'expired' ? 'expired' : 'pending',
+  ...(r.sentAt ? { sentAt: r.sentAt } : {}),
+})
+
+/** Email an invite (when mail is on and the owner is under the hourly cap); records the send. */
+async function mailInvite(c: Context, inv: InviteRow, inviter: { id: string; name: string }): Promise<boolean> {
+  if (!mailEnabled()) return false
+  const db = ctx().db
+  const [r] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(invites)
+    .where(and(eq(invites.createdBy, inviter.id), gt(invites.sentAt, Date.now() - 3600_000)))
+  if (Number(r?.n ?? 0) >= INVITE_MAILS_PER_HOUR) return false
+  const ws = (await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, inv.workspaceId)).limit(1))[0]
+  const sent = await sendMail(inviteMail({ to: inv.email, inviter: inviter.name, space: ws?.name ?? 'a space', role: inv.role, url: appUrl(c, `/invite/${inv.token}`), expiresAt: inviteExpiry(inv) }))
+  if (sent) await db.update(invites).set({ sentAt: Date.now(), sends: sql`${invites.sends} + 1` }).where(eq(invites.token, inv.token))
+  return sent
+}
+
 workspaceRoutes.post('/:id/invites', async (c) => {
   const u = requireUser(c)
   const id = c.req.param('id')
@@ -241,8 +303,9 @@ workspaceRoutes.post('/:id/invites', async (c) => {
   const token = randomToken(24)
   const now = Date.now()
   const expiresAt = now + INVITE_TTL_MS
-  await ctx().db.insert(invites).values({ token, workspaceId: id, email: b.email.toLowerCase(), role: b.role, createdBy: u.id, createdAt: now, expiresAt })
-  return c.json({ ok: true, inviteUrl: inviteUrl(token), expiresAt })
+  const [row] = await ctx().db.insert(invites).values({ token, workspaceId: id, email: b.email.toLowerCase(), role: b.role, createdBy: u.id, createdAt: now, expiresAt }).returning()
+  const emailed = await mailInvite(c, row, u)
+  return c.json({ ok: true, inviteUrl: inviteUrl(token), expiresAt, emailed })
 })
 
 workspaceRoutes.get('/:id/invites', async (c) => {
@@ -252,9 +315,28 @@ workspaceRoutes.get('/:id/invites', async (c) => {
   const rows = await ctx().db.select().from(invites).where(eq(invites.workspaceId, id)).orderBy(desc(invites.createdAt)).limit(200)
   const now = Date.now()
   const list: PendingInvite[] = rows
-    .filter((r) => inviteStatus(r, now) === 'pending')
-    .map((r) => ({ token: r.token, email: r.email, role: r.role as Role, createdAt: r.createdAt, expiresAt: inviteExpiry(r), inviteUrl: inviteUrl(r.token) }))
+    .filter((r) => {
+      const s = inviteStatus(r, now)
+      return s === 'pending' || (s === 'expired' && inviteExpiry(r) > now - EXPIRED_LISTED_MS)
+    })
+    .map((r) => pendingDto(r, now))
   return c.json(list)
+})
+
+/** Send an invite again: a fresh 7 days, and another email when mail is on (the link stays the same). */
+workspaceRoutes.post('/:id/invites/:token/resend', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  await requireRole(u.id, id, 'owner')
+  const db = ctx().db
+  const inv = (await db.select().from(invites).where(and(eq(invites.token, c.req.param('token')), eq(invites.workspaceId, id))).limit(1))[0]
+  if (!inv || inv.acceptedAt || inv.revokedAt) throw notFound('Invite not found, or it was already used or withdrawn')
+  const now = Date.now()
+  if (inv.sentAt && now - inv.sentAt < RESEND_AFTER_MS) throw new HttpError(429, 'quota', 'It was just sent. Wait a minute before sending it again.')
+  const [row] = await db.update(invites).set({ expiresAt: now + INVITE_TTL_MS }).where(eq(invites.token, inv.token)).returning()
+  const emailed = await mailInvite(c, row, u)
+  const fresh = (await db.select().from(invites).where(eq(invites.token, inv.token)).limit(1))[0] ?? row
+  return c.json({ ...pendingDto(fresh), emailed } satisfies PendingInvite)
 })
 
 workspaceRoutes.delete('/:id/invites/:token', async (c) => {

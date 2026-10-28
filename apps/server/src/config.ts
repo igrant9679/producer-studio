@@ -64,6 +64,8 @@ export interface Config {
   bgRemovalCmd?: string
   /** An RNNoise model file (.rnnn) for ffmpeg's arnndn voice denoiser; unset = afftdn only. */
   denoiseModel?: string
+  /** Outgoing mail through Resend's HTTP API (Railway blocks SMTP). Unset = no mail: the app shows links instead. */
+  mail?: { resendApiKey: string; from: string }
   /** Abuse brakes and quotas (cloud). Counted in Postgres, so they hold across replicas; 0 turns one off. */
   limits: {
     /** AI requests in one workspace per day; AI tokens (in + out) per workspace and per user per calendar month (UTC). */
@@ -201,6 +203,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pexelsApiKey: env.PEXELS_API_KEY?.trim() || undefined,
     bgRemovalCmd: env.BG_REMOVAL_CMD?.trim() || undefined,
     denoiseModel: env.DENOISE_MODEL?.trim() || undefined,
+    // both are needed (Resend only sends from a verified domain); the desktop app never sends mail
+    mail: mode === 'cloud' && env.RESEND_API_KEY?.trim() && env.MAIL_FROM?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim(), from: env.MAIL_FROM.trim() } : undefined,
     limits: {
       aiPerDay: envInt(env, 'AI_CALLS_PER_DAY', 200),
       aiPerMinute: envInt(env, 'AI_CALLS_PER_MINUTE', 20),

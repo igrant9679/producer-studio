@@ -103,7 +103,8 @@ describe('invites', () => {
     await ctx().db.update(invites).set({ expiresAt: Date.now() - 1000 }).where(eq(invites.token, tD))
     expect((await D.client.json('GET', `/api/invites/${tD}`)).body.status).toBe('expired')
     expect((await D.client.json('POST', `/api/invites/${tD}/accept`)).status).toBe(410)
-    expect((await A.client.json('GET', `/api/workspaces/${wsId}/invites`)).body).toEqual([])
+    // the withdrawn one is gone; the expired one stays listed (marked) so it can be sent again (A-1)
+    expect((await A.client.json('GET', `/api/workspaces/${wsId}/invites`)).body.map((i: { token: string; status: string }) => [i.token, i.status])).toEqual([[tD, 'expired']])
   })
 
   it('only owners see or withdraw invites', async () => {

@@ -4,6 +4,7 @@
 import type { ExportRequest, ExportResult, Job } from '@producer/core'
 import { create } from 'zustand'
 import { api } from '../lib/api'
+import { browserNotify, claimJobNotice, knownNotifyPrefs, requestNotifications } from '../lib/notify'
 import { toast, toastError } from '../lib/toast'
 import { useEditor } from './store'
 
@@ -28,14 +29,16 @@ export async function startExport(projectId: string, body: ExportRequest): Promi
   const job = await api.exportProject(projectId, body)
   const name = body.name?.trim() || 'Your export'
   useExports.setState({ byProject: { ...useExports.getState().byProject, [projectId]: { projectId, name, job } } })
-  void follow(projectId, name, job.id)
+  // this tab announces it (with Retry): the shell's job notices leave it alone
+  claimJobNotice(job.id)
+  void follow(projectId, name, job.id, body)
   return job
 }
 
 /** Seconds between looks at a running export. */
 const POLL_MS = 1000
 
-async function follow(projectId: string, name: string, jobId: string) {
+async function follow(projectId: string, name: string, jobId: string, body: ExportRequest) {
   const mine = () => useExports.getState().byProject[projectId]?.job.id === jobId
   try {
     // like waitForJob, but stops looking once this export is no longer the one followed (a newer one, or cleared)
@@ -59,7 +62,12 @@ async function follow(projectId: string, name: string, jobId: string) {
     const msg = e instanceof Error ? e.message : String(e)
     patch(projectId, { error: msg })
     if (/cancel/i.test(msg)) return toast(`Export cancelled: ${name}`)
-    toastError(e, `Export failed: ${name}`, { label: 'Open', run: () => openExport(projectId) })
+    // Retry starts the same export again (same format, range and name)
+    const retry = () => void startExport(projectId, body).catch((err) => toastError(err, 'Couldn’t start the export'))
+    toastError(e, `Export failed: ${name}`, [
+      { label: 'Retry', run: retry },
+      { label: 'Open', run: () => openExport(projectId) },
+    ])
     notify('Export failed', `${name}: ${msg}`, () => openExport(projectId))
   }
 }
@@ -78,26 +86,15 @@ export function openExport(projectId: string, r?: ExportResult) {
   if (r) window.open(r.url, '_blank', 'noopener')
 }
 
-/** A system notification, only when the person isn't looking at this tab and has allowed them. */
+/** A system notification, only when the person isn't looking at this tab, has allowed them and wants them. */
 function notify(title: string, body: string, onClick: () => void) {
-  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
-  if (typeof document !== 'undefined' && document.visibilityState === 'visible' && document.hasFocus()) return
-  try {
-    const n = new Notification(title, { body, tag: 'producer-export' })
-    n.onclick = () => {
-      window.focus()
-      onClick()
-      n.close()
-    }
-  } catch {
-    /* some browsers only allow notifications from a service worker */
-  }
+  void browserNotify(title, body, onClick, 'producer-export')
 }
 
-/** Ask once, when the person chooses to keep working while an export renders. */
+/** Ask once, when the person chooses to keep working while an export renders (unless their account says no). */
 export function askToNotify() {
-  if (typeof Notification === 'undefined' || Notification.permission !== 'default') return
-  void Notification.requestPermission().catch(() => undefined)
+  // asked inside the click itself: some browsers only show the prompt then
+  if (knownNotifyPrefs()?.browser !== false) void requestNotifications()
 }
 
 /** The dialog closed on a finished (or failed) export: the next opening starts fresh. */

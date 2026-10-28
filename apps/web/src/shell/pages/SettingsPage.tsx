@@ -2,7 +2,7 @@ import type { AiSettings, Device, DesktopSettings } from '@producer/core'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, Download, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, Mic, Paintbrush, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { useLocation } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { HttpError } from '../../lib/api'
 import { scrollBehavior } from '../../lib/appearance'
 import { useSession } from '../../lib/session'
@@ -514,6 +514,7 @@ export default function SettingsPage() {
                     <strong>{user?.name}</strong>
                     <span>{user?.email}</span>
                   </div>
+                  <Link className="btn sm" to="/account">Manage account</Link>
                 </div>
                 <div className="eyebrow" style={{ marginBottom: 10 }}>Linked devices</div>
                 <Devices />

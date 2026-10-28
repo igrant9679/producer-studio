@@ -28,6 +28,7 @@ import type {
 } from '@producer/core'
 import { INVITE_TTL_MS, VOICES, createProject as coreCreateProject, normalizeTags, searchSnippet, searchWords, type SearchHit } from '@producer/core'
 import { registerR3cMocks } from './mockR3c'
+import { installAccountMocks, mockMail } from './mockAccount'
 
 type Json = Record<string, unknown>
 
@@ -497,7 +498,7 @@ const editorOnly = (wsId: string | undefined) =>
 const projectWs = (id: string) => projects.find((x) => x.id === id)?.workspaceId
 const assetWs = (id: string) => assets.find((x) => x.asset.id === id)?.workspaceId
 
-const mockInvites: Array<{ token: string; workspaceId: string; email: string; role: Member['role']; createdAt: number; expiresAt: number; acceptedAt?: number; revokedAt?: number }> = []
+const mockInvites: Array<{ token: string; workspaceId: string; email: string; role: Member['role']; createdAt: number; expiresAt: number; acceptedAt?: number; revokedAt?: number; sentAt?: number }> = []
 const ownerOnly = (wsId: string) => (workspaces.find((x) => x.id === wsId)?.role === 'owner' ? null : fail(403, 'Only workspace owners can do that', 'forbidden'))
 on('POST', '/api/workspaces/([^/]+)/invites', async (m, _q, b) => {
   await delay(300)
@@ -506,16 +507,16 @@ on('POST', '/api/workspaces/([^/]+)/invites', async (m, _q, b) => {
   const token = Math.random().toString(36).slice(2, 12)
   const now = Date.now()
   const expiresAt = now + INVITE_TTL_MS
-  mockInvites.push({ token, workspaceId: m[1], email: String(b.email).toLowerCase(), role: (b.role as Member['role']) ?? 'editor', createdAt: now, expiresAt })
-  return json({ ok: true, inviteUrl: `${location.origin}/invite/${token}`, expiresAt })
+  mockInvites.push({ token, workspaceId: m[1], email: String(b.email).toLowerCase(), role: (b.role as Member['role']) ?? 'editor', createdAt: now, expiresAt, ...(mockMail() ? { sentAt: now } : {}) })
+  return json({ ok: true, inviteUrl: `${location.origin}/invite/${token}`, expiresAt, emailed: mockMail() })
 })
 on('GET', '/api/workspaces/([^/]+)/invites', (m) => {
   const denied = ownerOnly(m[1])
   if (denied) return denied
   return json(
     mockInvites
-      .filter((i) => i.workspaceId === m[1] && !i.acceptedAt && !i.revokedAt && i.expiresAt > Date.now())
-      .map((i) => ({ token: i.token, email: i.email, role: i.role, createdAt: i.createdAt, expiresAt: i.expiresAt, inviteUrl: `${location.origin}/invite/${i.token}` })),
+      .filter((i) => i.workspaceId === m[1] && !i.acceptedAt && !i.revokedAt && i.expiresAt > Date.now() - 30 * DAY)
+      .map((i) => ({ token: i.token, email: i.email, role: i.role, createdAt: i.createdAt, expiresAt: i.expiresAt, inviteUrl: `${location.origin}/invite/${i.token}`, status: i.expiresAt > Date.now() ? 'pending' : 'expired', ...(i.sentAt ? { sentAt: i.sentAt } : {}) })),
   )
 })
 on('DELETE', '/api/workspaces/([^/]+)/invites/([^/]+)', (m) => {
@@ -1413,7 +1414,7 @@ const systemInfo = (): SystemInfo =>
         capabilities: { transcribe: true, tts: true, render: true },
         sync: { ...sync },
       }
-    : { mode: 'cloud', version: '0.1.0-mock', ai: { provider: 'anthropic-api', available: true, detail: 'Anthropic API · server key configured', model: 'claude-opus-5' }, capabilities: { transcribe: true, tts: true, render: true } }
+    : { mode: 'cloud', version: '0.1.0-mock', ai: { provider: 'anthropic-api', available: true, detail: 'Anthropic API · server key configured', model: 'claude-opus-5' }, capabilities: { transcribe: true, tts: true, render: true }, mail: mockMail() }
 const emitSync = () => emit('sync', { ...sync })
 const desktopOnly = (h: Handler): Handler => (m, q, b) => (mockMode === 'desktop' ? h(m, q, b) : fail(404, 'Not available in cloud mode', 'not_found'))
 
@@ -1487,6 +1488,19 @@ on('DELETE', '/api/devices/([^/]+)', (m) => {
   const i = devices.findIndex((d) => d.id === m[1])
   if (i >= 0) devices.splice(i, 1)
   return json({ ok: true })
+})
+// account page, password reset, email checks, invite resend, hand-over (R3-A)
+installAccountMocks({
+  on,
+  json,
+  fail,
+  currentUser,
+  setUser: (u) => (u ? localStorage.setItem(AUTH_KEY, JSON.stringify(u)) : localStorage.removeItem(AUTH_KEY)),
+  users,
+  workspaces,
+  members,
+  invites: mockInvites,
+  devices,
 })
 
 // ---------------- media URL rewriting ----------------

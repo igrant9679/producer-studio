@@ -1,9 +1,10 @@
 import { Suspense, lazy, useRef } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useSession } from './lib/session'
-import { useToasts } from './lib/toast'
+import { Toasts } from './lib/Toasts'
 import { TooltipLayer } from './lib/tooltip'
 import { AuthPage } from './shell/AuthPage'
+import { ForgotPage, ResetPage, VerifyPage } from './shell/AccountAuthPages'
 import { AppErrorBoundary, EditorSkeleton, ShellSkeleton, SmallScreenNote } from './shell/boot'
 import { ShellRoutes } from './shell/ShellRoutes'
 import { SharePage } from './shell/SharePage'
@@ -28,31 +29,6 @@ function RequireAuth({ children, fallback = <ShellSkeleton />, keepWhenSignedOut
   return <>{children}</>
 }
 
-function Toasts() {
-  const toasts = useToasts((s) => s.toasts)
-  return (
-    <div className="toast-host" role="status" aria-live="polite">
-      {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.kind === 'error' ? 'error' : ''}`}>
-          {t.text}
-          {t.action && (
-            <button
-              type="button"
-              className="toast-action"
-              onClick={() => {
-                useToasts.getState().dismiss(t.id)
-                t.action!.run()
-              }}
-            >
-              {t.action.label}
-            </button>
-          )}
-        </div>
-      ))}
-    </div>
-  )
-}
-
 // The sign-in check starts in main.tsx, before React mounts.
 export function App() {
   return (
@@ -60,6 +36,9 @@ export function App() {
       <Routes>
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/signup" element={<AuthPage mode="signup" />} />
+        <Route path="/forgot" element={<ForgotPage />} />
+        <Route path="/reset/:token" element={<ResetPage />} />
+        <Route path="/verify/:token" element={<VerifyPage />} />
         <Route path="/r/:token" element={<SharePage />} />
         {/* Offline demo project (bundled media in /public/demo) for editor development without the API. */}
         <Route path="/edit/demo" element={<Suspense fallback={<EditorSkeleton />}><EditorPage demo /><SmallScreenNote /></Suspense>} />

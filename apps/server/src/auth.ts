@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import { promisify } from 'node:util'
 import type { Context, MiddlewareHandler } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
-import { eq } from 'drizzle-orm'
+import { and, eq, ne } from 'drizzle-orm'
 import { ctx } from './context'
 import { devices, sessions, users } from './db/schema'
 import { HttpError, unauthorized } from './http'
@@ -32,6 +32,8 @@ const SESSION_MS = 30 * 24 * 3600 * 1000
 /** Device tokens (desktop links) stop working after this long without a request. */
 export const DEVICE_IDLE_MS = 90 * 24 * 3600 * 1000
 const REFRESH_AFTER_MS = 24 * 3600 * 1000
+/** A session's "last used" is written at most this often. */
+const SEEN_EVERY_MS = 5 * 60 * 1000
 
 export type UserRow = typeof users.$inferSelect
 
@@ -83,6 +85,8 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
       .limit(1)
     const row = rows[0]
     if (!row) throw new HttpError(401, 'unauthorized', 'Invalid or revoked device token')
+    // an app link syncs; managing the account, the space's people or anything else takes a signed-in browser
+    if (!deviceMayUse(c.req.method, c.req.path)) throw new HttpError(403, 'forbidden', 'A linked desktop app can only sync. Sign in in the browser to do this.')
     const now = Date.now()
     // a token nobody has used for months is more likely leaked than needed: the app links again with a password
     if (now - (row.d.lastSeenAt ?? row.d.createdAt) > DEVICE_IDLE_MS) throw new HttpError(401, 'unauthorized', 'This app link expired after 90 days unused. Link the app again.')
@@ -105,15 +109,66 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (row && row.s.expiresAt > now) {
       c.set('user', row.u)
       c.set('sessionId', id)
-      if (row.s.expiresAt - now < SESSION_MS - REFRESH_AFTER_MS) {
-        await ctx().db.update(sessions).set({ expiresAt: now + SESSION_MS }).where(eq(sessions.id, id))
-        setCookie(c, SESSION_COOKIE, token, cookieOpts(new Date(now + SESSION_MS)))
-      }
+      const slide = row.s.expiresAt - now < SESSION_MS - REFRESH_AFTER_MS
+      if (slide || !row.s.lastSeenAt || now - row.s.lastSeenAt > SEEN_EVERY_MS)
+        await ctx().db.update(sessions).set({ lastSeenAt: now, ...(slide ? { expiresAt: now + SESSION_MS } : {}) }).where(eq(sessions.id, id))
+      if (slide) setCookie(c, SESSION_COOKIE, token, cookieOpts(new Date(now + SESSION_MS)))
     } else if (row) {
       await ctx().db.delete(sessions).where(eq(sessions.id, id))
     }
   }
   await next()
+}
+
+/**
+ * What a device token (a linked desktop app) may call: the sync engine's routes and nothing else (P-22). Anything
+ * about the account, members, invites, AI or sharing needs a browser session, so a leaked app token can't take over.
+ */
+const DEVICE_ROUTES: Array<[string, RegExp]> = [
+  ['GET', /^\/api\/auth\/me$/],
+  ['GET', /^\/api\/system$/],
+  ['*', /^\/api\/sync(\/.*)?$/],
+  ['GET|POST', /^\/api\/devices$/],
+  ['DELETE', /^\/api\/devices\/[^/]+$/],
+  ['GET|POST', /^\/api\/workspaces$/],
+  ['PATCH|DELETE', /^\/api\/workspaces\/[^/]+$/],
+  ['GET|PUT', /^\/api\/workspaces\/[^/]+\/brand$/],
+  ['GET|POST', /^\/api\/projects$/],
+  ['GET|PUT|PATCH', /^\/api\/projects\/[^/]+$/],
+  ['POST', /^\/api\/uploads$/],
+  ['PUT', /^\/api\/uploads\/[^/]+\/data$/],
+  ['GET', /^\/api\/assets$/],
+  ['GET|PATCH|DELETE', /^\/api\/assets\/[^/]+$/],
+  ['POST', /^\/api\/assets\/[^/]+\/(complete|abort)$/],
+  ['GET|HEAD', /^\/api\/media\/[^/]+\/[^/]+$/],
+  ['*', /^\/api\/voice\/(profiles|relay)(\/.*)?$/],
+  ['GET', /^\/api\/events$/],
+]
+
+export function deviceMayUse(method: string, path: string): boolean {
+  const m = method.toUpperCase()
+  return DEVICE_ROUTES.some(([methods, re]) => (methods === '*' || methods.split('|').includes(m)) && re.test(path))
+}
+
+/**
+ * End a person's sessions: all of them, or all but `except` (the one asking). `devices` also unlinks every desktop
+ * app. Their open live-update streams close now.
+ */
+export async function endSessions(userId: string, o: { except?: string | null; devices?: boolean } = {}): Promise<{ sessions: number; devices: number }> {
+  const db = ctx().db
+  const s = await db
+    .delete(sessions)
+    .where(o.except ? and(eq(sessions.userId, userId), ne(sessions.id, o.except)) : eq(sessions.userId, userId))
+    .returning({ id: sessions.id })
+  const d = o.devices ? await db.delete(devices).where(eq(devices.userId, userId)).returning({ id: devices.id }) : []
+  ctx().bus.accessChanged(userId)
+  return { sessions: s.length, devices: d.length }
+}
+
+/** An absolute link into the app for a mail: PUBLIC_URL, else the address this request came to. */
+export function appUrl(c: Context, path: string): string {
+  const base = ctx().config.publicUrl ?? new URL(c.req.url).origin
+  return `${base.replace(/\/+$/, '')}${path}`
 }
 
 export function requireUser(c: Context<AppEnv>): UserRow {
