@@ -5,7 +5,7 @@ import { Hono } from 'hono'
 import { and, asc, desc, eq, gt, inArray, isNotNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { Device, SyncChanges, SystemInfo } from '@producer/core'
-import { type AppEnv, requireUser } from '../auth'
+import { type AppEnv, DEVICE_IDLE_MS, requireUser } from '../auth'
 import { ctx } from '../context'
 import { CHANGE_LOCK_NS } from '../db/migrate'
 import { assets, brandKits, devices, memberships, projects, tombstones, voiceProfiles, workspaces } from '../db/schema'
@@ -21,6 +21,7 @@ import { checkCredentials } from './auth'
 import { listWorkspaces } from './workspaces'
 import { voiceProfileDto } from './voice'
 import { storageHealth } from '../services/storage-health'
+import { mailEnabled } from '../mail'
 
 const require = createRequire(import.meta.url)
 
@@ -68,6 +69,7 @@ systemRoutes.get('/', async (c) => {
     capabilities: capabilities(),
     ...(cfg.mode === 'cloud' ? { storage: storageHealth() } : {}),
     limits: { uploadBytes: cfg.maxUploadBytes },
+    mail: mailEnabled(),
   }
   // desktop: sync state (account, cloud URL) only for the signed-in local session
   if (cfg.mode === 'desktop' && c.get('user')) {
@@ -80,7 +82,7 @@ systemRoutes.get('/', async (c) => {
 // ---- devices ----
 export const deviceRoutes = new Hono<AppEnv>()
 
-const deviceDto = (d: typeof devices.$inferSelect): Device => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt ?? undefined })
+const deviceDto = (d: typeof devices.$inferSelect): Device => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt ?? undefined, expiresAt: (d.lastSeenAt ?? d.createdAt) + DEVICE_IDLE_MS })
 
 /**
  * Create a device token. Authenticated with the session cookie / an existing device token, or directly with

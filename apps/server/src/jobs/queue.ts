@@ -7,6 +7,7 @@ import { jobDto } from '../dto'
 import { newId } from '../ids'
 import { ASSET_ERRORS, failAssetOfJob } from '../services/asset-recovery'
 import { scrubPaths } from './errors'
+import { jobEnded } from '../services/notify'
 
 export type JobRow = typeof jobs.$inferSelect
 
@@ -14,6 +15,8 @@ export function emitJob(j: JobRow) {
   const dto = jobDto(j)
   // results (transcripts, scripts) can be large; other processes reload by id
   ctx().bus.publish(j.workspaceId, 'job', dto, { id: j.id, inline: j.result == null ? dto : undefined })
+  // A-8: the person who started it hears about the end by email, if they chose to
+  if (j.status === 'done' || j.status === 'error') void jobEnded(j)
 }
 
 export async function enqueue(kind: JobKind, input: Record<string, unknown>, meta: { workspaceId: string; userId: string; projectId?: string | null; message?: string }): Promise<JobRow> {

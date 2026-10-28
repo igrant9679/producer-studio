@@ -21,6 +21,8 @@ export interface User {
   name: string
   avatarColor: string
   createdAt: number
+  /** The address was confirmed through mail (absent: older servers, or not confirmed). */
+  emailVerified?: boolean
 }
 
 export type Role = 'owner' | 'editor' | 'viewer'
@@ -104,8 +106,8 @@ export function normalizePreferences(raw: unknown): UserPreferences {
 // DELETE /api/workspaces/:id                          -> {ok: true}  (owner; personal spaces can't be deleted.
 //        Permanently removes the space's projects, media, exports, brand kit and AI keys for every member.)
 // GET  /api/workspaces/:id/members                    -> Member[]
-// POST /api/workspaces/:id/invites {email, role}      -> {ok, inviteUrl, expiresAt}  (owner)
-// GET  /api/workspaces/:id/invites                    -> PendingInvite[]  (owner; not accepted, withdrawn or expired)
+// POST /api/workspaces/:id/invites {email, role}      -> {ok, inviteUrl, expiresAt, emailed}  (owner; emailed when mail is on)
+// GET  /api/workspaces/:id/invites                    -> PendingInvite[]  (owner; not accepted or withdrawn; expired ones for 30 days)
 // DELETE /api/workspaces/:id/invites/:token           -> {ok: true}       (owner; the link stops working)
 // GET  /api/invites/:token                            -> InviteInfo       (signed in)
 // POST /api/invites/:token/accept                     -> Workspace        (signed in as the invited email; single use)
@@ -128,6 +130,12 @@ export interface PendingInvite {
   createdAt: number
   expiresAt: number
   inviteUrl: string
+  /** 'expired' ones stay listed for 30 days so an owner can Resend them (absent: pending). */
+  status?: 'pending' | 'expired'
+  /** When it was last emailed (absent: never, e.g. mail is off). */
+  sentAt?: number
+  /** POST …/invites only: whether the invite went out by email (false: copy the link and send it yourself). */
+  emailed?: boolean
 }
 
 export type InviteStatus = 'pending' | 'accepted' | 'expired' | 'revoked'
@@ -330,6 +338,8 @@ export interface Job<R = unknown> {
   error?: string
   createdAt: number
   updatedAt: number
+  /** Who started it (their own jobs end with a notification). */
+  startedBy?: string
 }
 
 // ---- AI ----
@@ -658,6 +668,8 @@ export interface SystemInfo {
   storage?: StorageHealth
   /** What this server accepts (MAX_UPLOAD_MB), for screens that state a limit. Optional: older servers omit it. */
   limits?: { uploadBytes: number }
+  /** The server sends mail (invites, password reset, job notices). Optional: older servers omit it. */
+  mail?: boolean
 }
 
 /** Result of the server's storage self-check: write, read back and delete a small object. */
@@ -737,6 +749,8 @@ export interface Device {
   name: string
   createdAt: number
   lastSeenAt?: number
+  /** The link stops working if it isn't used before this (90 days after it was last used). */
+  expiresAt?: number
 }
 
 export interface SyncProject {

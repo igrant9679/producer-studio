@@ -20,6 +20,7 @@ import { sceneRoutes } from './routes/scenes'
 import { smartRoutes, smartToolsRoutes } from './routes/smart'
 import { smoothRoutes } from './routes/smooth'
 import { authRoutes } from './routes/auth'
+import { accountRoutes } from './routes/account'
 import { eventRoutes, jobRoutes } from './routes/jobs'
 import { preferenceRoutes } from './routes/preferences'
 import { projectRoutes } from './routes/projects'
@@ -111,6 +112,7 @@ export function createApp() {
   // desktop-only routes first: they shadow signup and (while linked) workspace creation
   if (ctx().config.mode === 'desktop') app.route('/api', desktopRoutes)
   app.route('/api/auth', authRoutes)
+  app.route('/api/account', accountRoutes)
   app.route('/api/me', preferenceRoutes)
   app.route('/api/workspaces', workspaceShareRoutes)
   app.route('/api/workspaces', activityRoutes)

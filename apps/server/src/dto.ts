@@ -7,7 +7,7 @@ import { etagOf } from './etag'
 export const mediaPath = (assetId: string, variant: 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' | 'waveform') => `/api/media/${encodeURIComponent(assetId)}/${variant}`
 
 export function userDto(u: typeof users.$inferSelect): User {
-  return { id: u.id, email: u.email, name: u.name, avatarColor: u.avatarColor, createdAt: u.createdAt }
+  return { id: u.id, email: u.email, name: u.name, avatarColor: u.avatarColor, createdAt: u.createdAt, emailVerified: u.emailVerifiedAt != null }
 }
 
 export function projectSummary(p: typeof projects.$inferSelect): ProjectSummary {
@@ -109,6 +109,7 @@ export function jobDto(j: typeof jobs.$inferSelect): Job {
     error: j.error ?? undefined,
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
+    startedBy: j.userId,
   }
 }
 
