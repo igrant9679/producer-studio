@@ -58,6 +58,7 @@ import {
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
+import { ClipAudioOverlay, hasBand } from './audio/ClipAudioOverlay'
 import { TrackSoundButton } from './audio/TrackSound'
 import { Menu, MenuItem, Slider } from './controls'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
@@ -1148,7 +1149,9 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
           {(item.type === 'video' || item.type === 'image') && item.filter && width > 150 && <span className="badge">{FILTERS.find((f) => f.id === item.filter!.id)?.name ?? 'Filter'}</span>}
         </div>
         {(item.type === 'video' || item.type === 'audio') && item.fadeIn > 0 && <div className="tl-fade in" style={{ width: Math.min(width, item.fadeIn * zoom) }} />}
-        {(item.type === 'video' || item.type === 'audio') && item.fadeOut > 0 && <div className="tl-fade out" style={{ width: Math.min(width, item.fadeOut * zoom) }} />}        {kfTimes.map((t) => (
+        {(item.type === 'video' || item.type === 'audio') && item.fadeOut > 0 && <div className="tl-fade out" style={{ width: Math.min(width, item.fadeOut * zoom) }} />}
+        {(item.type === 'video' || item.type === 'audio') && hasBand(item, asset?.hasAudio) && height >= 26 && width >= 12 && <ClipAudioOverlay item={item} width={width} height={height - 2} zoom={zoom} selected={selected} locked={locked} />}
+        {kfTimes.map((t) => (
           <button
             key={t}
             tabIndex={-1}
