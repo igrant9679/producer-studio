@@ -63,6 +63,8 @@ describe('focused controls and selected text keep their keys (EDT-37)', () => {
   it('Space on a button reached with Tab presses the button, not play', () => {
     render(<><Shortcuts /><button>Split</button></>)
     const btn = screen.getByRole('button', { name: 'Split' })
+    // the Tab that reaches it (a mouse press from the test before could otherwise still count)
+    fireEvent.keyDown(document.body, { key: 'Tab' })
     act(() => btn.focus())
     const ev = fireEvent.keyDown(btn, { key: ' ' })
     expect(ev).toBe(true) // not prevented: the browser clicks the button
