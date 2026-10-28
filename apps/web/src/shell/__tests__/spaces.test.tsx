@@ -43,7 +43,7 @@ describe('<RenameSpaceModal>', () => {
     fireEvent.change(screen.getByLabelText('Space name'), { target: { value: '  Brand team ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
-    expect(rename).toHaveBeenCalledWith(team.id, 'Brand team')
+    expect(rename).toHaveBeenCalledWith(team.id, 'Brand team', team.etag)
     expect(useSession.getState().workspaces[1].name).toBe('Brand team')
   })
 })
