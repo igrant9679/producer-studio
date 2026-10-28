@@ -27,6 +27,7 @@ import { versionRoutes } from './routes/versions'
 import { exportRoutes, projectExportRoutes, shareRoutes, workspaceShareRoutes } from './routes/share'
 import { activityRoutes, commentRoutes, projectCollabRoutes } from './routes/collab'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
+import { brandRoutes } from './routes/brand'
 import { templateRoutes } from './routes/templates'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
@@ -114,6 +115,7 @@ export function createApp() {
   app.route('/api/me', preferenceRoutes)
   app.route('/api/workspaces', workspaceShareRoutes)
   app.route('/api/workspaces', activityRoutes)
+  app.route('/api/workspaces', brandRoutes)
   app.route('/api/workspaces', workspaceRoutes)
   app.route('/api/invites', inviteRoutes)
   app.route('/api/projects', projectExportRoutes)

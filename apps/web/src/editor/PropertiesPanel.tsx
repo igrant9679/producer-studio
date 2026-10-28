@@ -39,6 +39,7 @@ import { SmartTab } from './SmartPanel'
 import { thumbUrl } from './media'
 import { PROJECT_NAME_MAX, useEditor } from './store'
 import { ViewOnly } from './viewer'
+import { BrandFontOptions } from './brandFonts'
 import { timecode } from './timelineMath'
 
 const BLENDS: BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion']
@@ -526,6 +527,7 @@ function TextTab({ item }: { item: TextItem }) {
             {FONTS.map((f) => (
               <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
             ))}
+            <BrandFontOptions />
           </select>
         </Field>
         <Field label="Size / weight">
@@ -684,6 +686,7 @@ export function CaptionStyleEditor({ track }: { track: Track }) {
             {FONTS.map((f) => (
               <option key={f} value={f}>{f}</option>
             ))}
+            <BrandFontOptions />
           </select>
         </Field>
         <Slider label="Size" value={cs.style.fontSize} min={16} max={200} suffix="px" onChange={(v) => setStyle({ fontSize: v }, 'Caption size', 'csz')} />

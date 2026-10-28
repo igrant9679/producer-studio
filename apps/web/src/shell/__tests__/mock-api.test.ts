@@ -76,6 +76,18 @@ describe('the dev mock API', () => {
     expect((await call('POST', '/api/projects/p_launch/presence', { client: 't', open: true })).body.people).toHaveLength(1)
   })
 
+  it('keeps several brand kits with the server’s rules (A-21)', async () => {
+    expect((await call('POST', '/api/workspaces/ws_client/brand-kits', {})).status).toBe(403)
+    expect((await call('GET', '/api/workspaces/ws_client/brand-kits')).status).toBe(200)
+    const made = await call('POST', '/api/workspaces/ws_team/brand-kits', {})
+    expect(made.body).toMatchObject({ default: false, doc: { name: 'Northwind copy' } })
+    expect((await call('DELETE', '/api/workspaces/ws_team/brand-kits/default')).status).toBe(409)
+    const list = (await call('POST', `/api/workspaces/ws_team/brand-kits/${made.body.id}/default`)).body.items
+    expect(list[0]).toMatchObject({ default: true, doc: { name: 'Northwind copy' } })
+    expect((await call('POST', '/api/workspaces/ws_team/brand/palette', { assetId: 'as_logo' })).body.colors.length).toBeGreaterThan(1)
+    expect((await fetch('/api/workspaces/ws_client/brand/fonts?family=Acme', { method: 'POST', body: 'x' })).status).toBe(403)
+  })
+
   it('lets only owners invite', async () => {
     expect((await call('POST', '/api/workspaces/ws_team/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(403)
     expect((await call('POST', '/api/workspaces/ws_personal/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(200)

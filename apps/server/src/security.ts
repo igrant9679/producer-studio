@@ -44,5 +44,7 @@ export function bodyLimitFor(method: string, path: string): number | null {
   if (/^\/api\/uploads\/[^/]+\/data$/.test(path)) return null
   if (/^\/api\/projects(\/[^/]+)?$/.test(path) || path === '/api/ai/assistant') return 64 * MB
   if (path.startsWith('/api/ai/') || path.startsWith('/api/voice/') || path.startsWith('/api/sync')) return 8 * MB
+  // a brand kit's font file (A-21: at most 5 MB, checked by the route too)
+  if (/^\/api\/workspaces\/[^/]+\/brand\/fonts$/.test(path)) return 6 * MB
   return 1 * MB
 }

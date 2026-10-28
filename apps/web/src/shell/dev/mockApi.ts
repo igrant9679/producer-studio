@@ -27,6 +27,7 @@ import type {
   Workspace,
 } from '@producer/core'
 import { INVITE_TTL_MS, VOICES, createProject as coreCreateProject } from '@producer/core'
+import { registerR3cMocks } from './mockR3c'
 
 type Json = Record<string, unknown>
 
@@ -554,6 +555,8 @@ on('PUT', '/api/workspaces/([^/]+)/brand', async (m, _q, b) => {
   brands[m[1]] = b as unknown as BrandKitDoc
   return json(brands[m[1]])
 })
+// brand kits, templates, onboarding, Voice Studio and Producer additions (R3-C)
+registerR3cMocks({ on, json, fail, delay, editorOnly, memberOf: (ws) => workspaces.some((w) => w.id === ws), brands })
 
 on('GET', '/api/projects', async (_m, q) => {
   await delay(280)

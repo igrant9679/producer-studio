@@ -65,7 +65,8 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   status, progress, message, input jsonb, result jsonb, error, project_id, workspace_id, user_id,
   timestamps, locked_by, locked_at)`, `exports`, `share_links(token, project_id, export_id, expires_at,
   password_hash, allow_download, allow_comments, views, last_viewed_at)`, `brand_kits(workspace_id, doc jsonb)`,
-  `project_versions` (saved versions, v10), `idempotency_keys` (v10), `comments`, `activity` (v11, see Collaboration).
+  `project_versions` (saved versions, v10), `idempotency_keys` (v10), `comments`, `activity` (v11, see Collaboration),
+  `extra_brand_kits`, `brand_fonts`, `voice_settings`, `member_settings` (v14, see Brand kits, voice and onboarding).
 - **Object storage**: S3-compatible (`S3_*` env; R2/Railway buckets) with presigned PUT uploads and signed GET;
   dev falls back to local disk `.data/storage` with the same interface.
 - The project document is the `Project` type from core. Asset `src` = storage key; the client resolves media via
@@ -195,6 +196,21 @@ and comment.
   commented and member changes, recorded per space by the routes (and the export job) and listed newest first in
   pages (`GET /api/workspaces/:id/activity`), shown on the shell's Activity page.
 - None of these tables sync to desktops.
+
+## Brand kits, voice and onboarding (migration v14; contract in `packages/core/src/brand.ts`)
+- **Several kits per space** (`services/brand.ts`, `routes/brand.ts`): `brand_kits` stays the space's default kit
+  (synced to desktops, read by `GET/PUT /api/workspaces/:id/brand`); `extra_brand_kits` holds the others
+  (`/api/workspaces/:id/brand-kits[/:kitId]`, If-Match on save). "Make default" moves a kit's settings into the default
+  row and keeps the old default as another kit. Producer briefs, `POST /api/projects {templateId, brandKitId}` and
+  `POST /api/templates/from-brand` take a kit id (`getBrandKit`; a deleted kit falls back to the default).
+- **Colours from a logo** (`services/palette.ts`): a raster logo already in the space is shrunk by ffmpeg to 64×64 RGBA
+  and quantised in JS (opaque pixels binned, near bins merged, most used first); an SVG gives the colours written in
+  it. Nothing is fetched from the web.
+- **Font files** (`brand_fonts`, stored under `ws/<id>/brand-fonts/`): sniffed by content (WOFF2, WOFF, TTF, OTF,
+  ≤ 5 MB), usable as a kit's headline or body font (`customFonts` on the kit lists them, so `lookPalette` keeps them).
+  The editor registers the space's fonts with the FontFace API; the export copies the files a project uses and declares
+  them next to the bundled faces (`render/brandFonts.ts`).
+- None of the v14 tables sync to desktops: a desktop sees the default kit only.
 
 ## Two products, one codebase
 

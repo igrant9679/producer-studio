@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 14
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -461,6 +461,51 @@ CREATE TABLE IF NOT EXISTS activity (
 CREATE INDEX IF NOT EXISTS activity_ws_idx ON activity(workspace_id, created_at, id);
 `
 
+/**
+ * v14 — brand kits and voice (R3-C): a space's other brand kits (brand_kits stays its default, the one desktops sync),
+ * font files uploaded for them, the space's voice settings (pronunciation dictionary), and each member's own settings
+ * in a space (Voice Studio draft, favourite voices, the onboarding checklist). None of these sync to desktops.
+ */
+export const DDL_V14 = `
+CREATE TABLE IF NOT EXISTS extra_brand_kits (
+  id text PRIMARY KEY,
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  doc jsonb NOT NULL,
+  created_by text,
+  created_at double precision NOT NULL,
+  updated_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS extra_brand_kits_ws_idx ON extra_brand_kits(workspace_id, created_at);
+
+CREATE TABLE IF NOT EXISTS brand_fonts (
+  id text PRIMARY KEY,
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  family text NOT NULL,
+  format text NOT NULL,
+  weight integer NOT NULL DEFAULT 400,
+  italic boolean NOT NULL DEFAULT false,
+  storage_key text NOT NULL,
+  size_bytes integer NOT NULL,
+  created_by text,
+  created_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS brand_fonts_ws_idx ON brand_fonts(workspace_id, family);
+
+CREATE TABLE IF NOT EXISTS voice_settings (
+  workspace_id text PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  doc jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at double precision NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS member_settings (
+  user_id text NOT NULL,
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  doc jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at double precision NOT NULL,
+  PRIMARY KEY (user_id, workspace_id)
+);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -476,4 +521,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [9, DDL_V9],
   [10, DDL_V10],
   [11, DDL_V11],
+  [14, DDL_V14],
 ]

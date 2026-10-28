@@ -155,6 +155,8 @@ export interface BrandKitDoc {
   /** Default caption preset id, default voice id. */
   captionPreset?: string
   voice?: string
+  /** Families among `fonts` that are fonts uploaded to the space (brand.ts BrandFont), set by the server on save. */
+  customFonts?: string[]
 }
 
 // ---- lists ----
@@ -200,6 +202,9 @@ export interface CreateProjectRequest {
   fps?: number
   /** Start from a template project (built-in id `tpl:<look>` or a workspace template project id). */
   templateId?: string
+  /** A built-in look in another aspect than its own ('16:9' | '9:16' | '1:1'), with this brand kit (A-21/A-22). */
+  aspect?: string
+  brandKitId?: string
   kind?: 'edit' | 'producer'
   /** Client-generated project id (desktop-created projects keep their id in the cloud). */
   id?: string
