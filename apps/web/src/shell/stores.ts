@@ -3,6 +3,7 @@
 import type { AssetRecord, Job } from '@producer/core'
 import { create } from 'zustand'
 import { api } from '../lib/api'
+import { onUserReset } from '../lib/session'
 
 type AssetListener = (a: AssetRecord) => void
 type ProjectListener = (p: { id: string; version: number }) => void
@@ -60,6 +61,8 @@ export const isActive = (j: Job) => j.status === 'queued' || j.status === 'runni
 // ---- uploads ----
 export interface UploadItem {
   id: string
+  /** The space it was uploaded to: the Library and the jobs list show only the current space's uploads. */
+  workspaceId?: string
   name: string
   size: number
   progress: number
@@ -93,12 +96,24 @@ export async function uploadFiles(workspaceId: string, files: File[]): Promise<A
   await Promise.all(
     files.map(async (file) => {
       const id = `up${++upN}`
-      patch(id, { name: file.name, size: file.size, progress: 0, status: 'uploading' })
+      patch(id, { workspaceId, name: file.name, size: file.size, progress: 0, status: 'uploading' })
       try {
         const rec = await api.upload(workspaceId, file, (f) => patch(id, { progress: f }))
         patch(id, { progress: 1, status: rec.status === 'ready' ? 'ready' : 'processing', assetId: rec.asset.id })
         liveBus.emitAsset(rec)
         out.push(rec)
+        // the live stream only covers the space on screen: after a switch, polling still sees it finish
+        if (rec.status !== 'ready' && rec.status !== 'error') {
+          let last: AssetRecord['status'] = rec.status
+          void waitForAssetReady(rec.asset.id, {
+            intervalMs: 5000,
+            onUpdate: (a) => {
+              if (a.status === last) return
+              last = a.status
+              liveBus.emitAsset(a)
+            },
+          }).catch(() => undefined)
+        }
       } catch (e) {
         patch(id, { status: 'error', error: e instanceof Error ? e.message : String(e) })
       }
@@ -106,6 +121,15 @@ export async function uploadFiles(workspaceId: string, files: File[]): Promise<A
   )
   return out
 }
+
+// The next person to sign in on this tab doesn't inherit the job list or the uploads.
+onUserReset(() => {
+  useJobs.setState({ jobs: {} })
+  useUploads.setState({ items: [] })
+})
+
+/** This space's uploads (an upload from before the space was recorded counts everywhere). */
+export const uploadsIn = (items: UploadItem[], workspaceId: string | undefined) => items.filter((u) => !u.workspaceId || u.workspaceId === workspaceId)
 
 // Mark processing uploads ready when the server says so.
 liveBus.onAsset((a) => {

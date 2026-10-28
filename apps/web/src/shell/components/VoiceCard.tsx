@@ -80,7 +80,8 @@ export const useVoicesVersion = create<{ n: number; bump: () => void }>((set) =>
 
 /** Voices from the server (built-in + a space's cloned/designed voices: `space`, else the current one), else the bundled Kokoro list. */
 export function useVoices(space?: string): Voice[] {
-  const [list, setList] = useState<Voice[]>(CORE_VOICES)
+  // kept with the space it came from: another space's cloned voices never show here, even when this load fails
+  const [got, setGot] = useState<{ ws?: string; list: Voice[] }>({ list: CORE_VOICES })
   const current = useSession((s) => s.workspaceId)
   const workspaceId = space ?? current
   const version = useVoicesVersion((s) => s.n)
@@ -89,13 +90,13 @@ export function useVoices(space?: string): Voice[] {
     api
       .voices(workspaceId)
       // the space's own voices first
-      .then((v) => alive && Array.isArray(v) && v.length && setList([...v.filter(isCustomVoice), ...v.filter((x) => !isCustomVoice(x))]))
+      .then((v) => alive && Array.isArray(v) && v.length && setGot({ ws: workspaceId, list: [...v.filter(isCustomVoice), ...v.filter((x) => !isCustomVoice(x))] }))
       .catch(() => undefined)
     return () => {
       alive = false
     }
   }, [workspaceId, version])
-  return list
+  return got.ws === workspaceId ? got.list : CORE_VOICES
 }
 
 export const VOICE_FILTERS = ['All', 'My voices', 'Female', 'Male', 'American', 'British', 'Narration', 'Conversational'] as const

@@ -23,7 +23,7 @@ import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useCreateAndOpen, type EditorTab } from '../actions'
 import { useIsDesktop } from '../system'
-import { usePageTitle } from '../ui'
+import { useEditGate, usePageTitle } from '../ui'
 import { AMBER, CYAN, GREEN, QuickCard, VIOLET } from './HomePage'
 
 interface Tool {
@@ -84,6 +84,7 @@ export default function ToolsPage() {
   const navigate = useNavigate()
   const [create] = useCreateAndOpen()
   const isDesktop = useIsDesktop()
+  const gate = useEditGate()
   return (
     <div className="ps-page">
       <div className="ps-page-head">
@@ -108,6 +109,8 @@ export default function ToolsPage() {
                 body={t.body}
                 soon={t.soon}
                 badge={t.desktop && !isDesktop ? 'Desktop app' : undefined}
+                // a tool that opens a new project; Voice Studio itself is fine to browse
+                lockedTip={t.go && !t.go.route ? gate.tip : undefined}
                 {...(t.tint ?? {})}
                 onClick={() => {
                   if (!t.go) return

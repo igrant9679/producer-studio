@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { useCreateAndOpen } from '../actions'
-import { CardSkeletons, EmptyState, Modal, Soon, Spinner, Thumb, useAsync, usePageTitle } from '../ui'
+import { CardSkeletons, EmptyState, Modal, Soon, Spinner, Thumb, useAsync, useEditGate, usePageTitle } from '../ui'
 import { formatDuration } from '../util'
 
 function aspectNum(a: string): number {
@@ -35,6 +35,7 @@ function TemplateCard({ t, onOpen }: { t: TemplateSummary; onOpen: () => void })
 function TemplateModal({ list, index, onIndex, onClose }: { list: TemplateSummary[]; index: number; onIndex: (i: number) => void; onClose: () => void }) {
   const t = list[index]
   const [create, busy] = useCreateAndOpen()
+  const gate = useEditGate()
   const a = aspectNum(t.aspect)
   return (
     <Modal onClose={onClose} width={960} title={t.name} subtitle={`${t.builtIn ? 'Producer Studio look' : "Your team's template"} · ${t.category}`}>
@@ -56,7 +57,7 @@ function TemplateModal({ list, index, onIndex, onClose }: { list: TemplateSummar
           <p className="muted" style={{ fontSize: '0.8125rem', lineHeight: 1.55 }}>
             Opens as a new project with placeholder clips and texts you can replace — drop in your footage, change the words, keep the timing and motion.
           </p>
-          <button className="btn primary" style={{ width: '100%', height: 44 }} disabled={busy} onClick={() => void create({ templateId: t.id })}>
+          <button className="btn primary" style={{ width: '100%', height: 44 }} disabled={busy || !gate.canEdit} data-tip={gate.tip} onClick={() => void create({ templateId: t.id })}>
             {busy ? <Spinner /> : <LayoutTemplate size={16} />} Use this template
           </button>
         </div>
@@ -87,8 +88,8 @@ export default function TemplatesPage() {
         <p>Branded motion, titles and pacing — pick one, swap in your footage, ship.</p>
         <div className="ps-thero-search">
           <div className="ps-seg">
-            <button className={type === 'video' ? 'on' : ''} onClick={() => setType('video')}><Film size={14} /> Video</button>
-            <button className={type === 'image' ? 'on' : ''} onClick={() => setType('image')}><ImageIcon size={14} /> Image</button>
+            <button className={type === 'video' ? 'on' : ''} aria-pressed={type === 'video'} onClick={() => setType('video')}><Film size={14} /> Video</button>
+            <button className={type === 'image' ? 'on' : ''} aria-pressed={type === 'image'} onClick={() => setType('image')}><ImageIcon size={14} /> Image</button>
           </div>
           <div style={{ position: 'relative', flex: 1 }}>
             <Search size={16} style={{ position: 'absolute', left: 13, top: 13, color: 'var(--text-3)' }} />
@@ -101,9 +102,9 @@ export default function TemplatesPage() {
         <EmptyState icon={<ImageIcon size={24} />} title="Image templates are coming soon" body="Thumbnails, covers, carousels and social posts designed from your brand kit. For now, switch back to video templates." action={<button className="btn" onClick={() => setType('video')}>Browse video templates</button>} />
       ) : (
         <>
-          <div className="row ps-chips-row" role="tablist" aria-label="Categories">
+          <div className="row ps-chips-row" role="group" aria-label="Categories">
             {cats.map((c) => (
-              <button key={c} role="tab" aria-selected={cat === c} className={clsx('chip', cat === c && 'active')} onClick={() => setCat(c)}>{c}</button>
+              <button key={c} aria-pressed={cat === c} className={clsx('chip', cat === c && 'active')} onClick={() => setCat(c)}>{c}</button>
             ))}
           </div>
           {error ? (
@@ -127,7 +128,9 @@ export default function TemplatesPage() {
               <span className="spacer" />
               <Soon label="Community gallery soon" />
             </div>
-            {loading && !data ? (
+            {error ? (
+              <div className="ps-alert">Couldn’t load your team’s templates. <button className="btn sm" onClick={reload}>Retry</button></div>
+            ) : loading && !data ? (
               <div className="ps-grid ps-tgrid"><CardSkeletons n={3} /></div>
             ) : teamShown.length ? (
               <div className="ps-grid ps-tgrid">

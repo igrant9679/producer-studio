@@ -181,6 +181,12 @@
 .ps-visual-made a { color: var(--accent); }
 @media (max-width: 700px) {
   .ps-source { grid-template-columns: 1fr; }
+  /* phone: the stepper keeps its five numbers in a row; the words show for the current step only */
+  .ps-stepper { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+  .ps-stepper button { justify-content: center; padding: 8px 4px; }
+  .ps-stepper li:not(.on) .ps-step-text { display: none; }
+  .ps-stepper li.on .ps-step-text span { display: none; }
+  .ps-wz-head h1 { font-size: 1.5rem; white-space: normal; }
 }
 
 /* the draft saved to the project; a space switched mid-wizard */

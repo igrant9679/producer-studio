@@ -33,7 +33,7 @@ import { useSession } from '../../lib/session'
 import { toastError } from '../../lib/toast'
 import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } from '../components/VoiceCard'
 import { sysFetch, useIsDesktop, useSystem } from '../system'
-import { Modal, Popover, Progress, Spinner, Thumb, useAsync, useFilePicker, usePageTitle } from '../ui'
+import { Modal, Popover, Progress, RadioCards, Spinner, Thumb, useAsync, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes, formatDuration, formatTime, ssGet } from '../util'
 import { DIAGRAM_INFO, VISUAL_KIND_INFO, defaultVisual, diagramFromText, diagramToText, withPrompt } from './sceneVisuals'
 import { takeProducerHandoff } from './handoff'
@@ -110,7 +110,7 @@ function Stepper({ s, onJump }: { s: WizardState; onJump: (id: StepId) => void }
 
 // ---------------- ① upload ----------------
 function LibraryPicker({ workspaceId, onClose, onPick }: { workspaceId: string; onClose: () => void; onPick: (recs: AssetRecord[]) => void }) {
-  const { data, loading } = useAsync(() => api.assets(workspaceId, 'video'), [workspaceId])
+  const { data, loading, error, reload } = useAsync(() => api.assets(workspaceId, 'video'), [workspaceId])
   const [sel, setSel] = useState<Set<string>>(new Set())
   const list = (data ?? []).filter((a) => a.asset.kind === 'video' && a.status !== 'error')
   return (
@@ -126,7 +126,9 @@ function LibraryPicker({ workspaceId, onClose, onPick }: { workspaceId: string; 
         </>
       }
     >
-      {loading ? (
+      {error ? (
+        <div className="ps-alert" role="alert">Couldn’t load this space’s videos. <button className="btn sm" onClick={reload}>Retry</button></div>
+      ) : loading ? (
         <div className="ps-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
           {Array.from({ length: 6 }, (_, i) => <div key={i} className="skeleton" style={{ aspectRatio: '16/9' }} />)}
         </div>
@@ -416,11 +418,11 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
             ))}
           </div>
         </div>
-        <div className="ps-voice-grid" role="radiogroup" aria-label="Narration voice">
+        <RadioCards className="ps-voice-grid" label="Narration voice">
           {shown.map((v) => (
             <VoiceCard key={v.id} v={v} compact selected={b.voice === v.id} onSelect={() => set({ voice: v.id })} />
           ))}
-        </div>
+        </RadioCards>
         {errs.voice && <div className="ps-field-err">{errs.voice}</div>}
       </div>
 

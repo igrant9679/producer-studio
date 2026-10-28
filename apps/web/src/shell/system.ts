@@ -3,7 +3,7 @@
 import type { AiKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, SyncFailure, SyncStatus, SystemInfo } from '@producer/core'
 import { useEffect } from 'react'
 import { create } from 'zustand'
-import { HttpError } from '../lib/api'
+import { HttpError, noteStatus } from '../lib/api'
 import { useSession } from '../lib/session'
 
 export async function sysFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -13,6 +13,7 @@ export async function sysFetch<T>(method: string, path: string, body?: unknown):
     headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
+  noteStatus(path, res.status)
   if (!res.ok) {
     let err: ApiError = { error: res.statusText || `HTTP ${res.status}` }
     try {

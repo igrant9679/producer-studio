@@ -22,4 +22,8 @@ export const useToasts = create<ToastState>((set) => ({
 }))
 
 export const toast = (text: string) => useToasts.getState().push(text)
-export const toastError = (e: unknown) => useToasts.getState().push(e instanceof Error ? e.message : String(e), 'error')
+/** An error toast; `what` names what failed ("Couldn’t cancel the export"). */
+export const toastError = (e: unknown, what?: string) => {
+  const msg = e instanceof Error ? e.message : String(e)
+  useToasts.getState().push(what ? `${what}: ${msg}` : msg, 'error')
+}

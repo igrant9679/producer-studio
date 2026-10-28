@@ -27,10 +27,23 @@ export function validateAuth(mode: 'login' | 'signup', v: { name: string; email:
   return e
 }
 
-/** Only allow same-origin relative redirects (browsers read `/\host` like `//host`). */
+/**
+ * Where to go after signing in: an app path on this origin, else home. The path is resolved the way the browser will
+ * (which reads `/\host` like `//host` and drops tabs and newlines, so `/\t/host` is `//host` too) and the resolved
+ * URL is what's returned, so what was checked is what's opened.
+ */
 export function safeNext(next: string | null): string {
-  if (!next || !next.startsWith('/') || next.startsWith('//') || next.includes('\\') || next.startsWith('/login') || next.startsWith('/signup')) return '/'
-  return next
+  if (!next || !next.startsWith('/') || next.startsWith('//') || /[\\\u0000-\u001f\u007f]/.test(next)) return '/'
+  let url: URL
+  try {
+    url = new URL(next, window.location.origin)
+  } catch {
+    return '/'
+  }
+  if (url.origin !== window.location.origin) return '/'
+  const path = `${url.pathname}${url.search}${url.hash}`
+  if (/^\/(login|signup)(\/|\?|#|$)/.test(path)) return '/'
+  return path
 }
 
 export function authErrorMessage(err: unknown, mode: 'login' | 'signup'): string {
@@ -48,6 +61,7 @@ export function authErrorMessage(err: unknown, mode: 'login' | 'signup'): string
 
 export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
   const status = useSession((s) => s.status)
+  const signedOutReason = useSession((s) => s.signedOutReason)
   const login = useSession((s) => s.login)
   const signup = useSession((s) => s.signup)
   const [params] = useSearchParams()
@@ -122,6 +136,11 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
           {serverError && (
             <div className="ps-alert" role="alert" style={{ marginBottom: 16 }}>
               {serverError}
+            </div>
+          )}
+          {!serverError && signedOutReason && mode === 'login' && (
+            <div className="ps-alert info" role="status" style={{ marginBottom: 16 }}>
+              {signedOutReason === 'expired' ? 'Your session ended. Sign in again to pick up where you left off.' : 'You signed out in another tab.'}
             </div>
           )}
 

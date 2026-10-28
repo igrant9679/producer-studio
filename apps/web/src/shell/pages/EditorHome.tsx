@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { projectPath, useCreateAndOpen } from '../actions'
 import { ProjectCard } from '../components/ProjectCard'
 import { AspectBox, AspectPickerModal } from '../modals'
-import { CardSkeletons, EmptyState, usePageTitle } from '../ui'
+import { CardSkeletons, EmptyState, useEditGate, usePageTitle } from '../ui'
 import { AMBER, CYAN, QuickCard, VIOLET, useRecentProjects } from './HomePage'
 
 export default function EditorHome() {
@@ -13,6 +13,7 @@ export default function EditorHome() {
   const navigate = useNavigate()
   const [modal, setModal] = useState(false)
   const [create, creating] = useCreateAndOpen()
+  const gate = useEditGate()
   const recent = useRecentProjects(12)
 
   return (
@@ -26,7 +27,7 @@ export default function EditorHome() {
       </div>
 
       <div className="ps-editor-create">
-        <button className="ps-create-hero" onClick={() => setModal(true)} disabled={creating}>
+        <button className="ps-create-hero" onClick={() => setModal(true)} disabled={creating || !gate.canEdit} data-tip={gate.tip}>
           <span className="ps-create-hero-icon"><Plus size={28} /></span>
           <span>
             <strong>Create new</strong>
@@ -35,7 +36,7 @@ export default function EditorHome() {
         </button>
         <div className="ps-aspect-quick">
           {ASPECT_RATIOS.slice(0, 5).map((a) => (
-            <button key={a.id} className="ps-aspect" onClick={() => void create({ width: a.width, height: a.height })} disabled={creating} title={`New ${a.name} project — ${a.hint}`}>
+            <button key={a.id} className="ps-aspect" onClick={() => void create({ width: a.width, height: a.height })} disabled={creating || !gate.canEdit} title={gate.tip ?? `New ${a.name} project — ${a.hint}`}>
               <div className="ps-aspect-box" style={{ height: 44 }}><AspectBox w={a.width} h={a.height} max={38} /></div>
               <strong>{a.name}</strong>
               <span>{a.hint}</span>
@@ -49,11 +50,11 @@ export default function EditorHome() {
           <h2 className="ps-h2">Start with AI</h2>
         </div>
         <div className="ps-grid ps-cols-5">
-          <QuickCard icon={<Captions size={20} />} title="AI captions" body="Speech-to-caption with word timing and styles." onClick={() => void create({ tab: 'captions', name: 'Auto captions' })} {...CYAN} />
-          <QuickCard icon={<FileText size={20} />} title="Transcript-based editing" body="Delete words, remove fillers and pauses." onClick={() => void create({ tab: 'transcript', name: 'Transcript edit' })} {...AMBER} />
-          <QuickCard icon={<Type size={20} />} title="Text templates" body="Titles, lower thirds and callouts, animated." onClick={() => void create({ tab: 'text', name: 'Untitled project' })} />
-          <QuickCard icon={<Wand2 size={20} />} title="Transitions" body="Crossfades, pushes, zooms and wipes between clips." onClick={() => void create({ tab: 'transitions', name: 'Untitled project' })} {...VIOLET} />
-          <QuickCard icon={<Sparkles size={20} />} title="Producer AI" body="Let AI write, narrate and assemble the first cut." onClick={() => navigate('/producer/new')} {...VIOLET} />
+          <QuickCard icon={<Captions size={20} />} title="AI captions" body="Speech-to-caption with word timing and styles." onClick={() => void create({ tab: 'captions', name: 'Auto captions' })} lockedTip={gate.tip} {...CYAN} />
+          <QuickCard icon={<FileText size={20} />} title="Transcript-based editing" body="Delete words, remove fillers and pauses." onClick={() => void create({ tab: 'transcript', name: 'Transcript edit' })} lockedTip={gate.tip} {...AMBER} />
+          <QuickCard icon={<Type size={20} />} title="Text templates" body="Titles, lower thirds and callouts, animated." onClick={() => void create({ tab: 'text', name: 'Untitled project' })} lockedTip={gate.tip} />
+          <QuickCard icon={<Wand2 size={20} />} title="Transitions" body="Crossfades, pushes, zooms and wipes between clips." onClick={() => void create({ tab: 'transitions', name: 'Untitled project' })} lockedTip={gate.tip} {...VIOLET} />
+          <QuickCard icon={<Sparkles size={20} />} title="Producer AI" body="Let AI write, narrate and assemble the first cut." onClick={() => navigate('/producer/new')} lockedTip={gate.tip} {...VIOLET} />
         </div>
       </section>
 
@@ -63,7 +64,9 @@ export default function EditorHome() {
           <span className="spacer" />
           <Link to="/library" className="btn ghost sm">Library <ArrowUpRight size={14} /></Link>
         </div>
-        {recent.loading && !recent.data ? (
+        {recent.error ? (
+          <div className="ps-alert">Couldn’t load your projects. <button className="btn sm" onClick={recent.reload}>Retry</button></div>
+        ) : recent.loading && !recent.data ? (
           <div className="ps-grid"><CardSkeletons n={4} /></div>
         ) : recent.data?.length ? (
           <div className="ps-grid">
@@ -72,7 +75,7 @@ export default function EditorHome() {
             ))}
           </div>
         ) : (
-          <EmptyState icon={<FolderOpen size={24} />} title="Your edits will live here" body="Create a project above — it autosaves as you work." action={<button className="btn primary" onClick={() => setModal(true)}><Clapperboard size={15} /> Create new</button>} />
+          <EmptyState icon={<FolderOpen size={24} />} title="Your edits will live here" body="Create a project above — it autosaves as you work." action={<button className="btn primary" {...gate.props} onClick={() => setModal(true)}><Clapperboard size={15} /> Create new</button>} />
         )}
       </section>
 

@@ -7,7 +7,7 @@ import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { absoluteUrl, copyText } from '../util'
 import { CreateSpaceModal, DeleteSpaceModal, InviteForm, RenameSpaceModal } from '../modals'
-import { Avatar, EmptyState, Modal, Spinner, spaceColor, useAsync, usePageTitle } from '../ui'
+import { Avatar, ConfirmDialog, EmptyState, spaceColor, useAsync, usePageTitle } from '../ui'
 
 const ROLE: Record<string, { label: string; icon: React.ReactNode; desc: string }> = {
   owner: { label: 'Owner', icon: <Crown size={13} />, desc: 'Manage members, brand kit and everything in the space' },
@@ -93,44 +93,50 @@ export default function SpacePage() {
         <button className="btn" onClick={() => setModal('create')}><Plus size={15} /> Create space</button>
       </div>
 
-      <section className="card ps-brand-sec" style={{ marginBottom: 18 }}>
-        <div className="ps-brand-sec-head"><UserPlus size={15} /> <strong>Invite people</strong><span className="muted">Make a link for one person to join {ws?.name}</span></div>
-        {ws?.personal && <div className="ps-alert info" style={{ marginBottom: 12 }}>Personal spaces are just for you. Create a team space to collaborate — projects, media and the brand kit are shared with everyone in it.</div>}
-        {isOwner && workspaceId ? (
-          <InviteForm
-            workspaceId={workspaceId}
-            onInvited={() => {
-              members.reload()
-              pending.reload()
-            }}
-          />
-        ) : (
-          <div className="muted">Only owners of this space can invite people.</div>
-        )}
-        {isOwner && !!pending.data?.length && (
-          <div className="ps-members" style={{ marginTop: 16 }}>
-            <div className="muted" style={{ fontSize: '0.75rem', marginBottom: 6 }}>Waiting to be accepted</div>
-            {pending.data.map((p) => (
-              <div key={p.token} className="ps-member">
-                <Clock size={18} style={{ color: 'var(--text-3)', flex: 'none' }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <strong>{p.email}</strong>
-                  <span>{ROLE[p.role]?.label ?? p.role} · link works until {new Date(p.expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
+      {ws?.personal ? (
+        <div className="ps-alert info" style={{ marginBottom: 18 }}>
+          <span style={{ flex: 1 }}>Personal spaces are just for you. Create a team space to collaborate — projects, media and the brand kit are shared with everyone in it.</span>
+          <button className="btn sm" onClick={() => setModal('create')}><Plus size={14} /> Create a team space</button>
+        </div>
+      ) : (
+        <section className="card ps-brand-sec" style={{ marginBottom: 18 }}>
+          <div className="ps-brand-sec-head"><UserPlus size={15} /> <strong>Invite people</strong><span className="muted">Make a link for one person to join {ws?.name}</span></div>
+          {isOwner && workspaceId ? (
+            <InviteForm
+              workspaceId={workspaceId}
+              onInvited={() => {
+                members.reload()
+                pending.reload()
+              }}
+            />
+          ) : (
+            <div className="muted">Only owners of this space can invite people.</div>
+          )}
+          {isOwner && !!pending.data?.length && (
+            <div className="ps-members" style={{ marginTop: 16 }}>
+              <div className="muted" style={{ fontSize: '0.75rem', marginBottom: 6 }}>Waiting to be accepted</div>
+              {pending.data.map((p) => (
+                <div key={p.token} className="ps-member">
+                  <Clock size={18} style={{ color: 'var(--text-3)', flex: 'none' }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <strong>{p.email}</strong>
+                    <span>{ROLE[p.role]?.label ?? p.role} · link works until {new Date(p.expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
+                  </div>
+                  <button
+                    className="btn sm"
+                    onClick={async () => {
+                      if (await copyText(absoluteUrl(p.inviteUrl))) setCopied(p.token)
+                    }}
+                  >
+                    {copied === p.token ? <Check size={14} /> : <Copy size={14} />} {copied === p.token ? 'Copied' : 'Copy link'}
+                  </button>
+                  <button className="btn sm ghost" onClick={() => void withdraw(p.token, p.email)}>Withdraw</button>
                 </div>
-                <button
-                  className="btn sm"
-                  onClick={async () => {
-                    if (await copyText(absoluteUrl(p.inviteUrl))) setCopied(p.token)
-                  }}
-                >
-                  {copied === p.token ? <Check size={14} /> : <Copy size={14} />} {copied === p.token ? 'Copied' : 'Copy link'}
-                </button>
-                <button className="btn sm ghost" onClick={() => void withdraw(p.token, p.email)}>Withdraw</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="card ps-brand-sec">
         <div className="ps-brand-sec-head"><Users size={15} /> <strong>Members</strong><span className="muted">{members.data ? `${members.data.length}` : ''}</span></div>
@@ -206,26 +212,18 @@ export default function SpacePage() {
         </section>
       )}
       {removing && (
-        <Modal
+        <ConfirmDialog
           title={removing.userId === user?.id ? `Leave “${ws?.name}”?` : `Remove ${removing.name} from “${ws?.name}”?`}
-          subtitle={
+          body={
             removing.userId === user?.id
               ? 'You’ll lose access to its projects, media and brand kit. An owner can invite you back.'
               : 'They lose access to its projects, media and brand kit at once, and any invite still waiting for them is withdrawn. Their work stays in the space.'
           }
+          confirmLabel={removing.userId === user?.id ? 'Leave space' : 'Remove'}
+          busy={busy === removing.userId}
+          onConfirm={() => void remove(removing)}
           onClose={() => setRemoving(undefined)}
-          width={460}
-          footer={
-            <>
-              <button className="btn ghost" onClick={() => setRemoving(undefined)} autoFocus>Cancel</button>
-              <button className="btn danger" onClick={() => void remove(removing)} disabled={busy === removing.userId}>
-                {busy === removing.userId && <Spinner />} {removing.userId === user?.id ? 'Leave space' : 'Remove'}
-              </button>
-            </>
-          }
-        >
-          <span />
-        </Modal>
+        />
       )}
       {modal === 'create' && <CreateSpaceModal onClose={() => setModal(undefined)} />}
       {modal === 'rename' && ws && <RenameSpaceModal ws={ws} onClose={() => setModal(undefined)} />}
