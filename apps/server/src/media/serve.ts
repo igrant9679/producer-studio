@@ -1,10 +1,11 @@
 // Serve a stored object with HTTP Range support (206 partial content) or redirect to a signed URL (S3).
+import path from 'node:path'
 import { Readable } from 'node:stream'
 import type { Context } from 'hono'
 import { ctx } from '../context'
 import { HttpError, notFound } from '../http'
 import { log } from '../log'
-import { SVG_MIME, isMediaMime } from '../services/assets'
+import { MIME_BY_EXT, SVG_MIME, isMediaMime } from '../services/assets'
 import { describeStorageError } from '../services/storage-health'
 
 export type Variant = 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' | 'waveform'
@@ -50,21 +51,43 @@ export function contentDisposition(kind: 'inline' | 'attachment', filename: stri
   return `${kind}; filename="${ascii}"; filename*=UTF-8''${ext}`
 }
 
+const EXT_BY_MIME: Record<string, string> = {}
+for (const [ext, mime] of Object.entries(MIME_BY_EXT)) EXT_BY_MIME[mime] ??= ext
+
 /**
- * What the browser is told about a stored object. Media plays inline. SVG keeps its type (so `<img>` can draw a
+ * A download's file name: the stored name, ending in the extension its type implies. A name with no extension (a
+ * voiceover's title) gets one; a media extension for another type is replaced; a dotted title is kept and extended.
+ */
+export function downloadName(filename: string | undefined, contentType: string): string {
+  const name = filename?.trim() || 'download'
+  const mime = contentType.split(';')[0].trim().toLowerCase()
+  const ext = EXT_BY_MIME[mime]
+  if (!ext) return name
+  const cur = path.extname(name).toLowerCase()
+  if (cur && MIME_BY_EXT[cur] === mime) return name
+  return (cur && MIME_BY_EXT[cur] ? name.slice(0, -cur.length) : name) + ext
+}
+
+/**
+ * What the browser is told about a stored object. Media plays inline, or is an attachment named with its type's
+ * extension when `download` asks (on S3 too: the signed URL carries it). SVG keeps its type (so `<img>` can draw a
  * logo) but is a download if opened directly: `<img>` ignores Content-Disposition and never runs an SVG's scripts,
  * while a navigation would. Anything else (a type stored before uploads were checked, or a desktop's synced file)
  * is an opaque download. Neither can run as a page on our origin or the bucket's.
  */
-export function deliveryOf(t: ServeTarget): { contentType: string; disposition?: string; inline: boolean } {
-  if (isMediaMime(t.contentType)) return { contentType: t.contentType, disposition: t.filename ? contentDisposition('inline', t.filename) : undefined, inline: true }
+export function deliveryOf(t: ServeTarget, download = false): { contentType: string; disposition?: string; inline: boolean } {
+  if (isMediaMime(t.contentType)) {
+    if (download) return { contentType: t.contentType, disposition: contentDisposition('attachment', downloadName(t.filename, t.contentType)), inline: true }
+    return { contentType: t.contentType, disposition: t.filename ? contentDisposition('inline', t.filename) : undefined, inline: true }
+  }
   const svg = t.contentType.split(';')[0].trim().toLowerCase() === SVG_MIME
   return { contentType: svg ? SVG_MIME : 'application/octet-stream', disposition: contentDisposition('attachment', t.filename ?? (svg ? 'image.svg' : 'download')), inline: false }
 }
 
+/** `?download=1` asks for an attachment: a Download button saves the file instead of opening a bare player. */
 export async function serveObject(c: Context, t: ServeTarget, opts: { cache?: string; redirect?: boolean } = {}): Promise<Response> {
   const storage = ctx().storage
-  const d = deliveryOf(t)
+  const d = deliveryOf(t, c.req.query('download') === '1')
   if (storage.presignGet && opts.redirect !== false) {
     const url = await storage.presignGet(t.key, { expiresSec: 900, contentType: d.contentType, disposition: d.disposition })
     return c.redirect(url, 302)

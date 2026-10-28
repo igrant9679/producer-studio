@@ -365,6 +365,23 @@ export interface WriteRequest {
   maxWords?: number
 }
 
+/**
+ * What Producer AI accepts: the server refuses more, and the wizard stops at the same numbers instead of sending a
+ * script that comes back as a raw validation error after a long wait.
+ */
+export const PRODUCE_LIMITS = {
+  /** Recordings one script is written from. */
+  recordings: 20,
+  /** Scenes one assembly takes. */
+  scenes: 40,
+  /** Footage windows in one scene. */
+  footagePerScene: 20,
+  /** Characters of narration in one scene. */
+  narrationChars: 5000,
+  /** Characters of the idea a video is made from. */
+  ideaChars: 20000,
+} as const
+
 export interface ProduceScriptRequest {
   projectId: string
   /** Recordings to build from; empty when brief.source is 'idea'. */
@@ -447,6 +464,8 @@ export interface ShareLink {
 export interface SharedVideo {
   project: { name: string; width: number; height: number; duration: number; updatedAt: number }
   videoUrl?: string
+  /** GET /api/share/:token/poster (public): the export's thumbnail, when it has one. */
+  posterUrl?: string
 }
 export interface ExportRequest {
   resolution: '720p' | '1080p' | '1440p' | '4k'
@@ -529,6 +548,8 @@ export interface SystemInfo {
   sync?: SyncStatus
   /** Whether the server can use its object storage right now (checked every few minutes). */
   storage?: StorageHealth
+  /** What this server accepts (MAX_UPLOAD_MB), for screens that state a limit. Optional: older servers omit it. */
+  limits?: { uploadBytes: number }
 }
 
 /** Result of the server's storage self-check: write, read back and delete a small object. */

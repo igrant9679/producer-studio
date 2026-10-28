@@ -4,7 +4,7 @@ import type { ThemePreference } from '@producer/core'
 import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, Keyboard, Loader2, Monitor, Moon, MousePointer2, Redo2, Share2, Sun, TriangleAlert, Undo2, Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../lib/api'
+import { api, HttpError } from '../lib/api'
 import { themeLabel, useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
 import { toast, toastError } from '../lib/toast'
@@ -42,7 +42,11 @@ export function TopBar() {
       await navigator.clipboard.writeText(url).catch(() => undefined)
       toast('Review link copied to clipboard')
     } catch (e) {
-      toastError(e)
+      // nothing exported yet: a link would show "No finished video yet", so export first
+      if (e instanceof HttpError && e.status === 409) {
+        useEditor.setState({ exportOpen: true, playing: false })
+        toast('Export the video first: a share link shows a finished export')
+      } else toastError(e)
     }
   }
 

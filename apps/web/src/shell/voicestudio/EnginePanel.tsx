@@ -166,6 +166,8 @@ function Engines() {
   const engines = useTtsEngines(true)
   const [busy, setBusy] = useState<string>()
   const [installs, setInstalls] = useState<Record<string, SidecarStatus>>({})
+  // an engine whose licence must be accepted: shown first, then used or installed
+  const [licence, setLicence] = useState<{ b: TtsBackend; then: 'use' | 'install' }>()
 
   // poll sidecar installs while any is running
   useEffect(() => {
@@ -254,16 +256,57 @@ function Engines() {
                   )}
                 </div>
                 {b.available === false && SIDECARS.has(b.id) && job?.state !== 'running' ? (
-                  <button className="btn sm" disabled={!!busy} onClick={() => installSidecar(b)}>{busy === b.id ? <Spinner size={12} /> : <Download size={13} />} {b.license_required && !b.license_accepted ? 'Accept licence & install' : 'Install'}</button>
+                  <button className="btn sm" disabled={!!busy} onClick={() => (b.license_required && !b.license_accepted ? setLicence({ b, then: 'install' }) : void installSidecar(b))}>{busy === b.id ? <Spinner size={12} /> : <Download size={13} />} {b.license_required && !b.license_accepted ? 'Review licence & install' : 'Install'}</button>
                 ) : !active && b.available !== false ? (
-                  <button className="btn sm" disabled={!!busy} onClick={() => select(b)}>{busy === b.id && <Spinner size={12} />} {b.license_required && !b.license_accepted ? 'Accept licence & use' : 'Make default'}</button>
+                  <button className="btn sm" disabled={!!busy} onClick={() => (b.license_required && !b.license_accepted ? setLicence({ b, then: 'use' }) : void select(b))}>{busy === b.id && <Spinner size={12} />} {b.license_required && !b.license_accepted ? 'Review licence & use' : 'Make default'}</button>
                 ) : null}
               </div>
             )
           })}
         </div>
       )}
+      {licence && <LicenceDialog b={licence.b} action={licence.then === 'use' ? 'use' : 'install'} onClose={() => setLicence(undefined)} onAccept={() => {
+        const { b, then } = licence
+        setLicence(undefined)
+        void (then === 'use' ? select(b) : installSidecar(b))
+      }} />}
     </section>
+  )
+}
+
+/** The licence an engine needs accepted, shown before accepting it. */
+function LicenceDialog({ b, action, onClose, onAccept }: { b: TtsBackend; action: 'use' | 'install'; onClose: () => void; onAccept: () => void }) {
+  const n = LICENSE_NOTES[b.id]
+  return (
+    <Modal
+      title={`${engineName(b)} licence`}
+      subtitle="This engine’s model weights come with their own licence. Read it before accepting."
+      onClose={onClose}
+      width={520}
+      footer={
+        <>
+          <button className="btn ghost" autoFocus onClick={onClose}>Cancel</button>
+          <button className="btn primary" onClick={onAccept}>Accept and {action}</button>
+        </>
+      }
+    >
+      <div className="vs-licence">
+        {n ? (
+          <>
+            <strong>{n.license}</strong>
+            <div className="muted" style={{ fontSize: '0.8125rem', marginTop: 4 }}>
+              {n.commercial === false ? 'Non-commercial use only.' : n.commercial === null ? 'Commercial use depends on the model you choose: check its card.' : 'Commercial use allowed.'}
+              {n.note ? ` ${n.note}` : ''}
+            </div>
+          </>
+        ) : (
+          <div className="muted" style={{ fontSize: '0.8125rem' }}>Producer Studio hasn’t reviewed this licence: read it on the model card.</div>
+        )}
+        {b.docs_url && /^https:\/\//.test(b.docs_url) && (
+          <a className="btn sm" style={{ marginTop: 12 }} href={b.docs_url} target="_blank" rel="noreferrer noopener"><ExternalLink size={13} /> Read the licence and model card</a>
+        )}
+      </div>
+    </Modal>
   )
 }
 
@@ -281,6 +324,7 @@ function Models() {
   const [jobs, setJobs] = useState<Record<string, InstallJob>>({})
   const [busy, setBusy] = useState<string>()
   const [poll, setPoll] = useState(0)
+  const [removing, setRemoving] = useState<ModelRow>()
 
   // VoiceStudio's own renderer polls install status while anything downloads
   useEffect(() => {
@@ -320,6 +364,7 @@ function Models() {
     setBusy(m.repo_id)
     try {
       await vsFetch(`/models/${m.repo_id.split('/').map(encodeURIComponent).join('/')}`, { method: 'DELETE' })
+      setRemoving(undefined)
       models.reload()
     } catch (e) {
       toastError(e)
@@ -338,6 +383,7 @@ function Models() {
 
   const rows = (models.data?.models ?? []).filter((m) => m.supported !== false)
   const roles = [...new Set(rows.map((m) => m.role || 'Other'))]
+  const removingSize = removing && (removing.size_on_disk_bytes || (removing.size_gb ? removing.size_gb * 1024 ** 3 : undefined))
   return (
     <section className="card vs-engine-card">
       <div className="row"><HardDrive size={15} /> <strong>Models</strong><span className="spacer" />{models.data?.disk_free_gb != null && <span className="muted" style={{ fontSize: '0.75rem' }}>{models.data.disk_free_gb.toFixed(0)} GB free</span>}<button className="btn ghost sm" onClick={models.reload}><RefreshCw size={13} /> Refresh</button></div>
@@ -381,7 +427,7 @@ function Models() {
                     {j?.state === 'downloading' ? (
                       <button className="btn ghost sm" onClick={() => cancel(m)}>Cancel</button>
                     ) : m.installed && !m.incomplete ? (
-                      <button className="btn ghost sm icon" disabled={busy === m.repo_id} onClick={() => remove(m)} aria-label={`Remove ${m.repo_id}`} title="Remove from disk"><Trash2 size={14} /></button>
+                      <button className="btn ghost sm icon" disabled={busy === m.repo_id} onClick={() => setRemoving(m)} aria-label={`Remove ${m.repo_id}`} title="Remove from disk"><Trash2 size={14} /></button>
                     ) : (
                       <button className="btn sm" disabled={busy === m.repo_id} onClick={() => install(m)}>{busy === m.repo_id ? <Spinner size={12} /> : <Download size={13} />} {m.incomplete || j?.state === 'failed' ? 'Retry' : 'Download'}</button>
                     )}
@@ -391,6 +437,22 @@ function Models() {
             </div>
           </div>
         ))
+      )}
+      {removing && (
+        <Modal
+          title={`Remove ${removing.label || removing.repo_id}?`}
+          subtitle={`${removingSize ? `Frees ${fmtBytes(removingSize)} on this computer.` : 'Removes it from this computer.'} ${removing.required ? 'This is the required voice model: speech won’t generate until it’s downloaded again.' : 'You can download it again any time.'}`}
+          onClose={() => setRemoving(undefined)}
+          width={480}
+          footer={
+            <>
+              <button className="btn ghost" autoFocus onClick={() => setRemoving(undefined)}>Cancel</button>
+              <button className="btn danger" disabled={busy === removing.repo_id} onClick={() => void remove(removing)}>{busy === removing.repo_id && <Spinner size={12} />} Remove from disk</button>
+            </>
+          }
+        >
+          <span />
+        </Modal>
       )}
     </section>
   )

@@ -23,6 +23,8 @@ export class DictationSession {
   private finished?: (text: string) => void
   private failed?: (e: Error) => void
   private ended = false
+  /** Why the session stopped working, once it has: stop() then answers at once instead of waiting out its timeout. */
+  private failure?: Error
 
   constructor(private o: DictationOptions = {}) {}
 
@@ -35,7 +37,23 @@ export class DictationSession {
     return this.summary ?? this.committed.join(' ').trim()
   }
 
+  /** Opens the microphone and the connection. A start that fails releases the microphone and throws. */
   async start(): Promise<void> {
+    try {
+      await this.open()
+    } catch (e) {
+      this.ended = true
+      this.cleanupMedia()
+      try {
+        this.ws?.close()
+      } catch {
+        /* closed */
+      }
+      throw e
+    }
+  }
+
+  private async open(): Promise<void> {
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false })
     // level meter
     this.audio = new AudioContext()
@@ -64,8 +82,8 @@ export class DictationSession {
     })
     ws.onmessage = (m) => this.onMessage(m.data)
     ws.onclose = () => {
-      if (!this.ended) this.fail(new Error('Dictation disconnected'))
-      else this.finished?.(this.text)
+      if (!this.ended) this.fail(new Error('Dictation disconnected: VoiceStudio closed the connection.'))
+      else if (this.finished) this.finish()
     }
     const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'
     const rec = new MediaRecorder(this.stream, { mimeType: mime })
@@ -96,11 +114,7 @@ export class DictationSession {
         if (this.ended) this.finish()
       }
     } else if (m.type === 'status' && m.stage) this.emit({ type: 'status', stage: m.stage })
-    else if (m.type === 'error') {
-      const msg = m.message || m.detail || 'Dictation failed'
-      this.emit({ type: 'error', message: msg, kind: m.kind })
-      this.fail(new Error(msg))
-    }
+    else if (m.type === 'error') this.fail(new Error(m.message || m.detail || 'Dictation failed'), m.kind)
   }
 
   private cleanupMedia() {
@@ -121,21 +135,27 @@ export class DictationSession {
     done?.(this.text)
   }
 
-  private fail(e: Error) {
+  /** An error or a dropped connection, while listening or finishing: said through onEvent, and stop() rejects with it. */
+  private fail(e: Error, kind?: string) {
+    if (this.failure) return
+    this.failure = e
     const f = this.failed
     this.failed = undefined
     this.finished = undefined
+    this.ended = true
     this.cleanupMedia()
     try {
       this.ws?.close()
     } catch {
       /* closed */
     }
+    this.emit({ type: 'error', message: e.message, kind })
     f?.(e)
   }
 
   /** Stop recording and wait for the final text. */
   stop(timeoutMs = 30_000): Promise<string> {
+    if (this.failure) return Promise.reject(this.failure)
     return new Promise((resolve, reject) => {
       this.finished = resolve
       this.failed = reject

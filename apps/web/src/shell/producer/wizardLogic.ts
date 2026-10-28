@@ -1,5 +1,5 @@
 // Pure state logic for the Producer AI wizard (no React, no network) — unit-tested in __tests__.
-import type { ProducerMeta, ProjectDocResponse, ScriptScene } from '@producer/core'
+import { PRODUCE_LIMITS, type ProducerMeta, type ProjectDocResponse, type ScriptScene } from '@producer/core'
 
 export type Brief = NonNullable<ProducerMeta['brief']>
 export type StepId = 'upload' | 'brief' | 'generate' | 'review' | 'assemble'
@@ -112,10 +112,16 @@ export function narrationSeconds(text: string): number {
   return sceneWords(text) / 2.5
 }
 
+// the server's limits (PRODUCE_LIMITS), said before the long wait rather than as a validation error after it
 export function validateScenes(scenes: ScriptScene[]): string | undefined {
   if (!scenes.length) return 'Add at least one scene'
+  if (scenes.length > PRODUCE_LIMITS.scenes) return `A video can have at most ${PRODUCE_LIMITS.scenes} scenes: remove ${scenes.length - PRODUCE_LIMITS.scenes}`
   const empty = scenes.findIndex((s) => !s.narration.trim())
   if (empty >= 0) return `Scene ${empty + 1} has no narration`
+  const long = scenes.findIndex((s) => s.narration.length > PRODUCE_LIMITS.narrationChars)
+  if (long >= 0) return `Scene ${long + 1}’s narration is over ${PRODUCE_LIMITS.narrationChars.toLocaleString('en')} characters`
+  const many = scenes.findIndex((s) => s.footage.length > PRODUCE_LIMITS.footagePerScene)
+  if (many >= 0) return `Scene ${many + 1} has more than ${PRODUCE_LIMITS.footagePerScene} footage windows`
   const bad = scenes.findIndex((s) => s.footage.some((f) => !(f.end > f.start)))
   if (bad >= 0) return `Scene ${bad + 1} has a footage window that ends before it starts`
   return undefined
@@ -169,9 +175,15 @@ export function workspaceMismatch(s: Pick<WizardState, 'workspaceId'>, sessionWo
 export function canAdvance(s: WizardState, step: StepId = s.step): { ok: boolean; reason?: string } {
   switch (step) {
     case 'upload': {
-      if (isIdea(s)) return (s.brief.idea ?? '').trim().length >= 10 ? { ok: true } : { ok: false, reason: 'Describe the video in a sentence or more' }
+      if (isIdea(s)) {
+        const idea = (s.brief.idea ?? '').trim()
+        if (idea.length > PRODUCE_LIMITS.ideaChars) return { ok: false, reason: `Shorten the idea to ${PRODUCE_LIMITS.ideaChars.toLocaleString('en')} characters` }
+        return idea.length >= 10 ? { ok: true } : { ok: false, reason: 'Describe the video in a sentence or more' }
+      }
       if (s.assets.some((a) => a.status === 'uploading' || a.status === 'processing')) return { ok: false, reason: 'Waiting for uploads to finish processing' }
       if (!readyAssetIds(s).length) return { ok: false, reason: 'Add at least one recording' }
+      const extra = readyAssetIds(s).length - PRODUCE_LIMITS.recordings
+      if (extra > 0) return { ok: false, reason: `A video can use at most ${PRODUCE_LIMITS.recordings} recordings: remove ${extra}` }
       return { ok: true }
     }
     case 'brief': {
@@ -198,6 +210,18 @@ export function maxReachableStep(s: WizardState): number {
   while (i < order.length - 1 && canAdvance(s, order[i]).ok) i++
   // Generate is a process step; if a script exists the user can hop straight to review.
   return i
+}
+
+/** Whether the stepper (or the browser's Back and Forward) may show `step` now. Writing is a process, not a page. */
+export function canShowStep(s: WizardState, step: StepId): boolean {
+  const i = STEPS.findIndex((x) => x.id === step)
+  return s.run.status !== 'running' && i >= 0 && i <= maxReachableStep(s) && step !== 'generate' && !(step === 'assemble' && !s.scenes.length)
+}
+
+/** The step in the wizard's URL (`?step=`); none is the first. */
+export function stepFromSearch(q: URLSearchParams): StepId {
+  const v = q.get('step')
+  return STEPS.some((x) => x.id === v) ? (v as StepId) : 'upload'
 }
 
 export function moveScene(scenes: ScriptScene[], from: number, to: number): ScriptScene[] {

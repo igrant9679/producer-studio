@@ -187,3 +187,4 @@
 .ps-draft { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--text-3); }
 .ps-draft.err { color: var(--danger-text); }
 .ps-space-mismatch { margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+.ps-ai-missing { margin-bottom: 14px; align-items: flex-start; }

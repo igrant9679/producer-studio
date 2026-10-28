@@ -22,7 +22,7 @@ const Gallery = lazy(() => import('../voicestudio/Gallery'))
 const Stories = lazy(() => import('../voicestudio/Stories'))
 const AudioTools = lazy(() => import('../voicestudio/AudioTools'))
 const EnginePanel = lazy(() => import('../voicestudio/EnginePanel'))
-import { formatDuration, relativeTime } from '../util'
+import { downloadUrl, formatDuration, relativeTime } from '../util'
 
 const EXAMPLES: Array<{ label: string; text: string }> = [
   { label: 'Podcast intro', text: "Welcome back to the show. I'm your host, and this week we're digging into the small habits that make remote teams feel close — even when they're oceans apart. Grab a coffee; let's get into it." },
@@ -208,7 +208,7 @@ function HistoryRow({ a, onChange, onRemove }: { a: AssetRecord; onChange: (a: A
           >
             {(close) => (
               <>
-                <a className="ps-menu-item" href={mediaUrl(a.asset.id, 'source')} download={a.asset.name} onClick={close}>
+                <a className="ps-menu-item" href={downloadUrl(mediaUrl(a.asset.id, 'source'))} download onClick={close}>
                   <Download size={15} /> Download
                 </a>
                 <MenuList
@@ -495,12 +495,13 @@ export default function VoiceStudio() {
   const desktop = useIsDesktop()
   const [params, setParams] = useSearchParams()
   const tab = (TABS.find((t) => t.id === params.get('tab') && (desktop || !t.desktopOnly))?.id ?? 'tts') as Tab
+  // each tab is a history entry, like the Library's: Back returns to the previous tab
   const setTab = (t: Tab) => setParams((p) => {
     const n = new URLSearchParams(p)
     if (t === 'tts') n.delete('tab')
     else n.set('tab', t)
     return n
-  }, { replace: true })
+  })
   const [voice, setVoice] = useState('af_heart')
   // a voiceover that finishes later plays only while Voice Studio is on screen
   useEffect(() => {

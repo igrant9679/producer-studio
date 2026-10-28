@@ -69,6 +69,9 @@ function GalleryHome() {
 
 // ---------------- my clips ----------------
 
+/** Consent starts blank for every voice: never the previous voice's speaker or tick. */
+const freshConsent = (speaker = ''): ConsentState => ({ whose: 'other', speaker, agreed: false })
+
 function Clips() {
   const [q, setQ] = useState('')
   const [debounced, setDebounced] = useState('')
@@ -76,6 +79,8 @@ function Clips() {
   const [trimming, setTrimming] = useState<GalleryVoice>()
   const [making, setMaking] = useState<GalleryVoice>()
   const [renaming, setRenaming] = useState<GalleryVoice>()
+  const [deleting, setDeleting] = useState<GalleryVoice>()
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const playing = useAudioPreview((s) => s.playing)
   const loadingKey = useAudioPreview((s) => s.loading)
   const toggle = useAudioPreview((s) => s.toggle)
@@ -86,11 +91,15 @@ function Clips() {
   const list = useAsync(() => vsGet<GalleryVoice[]>('/gallery/voices', { query: { search: debounced || undefined, limit: 200 } }), [debounced])
 
   const remove = async (v: GalleryVoice) => {
+    setDeleteBusy(true)
     try {
       await vsFetch(`/gallery/voices/${v.id}`, { method: 'DELETE' })
       list.setData((cur) => (cur ?? []).filter((x) => x.id !== v.id))
+      setDeleting(undefined)
     } catch (e) {
       toastError(e)
+    } finally {
+      setDeleteBusy(false)
     }
   }
 
@@ -131,7 +140,7 @@ function Clips() {
                 <button className="btn sm" onClick={() => setMaking(v)}><Mic size={12} /> Make a voice</button>
                 <button className="btn ghost sm icon" onClick={() => setTrimming(v)} title="Trim" aria-label={`Trim ${v.name}`}><Scissors size={13} /></button>
                 <button className="btn ghost sm icon" onClick={() => setRenaming(v)} title="Rename" aria-label={`Rename ${v.name}`}><Pencil size={13} /></button>
-                <button className="btn ghost sm icon" onClick={() => remove(v)} title="Delete" aria-label={`Delete ${v.name}`}><Trash2 size={13} /></button>
+                <button className="btn ghost sm icon" onClick={() => setDeleting(v)} title="Delete" aria-label={`Delete ${v.name}`}><Trash2 size={13} /></button>
               </div>
             )
           })}
@@ -140,6 +149,22 @@ function Clips() {
       {importing && <ImportClip mode={importing} onClose={() => setImporting(undefined)} onDone={() => list.reload()} />}
       {trimming && <TrimClip clip={trimming} onClose={() => setTrimming(undefined)} onDone={() => list.reload()} />}
       {making && <MakeVoice clip={making} onClose={() => setMaking(undefined)} />}
+      {deleting && (
+        <Modal
+          title={`Delete “${deleting.name}”?`}
+          subtitle={`The ${deleting.duration ? `${formatDuration(deleting.duration)} ` : ''}clip is removed from this computer’s gallery. This can’t be undone.`}
+          onClose={() => setDeleting(undefined)}
+          width={460}
+          footer={
+            <>
+              <button className="btn ghost" autoFocus onClick={() => setDeleting(undefined)}>Cancel</button>
+              <button className="btn danger" disabled={deleteBusy} onClick={() => void remove(deleting)}>{deleteBusy && <Spinner size={13} />} Delete clip</button>
+            </>
+          }
+        >
+          <span />
+        </Modal>
+      )}
       {renaming && (
         <RenameClip
           clip={renaming}
@@ -434,7 +459,11 @@ function Community() {
   const [type, setType] = useState<'' | 'preset' | 'voice'>('')
   const [debounced, setDebounced] = useState('')
   const [adding, setAdding] = useState<CommunityItem>()
-  const [consent, setConsent] = useState<ConsentState>({ whose: 'other', speaker: '', agreed: false })
+  const [consent, setConsent] = useState<ConsentState>(freshConsent)
+  const openAdding = (it: CommunityItem) => {
+    setConsent(freshConsent(it.name))
+    setAdding(it)
+  }
   const [busy, setBusy] = useState<string>()
   const playing = useAudioPreview((s) => s.playing)
   const loadingKey = useAudioPreview((s) => s.loading)
@@ -502,7 +531,7 @@ function Community() {
                   </button>
                 </div>
                 <span className="muted" style={{ fontSize: '0.7188rem' }}>{[it.type === 'voice' ? 'Recorded voice' : 'Designed preset', it.use_case, it.facets?.gender, it.language].filter(Boolean).join(' · ')}</span>
-                <button className="btn sm" style={{ marginTop: 6 }} disabled={!!busy} onClick={() => (it.type === 'voice' ? setAdding(it) : void add(it, false))}>
+                <button className="btn sm" style={{ marginTop: 6 }} disabled={!!busy} onClick={() => (it.type === 'voice' ? openAdding(it) : void add(it, false))}>
                   {busy === it.id ? <Spinner size={12} /> : <Plus size={13} />} Add to my voices
                 </button>
               </div>
@@ -542,7 +571,7 @@ function Packs() {
   const bump = useVoicesVersion((s) => s.bump)
   const [file, setFile] = useState<File>()
   const [info, setInfo] = useState<PackInfo>()
-  const [consent, setConsent] = useState<ConsentState>({ whose: 'other', speaker: '', agreed: false })
+  const [consent, setConsent] = useState<ConsentState>(freshConsent)
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const verified = !!info?.consent?.would_verify
@@ -556,7 +585,8 @@ function Packs() {
       form.set('file', f, f.name)
       const i = (await (await vsFetch('/personas/inspect', { body: form })).json()) as PackInfo
       setInfo(i)
-      setConsent((c) => ({ ...c, speaker: i.name }))
+      // each pack is its own speaker: the last one's consent never carries over
+      setConsent(freshConsent(i.name))
     } catch (e) {
       toastError(e)
       setFile(undefined)

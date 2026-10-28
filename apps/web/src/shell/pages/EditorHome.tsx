@@ -2,7 +2,7 @@ import { ASPECT_RATIOS } from '@producer/core'
 import { ArrowUpRight, Captions, Clapperboard, FileText, FolderOpen, Plus, Sparkles, Type, Wand2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useCreateAndOpen } from '../actions'
+import { projectPath, useCreateAndOpen } from '../actions'
 import { ProjectCard } from '../components/ProjectCard'
 import { AspectBox, AspectPickerModal } from '../modals'
 import { CardSkeletons, EmptyState, usePageTitle } from '../ui'
@@ -68,7 +68,7 @@ export default function EditorHome() {
         ) : recent.data?.length ? (
           <div className="ps-grid">
             {recent.data.map((p) => (
-              <ProjectCard key={p.id} p={p} onOpen={() => navigate(`/edit/${p.id}`)} />
+              <ProjectCard key={p.id} p={p} onOpen={() => navigate(projectPath(p))} />
             ))}
           </div>
         ) : (

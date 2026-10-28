@@ -3,7 +3,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import * as z from 'zod/v4'
-import { VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
+import { PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { jobDto } from '../dto'
@@ -150,14 +150,14 @@ const BriefSchema = z.object({
   aspect: z.enum(['16:9', '9:16', '1:1']).default('16:9'),
   notes: z.string().max(4000).optional(),
   source: z.enum(['recordings', 'idea']).optional(),
-  idea: z.string().max(20000).optional(),
+  idea: z.string().max(PRODUCE_LIMITS.ideaChars).optional(),
   lengthSec: z.number().int().min(15).max(600).optional(),
   visualKinds: z.array(z.enum(['motion', 'diagram', 'image', 'stock', 'aiVideo'])).max(6).optional(),
 })
 
 aiRoutes.post('/produce/script', async (c) => {
   const u = requireUser(c)
-  const b = await body(c, z.object({ projectId: z.string().min(1), assetIds: z.array(z.string()).max(20).default([]), brief: BriefSchema }))
+  const b = await body(c, z.object({ projectId: z.string().min(1), assetIds: z.array(z.string()).max(PRODUCE_LIMITS.recordings).default([]), brief: BriefSchema }))
   // recordings mode needs at least one; idea mode needs the idea (or at least a title)
   if (b.brief.source !== 'idea' && !b.assetIds.length) throw new HttpError(400, 'invalid', 'Add at least one recording, or make the video from an idea')
   if (b.brief.source === 'idea' && !(b.brief.idea?.trim() || b.brief.title.trim())) throw new HttpError(400, 'invalid', 'Describe the idea for the video')
@@ -174,8 +174,8 @@ const SceneSchema = z.object({
   id: z.string().min(1).max(20),
   title: z.string().max(200),
   headline: z.string().max(300),
-  narration: z.string().min(1).max(5000),
-  footage: z.array(z.object({ assetId: z.string(), start: z.number().min(0), end: z.number().min(0) })).max(20),
+  narration: z.string().min(1).max(PRODUCE_LIMITS.narrationChars),
+  footage: z.array(z.object({ assetId: z.string(), start: z.number().min(0), end: z.number().min(0) })).max(PRODUCE_LIMITS.footagePerScene),
   visuals: z.string().max(2000).optional(),
   visual: VisualSchema.optional(),
   voice: z.object({ assetId: z.string(), duration: z.number() }).optional(),
@@ -188,7 +188,7 @@ const SceneSchema = z.object({
 aiRoutes.put('/produce/draft', async (c) => {
   const u = requireUser(c)
   // a scene still being written may have no narration yet
-  const DraftScene = SceneSchema.extend({ narration: z.string().max(5000) })
+  const DraftScene = SceneSchema.extend({ narration: z.string().max(PRODUCE_LIMITS.narrationChars) })
   const b = await body(c, z.object({ projectId: z.string().min(1), brief: BriefSchema, scenes: z.array(DraftScene).max(100), scriptBrief: BriefSchema.optional() }))
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
@@ -214,7 +214,7 @@ aiRoutes.post('/produce/assemble', async (c) => {
   const u = requireUser(c)
   const b = await body(
     c,
-    z.object({ projectId: z.string().min(1), scenes: z.array(SceneSchema).min(1).max(40), brief: BriefSchema.optional(), replace: z.boolean().optional(), intoCopy: z.boolean().optional() }),
+    z.object({ projectId: z.string().min(1), scenes: z.array(SceneSchema).min(1).max(PRODUCE_LIMITS.scenes), brief: BriefSchema.optional(), replace: z.boolean().optional(), intoCopy: z.boolean().optional() }),
   )
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')

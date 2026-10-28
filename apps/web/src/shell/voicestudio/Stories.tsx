@@ -56,6 +56,13 @@ function StoryStudio() {
   const cache = useRef(new Map<string, Float32Array>())
   const stop = useRef(false)
   const preview = useAudioPreview((s) => s.toggle)
+  // one line preview's audio at a time: the previous one is released when the next plays, and all on leaving
+  const lineUrl = useRef<string>()
+  useEffect(() => () => {
+    if (lineUrl.current) URL.revokeObjectURL(lineUrl.current)
+  }, [])
+  // any edit to the lines or how they're spoken makes the built mix stale: "Open as project" mustn't use it
+  useEffect(() => setBuilt(undefined), [lines, speed, language, gapMs])
   const playing = useAudioPreview((s) => s.playing)
 
   const characters = useMemo(() => castOf(lines), [lines])
@@ -63,6 +70,8 @@ function StoryStudio() {
   useEffect(() => {
     if (!voices.length) return
     setCast((cur) => {
+      // unchanged when everyone is cast: `voices` is a new array each render, and a new object would render again
+      if (characters.every((c) => cur[c])) return cur
       const next = { ...cur }
       for (const c of characters) if (!next[c]) next[c] = voices[0].vsProfileId
       return next
@@ -99,7 +108,9 @@ function StoryStudio() {
     try {
       setBusy(`line:${l.id}`)
       const s = await renderLine(l)
-      preview(`story:${l.id}`, URL.createObjectURL(new Blob([encodeWav(s, RATE)], { type: 'audio/wav' })))
+      if (lineUrl.current) URL.revokeObjectURL(lineUrl.current)
+      lineUrl.current = URL.createObjectURL(new Blob([encodeWav(s, RATE)], { type: 'audio/wav' }))
+      preview(`story:${l.id}`, lineUrl.current)
     } catch (e) {
       toastError(e)
     } finally {

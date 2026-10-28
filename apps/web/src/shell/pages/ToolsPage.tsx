@@ -15,7 +15,6 @@ import {
   Sparkles,
   SunMedium,
   Type,
-  Video,
   Wand2,
   Waves,
   Zap,
@@ -23,6 +22,7 @@ import {
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useCreateAndOpen, type EditorTab } from '../actions'
+import { useIsDesktop } from '../system'
 import { usePageTitle } from '../ui'
 import { AMBER, CYAN, GREEN, QuickCard, VIOLET } from './HomePage'
 
@@ -32,6 +32,8 @@ interface Tool {
   icon: ReactNode
   go?: { tab?: EditorTab; route?: string; name?: string }
   soon?: boolean
+  /** Runs on the VoiceStudio engine: the desktop app only (on the web the card says so and still opens the tab). */
+  desktop?: boolean
   tint?: typeof CYAN
 }
 
@@ -71,8 +73,8 @@ const GROUPS: Array<{ title: string; blurb: string; tools: Tool[] }> = [
       { title: 'Voiceover', body: 'Write a script, generate narration, drop it in.', icon: <Mic size={20} />, go: { route: '/voice' }, tint: GREEN },
       { title: 'Music & sound', body: 'Add music beds and effects with fades and ducking.', icon: <Music size={20} />, go: { tab: 'audio' }, tint: CYAN },
       { title: 'Separate audio', body: 'Split a clip’s audio onto its own track.', icon: <Waves size={20} />, go: { tab: 'audio' } },
-      { title: 'Voice changer', body: 'Re-voice a recording with any voice.', icon: <AudioLines size={20} />, soon: true },
-      { title: 'Voice cloning', body: 'Create a custom voice from 10 seconds of audio.', icon: <Video size={20} />, soon: true },
+      { title: 'Voice changer', body: 'Re-voice a recording with any of your voices.', icon: <AudioLines size={20} />, go: { route: '/voice?tab=dub' }, desktop: true, tint: VIOLET },
+      { title: 'Voice cloning', body: 'Create a custom voice from a short recording.', icon: <Mic size={20} />, go: { route: '/voice?tab=voices' }, desktop: true, tint: GREEN },
     ],
   },
 ]
@@ -81,6 +83,7 @@ export default function ToolsPage() {
   usePageTitle('All tools')
   const navigate = useNavigate()
   const [create] = useCreateAndOpen()
+  const isDesktop = useIsDesktop()
   return (
     <div className="ps-page">
       <div className="ps-page-head">
@@ -104,6 +107,7 @@ export default function ToolsPage() {
                 title={t.title}
                 body={t.body}
                 soon={t.soon}
+                badge={t.desktop && !isDesktop ? 'Desktop app' : undefined}
                 {...(t.tint ?? {})}
                 onClick={() => {
                   if (!t.go) return

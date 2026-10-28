@@ -6,7 +6,7 @@ import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
 import { EmptyState, Soon, Spinner, Thumb, useAsync, usePageTitle } from '../ui'
-import { absoluteUrl, copyText, formatBytes, formatDuration, relativeTime } from '../util'
+import { absoluteUrl, copyText, downloadUrl, formatBytes, formatDuration, relativeTime } from '../util'
 
 type Row = ExportRecord & { project: ProjectSummary; shareToken?: string }
 
@@ -40,7 +40,7 @@ function ScheduleCalendar() {
       </div>
       <div className="ps-cal-veil">
         <strong>Plan and auto-publish to YouTube, TikTok, Instagram and LinkedIn</strong>
-        <span>Connect your accounts, drop an export on a date, and Producer Studio posts it for you. Arriving in phase 2.</span>
+        <span>Connect your accounts, drop an export on a date, and Producer Studio posts it for you.</span>
       </div>
     </div>
   )
@@ -138,7 +138,7 @@ export default function ExportsPage() {
               </div>
               <div className="row" style={{ gap: 6 }}>
                 <a className="btn sm" href={r.url} target="_blank" rel="noreferrer" title="Open"><ExternalLink size={13} /></a>
-                <a className="btn sm" href={r.url} download={`${r.name || r.project.name}.mp4`}><Download size={13} /> Download</a>
+                <a className="btn sm" href={downloadUrl(r.url)} download><Download size={13} /> Download</a>
                 <button className="btn sm primary" onClick={() => share(r)} disabled={sharing === r.exportId}>
                   {sharing === r.exportId ? <Spinner size={13} /> : copied === r.exportId ? <Check size={13} /> : <Link2 size={13} />} {copied === r.exportId ? 'Copied' : 'Copy link'}
                 </button>

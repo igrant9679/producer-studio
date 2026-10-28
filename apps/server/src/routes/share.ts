@@ -106,10 +106,13 @@ async function resolveShare(token: string) {
 shareRoutes.get('/:token', async (c) => {
   const { project, ex } = await resolveShare(c.req.param('token'))
   const s = projectSummary(project)
+  const base = `/api/share/${encodeURIComponent(c.req.param('token'))}`
+  const poster = ex ? (await loadAsset(ex.assetId).catch(() => null))?.thumbKey : undefined
   // public: only what the page shows (no workspace, creator or internal ids)
   const shared: SharedVideo = {
     project: { name: s.name, width: s.width, height: s.height, duration: s.duration, updatedAt: s.updatedAt },
-    videoUrl: ex ? `/api/share/${encodeURIComponent(c.req.param('token'))}/video` : undefined,
+    videoUrl: ex ? `${base}/video` : undefined,
+    posterUrl: poster ? `${base}/poster` : undefined,
   }
   return c.json(shared)
 })
@@ -131,4 +134,13 @@ shareRoutes.on(['GET', 'HEAD'], '/:token/video', async (c) => {
   const a = await loadAsset(ex.assetId)
   const t = variantTarget(a, 'source')!
   return serveObject(c, { ...t, filename: a.name }, { cache: 'public, max-age=300' })
+})
+
+/** The shared export's thumbnail, for the page's poster: public like the video, and only while the link works. */
+shareRoutes.on(['GET', 'HEAD'], '/:token/poster', async (c) => {
+  const { ex } = await resolveShare(c.req.param('token'))
+  const a = ex ? await loadAsset(ex.assetId).catch(() => null) : null
+  const t = a && variantTarget(a, 'thumb')
+  if (!t) throw notFound('This video has no poster')
+  return serveObject(c, t, { cache: 'public, max-age=300' })
 })

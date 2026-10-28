@@ -127,6 +127,36 @@ describe('share links', () => {
     expect((await new Client(t.app).json('GET', `/api/share/${s1.token}`)).status).toBe(404)
   })
 
+  it('the share page gets a public poster, only while the link works (APP-24)', async () => {
+    const A = await signup(t.app)
+    const p = (await A.client.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Poster' })).body.summary
+    const ticket = (await A.client.json('POST', '/api/uploads', { workspaceId: A.workspaceId, filename: 'cut.mp4', mime: 'video/mp4', size: 4 })).body
+    await A.client.req('PUT', ticket.url, new Uint8Array([1, 2, 3, 4]), ticket.headers)
+    const { ctx } = await import('../context')
+    const { updateAsset, assetPrefix } = await import('../services/assets')
+    const thumbKey = `${assetPrefix(A.workspaceId, ticket.assetId)}/thumb.jpg`
+    await ctx().storage.put(thumbKey, Buffer.from('jpeg-bytes'))
+    const { exportsTable } = await schema()
+    const exportId = `ex_poster_${p.id}`
+    await (await db()).insert(exportsTable).values({ id: exportId, projectId: p.id, workspaceId: A.workspaceId, assetId: ticket.assetId, name: 'Cut', resolution: '1080p', fps: 30, format: 'mp4', sizeBytes: 4, duration: 5, createdBy: 'u', createdAt: Date.now() })
+    const link = (await A.client.json('POST', `/api/projects/${p.id}/share`, {})).body
+    const anon = new Client(t.app)
+    // no thumbnail yet: no poster offered
+    expect((await anon.json('GET', `/api/share/${link.token}`)).body.posterUrl).toBeUndefined()
+    expect((await anon.req('GET', `/api/share/${link.token}/poster`)).status).toBe(404)
+    await updateAsset(ticket.assetId, { thumbKey })
+    const pub = (await anon.json('GET', `/api/share/${link.token}`)).body
+    expect(pub.posterUrl).toBe(`/api/share/${link.token}/poster`)
+    const img = await anon.req('GET', pub.posterUrl)
+    expect(img.status).toBe(200)
+    expect(img.headers.get('content-type')).toBe('image/jpeg')
+    expect(Buffer.from(await img.arrayBuffer()).toString()).toBe('jpeg-bytes')
+    // a made-up token, or a stopped link, gets nothing
+    expect((await anon.req('GET', `/api/share/not-a-token/poster`)).status).toBe(404)
+    await A.client.json('DELETE', `/api/share/${link.token}`)
+    expect((await anon.req('GET', pub.posterUrl)).status).toBe(404)
+  })
+
   it('a link from before pinning is pinned to what it shows now', async () => {
     const A = await signup(t.app)
     const { projectId, mk } = await exported(A.client, A.workspaceId)

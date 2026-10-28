@@ -25,10 +25,18 @@ interface RenderState {
   total?: number
   phase?: string
   output?: string
+  /** The format this render was made in (the picker may have changed since, e.g. after a tab switch). */
+  format?: 'm4b' | 'mp3'
   duration?: number
   failed?: number[]
   error?: string
   ctrl?: AbortController
+}
+
+/** The extension an audiobook render is imported with: the file's own, else the format it was rendered in. */
+export function audiobookExt(output: string, format: 'm4b' | 'mp3'): string {
+  const own = /\.(m4b|mp3|m4a|wav)$/i.exec(output)?.[1]
+  return `.${(own ?? format).toLowerCase()}`
 }
 
 /** The render lives outside the component: switching tabs mustn't stop it (closing the stream stops VoiceStudio’s render). */
@@ -108,7 +116,7 @@ function AudiobookStudio() {
     const st = useRender.getState()
     if (st.running) return
     const ctrl = new AbortController()
-    st.set({ running: true, title: title || 'Audiobook', chapter: 0, total: plan?.chapter_count, phase: 'Starting', output: undefined, error: undefined, failed: undefined, ctrl })
+    st.set({ running: true, title: title || 'Audiobook', chapter: 0, total: plan?.chapter_count, phase: 'Starting', output: undefined, format, error: undefined, failed: undefined, ctrl })
     try {
       const res = await vsFetch('/audiobook', {
         signal: ctrl.signal,
@@ -148,7 +156,7 @@ function AudiobookStudio() {
   async function addToLibrary() {
     if (!r.output) return
     try {
-      const j = await vsApi.importOutput({ workspaceId, source: `/audio/${r.output.split('/').map(encodeURIComponent).join('/')}`, name: r.title || 'Audiobook', kind: 'audio', ext: `.${format}` })
+      const j = await vsApi.importOutput({ workspaceId, source: `/audio/${r.output.split('/').map(encodeURIComponent).join('/')}`, name: r.title || 'Audiobook', kind: 'audio', ext: audiobookExt(r.output, r.format ?? format) })
       useJobs.getState().upsert(j)
       toast('Adding the audiobook to the library')
     } catch (e) {

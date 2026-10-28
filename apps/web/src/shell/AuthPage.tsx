@@ -33,11 +33,12 @@ export function safeNext(next: string | null): string {
   return next
 }
 
-function authErrorMessage(err: unknown, mode: 'login' | 'signup'): string {
+export function authErrorMessage(err: unknown, mode: 'login' | 'signup'): string {
   if (err instanceof HttpError) {
     if (err.status === 401) return 'Incorrect email or password.'
     if (err.status === 409) return 'An account with that email already exists. Try signing in instead.'
-    if (err.status === 429) return 'Too many attempts. Wait a minute and try again.'
+    // the server says how long the lockout lasts (sign-in failures lock for up to 15 minutes)
+    if (err.status === 429) return err.body?.error || 'Too many attempts. Try again later.'
     if (err.status >= 500) return 'The server had a problem. Please try again in a moment.'
     return err.body?.error || err.message
   }
@@ -185,7 +186,7 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
           {[
             { icon: <Upload size={18} />, t: 'Record', s: 'Upload any capture' },
             { icon: <FileText size={18} />, t: 'Transcript', s: 'Word-accurate' },
-            { icon: <Sparkles size={18} />, t: 'Script', s: 'Written by Claude' },
+            { icon: <Sparkles size={18} />, t: 'Script', s: 'Written by AI' },
             { icon: <AudioLines size={18} />, t: 'Narrate', s: '24 natural voices' },
             { icon: <Film size={18} />, t: 'Assemble', s: 'Branded, captioned' },
           ].map((s) => (

@@ -1,23 +1,23 @@
 import type { ProjectSummary } from '@producer/core'
-import { ArrowRight, ArrowUpRight, AudioLines, Captions, Clapperboard, FileText, FolderOpen, Paperclip, Plus, ScissorsLineDashed, Sparkles, Video, X } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, AudioLines, Captions, Clapperboard, FileText, FolderOpen, LayoutTemplate, Paperclip, Plus, Sparkles, Video, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
-import { useCreateAndOpen, type EditorTab } from '../actions'
+import { projectPath, useCreateAndOpen, type EditorTab } from '../actions'
 import { ProjectCard } from '../components/ProjectCard'
 import { AspectPickerModal } from '../modals'
 import { setProducerHandoff } from '../producer/handoff'
 import { CardSkeletons, EmptyState, useAsync, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes } from '../util'
 
-export function QuickCard({ icon, title, body, onClick, glow, iconBg, iconFg, soon }: { icon: ReactNode; title: string; body: string; onClick?: () => void; glow?: string; iconBg?: string; iconFg?: string; soon?: boolean }) {
+export function QuickCard({ icon, title, body, onClick, glow, iconBg, iconFg, soon, badge }: { icon: ReactNode; title: string; body: string; onClick?: () => void; glow?: string; iconBg?: string; iconFg?: string; soon?: boolean; badge?: string }) {
   return (
     <button className={`ps-qcard ${soon ? 'disabled' : ''}`} onClick={soon ? undefined : onClick} style={{ ['--glow' as string]: glow, ['--icon-bg' as string]: iconBg, ['--icon-fg' as string]: iconFg }} aria-disabled={soon}>
       <div className="ps-qcard-icon">{icon}</div>
       <h3>{title}</h3>
       <p>{body}</p>
-      {soon && <span className="ps-soon">Coming soon</span>}
+      {soon ? <span className="ps-soon">Coming soon</span> : badge && <span className="ps-soon">{badge}</span>}
     </button>
   )
 }
@@ -143,7 +143,7 @@ export default function HomePage() {
           <QuickCard icon={<Captions size={20} />} title="Auto captions" body="Transcribe speech into styled, word-timed captions." onClick={tool('captions', 'Auto captions')} {...CYAN} />
           <QuickCard icon={<FileText size={20} />} title="Transcript editing" body="Edit the video by deleting words from its transcript." onClick={tool('transcript', 'Transcript edit')} {...AMBER} />
           <QuickCard icon={<AudioLines size={20} />} title="Voiceover" body="Type a script and generate natural narration." onClick={() => navigate('/voice')} {...GREEN} />
-          <QuickCard icon={<ScissorsLineDashed size={20} />} title="Remove pauses" body="Cut silences and filler words in one click." onClick={tool('transcript', 'Remove pauses')} />
+          <QuickCard icon={<LayoutTemplate size={20} />} title="Start from a template" body="Built-in looks and your team’s saved projects, ready to fill in." onClick={() => navigate('/templates')} />
         </div>
       </section>
 
@@ -162,7 +162,7 @@ export default function HomePage() {
         ) : recent.data?.length ? (
           <div className="ps-grid">
             {recent.data.map((p) => (
-              <ProjectCard key={p.id} p={p} onOpen={() => navigate(`/edit/${p.id}`)} />
+              <ProjectCard key={p.id} p={p} onOpen={() => navigate(projectPath(p))} />
             ))}
           </div>
         ) : (

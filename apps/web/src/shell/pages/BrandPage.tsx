@@ -2,7 +2,7 @@ import type { BrandKitDoc, TextStyle } from '@producer/core'
 import { CAPTION_PRESETS, FONTS } from '@producer/core'
 import clsx from 'clsx'
 import { ImagePlus, Palette, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, mediaUrl } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
@@ -44,13 +44,23 @@ function luminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
+/**
+ * Unsaved edits per person and space, kept while they're elsewhere in the app (another page, another space): coming
+ * back brings them back instead of discarding them. In memory only, so a sign-out or reload never hands them on.
+ */
+const drafts = new Map<string, BrandKitDoc>()
+
 export default function BrandPage() {
   usePageTitle('Brand kit')
   const workspaceId = useSession((s) => s.workspaceId)
+  const userId = useSession((s) => s.user?.id ?? '')
   const ws = useSession((s) => s.workspaces.find((w) => w.id === s.workspaceId))
   const voices = useVoices()
   const [doc, setDoc] = useState<BrandKitDoc>()
   const [saved, setSaved] = useState<BrandKitDoc>()
+  // the space the kit on screen belongs to (until a switch's new kit has loaded)
+  const [kitSpace, setKitSpace] = useState<string>()
+  const [restored, setRestored] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string>()
   const [attempt, setAttempt] = useState(0)
@@ -70,21 +80,53 @@ export default function BrandPage() {
         if (!alive) return
         // a space without a kit gets the server's defaults here
         const d = { ...EMPTY, ...b, fonts: { ...EMPTY.fonts, ...(b?.fonts ?? {}) }, colors: b?.colors ?? EMPTY.colors }
-        setDoc(d)
+        const draft = drafts.get(`${userId}|${workspaceId}`)
+        setDoc(draft ?? d)
         setSaved(d)
+        setKitSpace(workspaceId)
+        setRestored(!!draft)
       })
       .catch((e) => {
         if (!alive) return
         // never stand in defaults for a kit we couldn't read: saving them would replace the real one
         setDoc(undefined)
         setSaved(undefined)
+        setKitSpace(undefined)
         setLoadError(e instanceof Error ? e.message : String(e))
       })
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
-  }, [workspaceId, attempt])
+  }, [workspaceId, attempt, userId])
+
+  const dirty = !!doc && !!saved && JSON.stringify(doc) !== JSON.stringify(saved)
+  // keep unsaved edits with the space they were made in
+  useEffect(() => {
+    if (!kitSpace || !doc || !saved) return
+    const key = `${userId}|${kitSpace}`
+    if (dirty) drafts.set(key, doc)
+    else drafts.delete(key)
+  }, [doc, saved, dirty, kitSpace, userId])
+  // closing or reloading the tab would lose them: the browser asks first
+  useEffect(() => {
+    if (!dirty) return
+    const onUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
+  }, [dirty])
+  // a switch away with unsaved edits says they're kept, so nobody thinks they were lost
+  const prevSpace = useRef(workspaceId)
+  useEffect(() => {
+    const was = prevSpace.current
+    prevSpace.current = workspaceId
+    if (!was || was === workspaceId || !drafts.has(`${userId}|${was}`)) return
+    const name = useSession.getState().workspaces.find((w) => w.id === was)?.name ?? 'the other space'
+    toast(`Your unsaved brand kit changes for “${name}” are kept: they’re back when you return to it.`)
+  }, [workspaceId, userId])
 
   const pickLogo = useFilePicker('image/png,image/svg+xml,image/jpeg,image/webp', false, async ([file]) => {
     if (!workspaceId || !file) return
@@ -130,7 +172,8 @@ export default function BrandPage() {
   }
 
   const set = (p: Partial<BrandKitDoc>) => setDoc((d) => d && { ...d, ...p })
-  const dirty = JSON.stringify(doc) !== JSON.stringify(saved)
+  // a colour that isn't hex is said at the field, and holds Save, instead of being dropped on save without a word
+  const badColour = doc.colors.findIndex((c) => !isHex(c))
   const primary = doc.colors[0] ?? '#ff5a5f'
   const secondary = doc.colors[1] ?? '#35e0ff'
   // Darkest brand colour (if dark enough) becomes the preview ground.
@@ -140,12 +183,13 @@ export default function BrandPage() {
 
   async function save() {
     // only ever over a kit that loaded
-    if (!workspaceId || !doc || !saved) return
+    if (!kitSpace || !doc || !saved || badColour >= 0) return
     setSaving(true)
     try {
-      const out = await api.saveBrand(workspaceId, { ...doc, colors: doc.colors.filter(isHex) })
+      const out = await api.saveBrand(kitSpace, doc)
       setDoc(out)
       setSaved(out)
+      setRestored(false)
       toast('Brand kit saved')
     } catch (e) {
       toastError(e)
@@ -163,10 +207,11 @@ export default function BrandPage() {
           <p>Colours, fonts, logo and defaults used by Producer AI and offered in the editor for every project in this space.</p>
         </div>
         <span className="spacer" />
-        {dirty && <button className="btn ghost" onClick={() => saved && setDoc(saved)} disabled={!saved}><RotateCcw size={14} /> Discard</button>}
-        <button className="btn primary" onClick={save} disabled={!dirty || saving || !canEdit || !saved}>{saving ? <Spinner /> : <Save size={15} />} {dirty ? 'Save changes' : 'Saved'}</button>
+        {dirty && <button className="btn ghost" onClick={() => { if (saved) setDoc(saved); setRestored(false) }} disabled={!saved}><RotateCcw size={14} /> Discard</button>}
+        <button className="btn primary" onClick={save} disabled={!dirty || saving || !canEdit || !saved || badColour >= 0}>{saving ? <Spinner /> : <Save size={15} />} {dirty ? 'Save changes' : 'Saved'}</button>
       </div>
       {!canEdit && <div className="ps-alert info" style={{ marginBottom: 18 }}>You have view-only access to this space’s brand kit.</div>}
+      {restored && dirty && <div className="ps-alert info" role="status" style={{ marginBottom: 18 }}>Your unsaved changes from earlier are back. Save them, or Discard to see the kit as saved.</div>}
 
       <div className="ps-brand">
         <div className="ps-brand-form">
@@ -183,7 +228,7 @@ export default function BrandPage() {
                   <label className="ps-swatch-chip" style={{ background: isHex(c) ? c : 'transparent' }} title="Pick a colour">
                     <input type="color" value={isHex(c) && c.length === 7 ? c : '#000000'} onChange={(e) => set({ colors: doc.colors.map((x, j) => (j === i ? e.target.value : x)) })} disabled={!canEdit} aria-label={`Colour ${i + 1}`} />
                   </label>
-                  <input className={clsx('input ps-swatch-hex', !isHex(c) && 'bad')} value={c} onChange={(e) => set({ colors: doc.colors.map((x, j) => (j === i ? e.target.value.trim() : x)) })} disabled={!canEdit} aria-label={`Hex for colour ${i + 1}`} spellCheck={false} />
+                  <input className={clsx('input ps-swatch-hex', !isHex(c) && 'bad')} value={c} onChange={(e) => set({ colors: doc.colors.map((x, j) => (j === i ? e.target.value.trim() : x)) })} disabled={!canEdit} aria-label={`Hex for colour ${i + 1}`} aria-invalid={!isHex(c)} aria-describedby={!isHex(c) ? 'brand-colour-err' : undefined} spellCheck={false} />
                   {i === 0 && <span className="ps-swatch-tag">Primary</span>}
                   <button className="btn ghost sm icon" onClick={() => set({ colors: doc.colors.filter((_, j) => j !== i) })} disabled={!canEdit || doc.colors.length <= 1} aria-label={`Remove colour ${c}`}><X size={13} /></button>
                 </div>
@@ -192,6 +237,11 @@ export default function BrandPage() {
                 <button className="ps-swatch-add" onClick={() => set({ colors: [...doc.colors, '#ffffff'] })} disabled={!canEdit}><Plus size={14} /> Add colour</button>
               )}
             </div>
+            {badColour >= 0 && (
+              <div id="brand-colour-err" className="ps-field-err" role="alert" style={{ marginTop: 8 }}>
+                Colour {badColour + 1} (“{doc.colors[badColour]}”) isn’t a hex colour. Use #RGB or #RRGGBB, e.g. #ff5a5f, or remove it.
+              </div>
+            )}
           </section>
 
           <section className="card ps-brand-sec">

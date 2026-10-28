@@ -72,7 +72,7 @@ export function SharePage() {
           <div className="ps-share-stage" style={{ maxWidth: ratio < 1.2 ? `min(100%, calc(78vh * ${ratio}))` : undefined }}>
             <div className="ps-share-player" style={{ aspectRatio: String(ratio) }}>
               {data.videoUrl ? (
-                <video src={data.videoUrl} controls playsInline autoPlay />
+                <video src={data.videoUrl} poster={data.posterUrl} controls playsInline autoPlay />
               ) : (
                 <div className="ps-share-novideo">
                   <Film size={28} />
