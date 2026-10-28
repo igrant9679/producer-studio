@@ -21,6 +21,7 @@ const ExportSchema = z.object({
   quality: z.enum(['draft', 'standard', 'high']).default('standard'),
   format: z.enum(['mp4', 'webm', 'gif']).default('mp4'),
   name: z.string().max(200).optional(),
+  loudness: z.enum(['off', 'youtube', 'podcast', 'broadcast']).optional(),
 })
 
 /** Mounted at /api/projects (export + share sub-routes). */
