@@ -9,6 +9,7 @@ import { projects } from '../db/schema'
 import { projectSummary } from '../dto'
 import { HttpError, body, invalid, notFound, requireRole } from '../http'
 import { getLook, starterProject } from '../services/looks'
+import { recordActivity } from '../services/activity'
 import { hydrateAssets, insertProject, loadProjectRow, saveProjectDoc, validateProject, withFreshIds } from '../services/projects'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 import { getBrand } from './workspaces'
@@ -109,6 +110,7 @@ projectRoutes.post('/', async (c) => {
   }
   const row = await insertProject({ workspaceId: b.workspaceId, userId: u.id, doc, kind: b.kind })
   announce(row)
+  await recordActivity({ workspaceId: row.workspaceId, projectId: row.id, actorId: u.id, kind: 'project.created', data: { project: row.name } })
   const res: ProjectDocResponse = { summary: projectSummary(row), project: row.doc, version: row.version }
   return c.json(res)
 })
@@ -133,6 +135,7 @@ projectRoutes.put('/:id', async (c) => {
   // older (a draft saved while the editor was open, then "Keep mine"), so a save keeps the stored ones
   if (row.doc.ai) doc.ai = row.doc.ai
   const r = await saveProjectDoc(id, doc, b.baseVersion)
+  if (doc.name !== row.name) await recordActivity({ workspaceId: row.workspaceId, projectId: id, actorId: u.id, kind: 'project.renamed', data: { from: row.name, to: doc.name } })
   return c.json({ version: r.version, updatedAt: r.updatedAt })
 })
 
@@ -155,6 +158,7 @@ projectRoutes.patch('/:id', async (c) => {
   const [updated] = await ctx().db.update(projects).set(set).where(eq(projects.id, id)).returning()
   // trash, restore and template changes keep the version but still change what other screens list
   announce(updated)
+  if (b.name !== undefined && b.name !== row.name) await recordActivity({ workspaceId: row.workspaceId, projectId: id, actorId: u.id, kind: 'project.renamed', data: { from: row.name, to: b.name } })
   return c.json({ ...projectSummary(updated), version: updated.version })
 })
 
@@ -166,6 +170,7 @@ projectRoutes.post('/:id/duplicate', async (c) => {
   doc.name = `${row.name} copy`
   const copy = await insertProject({ workspaceId: row.workspaceId, userId: u.id, doc, kind: row.kind })
   announce(copy)
+  await recordActivity({ workspaceId: copy.workspaceId, projectId: copy.id, actorId: u.id, kind: 'project.created', data: { project: copy.name, copyOf: row.name } })
   return c.json(projectSummary(copy))
 })
 

@@ -5,6 +5,7 @@ import { FONTS, INVITE_TTL_MS, type BrandKitDoc, type InviteInfo, type InviteSta
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { brandKits, exportsTable, invites, jobs, memberships, projects, shareLinks, users, workspaces } from '../db/schema'
+import { recordActivity } from '../services/activity'
 import { HttpError, body, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { newId, randomToken } from '../ids'
 import { jobsDeleted } from '../jobs/queue'
@@ -158,6 +159,7 @@ workspaceRoutes.patch('/:id/members/:userId', async (c) => {
     throw new HttpError(409, 'conflict', 'A space needs at least one owner. Make someone else an owner first.')
   await ctx().db.update(memberships).set({ role: b.role }).where(and(eq(memberships.workspaceId, id), eq(memberships.userId, target)))
   membersChanged(id)
+  if (current !== b.role) await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: b.role } })
   return c.json({ ok: true, role: b.role })
 })
 
@@ -187,6 +189,7 @@ workspaceRoutes.delete('/:id/members/:userId', async (c) => {
         .where(and(eq(invites.workspaceId, id), eq(invites.email, email.toLowerCase()), isNull(invites.acceptedAt), isNull(invites.revokedAt)))
   })
   membersChanged(id)
+  await recordActivity(self ? { workspaceId: id, actorId: u.id, kind: 'member.left' } : { workspaceId: id, actorId: u.id, kind: 'member.removed', data: { member: await userName(target) } })
   return c.json({ ok: true })
 })
 
@@ -324,6 +327,9 @@ inviteRoutes.post('/:token/accept', async (c) => {
     else if (!roleAtLeast(existing.role as Role, inv.role as Role))
       await tx.update(memberships).set({ role: inv.role }).where(and(eq(memberships.workspaceId, inv.workspaceId), eq(memberships.userId, u.id)))
   })
+  await recordActivity({ workspaceId: inv.workspaceId, actorId: u.id, kind: 'member.joined', data: { role: inv.role } })
   const ws = (await listWorkspaces(u.id)).find((w) => w.id === inv.workspaceId)
   return c.json(ws)
 })
+
+const userName = async (id: string) => (await ctx().db.select({ name: users.name }).from(users).where(eq(users.id, id)).limit(1))[0]?.name ?? 'someone'

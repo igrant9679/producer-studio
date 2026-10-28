@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import type { Database } from './db'
 import { log } from './log'
 
-export type EventName = 'job' | 'asset' | 'project' | 'sync' | 'workspace'
+export type EventName = 'job' | 'asset' | 'project' | 'sync' | 'workspace' | 'presence' | 'comment'
 
 export interface BusEvent {
   workspaceId: string

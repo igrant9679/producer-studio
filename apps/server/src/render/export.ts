@@ -17,6 +17,7 @@ import { log } from '../log'
 import { probe, renderMediaKey, sdrStillArgs } from '../media/process'
 import { ffmpeg, run } from '../media/proc'
 import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAsset } from '../services/assets'
+import { recordActivity } from '../services/activity'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { buildFontFaces, fontsUsed } from './fonts'
 import { normalizeLoudness } from './loudness'
@@ -425,6 +426,7 @@ export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: 
         { id: exportId, projectId: row.id, workspaceId: row.workspaceId, assetId: assetRow.id, jobId: jc.job.id, name, resolution: audioOnly ? 'audio' : input.resolution, fps: input.fps, format: input.format, sizeBytes, duration, createdBy: jc.job.userId, createdAt: Date.now() },
         result,
       )
+      await recordActivity({ workspaceId: row.workspaceId, projectId: row.id, actorId: jc.job.userId, kind: 'project.exported', data: { project: row.name, name, format: input.format, resolution: audioOnly ? undefined : input.resolution } })
       jc.progress(1, 'Export ready')
       return result
     } catch (err) {

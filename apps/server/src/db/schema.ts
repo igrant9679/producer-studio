@@ -169,6 +169,46 @@ export const shareLinks = pgTable('share_links', {
   exportId: text('export_id'),
   createdBy: text('created_by').notNull(),
   createdAt: ms('created_at').notNull(),
+  /** v11: the link's settings and views. */
+  expiresAt: ms('expires_at'),
+  passwordHash: text('password_hash'),
+  allowDownload: boolean('allow_download').notNull().default(true),
+  allowComments: boolean('allow_comments').notNull().default(false),
+  views: integer('views').notNull().default(0),
+  lastViewedAt: ms('last_viewed_at'),
+})
+
+/** v11: timecoded review comments. A reply's parentId is its thread's first comment; visitors have no authorId. */
+export const comments = pgTable('comments', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull(),
+  workspaceId: text('workspace_id').notNull(),
+  parentId: text('parent_id'),
+  authorId: text('author_id'),
+  authorName: text('author_name').notNull(),
+  shareToken: text('share_token'),
+  body: text('body').notNull(),
+  /** Seconds into the project (thread roots). */
+  at: doublePrecision('at'),
+  /** A point on the frame, 0–1 from the top left. */
+  x: doublePrecision('x'),
+  y: doublePrecision('y'),
+  resolvedAt: ms('resolved_at'),
+  resolvedBy: text('resolved_by'),
+  createdAt: ms('created_at').notNull(),
+  updatedAt: ms('updated_at').notNull(),
+})
+
+/** v11: what happened in a space, newest first on the Activity page. */
+export const activity = pgTable('activity', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  projectId: text('project_id'),
+  actorId: text('actor_id'),
+  actorName: text('actor_name').notNull(),
+  kind: text('kind').notNull(),
+  data: jsonb('data').$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: ms('created_at').notNull(),
 })
 
 export const brandKits = pgTable('brand_kits', {
@@ -255,4 +295,4 @@ export const userPreferences = pgTable('user_preferences', {
   updatedAt: ms('updated_at').notNull(),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences }
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences }
