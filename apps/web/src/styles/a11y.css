@@ -1,0 +1,30 @@
+/* Accessibility basics (A-24), for the shell and the editor: the skip link, and a focus ring on every card that
+   is clearly not the "selected" look. Loaded before the page styles, so card rules carry :root to win over hover. */
+
+/* ---------- skip link: off screen until it has focus ---------- */
+.ps-skip {
+  position: fixed; z-index: 3000; left: 8px; top: 8px; padding: 8px 14px; border-radius: 10px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop);
+  font-weight: 600; font-size: 0.875rem; transform: translateY(calc(-100% - 16px));
+}
+.ps-skip:focus { transform: none; outline: 2px solid var(--cyan); outline-offset: 2px; }
+.ps-content:focus, .ps-content:focus-visible { outline: none; }
+
+/* read by screen readers, not shown (the app's live region, lib/announce.ts) */
+.ps-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ---------- keyboard focus on cards: a ring with a gap (selection is a plain 2px line) ---------- */
+:root .ps-pcard:focus-visible { outline: none; background: var(--surface); }
+:root .ps-pcard:focus-visible .ps-thumb,
+:root .ps-tcard:focus-visible .ps-thumb { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--cyan), var(--shadow-card); }
+:root .ps-qcard:focus-visible,
+:root .ps-space-card:focus-visible,
+:root .ps-voice:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+/* reduce motion: cards don't lift on hover or focus either (transitions are already off, theme.css) */
+:root[data-reduce-motion='true'] .ps-qcard:hover,
+:root[data-reduce-motion='true'] .ps-tcard:hover .ps-thumb,
+:root[data-reduce-motion='true'] .ps-tcard:focus-visible .ps-thumb { transform: none; }
+/* the editor's media cards: their Add button shows for the keyboard too, not only on hover */
+:root .ed-asset:focus-within .thumb { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+:root .ed-asset:focus-within .add { opacity: 1; transform: none; }
+.ed-asset .add:focus-visible { outline: 2px solid var(--on-accent); outline-offset: -4px; }

@@ -30,5 +30,9 @@ button.ed-save:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1
 .ed-versions-list .ed-versions-name { padding: 0; }
 .ed-versions-name .input { flex: 1; min-width: 0; }
 @media (max-width: 760px) {
-  .ed-versions { position: absolute; right: 0; top: 0; bottom: 0; z-index: 30; width: min(320px, 92vw); box-shadow: var(--shadow-drop); }
+  /* a sheet from the bottom, like Properties (editor.css) */
+  .ed-versions {
+    position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; width: auto; height: min(68vh, 560px);
+    border-left: 0; border-top: 1px solid var(--border-strong); border-radius: 14px 14px 0 0; box-shadow: var(--shadow-pop);
+  }
 }

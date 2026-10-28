@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { addAsset, addItem, createProject, createVideoItem, findItem, rampOf, setItemSpeed, sourceSpan, type Asset, type Job, type Project, type SmoothCopyResult, type VideoItem } from '@producer/core'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { announced } from '../../lib/announce'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { useToasts } from '../../lib/toast'
@@ -119,8 +120,12 @@ describe('smooth slow motion (E-17)', () => {
     await waitFor(() => expect(clip().smooth?.jobId).toBe('jb_s'))
     expect(screen.getByRole('status', { name: 'Making smooth slow motion' })).toBeTruthy()
     await waitFor(() => expect(screen.getByText(/Making the in-between frames \(40%\)/)).toBeTruthy())
+    // the start and the finish are said once each; the percentage isn't a live region (R3-E)
+    await waitFor(() => expect(announced()).toBe('Making smooth slow motion'))
+    expect(screen.getByText(/Making the in-between frames/).closest('[role="status"], [aria-live]')).toBeNull()
     done = true
     await waitFor(() => expect(clip().smooth?.assetId).toBe('sm1'), { timeout: 3000 })
+    await waitFor(() => expect(announced()).toBe('Smooth slow motion ready'))
     expect(S().project.assets.sm1).toBeTruthy()
     expect(screen.getByText(/Playing the smooth copy \(60 fps\)/)).toBeTruthy()
     // bringing it in is not an undo step of its own

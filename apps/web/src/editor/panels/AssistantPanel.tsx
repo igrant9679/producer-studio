@@ -171,6 +171,7 @@ export function AssistantPanel() {
         >
           <textarea
             rows={2}
+            aria-label="Ask the assistant"
             placeholder="e.g. Split at the playhead and add a zoom transition"
             value={input}
             onChange={(e) => setInput(e.target.value)}

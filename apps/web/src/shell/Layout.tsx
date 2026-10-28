@@ -49,7 +49,7 @@ import { DESKTOP_DOWNLOAD_URL, useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, uploadsIn, useJobs, useUploads } from './stores'
 import { StorageBanner } from './StorageBanner'
 import { QueueNote } from './components/QueueNote'
-import { Avatar, Logo, MenuList, Popover, Progress, Spinner, focusables, spaceColor, useClickOutside, useEditGate, useEscapeLayer, useFilePicker } from './ui'
+import { Avatar, Logo, MenuList, Popover, Progress, SkipLink, Spinner, focusables, spaceColor, useClickOutside, useEditGate, useEscapeLayer, useFilePicker } from './ui'
 import { JOB_LABELS, formatDuration, relativeTime } from './util'
 
 type ModalKind = 'aspect' | 'space' | 'invite' | 'help' | 'rename-space' | 'delete-space' | undefined
@@ -582,7 +582,8 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="ps-app">
-      {navOpen && <div className="ps-nav-scrim" onClick={closeNav} aria-hidden />}
+      <SkipLink target="#ps-main-content" />
+      {navOpen &&<div className="ps-nav-scrim" onClick={closeNav} aria-hidden />}
       <nav className={clsx('ps-nav', navOpen && 'open')} id="ps-nav" aria-label="Main" ref={navRef}>
         <div className="ps-nav-head">
           <NavLink to="/" aria-label="Producer Studio home">
@@ -653,7 +654,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </button>
           <AvatarMenu openModal={setModal} />
         </header>
-        <main className="ps-content" ref={contentRef}>
+        <main className="ps-content" ref={contentRef} id="ps-main-content" tabIndex={-1}>
           <StorageBanner />
           {!gate.canEdit && (
             <div className="ps-viewer-note" role="note">

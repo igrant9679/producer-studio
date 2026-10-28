@@ -99,14 +99,14 @@ export function TopBar() {
       <div className="row ed-top-r">
         <PresenceAvatars />
         <ThemeMenu />
-        <button className="ed-tbtn" {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
+        <button className="ed-tbtn ed-top-wide" {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
           <Keyboard size={16} />
         </button>
         <button className="btn sm" onClick={share} {...tipProps('Share', 'Review links to this project: make one, copy it, and set its expiry, password, downloads and comments.')}>
-          <Share2 size={14} /> Share
+          <Share2 size={14} /> <span className="ed-top-lbl">Share</span>
         </button>
         <button className="btn sm primary" onClick={() => useEditor.setState({ exportOpen: true, playing: false })} {...tipProps('Export', 'Render the video or a part of it (MP4, WebM or GIF, 720p to 4K), or just its sound (MP3, WAV). It renders in the background while you keep working.')} {...gate.props}>
-          <Upload size={14} /> Export
+          <Upload size={14} /> <span className="ed-top-lbl">Export</span>
         </button>
       </div>
       {shareOpen && (
@@ -258,7 +258,7 @@ function ThemeMenu() {
     setOpen(false)
   }
   return (
-    <div className="ed-dd ed-dd-right">
+    <div className="ed-dd ed-dd-right ed-top-wide">
       <button className="ed-tbtn" {...tipProps(`Theme: ${themeLabel(theme)}`, 'Light, dark or follow your system.', 'Ctrl+Shift+L')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
         {resolved === 'light' ? <Sun size={16} /> : <Moon size={16} />}
       </button>

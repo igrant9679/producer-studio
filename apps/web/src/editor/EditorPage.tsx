@@ -11,9 +11,12 @@ import { PasteAttributesHost } from './PasteAttributes'
 import { SmoothJobsHost } from './SpeedPanel'
 import './editor.css'
 import { StorageBanner } from '../shell/StorageBanner'
+import { SkipLink } from '../shell/ui'
 import { AssetPanel, LeftRail } from './LeftPanel'
 import { isFileDrag } from './media'
 import { flush, keepBoth, loadInto, onProjectEvent, overwriteServer, reloadTheirs, resyncProject, startAutosave } from './persistence'
+import { startPhoneSheets } from './phone'
+import { startSaveAnnouncements } from './saveAnnounce'
 import { startPlaybackClock } from './playback'
 import { PropertiesPanel } from './PropertiesPanel'
 import { useShortcuts } from './shortcuts'
@@ -57,6 +60,8 @@ export function EditorPage({ demo = false }: { demo?: boolean }) {
     if ((tabs as string[]).includes(tabParam)) useEditor.setState({ activeLeftTab: tabParam as LeftTab, leftCollapsed: false })
   }, [loaded, tabParam])
 
+  useEffect(() => startPhoneSheets(), [])
+  useEffect(() => startSaveAnnouncements(), [])
   useEffect(() => startPlaybackClock(), [])
   useEffect(() => startAutosave(), [])
   useEffect(() => startViewerMode(), [])
@@ -187,6 +192,8 @@ function EditorShell() {
 
   return (
     <div className={`ed-root${leftCollapsed ? ' left-collapsed' : ''}${readOnly ? ' ed-readonly' : ''}`}>
+      <SkipLink target="[data-canvas]">Skip to the canvas</SkipLink>
+      <SkipLink target='.tl-clip[tabindex="0"], .tl-rows'>Skip to the timeline</SkipLink>
       <TopBar />
       <StorageBanner />
       {saveState === 'conflict' && <ConflictBanner />}

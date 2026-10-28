@@ -6,6 +6,7 @@ import { Film, ImageOff, Loader2, X } from 'lucide-react'
 import type { Workspace } from '@producer/core'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { create } from 'zustand'
+import { useReducedMotion } from '../lib/motion'
 import { canEdit, currentWorkspace, onUserReset, useSession } from '../lib/session'
 
 /** The tooltip on an action a viewer can't take: who can. */
@@ -53,6 +54,32 @@ export function Logo({ compact = false }: { compact?: boolean }) {
         </span>
       )}
     </span>
+  )
+}
+
+/**
+ * A skip link (A-24): the first tab stop on a screen, shown when it has focus; Enter moves focus past the navigation
+ * to `target`, the first element matching that selector (an id, or a list to try in order).
+ */
+export function SkipLink({ target, children = 'Skip to content' }: { target: string; children?: ReactNode }) {
+  return (
+    <a
+      className="ps-skip"
+      href={target.startsWith('#') && !target.includes(',') ? target : '#'}
+      onClick={(e) => {
+        const el = target
+          .split(',')
+          .map((s) => document.querySelector<HTMLElement>(s.trim()))
+          .find(Boolean)
+        if (!el) return
+        e.preventDefault()
+        if (el.tabIndex < 0 && !el.hasAttribute('tabindex')) el.tabIndex = -1
+        el.focus({ preventScroll: true })
+        el.scrollIntoView?.({ block: 'nearest' })
+      }}
+    >
+      {children}
+    </a>
   )
 }
 
@@ -328,6 +355,22 @@ export function Popover({ trigger, children, align = 'left', className, style, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
   const side = flip.side ?? align
+  // Tab on a menu item closes the menu (WAI-ARIA menu pattern), choosing nothing; focus moves on from the trigger
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key === 'Tab' && (e.target as HTMLElement).matches(MENU_ITEM)) {
+      const trig = focusables(ref.current).find((el) => !popRef.current?.contains(el))
+      const page = focusables(document.body).filter((el) => !popRef.current?.contains(el))
+      const i = trig ? page.indexOf(trig) : -1
+      const next = i >= 0 ? (page[i + (e.shiftKey ? -1 : 1)] ?? trig) : undefined
+      setOpen(false)
+      if (next) {
+        e.preventDefault()
+        next.focus()
+      }
+      return
+    }
+    onMenuKeyDown(e)
+  }
   return (
     <div ref={ref} className="ps-popover-root" style={{ position: 'relative', display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
       {trigger({ open, toggle: () => setOpen(!open) })}
@@ -335,7 +378,7 @@ export function Popover({ trigger, children, align = 'left', className, style, o
         <div
           ref={popRef}
           className={clsx('ps-pop', className)}
-          onKeyDown={onMenuKeyDown}
+          onKeyDown={onKeyDown}
           style={{ top: 'calc(100% + 6px)', [side]: 0, ...style, ...(flip.side ? { [side === 'left' ? 'right' : 'left']: 'auto', [side]: 0 } : {}), ...(flip.up ? { top: 'auto', bottom: 'calc(100% + 6px)' } : {}) }}
         >
           {typeof children === 'function' ? children(close) : children}
@@ -532,11 +575,13 @@ export function Thumb({ src, seed = '', aspect, contain, children, icon, videoSr
   const [failed, setFailed] = useState(false)
   useEffect(() => setFailed(false), [src])
   const [vidFailed, setVidFailed] = useState(false)
+  // reduce motion: the still stays, no hover preview
+  const still = useReducedMotion()
   return (
     <div className={clsx('ps-thumb', contain && 'contain', className)} style={{ aspectRatio: aspect ? String(aspect) : undefined, background: gradientFor(seed) }}>
       {(!src || failed) && <div className="ps-thumb-fallback">{icon ?? (failed ? <ImageOff size={22} /> : <Film size={24} />)}</div>}
       {src && !failed && <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} draggable={false} />}
-      {videoSrc && playing && !vidFailed && <video src={videoSrc} muted autoPlay loop playsInline onError={() => setVidFailed(true)} />}
+      {videoSrc && playing && !still && !vidFailed && <video src={videoSrc} muted autoPlay loop playsInline onError={() => setVidFailed(true)} />}
       {children}
     </div>
   )

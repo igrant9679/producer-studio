@@ -46,6 +46,20 @@ describe('labels name their controls', () => {
     expect(screen.getByRole('button', { name: 'Draft' }).getAttribute('aria-pressed')).toBe('false')
   })
 
+  it('a plain select or box put in a field is named by the field (R3-E)', () => {
+    render(
+      <>
+        <Field label="Frame rate"><select><option>30</option></select></Field>
+        <Field label="Name"><input /></Field>
+        <Field label="Size"><input aria-label="Width" /></Field>
+      </>,
+    )
+    expect(screen.getByRole('combobox', { name: 'Frame rate' })).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: 'Name' })).toBeTruthy()
+    // its own name wins
+    expect(screen.getByRole('textbox', { name: 'Width' })).toBeTruthy()
+  })
+
   it('a section opens and closes with a button that says so', () => {
     render(<Section title="Transform"><p>inside</p></Section>)
     const btn = screen.getByRole('button', { name: 'Transform' })

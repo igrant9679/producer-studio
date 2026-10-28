@@ -20,6 +20,7 @@ import {
   type Workspace,
 } from '@producer/core'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { announced } from '../../lib/announce'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { useToasts } from '../../lib/toast'
@@ -86,7 +87,7 @@ function open(id = 'va', withCanvas = true) {
       <PropertiesPanel />
     </>,
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Smart' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Smart' }))
   return r
 }
 
@@ -104,11 +105,11 @@ const toasts = () => useToasts.getState().toasts.map((t) => t.text)
 describe('the Smart tab', () => {
   it('is there for videos, pictures and sounds, not for text', () => {
     open('va', false)
-    expect(screen.getByRole('button', { name: 'Smart' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Smart' })).toBeTruthy()
     cleanup()
     act(() => S().select(['tt']))
     render(<PropertiesPanel />)
-    expect(screen.queryByRole('button', { name: 'Smart' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Smart' })).toBeNull()
   })
 
   it('a viewer sees every control disabled, saying who can change it', () => {
@@ -287,7 +288,9 @@ describe('clean-up tools', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stabilise' }))
     // the clip shows 4..12 s of its file: a second either side
     expect(call).toHaveBeenCalledWith('a', 'stabilise', { from: 3, to: 13, smoothing: 50 })
-    await waitFor(() => expect(screen.getByRole('status', { name: /Stabilise: 40%/ })).toBeTruthy(), { timeout: 3000 })
+    // the progress is there to read; the start is said once, not each tick (R3-E)
+    await waitFor(() => expect((screen.getByRole('progressbar', { name: 'Stabilise' }) as HTMLProgressElement).value).toBe(0.4), { timeout: 3000 })
+    await waitFor(() => expect(announced()).toBe('Stabilise: started'))
     await waitFor(() => expect(clip().assetId).toBe('stab'), { timeout: 4000 })
     expect(clip()).toMatchObject({ in: 1, duration: 8, start: 0 })
     expect(lastLabel()).toBe('Stabilise')

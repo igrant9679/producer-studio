@@ -3,7 +3,7 @@ import type { AnimProp, Item } from '@producer/core'
 import { isSafeColor, removeKeyframe, setKeyframe } from '@producer/core'
 import clsx from 'clsx'
 import { ChevronDown, ChevronRight, Diamond } from 'lucide-react'
-import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { localTime, readProp } from './actions'
 import { useEditor } from './store'
 
@@ -40,10 +40,17 @@ export function useFieldIds() {
 export function Field({ label, children, keyframe, className }: { label: ReactNode; children: ReactNode; keyframe?: ReactNode; className?: string }) {
   const id = useId()
   const ids = useMemo(() => ({ control: `${id}c`, label: `${id}l` }), [id])
+  const ctl = useRef<HTMLDivElement>(null)
+  // a plain input or select put straight in a field (not one of the controls above) is named by the field's label
+  useLayoutEffect(() => {
+    ctl.current?.querySelectorAll('input, select, textarea').forEach((el) => {
+      if (!el.id && !el.hasAttribute('aria-label') && !el.hasAttribute('aria-labelledby') && el.closest('.ed-field-ctl') === ctl.current) el.setAttribute('aria-labelledby', ids.label)
+    })
+  })
   return (
     <div className={clsx('ed-field', className)}>
       <label id={ids.label} htmlFor={ids.control}>{label}</label>
-      <div className="ed-field-ctl" role="group" aria-labelledby={ids.label}>
+      <div ref={ctl} className="ed-field-ctl" role="group" aria-labelledby={ids.label}>
         <FieldIds.Provider value={ids}>{children}</FieldIds.Provider>
       </div>
       <div className="ed-field-kf">{keyframe}</div>
@@ -291,18 +298,29 @@ export function KeyframeToggle({ item, prop }: { item: Item; prop: AnimProp }) {
 const ITEMS = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 
+const tabbable = (root: ParentNode | null | undefined): HTMLElement[] =>
+  Array.from(root?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter((el) => el.tabIndex >= 0 && !el.closest('[inert], [hidden]'))
+
 /**
- * A pop-up menu (or, with role "dialog", a small popover). Opening it moves focus to its first item; the arrow keys,
- * Home and End move between items; Escape or Tab closes it and focus returns to where it was.
+ * A pop-up menu (or, with role "dialog", a small popover). Opening it moves focus to its first item (a popover's
+ * chosen option, else its first control); the arrow keys, Home and End move between a menu's items; Escape closes it
+ * and focus returns to where it was. Tab follows the WAI-ARIA patterns: in a popover it moves between the popover's
+ * own controls (Shift+Tab backwards, wrapping); in a menu it closes the menu, choosing nothing, and focus moves on
+ * from the button that opened it.
  */
 export function Menu({ open, onClose, children, className, style, role = 'menu', label }: { open: boolean; onClose: () => void; children: ReactNode; className?: string; style?: React.CSSProperties; role?: 'menu' | 'dialog'; label?: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
   close.current = onClose
+  const openerRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (!open) return
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const first = ref.current?.querySelector<HTMLElement>(role === 'menu' ? ITEMS : FOCUSABLE)
+    const opener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
+    openerRef.current = opener
+    const first =
+      role === 'menu'
+        ? ref.current?.querySelector<HTMLElement>(ITEMS)
+        : (ref.current?.querySelector<HTMLElement>('[aria-pressed="true"]:not(:disabled), [aria-checked="true"]:not(:disabled)') ?? tabbable(ref.current)[0])
     ;(first ?? ref.current)?.focus({ preventScroll: true })
     const onDown = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) close.current()
@@ -323,10 +341,32 @@ export function Menu({ open, onClose, children, className, style, role = 'menu',
   }, [open, role])
   if (!open) return null
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape' || e.key === 'Tab') {
-      if (e.key === 'Escape') e.preventDefault()
+    if (e.key === 'Escape') {
+      e.preventDefault()
       e.stopPropagation()
       onClose()
+      return
+    }
+    if (e.key === 'Tab') {
+      e.stopPropagation()
+      if (role === 'dialog') {
+        // a popover keeps Tab among its own controls
+        e.preventDefault()
+        const f = tabbable(ref.current)
+        const at = f.indexOf(document.activeElement as HTMLElement)
+        if (f.length) f[at < 0 ? 0 : (at + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus()
+        return
+      }
+      // a menu closes, and focus moves on from its opener as if the menu had never opened
+      const opener = openerRef.current
+      const page = opener?.isConnected ? tabbable(document).filter((el) => !ref.current?.contains(el)) : []
+      const i = opener ? page.indexOf(opener) : -1
+      const next = i >= 0 ? (page[i + (e.shiftKey ? -1 : 1)] ?? opener) : undefined
+      onClose()
+      if (next) {
+        e.preventDefault()
+        next.focus()
+      }
       return
     }
     if (role !== 'menu') return

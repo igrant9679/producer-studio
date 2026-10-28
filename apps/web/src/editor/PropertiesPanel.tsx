@@ -31,6 +31,7 @@ import * as A from './actions'
 import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
 import { resetDemoProject } from './demo'
 import { SpeedTab } from './SpeedPanel'
+import { PANEL_ID, PanelTabs, panelTabId } from './PanelTabs'
 import { AlignButtons } from './AlignTools'
 import { AdjustmentLayerTab, ColourTab, EffectsSection } from './ColourPanel'
 import { KeyframesSection } from './KeyframePanel'
@@ -94,18 +95,12 @@ export function PropertiesPanel() {
   if (collapsed) return null
   return (
     <aside className="ed-props">
-      <div className="ed-tabs">
-        {tabs.map((t) => (
-          <button key={t.id} className={clsx(t.id === tab && 'on')} onClick={() => useEditor.setState({ activeRightTab: t.id })}>
-            {t.label}
-          </button>
-        ))}
-        <div className="spacer" />
+      <PanelTabs tabs={tabs} value={tab} label="Properties" onChange={(id) => useEditor.setState({ activeRightTab: id })}>
         <button className="ed-collapse" title="Collapse panel" onClick={() => useEditor.setState({ rightCollapsed: true })}>
           <ChevronsRight size={14} />
         </button>
-      </div>
-      <div className="ed-props-body">
+      </PanelTabs>
+      <div className="ed-props-body" id={PANEL_ID} role="tabpanel" aria-labelledby={panelTabId(tab)}>
         <ViewOnly>
         {item && <ItemHeader item={item} track={f!.track} />}
         {locked && <p className="ed-note" role="note">{A.LOCKED_NOTE}</p>}
@@ -508,6 +503,7 @@ function TextTab({ item }: { item: TextItem }) {
         <textarea
           className="ed-textarea"
           rows={3}
+          aria-label="Text"
           value={text}
           onChange={(e) => {
             setText(e.target.value)
@@ -746,6 +742,7 @@ function CaptionTab({ item, track }: { item: CaptionItem; track: Track }) {
         <textarea
           className="ed-textarea"
           rows={2}
+          aria-label="Caption text"
           value={text}
           onChange={(e) => {
             setText(e.target.value)
