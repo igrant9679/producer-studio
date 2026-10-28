@@ -63,7 +63,7 @@ export async function startCloud(env: Record<string, string> = {}): Promise<Clou
   const cloudData = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-cloud-'))
   const proc = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
     cwd: SERVER_DIR,
-    env: { ...process.env, MODE: 'cloud', PORT: String(port), HOST: '127.0.0.1', DATA_DIR: cloudData, PGLITE_DIR: 'memory://', LOG_SILENT: '1', AI_PROVIDER: 'none', DESKTOP_SECRET: '', ...env },
+    env: { ...process.env, MODE: 'cloud', PORT: String(port), HOST: '127.0.0.1', DATA_DIR: cloudData, PGLITE_DIR: 'memory://', LOG_SILENT: '1', AI_PROVIDER: 'none', DESKTOP_SECRET: '', SAMPLE_PROJECT: '0', ...env },
     stdio: ['ignore', 'ignore', 'pipe'],
   })
   let err = ''
