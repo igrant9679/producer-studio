@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { and, eq, inArray } from 'drizzle-orm'
-import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
+import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, isAudioFormat, projectDuration, projectForExport, sidecarCaptions, type ExportPreviewResult, type ExportRequest, type ExportResult, type Project } from '@producer/core'
 import { childEnv } from '../child-env'
 import { REPO_ROOT } from '../config'
 import { ctx } from '../context'
@@ -285,7 +285,7 @@ export function renderWorkers(o: { memoryMb: number; cpus: number; concurrency: 
   return Math.max(1, Math.min(byMemory, byCpu, Math.floor(o.frames / 30), 24))
 }
 
-export function renderArgs(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: ExportRequest['format']; workers?: number }): string[] {
+export function renderArgs(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: RenderFormat; workers?: number }): string[] {
   const args = [hyperframesCli(), 'render', dir, '-o', out, '-q', QUALITY[opts.quality], '--fps', String(opts.fps)]
   if (opts.format !== 'mp4') args.push('--format', opts.format)
   if (opts.workers) args.push('--workers', String(opts.workers))
@@ -294,7 +294,7 @@ export function renderArgs(dir: string, out: string, opts: { fps: number; qualit
   return args
 }
 
-export async function renderComposition(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: ExportRequest['format']; workers?: number; signal?: AbortSignal; progress?: (f: number) => void }) {
+export async function renderComposition(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: RenderFormat; workers?: number; signal?: AbortSignal; progress?: (f: number) => void }) {
   const args = renderArgs(dir, out, opts)
   let buf = ''
   const r = await run(process.execPath, args, {
@@ -321,7 +321,7 @@ export function targetSize(w: number, h: number, resolution: ExportRequest['reso
   return { w: even(w * s), h: even(h * s) }
 }
 
-const MIME: Record<ExportRequest['format'], string> = { mp4: 'video/mp4', webm: 'video/webm', gif: 'image/gif' }
+const MIME: Record<ExportRequest['format'], string> = { mp4: 'video/mp4', webm: 'video/webm', gif: 'image/gif', mp3: 'audio/mpeg', wav: 'audio/wav' }
 
 /**
  * Record the export and finish its job in one transaction, unless the job was cancelled meanwhile (or another worker
@@ -347,67 +347,77 @@ export interface RenderSteps {
   render: typeof renderComposition
 }
 
-export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: lintComposition, render: renderComposition }): Promise<ExportResult> {
+export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: lintComposition, render: renderComposition }): Promise<ExportResult | ExportPreviewResult> {
   const input = jc.job.input as unknown as ExportRequest & { projectId: string }
   const row = await loadProjectRow(input.projectId)
-  const project = await hydrateAssets(row.doc, row.workspaceId)
-  if (projectDuration(project) <= 0) throw new HttpError(400, 'invalid', 'The project is empty')
+  const whole = await hydrateAssets(row.doc, row.workspaceId)
+  // the range, the platform shape and only the captions that are burned in
+  const project = projectForExport(whole, input)
+  if (projectDuration(project) <= 0) throw new HttpError(400, 'invalid', input.range ? 'There is nothing on the timeline in that range' : 'The project is empty')
+  const plan = renderPlan(project, input)
   const dir = path.join(ctx().config.dataDir, 'renders', jc.job.id)
   fs.rmSync(dir, { recursive: true, force: true })
   fs.mkdirSync(dir, { recursive: true })
   try {
     // Render natively at the requested size: the stage is scaled inside the composition so text, shapes and
     // captions are drawn at full resolution and source footage keeps its detail (no post-render upscale).
-    const tgt = targetSize(project.width, project.height, input.resolution)
-    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: input.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt, fps: input.fps })
+    const tgt = plan.size
+    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: plan.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt, fps: plan.fps })
     jc.check()
     jc.progress(0.09, 'Checking composition')
     const lint = await steps.lint(dir, jc.signal)
     if (lint.errors.length) throw new Error(`Composition lint failed: ${lint.errors.slice(0, 5).join('; ')}`)
     jc.check()
-    const ext = input.format
-    const raw = path.join(dir, `render.${ext}`)
+    const raw = path.join(dir, `render.${plan.format}`)
     jc.progress(0.1, 'Rendering')
-    const workers = renderWorkers({ memoryMb: systemMemoryMb(), cpus: os.cpus().length, concurrency: ctx().config.workerConcurrency, frames: Math.ceil(prep.duration * input.fps) })
-    await steps.render(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
+    const workers = renderWorkers({ memoryMb: systemMemoryMb(), cpus: os.cpus().length, concurrency: ctx().config.workerConcurrency, frames: Math.ceil(prep.duration * plan.fps) })
+    await steps.render(dir, raw, { fps: plan.fps, quality: plan.quality, format: plan.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
     jc.check()
     const final = raw
+    if (input.preview) return await savePreview(jc, row, final, prep.duration)
+    const out = await deliverable(final, input.format, dir, prep.duration, jc.signal)
+    const ext = input.format
+    const audioOnly = isAudioFormat(input.format)
     jc.progress(0.97, 'Saving export')
-    const info = await probe(final, jc.signal).catch(() => null)
-    const name = (input.name?.trim() || `${project.name} ${input.resolution}`).slice(0, 180)
+    const info = await probe(out, jc.signal).catch(() => null)
+    const name = (input.name?.trim() || `${project.name} ${audioOnly ? 'audio' : input.resolution}`).slice(0, 180)
     const assetRow = await createAssetFromFile({
       workspaceId: row.workspaceId,
       userId: jc.job.userId,
       projectId: row.id,
-      filePath: final,
+      filePath: out,
       name: `${name}.${ext}`,
       mime: MIME[input.format],
-      kind: input.format === 'gif' ? 'image' : 'video',
+      kind: audioOnly ? 'audio' : input.format === 'gif' ? 'image' : 'video',
       origin: 'render',
       status: 'ready',
       // the job that made it, like voiceovers and Producer AI clips record theirs
-      meta: { duration: info?.duration ?? prep.duration, width: info?.width ?? tgt.w, height: info?.height ?? tgt.h, fps: info?.fps ?? input.fps, hasAudio: info?.hasAudio, jobId: jc.job.id },
+      meta: audioOnly
+        ? { duration: info?.duration ?? prep.duration, hasAudio: true, jobId: jc.job.id }
+        : { duration: info?.duration ?? prep.duration, width: info?.width ?? tgt.w, height: info?.height ?? tgt.h, fps: info?.fps ?? input.fps, hasAudio: info?.hasAudio, jobId: jc.job.id },
     })
     try {
-      // cheap thumbnail for the library
-      try {
-        const thumb = path.join(dir, 'thumb.jpg')
-        await ffmpeg(['-ss', String(Math.min(1, (info?.duration ?? 1) / 2)), '-i', final, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
-        const key = `${assetPrefix(row.workspaceId, assetRow.id)}/thumb.jpg`
-        await ctx().storage.putFile(key, thumb, 'image/jpeg')
-        await updateAsset(assetRow.id, { thumbKey: key })
-      } catch (err) {
-        log.warn('export thumbnail failed', { err })
-      }
-      jc.check()
+      // cheap thumbnail for the library and the share page's poster: the cover frame picked, else near the start
+      if (!audioOnly)
+        try {
+          const thumb = path.join(dir, 'thumb.jpg')
+          await ffmpeg(['-ss', String(coverTime(input.coverAt, info?.duration ?? prep.duration)), '-i', out, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
+          const key = `${assetPrefix(row.workspaceId, assetRow.id)}/thumb.jpg`
+          await ctx().storage.putFile(key, thumb, 'image/jpeg')
+          await updateAsset(assetRow.id, { thumbKey: key })
+        } catch (err) {
+          log.warn('export thumbnail failed', { err })
+        }
       const exportId = newId('ex')
+      const captions = input.captions === 'sidecar' && !audioOnly ? await saveSidecar(whole, input, row.workspaceId, assetRow.id, dir) : false
+      jc.check()
       const sizeBytes = assetRow.size
       const duration = info?.duration ?? prep.duration
-      const result: ExportResult = { exportId, url: `/api/media/${assetRow.id}/source`, sizeBytes, duration }
+      const result: ExportResult = { exportId, url: `/api/media/${assetRow.id}/source`, sizeBytes, duration, format: input.format, ...(captions ? { captionsUrl: captionsPath(exportId) } : {}) }
       await saveExport(
         jc.job.id,
         jc.job.lockedBy,
-        { id: exportId, projectId: row.id, workspaceId: row.workspaceId, assetId: assetRow.id, jobId: jc.job.id, name, resolution: input.resolution, fps: input.fps, format: input.format, sizeBytes, duration, createdBy: jc.job.userId, createdAt: Date.now() },
+        { id: exportId, projectId: row.id, workspaceId: row.workspaceId, assetId: assetRow.id, jobId: jc.job.id, name, resolution: audioOnly ? 'audio' : input.resolution, fps: input.fps, format: input.format, sizeBytes, duration, createdBy: jc.job.userId, createdAt: Date.now() },
         result,
       )
       jc.progress(1, 'Export ready')
@@ -424,4 +434,80 @@ export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: 
   } finally {
     if (process.env.KEEP_RENDERS !== '1') fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => undefined)
   }
+}
+
+// ---------- export options: range, audio only, captions, cover, draft preview (E-5, E-23) ----------
+
+/** What HyperFrames itself renders: an audio-only export renders a small video and keeps its sound. */
+export type RenderFormat = 'mp4' | 'webm' | 'gif'
+
+/** Short side of a draft preview, and of the picture rendered only for its sound. */
+export const PREVIEW_SHORT = 360
+const AUDIO_RENDER_SHORT = 144
+/** Frame rate of a draft preview (fast, smooth enough to judge a transition), and of an audio-only render. */
+const PREVIEW_FPS = 24
+const AUDIO_RENDER_FPS = 10
+
+/** Size with short side `short` (never above the project's), even dimensions. */
+export function shortSideSize(w: number, h: number, short: number): { w: number; h: number } {
+  const s = Math.min(1, short / Math.min(w, h))
+  const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
+  return { w: even(w * s), h: even(h * s) }
+}
+
+/** How the composition is rendered for a request: a full export at its size, a small fast draft, or just for the sound. */
+export function renderPlan(p: Pick<Project, 'width' | 'height'>, input: ExportRequest): { size: { w: number; h: number }; fps: number; quality: ExportRequest['quality']; format: RenderFormat } {
+  if (input.preview) return { size: shortSideSize(p.width, p.height, PREVIEW_SHORT), fps: Math.min(PREVIEW_FPS, input.fps), quality: 'draft', format: 'mp4' }
+  if (isAudioFormat(input.format)) return { size: shortSideSize(p.width, p.height, AUDIO_RENDER_SHORT), fps: AUDIO_RENDER_FPS, quality: 'draft', format: 'mp4' }
+  return { size: targetSize(p.width, p.height, input.resolution), fps: input.fps, quality: input.quality, format: input.format as RenderFormat }
+}
+
+/** The thumbnail's time: the cover picked (inside the file), else 1 s in or half way. */
+export function coverTime(coverAt: number | undefined, duration: number): number {
+  if (coverAt === undefined || !Number.isFinite(coverAt)) return Math.min(1, duration / 2)
+  return Math.round(Math.max(0, Math.min(coverAt, duration - 0.05)) * 1000) / 1000
+}
+
+/** ffmpeg arguments that keep only the sound of `src`, `duration` long, as MP3 (192 kb/s) or 16-bit WAV. */
+export function audioArgs(src: string, out: string, format: 'mp3' | 'wav', duration: number): string[] {
+  const codec = format === 'mp3' ? ['-c:a', 'libmp3lame', '-b:a', '192k'] : ['-c:a', 'pcm_s16le']
+  return ['-i', src, '-vn', '-map', '0:a:0', '-t', String(Math.round(duration * 1000) / 1000), ...codec, out]
+}
+
+/** The file the person downloads: the render itself, or its sound for an audio-only export. */
+async function deliverable(render: string, format: ExportRequest['format'], dir: string, duration: number, signal?: AbortSignal): Promise<string> {
+  if (!isAudioFormat(format)) return render
+  const info = await probe(render, signal).catch(() => null)
+  if (info && !info.hasAudio) throw new HttpError(400, 'invalid', 'There is no sound to export here: every clip is muted or silent')
+  const out = path.join(dir, `audio.${format}`)
+  await ffmpeg(audioArgs(render, out, format, duration), { signal })
+  return out
+}
+
+export const captionsPath = (exportId: string) => `/api/exports/${exportId}/captions`
+
+/** Write the export's sidecar captions next to its file; false when the range has no caption lines. */
+async function saveSidecar(whole: Project, input: ExportRequest, workspaceId: string, assetId: string, dir: string): Promise<boolean> {
+  const format = input.captionFormat ?? 'srt'
+  // from the same range of the edit, before the captions were left out of the picture
+  const text = sidecarCaptions(projectForExport(whole, { range: input.range }), format, input.captionTrackId)
+  if (!text.replace(/^WEBVTT\s*/, '').trim()) return false
+  const file = path.join(dir, `captions.${format}`)
+  fs.writeFileSync(file, text)
+  const key = `${assetPrefix(workspaceId, assetId)}/captions.${format}`
+  await ctx().storage.putFile(key, file, format === 'srt' ? 'application/x-subrip' : 'text/vtt')
+  await updateAsset(assetId, { meta: { captions: { key, format } } })
+  return true
+}
+
+/** Where a project's draft preview is kept: only the latest (each new draft replaces the one before). */
+export const previewPrefix = (workspaceId: string, projectId: string) => `ws/${workspaceId}/previews/${projectId}/`
+export const previewKey = (workspaceId: string, projectId: string, jobId: string) => `${previewPrefix(workspaceId, projectId)}${jobId}.mp4`
+
+async function savePreview(jc: JobContext, row: { id: string; workspaceId: string }, file: string, duration: number): Promise<ExportPreviewResult> {
+  jc.progress(0.97, 'Saving the draft')
+  await ctx().storage.deletePrefix(previewPrefix(row.workspaceId, row.id)).catch(() => undefined)
+  const { size } = await ctx().storage.putFile(previewKey(row.workspaceId, row.id, jc.job.id), file, 'video/mp4')
+  jc.check()
+  return { previewUrl: `/api/projects/${row.id}/previews/${jc.job.id}`, sizeBytes: size, duration }
 }

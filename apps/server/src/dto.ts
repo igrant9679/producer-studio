@@ -103,12 +103,14 @@ export function jobDto(j: typeof jobs.$inferSelect): Job {
   }
 }
 
-export function exportDto(e: typeof exportsTable.$inferSelect): ExportRecord {
+export function exportDto(e: typeof exportsTable.$inferSelect, captions = false): ExportRecord {
   return {
     exportId: e.id,
     url: mediaPath(e.assetId, 'source'),
     sizeBytes: e.sizeBytes,
     duration: e.duration,
+    format: e.format as ExportRecord['format'],
+    ...(captions ? { captionsUrl: `/api/exports/${e.id}/captions` } : {}),
     projectId: e.projectId,
     name: e.name,
     resolution: e.resolution,

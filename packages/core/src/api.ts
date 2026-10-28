@@ -272,7 +272,7 @@ export function transcriptRev(t: Transcript): string {
 // GET /api/events?workspaceId=         -> text/event-stream, events: `job` (Job), `asset` (AssetRecord), `project`
 //   ({id, version, deleted?}: created, saved, renamed, trashed/restored, template flag, deleted), `workspace`
 //   ({id, name?, deleted, members?, brand?}: renamed, deleted, members changed, brand kit saved), `sync`
-export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task'
+export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task' | 'media.scenes'
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
 export interface Job<R = unknown> {
@@ -472,6 +472,9 @@ export interface AssistantResult {
 // ---- export & share ----
 // POST /api/projects/:id/export  ExportRequest     -> Job<ExportResult>
 // GET  /api/exports?projectId=                    -> ExportRecord[]
+// GET  /api/exports/:id/captions                  -> the export's sidecar captions (viewer)
+// GET  /api/projects/:id/previews/:jobId          -> the draft preview video (viewer)
+// POST /api/assets/:id/scenes {from?, to?, threshold?} -> Job<SceneCuts> (editor; ffmpeg scene detection)
 // POST /api/projects/:id/share   {exportId?}      -> ShareLink  (editor; the given or latest export; reuses that
 //        export's existing link; 409 when nothing has been exported yet)
 // GET  /api/projects/:id/shares                   -> ShareLink[]  (viewer)
@@ -494,13 +497,37 @@ export interface ExportRequest {
   resolution: '720p' | '1080p' | '1440p' | '4k'
   fps: 24 | 25 | 30 | 50 | 60
   quality: 'draft' | 'standard' | 'high'
-  format: 'mp4' | 'webm' | 'gif'
+  /** mp3 / wav: the sound only. */
+  format: 'mp4' | 'webm' | 'gif' | 'mp3' | 'wav'
   name?: string
+  /** Only this part of the timeline (seconds), starting at 0 in the file. */
+  range?: { from: number; to: number }
+  /** Reframe a copy to this ASPECT_RATIOS shape for the export (a platform preset); the project keeps its own. */
+  aspect?: string
+  /** Captions drawn on the picture (default), written to a sidecar file beside it, or left out. */
+  captions?: 'burn' | 'sidecar' | 'none'
+  captionFormat?: 'srt' | 'vtt'
+  /** The caption track burned in or written out (default: every track burned, the first written). */
+  captionTrackId?: string
+  /** The frame (seconds into the export) used for its thumbnail and share-page poster. */
+  coverAt?: number
+  /** A quick draft for the export dialog's player: small and fast, kept only until the next one, not an export. */
+  preview?: boolean
 }
 
 export interface ExportResult {
   exportId: string
   url: string
+  sizeBytes: number
+  duration: number
+  /** The sidecar caption file (GET, `?download=1` saves it). */
+  captionsUrl?: string
+  format?: ExportRequest['format']
+}
+
+/** A draft preview (`preview: true`): GET previewUrl plays it. */
+export interface ExportPreviewResult {
+  previewUrl: string
   sizeBytes: number
   duration: number
 }
@@ -511,6 +538,12 @@ export interface ExportRecord extends ExportResult {
   resolution: string
   fps: number
   createdAt: number
+}
+
+/** media.scenes: where the picture changes, in seconds into the file, inside the range asked for. */
+export interface SceneCuts {
+  assetId: string
+  cuts: number[]
 }
 
 // ---- templates ----

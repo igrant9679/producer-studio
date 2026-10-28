@@ -99,6 +99,8 @@ export interface AssetMeta {
   /** The job that made this clip and processes it inside itself (voiceovers, Producer AI visuals): once that job has
    * ended, a clip still "processing" never will finish, and asset recovery fails it. */
   jobId?: string
+  /** An export's sidecar caption file, stored next to it. */
+  captions?: { key: string; format: 'srt' | 'vtt' }
 }
 
 export const assets = pgTable('assets', {
