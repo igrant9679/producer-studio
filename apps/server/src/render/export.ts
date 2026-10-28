@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { and, eq, inArray } from 'drizzle-orm'
-import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
+import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, loudnessLufs, projectDuration, type ExportRequest, type ExportResult, type Project } from '@producer/core'
 import { childEnv } from '../child-env'
 import { REPO_ROOT } from '../config'
 import { ctx } from '../context'
@@ -19,6 +19,7 @@ import { ffmpeg, run } from '../media/proc'
 import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAsset } from '../services/assets'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { buildFontFaces, fontsUsed } from './fonts'
+import { normalizeLoudness } from './loudness'
 
 const require = createRequire(import.meta.url)
 
@@ -371,7 +372,10 @@ export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: 
     const workers = renderWorkers({ memoryMb: systemMemoryMb(), cpus: os.cpus().length, concurrency: ctx().config.workerConcurrency, frames: Math.ceil(prep.duration * input.fps) })
     await steps.render(dir, raw, { fps: input.fps, quality: input.quality, format: input.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
     jc.check()
-    const final = raw
+    const lufs = input.format === 'gif' ? undefined : loudnessLufs(input.loudness)
+    if (lufs !== undefined) jc.progress(0.92, 'Normalising loudness')
+    const final = lufs !== undefined ? await normalizeLoudness(raw, path.join(dir, `loud.${ext}`), lufs, { format: input.format, signal: jc.signal }) : raw
+    jc.check()
     jc.progress(0.97, 'Saving export')
     const info = await probe(final, jc.signal).catch(() => null)
     const name = (input.name?.trim() || `${project.name} ${input.resolution}`).slice(0, 180)

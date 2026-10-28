@@ -496,6 +496,8 @@ export interface ExportRequest {
   quality: 'draft' | 'standard' | 'high'
   format: 'mp4' | 'webm' | 'gif'
   name?: string
+  /** Loudness normalisation of the exported sound (see LOUDNESS_TARGETS); absent or 'off' leaves the mix as it is. */
+  loudness?: 'off' | 'youtube' | 'podcast' | 'broadcast'
 }
 
 export interface ExportResult {

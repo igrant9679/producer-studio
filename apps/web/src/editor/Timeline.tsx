@@ -63,6 +63,9 @@ import {
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
+import { ClipAudioOverlay, hasBand } from './audio/ClipAudioOverlay'
+import { jlTrim } from './audio/jlcut'
+import { TrackSoundButton } from './audio/TrackSound'
 import { Menu, MenuItem, Slider } from './controls'
 import { FreezeButton } from './FreezeMenu'
 import { HistoryButton } from './HistoryPanel'
@@ -521,7 +524,8 @@ function TimelineBody() {
         if (r.snapped) line = r.t
       }
       setSnapLine(line)
-      st.commit(trimLinked(orig, item.id, edge, t), 'Trim', { coalesce: `trim:${item.id}:${edge}` })
+      // Shift on an audio clip's edge: a J or L cut (only the sound moves, see jlTrim)
+      st.commit(jlTrim(ev, orig, item, edge, t) ?? trimLinked(orig, item.id, edge, t), 'Trim', { coalesce: `trim:${item.id}:${edge}` })
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -590,12 +594,14 @@ function TimelineBody() {
         pendingFocus = item.id
         s.commit(moveItem(p, item.id, { start: item.start, trackId: to.id }), 'Move clip')
       }
-    } else if (k === '[' || k === ']') {
-      // trim the start or end to the playhead
+    } else if (k === '[' || k === ']' || ((k === '{' || k === '}') && item.type === 'audio')) {
+      // trim the start or end to the playhead (Shift on an audio clip: a J or L cut, which may also lengthen it)
       done()
-      if (s.playhead > item.start && s.playhead < itemEnd(item)) {
+      const edge = k === '[' || k === '{' ? 'start' : 'end'
+      const jl = jlTrim({ shiftKey: k === '{' || k === '}' }, p, item, edge, s.playhead)
+      if (jl || (s.playhead > item.start && s.playhead < itemEnd(item))) {
         pendingFocus = item.id
-        s.commit(trimLinked(p, item.id, k === '[' ? 'start' : 'end', s.playhead), 'Trim')
+        s.commit(jl ?? trimLinked(p, item.id, edge, s.playhead), 'Trim')
       }
     } else if (k === 'Enter') {
       done()
@@ -704,7 +710,7 @@ function TimelineBody() {
             <Ruler width={contentW} zoom={zoom} fps={project.fps} duration={duration} onPointerDown={clipEvents.scrub} />
           </div>
           <p id="tl-keys" className="ed-sr">
-            Arrow keys move between clips and tracks. Alt with the arrows moves the clip (Shift: by a second), [ and ] trim it to the playhead, Delete removes it, Shift F10 opens its menu.
+            Arrow keys move between clips and tracks. Alt with the arrows moves the clip (Shift: by a second), [ and ] trim it to the playhead (Shift on an audio clip: a J or L cut), Delete removes it, Shift F10 opens its menu.
           </p>
           <div
             className="tl-rows"
@@ -1069,6 +1075,7 @@ const TrackHeader = memo(function TrackHeader({ track }: { track: Track }) {
             {track.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
           </button>
         )}
+        <TrackSoundButton track={track} />
         <button title={track.locked ? 'Unlock track' : 'Lock track'} aria-label={`Lock ${track.name}`} aria-pressed={!!track.locked} className={clsx(track.locked && 'off')} onClick={() => up({ locked: !track.locked }, track.locked ? 'Unlock track' : 'Lock track')}>
           {track.locked ? <Lock size={13} /> : <Unlock size={13} />}
         </button>
@@ -1214,6 +1221,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
         </div>
         {(item.type === 'video' || item.type === 'audio') && item.fadeIn > 0 && <div className="tl-fade in" style={{ width: Math.min(width, item.fadeIn * zoom) }} />}
         {(item.type === 'video' || item.type === 'audio') && item.fadeOut > 0 && <div className="tl-fade out" style={{ width: Math.min(width, item.fadeOut * zoom) }} />}
+        {(item.type === 'video' || item.type === 'audio') && hasBand(item, asset?.hasAudio) && height >= 26 && width >= 12 && <ClipAudioOverlay item={item} width={width} height={height - 2} zoom={zoom} selected={selected} locked={locked} />}
         {kfTimes.map((t) => (
           <button
             key={t}

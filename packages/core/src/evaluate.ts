@@ -1,10 +1,10 @@
 // Frame evaluation: project + time -> positioned layers and audio levels. Renderer-agnostic and deterministic
 // (no clocks, seeded noise), so the browser preview and the HyperFrames export produce identical frames.
+import { frameAudio } from './audio'
 import { FILTERS } from './presets'
 import { itemEnd } from './ops'
 import type {
   AnimationSpec,
-  AudioItem,
   CaptionItem,
   ColorAdjust,
   FrameAudio,
@@ -437,17 +437,10 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
   return layer
 }
 
-function audioLevel(it: AudioItem | VideoItem, lt: number): number {
-  let v = sampleKeyframes(it.keyframes?.volume, lt, it.volume)
-  if (it.fadeIn > 0 && lt < it.fadeIn) v *= lt / it.fadeIn
-  const rem = it.duration - lt
-  if (it.fadeOut > 0 && rem < it.fadeOut) v *= Math.max(0, rem) / it.fadeOut
-  return clamp(v, 0, 4)
-}
-
 export function evaluate(p: Project, t: number): FrameState {
   const layers: FrameLayer[] = []
-  const audio: FrameAudio[] = []
+  // sound (crossfades, track volume, solo, ducking) is worked out in audio.ts, shared with the export's volume lanes
+  const audio: FrameAudio[] = frameAudio(p, t)
   let z = 0
   const visual = p.tracks.filter((tr) => tr.kind !== 'audio' && tr.kind !== 'caption')
   const captions = p.tracks.filter((tr) => tr.kind === 'caption')
@@ -458,21 +451,6 @@ export function evaluate(p: Project, t: number): FrameState {
         const l = visualLayer(p, track, a, z++, t)
         if (l && l.opacity > 0.001) layers.push(l)
       }
-      // freeze frames and reversed clips are silent (the export can't play a source's sound backwards either)
-      if (it.type === 'video' && !it.muted && !track.muted && it.freezeAt === undefined && !it.reverse) {
-        if (t >= it.start && t < itemEnd(it)) {
-          const asset = p.assets[it.assetId]
-          if (asset?.hasAudio !== false) audio.push({ itemId: it.id, assetId: it.assetId, mediaTime: sourceTime(p, it, a.local), volume: audioLevel(it, a.local), speed: it.speed })
-        }
-      }
-    }
-  }
-  for (const track of p.tracks.filter((tr) => tr.kind === 'audio')) {
-    if (track.muted) continue
-    for (const it of track.items) {
-      if (it.type !== 'audio' || it.muted || t < it.start || t >= itemEnd(it)) continue
-      const lt = t - it.start
-      audio.push({ itemId: it.id, assetId: it.assetId, mediaTime: it.in + lt * it.speed, volume: audioLevel(it, lt), speed: it.speed })
     }
   }
   for (const track of captions) {

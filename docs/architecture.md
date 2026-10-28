@@ -20,6 +20,12 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   HyperFrames media element (`data-start`, `data-duration`, `data-media-start`, `data-playback-rate`,
   `data-automation` volume lanes) and one paused GSAP timeline calls `StageRenderer.render(t)` in `export` mode.
   `hyperframes render` produces the MP4. Freeze frames → ffmpeg-extracted stills; reverse → pre-reversed proxy.
+- **Sound** (`packages/core/src/audio.ts`): one function decides every clip's level (keyframes and fades, track
+  volume, solo, crossfades across transitions, ducking under voiceovers and transcribed speech). `evaluate()` hands
+  it to the preview; the compiler samples it into the volume lanes (a lane past 512 points becomes several
+  elements on the same sound with 20 ms hand-overs). An export with a loudness target (YouTube -14, Podcast -16,
+  Broadcast -23 LUFS) gets a two-pass ffmpeg `loudnorm` after the render (`apps/server/src/render/loudness.ts`),
+  the picture copied untouched.
 - Verified 23 Sept 2026: lint 0/0, 10 s 720p render in ~22 s with title, captions, push transition, audio.
 
 ## Data

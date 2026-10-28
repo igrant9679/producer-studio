@@ -336,6 +336,12 @@ export interface Track {
   main?: boolean
   /** Caption tracks carry their style. */
   captionStyle?: CaptionStyle
+  /** Sound tracks (audio, video, overlay): level of the whole track (1 = as mixed, up to +12 dB). */
+  volume?: number
+  /** Only soloed tracks are heard while any track is soloed. */
+  solo?: boolean
+  /** Duck under voice: dB this track drops while a voiceover or a clip with a transcript is speaking (0/absent = off). */
+  duck?: number
 }
 
 export interface BrandKit {
