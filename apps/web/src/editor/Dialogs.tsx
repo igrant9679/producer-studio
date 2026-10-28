@@ -247,6 +247,7 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Editing', [['Ctrl B', 'Split at playhead'], ['Delete', 'Delete'], ['Shift Delete', 'Ripple delete'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl A', 'Select all'], ['Ctrl Z', 'Undo'], ['Ctrl Shift Z', 'Redo']]],
   ['Timeline', [['Ctrl = / Ctrl -', 'Zoom in / out'], ['Ctrl wheel', 'Zoom at pointer'], ['S', 'Toggle snapping'], ['Alt drag', 'Move without snapping'], ['Ctrl / Shift click', 'Multi-select']]],
   ['Timeline clip focused', [['← → ↑ ↓', 'Next clip / track'], ['Alt ← / →', 'Move a frame (Shift: a second)'], ['Alt ↑ / ↓', 'Move to the track above / below'], ['[ / ]', 'Trim start / end to playhead'], ['Shift F10', 'Clip menu']]],
+  ['Sound', [['Shift drag audio edge', 'J / L cut: the sound only (the next sound rolls)'], ['Shift [ / ]', 'J / L cut to playhead (audio clip)'], ['Double-click volume line', 'Add a volume keyframe'], ['Double-click keyframe', 'Remove it']]],
   ['Canvas', [['V', 'Select tool'], ['H', 'Hand tool'], ['Arrows', 'Nudge 1 px (canvas focused)'], ['Shift arrows', 'Nudge 10 px'], ['Double-click text', 'Edit text inline'], ['Shift drag', 'Constrain / 15° rotate']]],
 ]
 

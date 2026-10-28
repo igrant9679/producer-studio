@@ -276,6 +276,7 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Dictation (desktop)', [['Dictate into the focused text box', 'Ctrl Shift Space'], ['Insert / cancel', 'Ctrl Shift Space / Esc'], ['Dictate into any app', 'Ctrl Alt D (Settings → Dictation)']]],
   ['Editor — global', [['Play / pause', 'Space'], ['Undo', 'Ctrl Z'], ['Redo', 'Ctrl Shift Z'], ['Select all', 'Ctrl A'], ['Copy / paste', 'Ctrl C / V'], ['Delete', 'Backspace']]],
   ['Editor — timeline', [['Split at playhead', 'Ctrl B'], ['Zoom timeline', 'Ctrl + / −'], ['Previous / next frame', 'Ctrl ← / →'], ['Separate audio', 'Ctrl Shift S']]],
+  ['Editor — sound', [['J / L cut (sound leads or trails the picture)', 'Shift drag audio edge'], ['J / L cut to the playhead', 'Shift [ / ]'], ['Add a volume keyframe', 'Double-click the volume line']]],
   ['Editor — canvas', [['Move tool', 'V'], ['Hand tool', 'H'], ['Fit canvas', 'Shift F'], ['Nudge 1 px', '↑ ↓ ← →']]],
 ]
 

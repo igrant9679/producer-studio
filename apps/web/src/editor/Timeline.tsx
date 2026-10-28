@@ -59,6 +59,7 @@ import {
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
 import { ClipAudioOverlay, hasBand } from './audio/ClipAudioOverlay'
+import { jlTrim } from './audio/jlcut'
 import { TrackSoundButton } from './audio/TrackSound'
 import { Menu, MenuItem, Slider } from './controls'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
@@ -478,7 +479,8 @@ function TimelineBody() {
         if (r.snapped) line = r.t
       }
       setSnapLine(line)
-      st.commit(trimItem(orig, item.id, edge, t), 'Trim', { coalesce: `trim:${item.id}:${edge}` })
+      // Shift on an audio clip's edge: a J or L cut (only the sound moves, see jlTrim)
+      st.commit(jlTrim(ev, orig, item, edge, t) ?? trimItem(orig, item.id, edge, t), 'Trim', { coalesce: `trim:${item.id}:${edge}` })
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -547,12 +549,14 @@ function TimelineBody() {
         pendingFocus = item.id
         s.commit(moveItem(p, item.id, { start: item.start, trackId: to.id }), 'Move clip')
       }
-    } else if (k === '[' || k === ']') {
-      // trim the start or end to the playhead
+    } else if (k === '[' || k === ']' || ((k === '{' || k === '}') && item.type === 'audio')) {
+      // trim the start or end to the playhead (Shift on an audio clip: a J or L cut, which may also lengthen it)
       done()
-      if (s.playhead > item.start && s.playhead < itemEnd(item)) {
+      const edge = k === '[' || k === '{' ? 'start' : 'end'
+      const jl = jlTrim({ shiftKey: k === '{' || k === '}' }, p, item, edge, s.playhead)
+      if (jl || (s.playhead > item.start && s.playhead < itemEnd(item))) {
         pendingFocus = item.id
-        s.commit(trimItem(p, item.id, k === '[' ? 'start' : 'end', s.playhead), 'Trim')
+        s.commit(jl ?? trimItem(p, item.id, edge, s.playhead), 'Trim')
       }
     } else if (k === 'Enter') {
       done()
@@ -650,7 +654,7 @@ function TimelineBody() {
             <Ruler width={contentW} zoom={zoom} fps={project.fps} duration={duration} onPointerDown={clipEvents.scrub} />
           </div>
           <p id="tl-keys" className="ed-sr">
-            Arrow keys move between clips and tracks. Alt with the arrows moves the clip (Shift: by a second), [ and ] trim it to the playhead, Delete removes it, Shift F10 opens its menu.
+            Arrow keys move between clips and tracks. Alt with the arrows moves the clip (Shift: by a second), [ and ] trim it to the playhead (Shift on an audio clip: a J or L cut), Delete removes it, Shift F10 opens its menu.
           </p>
           <div
             className="tl-rows"
