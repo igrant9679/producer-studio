@@ -14,12 +14,15 @@ import {
   NEUTRAL_ADJUST,
   adjustToFilter,
   captionStyleFromPreset,
+  editable,
   findItem,
   projectDuration,
   presetCanvasSize,
   rechunkCaptions,
+  resetTransform,
   setAspect,
   setCanvasSize,
+  setItemSpeed,
   updateItem,
   updateProject,
   updateTrack,
@@ -54,6 +57,8 @@ export function PropertiesPanel() {
   const items = A.selectedItems(project, selection)
   const item = items.length === 1 ? items[0] : undefined
   const f = item ? findItem(project, item.id) : null
+  // a locked clip (or a clip on a locked track) shows its settings but takes no edits
+  const locked = !!f && !editable(f)
 
   let tabs: Array<{ id: string; label: string }> = []
   if (!item) tabs = items.length > 1 ? [{ id: 'multi', label: 'Selection' }] : [{ id: 'project', label: 'Project' }]
@@ -95,17 +100,20 @@ export function PropertiesPanel() {
       </div>
       <div className="ed-props-body">
         {item && <ItemHeader item={item} track={f!.track} />}
+        {locked && <p className="ed-note" role="note">{A.LOCKED_NOTE}</p>}
         {tab === 'project' && <ProjectTab project={project} />}
         {tab === 'multi' && <MultiTab items={items} />}
-        {item && tab === 'basic' && 'transform' in item && <BasicTab item={item as VisualItem} main={!!f?.track.main} />}
-        {item && tab === 'adjust' && (item.type === 'video' || item.type === 'image') && <AdjustTab item={item} />}
-        {item && tab === 'background' && (item.type === 'video' || item.type === 'image') && <BackgroundTab item={item} project={project} />}
-        {item && tab === 'animation' && 'animations' in item && <AnimationTab item={item as VisualItem} />}
-        {item && tab === 'speed' && (item.type === 'video' || item.type === 'audio') && <SpeedTab item={item} project={project} />}
-        {item && tab === 'audio' && (item.type === 'video' || item.type === 'audio') && <AudioTab item={item} />}
-        {item && tab === 'text' && item.type === 'text' && <TextTab item={item} />}
-        {item && tab === 'shape' && item.type === 'shape' && <ShapeTab item={item} />}
-        {item && tab === 'caption' && item.type === 'caption' && <CaptionTab item={item} track={f!.track} />}
+        <fieldset disabled={locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          {item && tab === 'basic' && 'transform' in item && <BasicTab item={item as VisualItem} main={!!f?.track.main} />}
+          {item && tab === 'adjust' && (item.type === 'video' || item.type === 'image') && <AdjustTab item={item} />}
+          {item && tab === 'background' && (item.type === 'video' || item.type === 'image') && <BackgroundTab item={item} project={project} />}
+          {item && tab === 'animation' && 'animations' in item && <AnimationTab item={item as VisualItem} />}
+          {item && tab === 'speed' && (item.type === 'video' || item.type === 'audio') && <SpeedTab item={item} />}
+          {item && tab === 'audio' && (item.type === 'video' || item.type === 'audio') && <AudioTab item={item} />}
+          {item && tab === 'text' && item.type === 'text' && <TextTab item={item} />}
+          {item && tab === 'shape' && item.type === 'shape' && <ShapeTab item={item} />}
+          {item && tab === 'caption' && item.type === 'caption' && <CaptionTab item={item} track={f!.track} />}
+        </fieldset>
       </div>
     </aside>
   )
@@ -264,6 +272,7 @@ function PropSlider({ item, prop, label, min, max, step, pct, suffix }: { item: 
       step={step}
       suffix={suffix ?? (pct ? '%' : undefined)}
       display={pct ? { to: (v) => v * 100, from: (v) => v / 100, step: 1 } : undefined}
+      neutral={prop === 'opacity' || prop === 'volume' || prop === 'scale' ? 1 : 0}
       onChange={(v) => {
         const s = useEditor.getState()
         s.commit(A.writeProp(s.project, item.id, prop, v), label, { coalesce: `${prop}:${item.id}` })
@@ -282,7 +291,7 @@ function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
       <Section
         title="Transform"
         right={
-          <button className="ed-mini" title="Reset transform" onClick={() => up<VisualItem>(item, { transform: { x: 0, y: 0, scale: 1, rotation: 0 }, keyframes: {} }, 'Reset transform')}>
+          <button className="ed-mini" title="Reset transform" onClick={() => useEditor.getState().commit(resetTransform(useEditor.getState().project, item.id), 'Reset transform')}>
             <RotateCcw size={12} />
           </button>
         }
@@ -531,14 +540,11 @@ function AnimationTab({ item }: { item: VisualItem }) {
 
 // ---------- speed ----------
 
-function SpeedTab({ item, project }: { item: VideoItem | AudioItem; project: Project }) {
-  const asset = project.assets[item.assetId]
+function SpeedTab({ item }: { item: VideoItem | AudioItem }) {
   const setSpeed = (v: number) => {
-    const it = live<VideoItem | AudioItem>(item.id) ?? item
-    const span = it.duration * it.speed
-    const max = asset?.duration ? (asset.duration - it.in) : Infinity
-    const src = Math.min(span, max)
-    up<VideoItem>(it as VideoItem, { speed: +v.toFixed(3), duration: +(src / v).toFixed(4) }, 'Speed', `speed:${item.id}`)
+    // keyframes, fades and animations stay on the same frames
+    const s = useEditor.getState()
+    s.commit(setItemSpeed(s.project, item.id, v), 'Speed', { coalesce: `speed:${item.id}` })
   }
   const frozen = item.type === 'video' && item.freezeAt !== undefined
   return (
@@ -548,7 +554,7 @@ function SpeedTab({ item, project }: { item: VideoItem | AudioItem; project: Pro
           <p className="ed-note">This is a freeze-frame segment; speed doesn't apply.</p>
         ) : (
           <>
-            <Slider label="Speed" value={item.speed} min={0.25} max={4} step={0.05} suffix="×" onChange={setSpeed} />
+            <Slider label="Speed" value={item.speed} min={0.25} max={4} step={0.05} suffix="×" neutral={1} onChange={setSpeed} />
             <div className="ed-chiprow">
               {[0.5, 1, 1.5, 2, 3].map((s) => (
                 <button key={s} className={clsx('chip', Math.abs(item.speed - s) < 0.001 && 'active')} onClick={() => setSpeed(s)}>{s}×</button>
@@ -771,7 +777,8 @@ export function CaptionStyleEditor({ track }: { track: Track }) {
               key={p.id}
               className={clsx(cs.preset === p.id && 'on')}
               onClick={() => {
-                const next = captionStyleFromPreset(p.id)
+                // sized for this canvas, like the style it replaces
+                const next = captionStyleFromPreset(p.id, useEditor.getState().project)
                 set({ ...next, position: cs.position }, `Caption style ${p.name}`)
               }}
             >

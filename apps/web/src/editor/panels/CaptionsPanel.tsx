@@ -55,7 +55,7 @@ export function CaptionsPanel() {
       setBusy('Building captions…')
       // from the project as it is after the wait, so edits made meanwhile are kept
       const p = useEditor.getState().project
-      const style = p.tracks.find((t) => t.kind === 'caption')?.captionStyle ?? captionStyleFromPreset('clean')
+      const style = p.tracks.find((t) => t.kind === 'caption')?.captionStyle ?? captionStyleFromPreset('clean', p)
       const next = captionsAtLeastOneFrame(generateCaptions(p, { style }))
       const n = next.tracks.find((t) => t.kind === 'caption')?.items.length ?? 0
       if (!n) {

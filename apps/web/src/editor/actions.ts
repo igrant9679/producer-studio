@@ -3,6 +3,7 @@ import type { AnimProp, Asset, Item, Project, TrackKind, TransitionType, VisualI
 import {
   addAsset,
   addItem,
+  assetIdsOf,
   clone,
   createAudioItem,
   createImageItem,
@@ -13,12 +14,14 @@ import {
   findItem,
   freezeFrame,
   insertTrack,
+  isEditable,
   itemEnd,
   mainTrack,
   pasteItems,
   projectDuration,
   sampleKeyframes,
   separateAudio,
+  separateAudioRefusal,
   setKeyframe,
   splitAt,
   updateItem,
@@ -42,6 +45,15 @@ export function primarySelected(): Item | undefined {
   return s.selection.length ? findItem(s.project, s.selection[s.selection.length - 1])?.item : undefined
 }
 
+export const LOCKED_NOTE = 'This clip is on a locked track. Unlock the track to edit it.'
+
+/** Ids from `ids` that can be edited; says so when a lock leaves none. */
+function editableIds(ids: string[], p = S().project): string[] {
+  const ok = ids.filter((id) => isEditable(p, id))
+  if (ids.length && !ok.length) toast(LOCKED_NOTE)
+  return ok
+}
+
 export function split() {
   const { project, playhead, selection } = S()
   let ids: string[]
@@ -51,12 +63,14 @@ export function split() {
     toast(selection.length ? 'Move the playhead over the selected clip to split it' : 'Nothing under the playhead to split')
     return
   }
+  ids = editableIds(ids)
+  if (!ids.length) return
   S().commit(splitAt(project, playhead, ids), 'Split')
 }
 
 export function remove(ripple = false) {
   const { project, selection } = S()
-  if (!selection.length) return
+  if (!selection.length || !editableIds(selection).length) return
   let p = project
   if (ripple) {
     // ripple on non-main tracks too; core packs main anyway
@@ -68,31 +82,48 @@ export function remove(ripple = false) {
   S().commit(p, ripple ? 'Ripple delete' : 'Delete', { selection: [] })
 }
 
+/** The clipboard keeps the clips' media records too, so they paste into another project whole. */
+function toClipboard(items: Item[]) {
+  const s = S()
+  const assets: Record<string, Asset> = {}
+  for (const id of items.flatMap(assetIdsOf)) {
+    const a = s.project.assets[id] ?? s.media[id]
+    if (a) assets[id] = a
+  }
+  s.set({ clipboard: clone(items), clipboardMedia: { workspaceId: s.workspaceId, assets: clone(assets) } })
+}
+
 export function copy() {
   const items = selectedItems()
   if (!items.length) return
-  S().set({ clipboard: clone(items) })
+  toClipboard(items)
   toast(`Copied ${items.length} item${items.length > 1 ? 's' : ''}`)
 }
 
 export function cut() {
   const items = selectedItems()
-  if (!items.length) return
-  S().set({ clipboard: clone(items) })
+  if (!items.length || !editableIds(items.map((i) => i.id)).length) return
+  toClipboard(items)
   remove(false)
 }
 
 export function paste() {
-  const { clipboard, project, playhead } = S()
+  const { clipboard, clipboardMedia, project, playhead, workspaceId } = S()
   if (!clipboard.length) return
-  const { project: p, newIds } = pasteItems(project, clipboard, playhead)
+  // media lives in its space: a clip copied in another space can't be loaded or exported from this one
+  const foreign = clipboardMedia.workspaceId !== workspaceId
+  const items = foreign ? clipboard.filter((i) => assetIdsOf(i).every((id) => project.assets[id])) : clipboard
+  if (items.length < clipboard.length) toast("Clips copied in another space can't be pasted here: add their media to this space first")
+  if (!items.length) return
+  const { project: p, newIds } = pasteItems(project, items, playhead, foreign ? {} : clipboardMedia.assets)
   S().commit(p, 'Paste', { selection: newIds })
 }
 
 export function duplicate() {
   const { selection, project } = S()
-  if (!selection.length) return
-  const { project: p, newIds } = duplicateItems(project, selection)
+  const ids = editableIds(selection)
+  if (!ids.length) return
+  const { project: p, newIds } = duplicateItems(project, ids)
   S().commit(p, 'Duplicate', { selection: newIds })
 }
 
@@ -104,24 +135,51 @@ export function selectAll() {
 export function separate() {
   const vids = selectedItems().filter((i) => i.type === 'video')
   if (!vids.length) return toast('Select a video clip to separate its audio')
+  if (!editableIds(vids.map((v) => v.id)).length) return
   let p = S().project
   for (const v of vids) p = separateAudio(p, v.id)
-  if (p === S().project) return toast('This clip has no audio to separate')
+  if (p === S().project) return toast(SEPARATE_REFUSED[separateAudioRefusal(p, vids[0].id) ?? ''] ?? SEPARATE_REFUSED['no-audio'])
   S().commit(p, 'Separate audio')
 }
 
+const SEPARATE_REFUSED: Record<string, string> = {
+  'no-audio': 'This clip has no audio to separate',
+  freeze: 'A freeze frame has no sound to separate',
+  reversed: 'A reversed clip plays silent, so there is no sound to separate',
+  separated: "This clip's audio is already on its own track",
+}
+
+const underAt = (i: Item, t: number) => i.type === 'video' && i.start <= t && itemEnd(i) > t
+
+/** Hold the frame under the playhead for 2 s, on the selected (else the main-track) clip. */
 export function freeze() {
   const { playhead, project } = S()
-  const v = selectedItems().find((i) => i.type === 'video' && i.start <= playhead && itemEnd(i) > playhead)
-    ?? (mainTrack(project)?.items ?? []).find((i) => i.type === 'video' && i.start <= playhead && itemEnd(i) > playhead)
+  const v = selectedItems().find((i) => underAt(i, playhead)) ?? (mainTrack(project)?.items ?? []).find((i) => underAt(i, playhead))
+  holdFrame(v, playhead)
+}
+
+/**
+ * Freeze from a clip's context menu: the clip right-clicked, at the playhead when it's over that clip, else at the
+ * point clicked (`at`).
+ */
+export function freezeClip(itemId: string, at: number) {
+  const { playhead, project } = S()
+  const v = findItem(project, itemId)?.item
+  if (v?.type !== 'video') return holdFrame(undefined, playhead)
+  holdFrame(v, underAt(v, playhead) ? playhead : Math.max(v.start, Math.min(at, itemEnd(v) - 1 / project.fps)))
+}
+
+function holdFrame(v: Item | undefined, t: number) {
   if (!v) return toast('Put the playhead over a video clip to freeze a frame')
-  S().commit(freezeFrame(project, v.id, playhead, 2), 'Freeze frame')
+  if (!editableIds([v.id]).length) return
+  S().commit(freezeFrame(S().project, v.id, t, 2), 'Freeze frame')
 }
 
 export function setTransition(itemId: string, type: TransitionType | null, duration = 0.6) {
   const { project } = S()
   const f = findItem(project, itemId)
-  if (!f || !('transitionOut' in f.item || f.item.type === 'video' || f.item.type === 'image')) return
+  // any visual clip takes one: text and shapes have no `transitionOut` until they get their first
+  if (!f || !('transform' in f.item)) return
   const next = f.track.items[f.index + 1]
   if (type && (!next || Math.abs(next.start - itemEnd(f.item)) > 0.05)) {
     toast('Transitions go between two touching clips on the same track')
@@ -207,7 +265,7 @@ export function addAssetAt(asset: Asset, at: number, opts: { trackId?: string; o
 }
 
 export function addText(templateId: string, at = S().playhead, over: Partial<Item> = {}) {
-  const item = createTextItem(at, templateId, over as never)
+  const item = createTextItem(at, templateId, over as never, S().project)
   const p = addItem(S().project, item)
   S().commit(p, 'Add text', { selection: [item.id] })
   S().set({ activeRightTab: '', playing: false })

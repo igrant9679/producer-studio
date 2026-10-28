@@ -1,4 +1,4 @@
-import { NEUTRAL_ADJUST, TEXT_TEMPLATES, defaultTextStyle, captionStyleFromPreset } from './presets'
+import { NEUTRAL_ADJUST, TEXT_TEMPLATES, defaultTextStyle, captionStyleFromPreset, textStyleFor } from './presets'
 import type {
   Asset,
   AudioItem,
@@ -107,7 +107,8 @@ export function createAudioItem(asset: Asset, start: number, over: Partial<Audio
   }
 }
 
-export function createTextItem(start: number, templateId = 'heading', over: Partial<TextItem> = {}): TextItem {
+/** A text item from a template; with `canvas` its style is sized for that canvas (templates are authored for 1080p). */
+export function createTextItem(start: number, templateId = 'heading', over: Partial<TextItem> = {}, canvas?: { width: number; height: number }): TextItem {
   const tpl = TEXT_TEMPLATES.find((t) => t.id === templateId) ?? TEXT_TEMPLATES[0]
   return {
     id: uid('x'),
@@ -116,7 +117,7 @@ export function createTextItem(start: number, templateId = 'heading', over: Part
     start,
     duration: 3,
     text: tpl.text,
-    style: defaultTextStyle(tpl.style),
+    style: textStyleFor(defaultTextStyle(tpl.style), canvas),
     template: tpl.id,
     ...visualDefaults(),
     animations: {

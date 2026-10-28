@@ -1107,7 +1107,7 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
             <>
               <div className="ed-menu-sep" />
               <MenuItem icon={<SplitSquareHorizontal size={14} />} label="Separate audio" onClick={run(A.separate)} />
-              <MenuItem icon={<Snowflake size={14} />} label="Freeze frame" onClick={run(A.freeze)} />
+              <MenuItem icon={<Snowflake size={14} />} label="Freeze frame" onClick={run(() => A.freezeClip(it.id, ctx.time))} />
             </>
           )}
           {(it.type === 'video' || it.type === 'audio') && (

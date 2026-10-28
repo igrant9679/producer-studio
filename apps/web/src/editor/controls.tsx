@@ -98,6 +98,7 @@ export function Slider({
   keyframe,
   disabled,
   display,
+  neutral,
 }: {
   label: ReactNode
   value: number
@@ -110,6 +111,8 @@ export function Slider({
   disabled?: boolean
   /** Maps the stored value to the displayed number (e.g. 0..1 -> %). */
   display?: { to: (v: number) => number; from: (v: number) => number; step?: number }
+  /** What a double-click resets to (default 0 when it's in range): 1 for opacity, volume and scale. */
+  neutral?: number
 }) {
   const pct = ((value - min) / (max - min)) * 100
   const end = () => useEditor.getState().endCoalesce()
@@ -129,8 +132,8 @@ export function Slider({
         onPointerUp={end}
         onKeyUp={end}
         onDoubleClick={() => {
-          // double-click resets to the neutral value when 0 is in range
-          if (min <= 0 && max >= 0) onChange(0)
+          const n = neutral ?? 0
+          if (min <= n && max >= n) onChange(n)
         }}
       />
       <NumberInput

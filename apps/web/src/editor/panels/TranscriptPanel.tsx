@@ -1,12 +1,13 @@
 // Transcript-based editing: words of the selected (or main-track) media, click to seek, select + Delete to cut,
 // remove filler words / pauses, search.
 import type { Item, Project, Transcript as TranscriptT, TranscriptWord } from '@producer/core'
-import { cutSourceRanges, fillerWordRanges, findItem, itemWords, mainTrack, removeSilences } from '@producer/core'
+import { cutSourceRanges, fillerWordRanges, findItem, isEditable, itemWords, mainTrack, removeSilences } from '@producer/core'
 import clsx from 'clsx'
 import { FileText, Loader2, Scissors, Search, Timer, Eraser } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, waitForJob } from '../../lib/api'
 import { toast, toastError } from '../../lib/toast'
+import { LOCKED_NOTE } from '../actions'
 import { Empty, useThrottledPlayhead } from '../controls'
 import { useEditor } from '../store'
 
@@ -67,7 +68,10 @@ export function TranscriptPanel() {
   const missingIds = [...new Set(items.filter((i) => 'assetId' in i && !project.assets[i.assetId]?.transcript).map((i) => (i as { assetId: string }).assetId))]
 
   const cutKeys = (keys: Set<string>, label: string) => {
-    const chosen = words.filter((w) => keys.has(w.key))
+    const picked = words.filter((w) => keys.has(w.key))
+    // words in a locked clip stay, so they aren't counted as removed
+    const chosen = picked.filter((w) => isEditable(useEditor.getState().project, w.itemId))
+    if (picked.length && !chosen.length) return toast(LOCKED_NOTE)
     if (!chosen.length) return
     // merge contiguous words per item into ranges (swallow the small gaps between them)
     const byItem = new Map<string, Array<{ start: number; end: number }>>()
@@ -92,7 +96,7 @@ export function TranscriptPanel() {
       if (it.type !== 'video' && it.type !== 'audio') continue
       const tr = p.assets[it.assetId]?.transcript
       const cur = findItem(p, it.id)?.item as typeof it | undefined
-      if (!tr || !cur) continue
+      if (!tr || !cur || !isEditable(p, it.id)) continue
       const lo = cur.in
       const hi = cur.in + cur.duration * cur.speed
       const ranges = fillerWordRanges(tr).filter((r) => r.start >= lo - 0.01 && r.end <= hi + 0.01)

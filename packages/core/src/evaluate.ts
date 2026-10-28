@@ -312,16 +312,19 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
   const rotation = sampleKeyframes(kf.rotation, lt, it.transform.rotation)
   const opacity = sampleKeyframes(kf.opacity, lt, it.opacity)
 
+  // time into the whole clip: a split piece carries on where the piece before it stopped
+  const ph = lt + (it.phase?.offset ?? 0)
+  const whole = it.phase?.length ?? it.duration
   const anim = it.animations ?? {}
   if (anim.in && anim.in.preset !== 'none' && lt < anim.in.duration) applyAnimation(m, anim.in, lt / anim.in.duration, 1, W, H)
   const rem = it.duration - lt
   if (anim.out && anim.out.preset !== 'none' && rem < anim.out.duration) applyAnimation(m, anim.out, Math.max(0, rem) / anim.out.duration, -1, W, H)
   if (anim.combo && anim.combo.preset !== 'none') {
-    const ph = (2 * Math.PI * lt) / Math.max(0.2, anim.combo.period)
-    if (anim.combo.preset === 'pulse') m.scale *= 1 + 0.04 * Math.sin(ph)
-    if (anim.combo.preset === 'float') m.ty += 12 * u * Math.sin(ph)
-    if (anim.combo.preset === 'swing') m.rotate += 6 * Math.sin(ph)
-    if (anim.combo.preset === 'shake') m.tx += 6 * u * Math.sin(ph * 3)
+    const w = (2 * Math.PI * ph) / Math.max(0.2, anim.combo.period)
+    if (anim.combo.preset === 'pulse') m.scale *= 1 + 0.04 * Math.sin(w)
+    if (anim.combo.preset === 'float') m.ty += 12 * u * Math.sin(w)
+    if (anim.combo.preset === 'swing') m.rotate += 6 * Math.sin(w)
+    if (anim.combo.preset === 'shake') m.tx += 6 * u * Math.sin(w * 3)
   }
   if (a.transition) applyTransition(m, a.transition.tr, a.transition.p, a.transition.side, W, H)
 
@@ -342,7 +345,7 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
         extraFilter += ` drop-shadow(0 0 ${(24 * k * u).toFixed(1)}px rgba(255,255,255,${(0.6 * k).toFixed(2)}))`
         break
       case 'flash': {
-        const beat = (lt * 2) % 1
+        const beat = (ph * 2) % 1
         m.brightness *= 1 + 1.5 * k * Math.max(0, 1 - beat * 4)
         break
       }
@@ -352,11 +355,11 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
         m.rotate += (hash01(frame * 3.1 + 5) - 0.5) * 2 * k
         break
       case 'zoomPulse':
-        m.scale *= 1 + 0.08 * k * (0.5 + 0.5 * Math.sin(lt * Math.PI * 2))
+        m.scale *= 1 + 0.08 * k * (0.5 + 0.5 * Math.sin(ph * Math.PI * 2))
         break
       case 'kenBurns':
-        m.scale *= 1 + 0.15 * k * clamp(lt / Math.max(0.1, it.duration), 0, 1)
-        m.tx += -40 * k * u * clamp(lt / Math.max(0.1, it.duration), 0, 1)
+        m.scale *= 1 + 0.15 * k * clamp(ph / Math.max(0.1, whole), 0, 1)
+        m.tx += -40 * k * u * clamp(ph / Math.max(0.1, whole), 0, 1)
         break
       case 'rgbSplit': {
         const d = (6 * k * u).toFixed(1)

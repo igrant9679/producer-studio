@@ -66,7 +66,7 @@ export function BrandPanel() {
 
   const addBrandText = (k: 'headline' | 'body') => {
     const s = useEditor.getState()
-    const it = createTextItem(s.playhead, k === 'headline' ? 'heading' : 'body')
+    const it = createTextItem(s.playhead, k === 'headline' ? 'heading' : 'body', {}, s.project)
     it.style = { ...it.style, fontFamily: brand!.fonts[k], color: brand!.colors[0] ?? it.style.color }
     s.commit(addItem(s.project, it), 'Add brand text', { selection: [it.id] })
   }
