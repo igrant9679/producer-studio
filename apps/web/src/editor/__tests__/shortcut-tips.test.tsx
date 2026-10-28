@@ -39,7 +39,7 @@ describe('shortcuts in tooltips (E-26)', () => {
     expect(kbdOf(/^Duplicate/)).toBe('Ctrl+D')
     expect(kbdOf('Separate audio (Ctrl+Shift+S)')).toBe('Ctrl+Shift+S')
     expect(kbdOf(/^Snapping/)).toBe('S')
-    expect(kbdOf(/^Play/)).toBe('Space')
+    expect(kbdOf(/^Play \(/)).toBe('Space')
     expect(kbdOf(/^Go to start/)).toBe('Home')
     expect(kbdOf(/^Zoom in/)).toBe('Ctrl+=')
     expect(kbdOf('Fit timeline (Shift+Z)')).toBe('Shift+Z')

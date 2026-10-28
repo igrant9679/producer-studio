@@ -10,14 +10,14 @@ import { addAsset, addItem, createCaptionItem, createProject, createVideoItem, i
 import { ctx } from '../context'
 import { assets, exportsTable } from '../db/schema'
 import { assetDoc } from '../dto'
-import { claimNext, finishJob, getJob } from '../jobs/queue'
+import { finishJob, getJob } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
 import { probe, processAsset } from '../media/process'
 import { detectScenes, parseSceneCuts } from '../media/scenes'
 import { type RenderSteps, audioArgs, coverTime, exportRender, renderPlan } from '../render/export'
 import { createAssetFromFile } from '../services/assets'
-import { type Client, setup, signup } from './helpers'
+import { type Client, claimJob, setup, signup } from './helpers'
 
 vi.mock('../media/proc', async (importOriginal) => {
   const m = await importOriginal<typeof import('../media/proc')>()
@@ -56,8 +56,7 @@ const steps: RenderSteps = {
 async function exportVia(body: Partial<ExportRequest>): Promise<{ jobId: string; result: ExportResult & ExportPreviewResult }> {
   const r = await client.json('POST', `/api/projects/${projectId}/export`, { resolution: '720p', fps: 30, quality: 'draft', format: 'mp4', ...body })
   expect(r.status, JSON.stringify(r.body)).toBe(200)
-  const claimed = (await claimNext('test-worker'))!
-  expect(claimed.id).toBe(r.body.id)
+  const claimed = await claimJob(r.body.id)
   const result = (await exportRender(inlineContext(claimed), steps)) as ExportResult & ExportPreviewResult
   return { jobId: claimed.id, result }
 }
@@ -217,15 +216,15 @@ describe('scene detection (E-10)', () => {
     const r = await client.json('POST', `/api/assets/${video.id}/scenes`, {})
     expect(r.status).toBe(200)
     expect(r.body.kind).toBe('media.scenes')
-    const claimed = (await claimNext('test-worker'))!
+    const claimed = await claimJob(r.body.id)
     const res: SceneCuts = await detectScenes(inlineContext(claimed))
     expect(res.assetId).toBe(video.id)
     expect(res.cuts.length).toBe(2)
     expect(res.cuts[0]).toBeCloseTo(1, 1)
     expect(res.cuts[1]).toBeCloseTo(2, 1)
     // from 1.5 s on, only the second cut
-    await client.json('POST', `/api/assets/${video.id}/scenes`, { from: 1.5, to: 3 })
-    const later = await detectScenes(inlineContext((await claimNext('test-worker'))!))
+    const again = await client.json('POST', `/api/assets/${video.id}/scenes`, { from: 1.5, to: 3 })
+    const later = await detectScenes(inlineContext(await claimJob(again.body.id)))
     expect(later.cuts.length).toBe(1)
     expect(later.cuts[0]).toBeCloseTo(2, 1)
   })

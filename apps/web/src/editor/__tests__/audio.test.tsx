@@ -259,6 +259,10 @@ describe('loudness on export (E-14)', () => {
     vi.spyOn(api, 'saveProject').mockResolvedValue({ version: 4, updatedAt: 1 } as never)
     const exp = vi.spyOn(api, 'exportProject').mockResolvedValue({ ...doneJob, status: 'queued' } as never)
     render(<ExportDialog />)
+    // a GIF has no sound to even out; the dialog shows its progress once an export starts, so check it first
+    fireEvent.click(screen.getByRole('button', { name: /GIF/ }))
+    expect(screen.queryByRole('button', { name: /^Podcast/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^MP4/ }))
     const podcast = screen.getByRole('button', { name: /^Podcast −16 LUFS/ })
     fireEvent.click(podcast)
     expect(podcast.getAttribute('aria-pressed')).toBe('true')
@@ -268,7 +272,5 @@ describe('loudness on export (E-14)', () => {
       await new Promise((r) => setTimeout(r, 10))
     })
     expect(exp.mock.calls[0][1]).toMatchObject({ loudness: 'podcast', format: 'mp4' })
-    fireEvent.click(screen.getByRole('button', { name: 'GIF' }))
-    expect(screen.queryByRole('button', { name: /^Podcast/ })).toBeNull()
   }, 20_000)
 })

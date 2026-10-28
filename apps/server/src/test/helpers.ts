@@ -76,3 +76,21 @@ export async function signup(app: Hono<AppEnv>, name = 'Test User'): Promise<{ c
   if (r.status !== 200) throw new Error(`signup failed ${r.status} ${JSON.stringify(r.body)}`)
   return { client, workspaceId: r.body.workspaces[0].id, email }
 }
+
+/**
+ * Claim one queued job by id, the way a worker claims the oldest: on a shared Postgres (TEST_DATABASE_URL) other test
+ * files leave jobs queued, so a test that runs its own job claims that one rather than the oldest.
+ */
+export async function claimJob(id: string, workerId = 'test-worker') {
+  const { and, eq, sql } = await import('drizzle-orm')
+  const { ctx } = await import('../context')
+  const { jobs } = await import('../db/schema')
+  const now = Date.now()
+  const rows = await ctx()
+    .db.update(jobs)
+    .set({ status: 'running', lockedBy: workerId, lockedAt: now, updatedAt: now, attempts: sql`${jobs.attempts} + 1`, message: 'Starting' })
+    .where(and(eq(jobs.id, id), eq(jobs.status, 'queued')))
+    .returning()
+  if (!rows[0]) throw new Error(`job ${id} is not queued`)
+  return rows[0]
+}

@@ -8,14 +8,14 @@ import { addAsset, addItem, createVideoItem, type Project } from '@producer/core
 import { ctx } from '../context'
 import { assets, exportsTable } from '../db/schema'
 import { assetDoc } from '../dto'
-import { claimNext, enqueue, getJob } from '../jobs/queue'
+import { getJob } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
 import { probe, processAsset } from '../media/process'
 import { exportRender } from '../render/export'
 import { measureLoudness, normalizeLoudness, parseLoudnorm } from '../render/loudness'
 import { createAssetFromFile, localSource } from '../services/assets'
-import { type Client, setup, signup } from './helpers'
+import { type Client, claimJob, setup, signup } from './helpers'
 
 let tmp: string
 /** A 3 s test picture with a quiet tone (about -35 LUFS). */
@@ -78,8 +78,7 @@ describe('loudness normalisation (E-14)', () => {
     expect(asked.status).toBe(200)
     expect((await getJob(asked.body.id))!.input).toMatchObject({ loudness: 'podcast' })
     expect((await client.json('POST', `/api/projects/${p.id}/export`, { loudness: 'loud' })).status).toBe(400)
-    const job = (await claimNext('loud-worker'))!
-    expect(job.id).toBe(asked.body.id)
+    const job = await claimJob(asked.body.id, 'loud-worker')
     // the quiet clip stands in for Chrome's render
     await exportRender(inlineContext(job), { lint: async () => ({ errors: [], warnings: 0 }), render: async (_dir, out) => fs.copyFileSync(quiet, out) })
     const [ex] = await ctx().db.select().from(exportsTable).where(eq(exportsTable.jobId, job.id))
