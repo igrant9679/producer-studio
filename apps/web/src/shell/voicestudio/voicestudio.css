@@ -101,3 +101,25 @@ html.vs-dict-widget-root, html.vs-dict-widget-root body, html.vs-dict-widget-roo
 .vs-langs { display: flex; flex-wrap: wrap; gap: 6px; max-height: 150px; overflow: auto; padding: 2px; }
 .vs-chip-x { display: inline-grid; place-items: center; width: 14px; height: 14px; margin-left: 2px; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
 .vs-chip-x:hover { background: var(--surface-3); }
+
+/* voice cards: where a cloned voice runs, favourites (A-20) */
+.ps-voice-meta .ps-voice-host { display: inline-flex; align-items: center; gap: 5px; margin-top: 2px; font-size: 0.6562rem; font-weight: 600; }
+.ps-voice-host i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.ps-voice-host.on { color: var(--green); }
+.ps-voice-host.on i { background: var(--green); }
+.ps-voice-host.off { color: var(--amber); }
+.ps-voice-host.off i { background: var(--amber); }
+.ps-voice-fav { color: var(--text-3); }
+.ps-voice-fav.on { color: var(--amber); }
+
+/* script tools: markup, pronunciations, batch, compare (A-20) */
+.vs-markup-hint { font-size: 0.7188rem; color: var(--text-3); }
+.vs-markup-hint code { font-family: var(--font-mono); color: var(--text-2); }
+.vs-dict { display: grid; gap: 6px; max-height: 360px; overflow: auto; }
+.vs-dict-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.vs-batch-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.vs-batch-table th, .vs-batch-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.vs-batch-table td.err { color: var(--danger); }
+.vs-batch-wrap { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+.vs-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.vs-compare-col { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--border); }

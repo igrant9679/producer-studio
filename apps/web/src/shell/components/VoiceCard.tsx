@@ -1,7 +1,7 @@
 import type { Voice } from '@producer/core'
 import { VOICES } from '@producer/core'
 import clsx from 'clsx'
-import { Check, Pause, Play, Wand2, Mic } from 'lucide-react'
+import { Check, Pause, Play, Star, Wand2, Mic } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { api } from '../../lib/api'
@@ -48,9 +48,21 @@ export function PlaySample({ voiceId, size = 'sm' }: { voiceId: string; size?: '
   )
 }
 
-export function VoiceCard({ v, selected, onSelect, compact }: { v: Voice; selected?: boolean; onSelect?: () => void; compact?: boolean }) {
+/**
+ * Where a cloned or designed voice can be made right now (A-20): on the web, by the linked desktop that holds it, which
+ * is online or not; on the desktop, by VoiceStudio on this computer. Null for built-in voices.
+ */
+export function voiceHost(v: Voice): { online: boolean; label: string } | null {
+  if (!isCustomVoice(v) || v.available === undefined) return null
+  const desktop = /Generated on|Open Producer Studio on/.test(v.detail ?? '')
+  if (desktop) return { online: !!v.available, label: v.available ? 'Desktop online' : 'Desktop offline' }
+  return { online: !!v.available, label: v.available ? 'Ready here' : 'Not available' }
+}
+
+export function VoiceCard({ v, selected, onSelect, compact, favourite, onFavourite }: { v: Voice; selected?: boolean; onSelect?: () => void; compact?: boolean; favourite?: boolean; onFavourite?: () => void }) {
   const custom = isCustomVoice(v)
   const unavailable = v.available === false
+  const host = voiceHost(v)
   return (
     <div
       className={clsx('ps-voice', selected && 'on', compact && 'compact', unavailable && 'unavailable')}
@@ -68,7 +80,28 @@ export function VoiceCard({ v, selected, onSelect, compact }: { v: Voice; select
           {custom && <span className="ps-voice-tag">{v.source === 'design' ? <Wand2 size={9} /> : <Mic size={9} />} {v.source === 'design' ? 'Designed' : 'My voice'}</span>}
         </strong>
         <span>{unavailable && v.detail ? v.detail : `${voiceAccent(v)} · ${v.style}`}</span>
+        {host && (
+          <span className={clsx('ps-voice-host', host.online ? 'on' : 'off')} title={v.detail}>
+            <i aria-hidden /> {host.label}
+          </span>
+        )}
       </div>
+      {onFavourite && (
+        <button
+          type="button"
+          className={clsx('btn ghost sm icon ps-voice-fav', favourite && 'on')}
+          aria-pressed={!!favourite}
+          aria-label={favourite ? `Remove ${v.name} from favourites` : `Add ${v.name} to favourites`}
+          title={favourite ? 'Favourite' : 'Add to favourites'}
+          onClick={(e) => {
+            e.stopPropagation()
+            onFavourite()
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <Star size={13} fill={favourite ? 'currentColor' : 'none'} />
+        </button>
+      )}
       {selected && <Check size={15} className="ps-voice-check" />}
       {(!custom || v.available) && <PlaySample voiceId={v.id} />}
     </div>
@@ -99,16 +132,18 @@ export function useVoices(space?: string): Voice[] {
   return got.ws === workspaceId ? got.list : CORE_VOICES
 }
 
-export const VOICE_FILTERS = ['All', 'My voices', 'Female', 'Male', 'American', 'British', 'Narration', 'Conversational'] as const
+export const VOICE_FILTERS = ['All', 'Favourites', 'My voices', 'Female', 'Male', 'American', 'British', 'Narration', 'Conversational'] as const
 export type VoiceFilter = (typeof VOICE_FILTERS)[number]
 
-export function filterVoices(list: Voice[], filter: VoiceFilter, q = ''): Voice[] {
+export function filterVoices(list: Voice[], filter: VoiceFilter, q = '', favourites: readonly string[] = []): Voice[] {
   const term = q.trim().toLowerCase()
   return list.filter((v) => {
     if (term && !`${v.name} ${v.style} ${v.lang} ${v.gender}`.toLowerCase().includes(term)) return false
     switch (filter) {
       case 'All':
         return true
+      case 'Favourites':
+        return favourites.includes(v.id)
       case 'My voices':
         return isCustomVoice(v)
       case 'Female':

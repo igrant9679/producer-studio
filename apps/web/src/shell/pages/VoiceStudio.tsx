@@ -1,12 +1,13 @@
 import type { AssetRecord } from '@producer/core'
-import { addAsset, addItem, createAudioItem } from '@producer/core'
+import { addAsset, addItem, createAudioItem, scriptSeconds } from '@producer/core'
 import clsx from 'clsx'
-import { AudioLines, BookOpen, Layers, Library, Users, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2, X } from 'lucide-react'
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import { AudioLines, BookA, BookOpen, Columns3, FileSpreadsheet, Layers, Library, Users, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { create } from 'zustand'
 import { api, mediaUrl, waitForJob } from '../../lib/api'
-import { onUserReset, useSession } from '../../lib/session'
+import { useSession } from '../../lib/session'
+import { BatchCsvModal, CompareModal, MarkupButtons, PronunciationsModal, compareLine, useVoiceRefresh } from '../voicestudio/ScriptTools'
+import { loadSaved, showDraftSpace, toggleFavourite, useTtsDraft } from '../voicestudio/ttsDraft'
 import { toast, toastError } from '../../lib/toast'
 import { InlineRename } from '../components/ProjectCard'
 import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } from '../components/VoiceCard'
@@ -32,25 +33,9 @@ const EXAMPLES: Array<{ label: string; text: string }> = [
 ]
 
 const MAX_CHARS = 5000
+const NO_FAVOURITES: string[] = []
 
-/**
- * The text-to-speech draft and the voiceover being generated from it. A store, not component state: the script and
- * the progress survive Voice Studio's own tabs (and other pages) while the generation carries on.
- */
-interface TtsDraft {
-  text: string
-  name: string
-  speed: number
-  gen?: { progress: number; message: string }
-  /** The last voiceover generated, for the History list. */
-  made?: AssetRecord
-  /** How many Voice Studio pages are on screen: a voiceover finishing later plays only then. */
-  shown: number
-  set: (p: Partial<TtsDraft> | ((s: TtsDraft) => Partial<TtsDraft>)) => void
-}
-
-export const useTtsDraft = create<TtsDraft>((set) => ({ text: '', name: '', speed: 1, shown: 0, set: (p) => set(p) }))
-onUserReset(() => useTtsDraft.setState({ text: '', name: '', speed: 1, gen: undefined, made: undefined }))
+export { useTtsDraft }
 
 /** Generate a voiceover from the draft. */
 async function generateVoiceover(workspaceId: string, voice: string, voiceName: string) {
@@ -233,11 +218,20 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
   const voices = useVoices()
   const gate = useEditGate()
   const { text, name, speed, gen, made, set } = useTtsDraft()
+  const favourites = useTtsDraft((s) => (workspaceId ? s.favourites[workspaceId] : undefined)) ?? NO_FAVOURITES
   const setText = (t: string | ((t: string) => string)) => set((d) => ({ text: typeof t === 'function' ? t(d.text) : t }))
   const [filter, setFilter] = useState<VoiceFilter>('All')
   const [q, setQ] = useState('')
   const [writer, setWriter] = useState(false)
   const [writing, setWriting] = useState(false)
+  const [tool, setTool] = useState<'dict' | 'batch' | 'compare'>()
+  // each space keeps its own draft: switching spaces puts this one away and brings that one's back
+  useLayoutEffect(() => showDraftSpace(workspaceId), [workspaceId])
+  useEffect(() => {
+    if (workspaceId) void loadSaved(workspaceId)
+  }, [workspaceId])
+  // whether a linked desktop is online, kept current while the picker is on screen
+  useVoiceRefresh()
   const taRef = useRef<HTMLTextAreaElement>(null)
   const writeCtrl = useRef<AbortController>()
   const history = useAsync(async () => {
@@ -264,10 +258,19 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
   )
   useEffect(() => () => writeCtrl.current?.abort(), [])
 
-  const shown = useMemo(() => filterVoices(voices, filter, q), [voices, filter, q])
+  const shown = useMemo(() => filterVoices(voices, filter, q, favourites), [voices, filter, q, favourites])
   const selected = voices.find((v) => v.id === voice)
-  const words = text.trim() ? text.trim().split(/\s+/).length : 0
-  const estSecs = words / 2.5 / speed
+  const words = text.trim() ? text.replace(/\[pause[^\]]*\]/gi, ' ').replace(/\*/g, '').trim().split(/\s+/).filter(Boolean).length : 0
+  // the pauses written in the script count too
+  const estSecs = scriptSeconds(text, speed)
+  const favourite = async (id: string) => {
+    if (!workspaceId) return
+    try {
+      await toggleFavourite(workspaceId, id)
+    } catch (e) {
+      toastError(e)
+    }
+  }
 
   async function stream(kind: 'voiceover' | 'rewrite', prompt: string) {
     setWriter(false)
@@ -363,6 +366,7 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
                     {writing ? <Spinner size={13} /> : <Sparkles size={13} />} {writing ? 'Writing…' : 'AI writer'}
                   </button>
                   {writing && <button className="btn ghost sm" onClick={() => writeCtrl.current?.abort()}>Stop</button>}
+                  <MarkupButtons taRef={taRef} text={text} setText={setText} disabled={writing} />
                   <button className="btn ghost sm" onClick={() => setText('')} disabled={writing}>Clear</button>
                 </>
               )}
@@ -372,6 +376,24 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
               </span>
             </div>
           </div>
+          <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+            <span className="vs-markup-hint">Write <code>[pause]</code> or <code>[pause 2s]</code> for a pause and <code>*words*</code> to stress them.</span>
+            <span className="spacer" />
+            <button className="btn ghost sm" onClick={() => setTool('dict')}><BookA size={13} /> Pronunciations</button>
+            <button className="btn ghost sm" onClick={() => setTool('compare')}><Columns3 size={13} /> Compare voices</button>
+            <button className="btn ghost sm" onClick={() => setTool('batch')} {...gate.props}><FileSpreadsheet size={13} /> Batch from CSV</button>
+          </div>
+          {tool === 'dict' && <PronunciationsModal onClose={() => setTool(undefined)} />}
+          {tool === 'batch' && <BatchCsvModal voices={voices} defaultVoice={voice} speed={speed} onClose={() => setTool(undefined)} />}
+          {tool === 'compare' && (
+            <CompareModal
+              voices={voices}
+              initial={[voice, ...favourites]}
+              text={compareLine(text, taRef.current ? text.slice(taRef.current.selectionStart, taRef.current.selectionEnd) : '')}
+              onUse={setVoice}
+              onClose={() => setTool(undefined)}
+            />
+          )}
 
           <div className="ps-section" style={{ marginTop: 28 }}>
             <div className="ps-section-head">
@@ -425,9 +447,9 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
             </div>
             <RadioCards className="ps-vs-voices" label="Voices">
               {shown.map((v) => (
-                <VoiceCard key={v.id} v={v} selected={voice === v.id} onSelect={() => setVoice(v.id)} />
+                <VoiceCard key={v.id} v={v} selected={voice === v.id} onSelect={() => setVoice(v.id)} favourite={favourites.includes(v.id)} onFavourite={() => void favourite(v.id)} />
               ))}
-              {!shown.length && <div className="muted" style={{ padding: 16, textAlign: 'center' }}>No voices match.</div>}
+              {!shown.length && <div className="muted" style={{ padding: 16, textAlign: 'center' }}>{filter === 'Favourites' && !q ? 'No favourites yet: star a voice to keep it here.' : 'No voices match.'}</div>}
             </RadioCards>
             <div className="ps-vs-speed">
               <div className="row">
@@ -504,7 +526,11 @@ export default function VoiceStudio() {
     else n.set('tab', t)
     return n
   })
-  const [voice, setVoice] = useState('af_heart')
+  // the draft's voice (kept with it per space), else the brand kit's default
+  const [brandVoice, setBrandVoice] = useState<{ ws?: string; voice?: string }>({})
+  const draftVoice = useTtsDraft((s) => (s.ws === workspaceId ? s.voice : undefined))
+  const voice = draftVoice ?? (brandVoice.ws === workspaceId ? brandVoice.voice : undefined) ?? 'af_heart'
+  const setVoice = (v: string) => useTtsDraft.getState().set({ voice: v })
   // a voiceover that finishes later plays only while Voice Studio is on screen
   useEffect(() => {
     useTtsDraft.getState().set((d) => ({ shown: d.shown + 1 }))
@@ -512,7 +538,7 @@ export default function VoiceStudio() {
   }, [])
   useEffect(() => {
     if (!workspaceId) return
-    api.brand(workspaceId).then((b) => b.voice && setVoice(b.voice)).catch(() => undefined)
+    api.brand(workspaceId).then((b) => setBrandVoice({ ws: workspaceId, voice: b.voice })).catch(() => undefined)
   }, [workspaceId])
   const head = HEAD[tab]
 

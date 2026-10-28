@@ -29,6 +29,7 @@ import { activityRoutes, commentRoutes, projectCollabRoutes } from './routes/col
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
 import { brandRoutes } from './routes/brand'
 import { onboardingRoutes } from './routes/onboarding'
+import { voiceStudioRoutes } from './routes/voiceStudio'
 import { templateRoutes } from './routes/templates'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
@@ -118,6 +119,7 @@ export function createApp() {
   app.route('/api/workspaces', activityRoutes)
   app.route('/api/workspaces', brandRoutes)
   app.route('/api/workspaces', onboardingRoutes)
+  app.route('/api/workspaces', voiceStudioRoutes)
   app.route('/api/workspaces', workspaceRoutes)
   app.route('/api/invites', inviteRoutes)
   app.route('/api/projects', projectExportRoutes)
