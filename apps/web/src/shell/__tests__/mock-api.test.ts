@@ -76,6 +76,27 @@ describe('the dev mock API', () => {
     expect((await call('POST', '/api/projects/p_launch/presence', { client: 't', open: true })).body.people).toHaveLength(1)
   })
 
+  it('has the Library’s routes with the server’s rules: trash, copies, tags, exports, search (A-11 – A-19)', async () => {
+    const team = (await call('GET', '/api/assets?workspaceId=ws_team')).body as Array<{ asset: { id: string } }>
+    // a delete only trashes; viewers can't
+    const client = (await call('GET', '/api/assets?workspaceId=ws_client')).body as Array<{ asset: { id: string } }>
+    if (client[0]) expect((await call('DELETE', `/api/assets/${client[0].asset.id}`)).status).toBe(403)
+    const id = (await call('POST', '/api/assets/as_rec2/copy', { workspaceId: 'ws_team' })).body.asset.id as string
+    expect((await call('GET', '/api/assets?workspaceId=ws_team')).body).toHaveLength(team.length + 1)
+    expect((await call('DELETE', `/api/assets/${id}`)).body).toMatchObject({ ok: true, usedIn: 0 })
+    expect((await call('GET', '/api/assets?workspaceId=ws_team&trashed=1')).body.map((a: { asset: { id: string } }) => a.asset.id)).toEqual([id])
+    expect((await call('POST', '/api/assets/trash/empty', { workspaceId: 'ws_team', ids: ['as_rec1'] })).status).toBe(409)
+    expect((await call('POST', '/api/assets/trash/empty', { workspaceId: 'ws_team' })).body).toEqual({ removed: 1, exports: 0 })
+    expect((await call('POST', '/api/assets/as_rec1/replace', { filename: 'a.mp3', mime: 'audio/mpeg', size: 1 })).status).toBe(400)
+    // projects: copy to a space the user only views is refused; tags are tidied
+    expect((await call('POST', '/api/projects/p_launch/copy', { workspaceId: 'ws_client' })).status).toBe(403)
+    expect((await call('POST', '/api/projects/p_launch/copy', { workspaceId: 'ws_team' })).body).toMatchObject({ workspaceId: 'ws_team', missingMedia: 0 })
+    expect((await call('PATCH', '/api/projects/p_reel', { tags: [' Launch ', 'launch'] })).body.tags).toEqual(['Launch'])
+    // every export of a space, paged like the server
+    expect((await call('GET', '/api/exports?workspaceId=ws_personal')).body).toMatchObject({ items: expect.any(Array) })
+    expect((await call('GET', '/api/search?workspaceId=ws_personal&q=launch')).body.hits.map((h: { title: string }) => h.title)).toEqual(expect.arrayContaining(['Spring launch — product tour']))
+  })
+
   it('lets only owners invite', async () => {
     expect((await call('POST', '/api/workspaces/ws_team/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(403)
     expect((await call('POST', '/api/workspaces/ws_personal/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(200)

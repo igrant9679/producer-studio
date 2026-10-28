@@ -26,7 +26,7 @@ import type {
   User,
   Workspace,
 } from '@producer/core'
-import { INVITE_TTL_MS, VOICES, createProject as coreCreateProject } from '@producer/core'
+import { INVITE_TTL_MS, VOICES, createProject as coreCreateProject, normalizeTags, searchSnippet, searchWords, type SearchHit } from '@producer/core'
 
 type Json = Record<string, unknown>
 
@@ -663,8 +663,28 @@ on('PATCH', '/api/projects/([^/]+)', async (m, _q, b) => {
   if (typeof b.name === 'string') p.name = b.name
   if (typeof b.trashed === 'boolean') p.trashed = b.trashed
   if (typeof b.isTemplate === 'boolean') p.isTemplate = b.isTemplate
+  if (Array.isArray(b.tags)) {
+    const tags = normalizeTags(b.tags as string[])
+    p.tags = tags.length ? tags : undefined
+    p.version++
+  }
   p.updatedAt = Date.now()
-  return json(summary(p))
+  return json({ ...summary(p), version: p.version })
+})
+// like the server (A-13): a copy in another space the person edits; `move` also trashes the original
+on('POST', '/api/projects/([^/]+)/copy', async (m, _q, b) => {
+  await delay(300)
+  const p = projects.find((x) => x.id === m[1])
+  if (!p) return fail(404, 'Project not found', 'not_found')
+  const to = String(b.workspaceId)
+  const denied = editorOnly(p.workspaceId) ?? editorOnly(to)
+  if (denied) return denied
+  if (to === p.workspaceId) return fail(400, 'Pick another space to copy it to', 'invalid')
+  const c = mkProject({ ...p, id: undefined, workspaceId: to, updatedAt: Date.now(), createdAt: Date.now(), doc: undefined, trashed: false })
+  c.thumbnailUrl = p.thumbnailUrl
+  projects.unshift(c)
+  if (b.move) p.trashed = true
+  return json({ ...summary(c), missingMedia: 0 })
 })
 on('POST', '/api/projects/([^/]+)/duplicate', async (m) => {
   await delay(300)
@@ -717,7 +737,8 @@ on('GET', '/api/assets', async (_m, q) => {
   await delay(250)
   const ws = q.get('workspaceId')
   const kind = q.get('kind')
-  return json(assets.filter((a) => a.workspaceId === ws && (!kind || a.asset.kind === kind)).map(pub))
+  const trashed = q.get('trashed') === '1'
+  return json(assets.filter((a) => a.workspaceId === ws && (!kind || a.asset.kind === kind) && !!a.trashedAt === trashed).map(pub))
 })
 on('GET', '/api/assets/([^/]+)', (m) => {
   const a = assets.find((x) => x.asset.id === m[1])
@@ -732,12 +753,59 @@ on('PATCH', '/api/assets/([^/]+)', (m, _q, b) => {
   if (b.transcript) a.asset.transcript = b.transcript as AssetRecord['asset']['transcript']
   return json(pub(a))
 })
+// like the server (A-14): a delete puts the clip in the media trash; only Empty trash removes it
+const usageOf = (id: string) => ({ assetId: id, projects: projects.filter((p) => p.workspaceId === assetWs(id) && !!docFor(p).assets[id]).map((p) => ({ id: p.id, name: p.name, trashed: p.trashed })) })
+on('POST', '/api/assets/trash/empty', (_m, _q, b) => {
+  const ws = String(b.workspaceId)
+  const denied = editorOnly(ws)
+  if (denied) return denied
+  const ids = Array.isArray(b.ids) ? (b.ids as string[]) : undefined
+  const gone = assets.filter((a) => a.workspaceId === ws && a.trashedAt && (!ids || ids.includes(a.asset.id)))
+  if (ids && gone.length !== new Set(ids).size) return fail(409, 'Only clips in the trash can be deleted for good. Move them to the trash first.', 'conflict')
+  for (const a of gone) assets.splice(assets.indexOf(a), 1)
+  return json({ removed: gone.length, exports: 0 })
+})
 on('DELETE', '/api/assets/([^/]+)', (m) => {
   const denied = editorOnly(assetWs(m[1]))
   if (denied) return denied
-  const i = assets.findIndex((x) => x.asset.id === m[1])
-  if (i >= 0) assets.splice(i, 1)
-  return json({ ok: true })
+  const a = assets.find((x) => x.asset.id === m[1])
+  if (!a) return fail(404, 'Asset not found', 'not_found')
+  a.trashedAt ??= Date.now()
+  return json({ ok: true, trashedAt: a.trashedAt, usedIn: usageOf(a.asset.id).projects.length })
+})
+on('POST', '/api/assets/([^/]+)/restore', (m) => {
+  const a = assets.find((x) => x.asset.id === m[1])
+  if (!a) return fail(404, 'Asset not found', 'not_found')
+  const denied = editorOnly(a.workspaceId)
+  if (denied) return denied
+  delete a.trashedAt
+  return json(pub(a))
+})
+on('GET', '/api/assets/([^/]+)/usage', (m) => (assetWs(m[1]) ? json(usageOf(m[1])) : fail(404, 'Asset not found', 'not_found')))
+on('POST', '/api/assets/([^/]+)/copy', (m, _q, b) => {
+  const a = assets.find((x) => x.asset.id === m[1])
+  if (!a) return fail(404, 'Asset not found', 'not_found')
+  const denied = editorOnly(a.workspaceId) ?? editorOnly(String(b.workspaceId))
+  if (denied) return denied
+  const copy: MockAsset = { ...structuredClone(a), workspaceId: String(b.workspaceId), createdAt: Date.now() }
+  copy.asset.id = nid('as')
+  assets.unshift(copy)
+  if (b.move) a.trashedAt = Date.now()
+  return json(pub(copy))
+})
+on('POST', '/api/assets/([^/]+)/replace', (m, _q, b) => {
+  const a = assets.find((x) => x.asset.id === m[1])
+  if (!a) return fail(404, 'Asset not found', 'not_found')
+  const denied = editorOnly(a.workspaceId)
+  if (denied) return denied
+  const mime = String(b.mime ?? '')
+  if (!mime.startsWith(`${a.asset.kind}/`)) return fail(400, `Replace a ${a.asset.kind} with another ${a.asset.kind}: projects use this clip as one.`, 'invalid')
+  return json({ assetId: a.asset.id, url: `/api/__mock_upload/${a.asset.id}`, method: 'PUT', headers: {} })
+})
+on('POST', '/api/assets/([^/]+)/replace/complete', (m) => {
+  const a = assets.find((x) => x.asset.id === m[1])
+  if (!a) return fail(404, 'Asset not found', 'not_found')
+  return json(pub(a))
 })
 
 on('GET', '/api/jobs/([^/]+)', (m) => {
@@ -852,7 +920,51 @@ on('PUT', '/api/ai/produce/draft', (_m, _q, b) => {
   return json({ version: p.version })
 })
 
-on('GET', '/api/exports', (_m, q) => json(exportsByProject[q.get('projectId') ?? ''] ?? []))
+on('GET', '/api/exports', (_m, q) => {
+  const ws = q.get('workspaceId')
+  if (!ws || q.get('projectId')) return json(exportsByProject[q.get('projectId') ?? ''] ?? [])
+  // the space's exports, newest first (A-19): one page, filtered like the server
+  const words = searchWords(q.get('q') ?? '')
+  const formats = (q.get('format') ?? '').split(',').filter(Boolean)
+  const items = projects
+    .filter((p) => p.workspaceId === ws && !p.trashed)
+    .flatMap((p) => (exportsByProject[p.id] ?? []).map((e) => ({ ...e, projectName: p.name, projectThumbnailUrl: p.thumbnailUrl, assetId: `as_${e.exportId}`, shares: Object.values(shares).filter((s) => s.exportId === e.exportId).length })))
+    .filter((e) => (!formats.length || formats.includes(e.format ?? 'mp4')) && words.every((w) => `${e.name} ${e.projectName}`.toLowerCase().includes(w)))
+    .sort((a, b) => b.createdAt - a.createdAt)
+  return json({ items })
+})
+on('DELETE', '/api/exports/([^/]+)', (m) => {
+  for (const [pid, list] of Object.entries(exportsByProject)) {
+    const i = list.findIndex((e) => e.exportId === m[1])
+    if (i < 0) continue
+    const denied = editorOnly(projectWs(pid))
+    if (denied) return denied
+    list.splice(i, 1)
+    let links = 0
+    for (const t of Object.keys(shares)) if (shares[t].exportId === m[1]) (delete shares[t], links++)
+    return json({ ok: true, links, keptFile: false })
+  }
+  return fail(404, 'Export not found', 'not_found')
+})
+// like the server's search (A-11): names, tags, words said in clips and voiceover text, voices, exports, members
+on('GET', '/api/search', async (_m, q) => {
+  await delay(120)
+  const ws = q.get('workspaceId') ?? ''
+  const words = searchWords(q.get('q') ?? '')
+  const has = (text: string) => words.length > 0 && words.every((w) => text.toLowerCase().includes(w))
+  const hits: SearchHit[] = []
+  for (const p of projects) if (p.workspaceId === ws && !p.trashed && has(`${p.name} ${(p.tags ?? []).join(' ')}`)) hits.push({ kind: p.isTemplate ? 'template' : 'project', id: p.id, title: p.name, project: summary(p) })
+  for (const a of assets) {
+    if (a.workspaceId !== ws || a.trashedAt) continue
+    const seg = a.asset.transcript?.segments.find((s) => has(s.text))
+    if (has(a.asset.name)) hits.push({ kind: 'media', id: a.asset.id, title: a.asset.name, assetId: a.asset.id, asset: pub(a) })
+    else if (seg) hits.push({ kind: 'media', id: a.asset.id, title: a.asset.name, assetId: a.asset.id, asset: pub(a), detail: 'Said in the clip', snippet: searchSnippet(seg.text, words), at: seg.start })
+  }
+  for (const v of VOICES) if (has(`${v.name} ${v.lang} ${v.style}`)) hits.push({ kind: 'voice', id: v.id, title: v.name, detail: `${v.style} · ${v.lang}` })
+  for (const p of projects) for (const e of exportsByProject[p.id] ?? []) if (p.workspaceId === ws && has(`${e.name} ${p.name}`)) hits.push({ kind: 'export', id: e.exportId, title: e.name || p.name, projectId: p.id })
+  for (const mem of members[ws] ?? []) if (has(`${mem.name} ${mem.email}`)) hits.push({ kind: 'member', id: mem.userId, title: mem.name, detail: `${mem.email} · ${mem.role}` })
+  return json({ q: q.get('q') ?? '', hits })
+})
 // like the server: editors export (a range, audio only, captions burned in or as a file, a draft preview); the
 // render "finishes" after a few seconds with one of the demo clips
 const mockCaptions: Record<string, string> = {}

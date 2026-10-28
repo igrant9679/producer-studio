@@ -79,6 +79,26 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   again. Caption tracks follow transcript cuts and restores. `project.fillerWords` is the transcript's filler list;
   speaker labels live on the clip's transcript segments (`speaker`), saved with `PATCH /api/assets/:id`.
 
+## Library: trash, exports, search, copies (migration v13; contract in `packages/core/src/library.ts`)
+- **Media trash** (`assets.trashed_at`, `services/library.ts`, `routes/assets.ts`): `DELETE /api/assets/:id` only
+  trashes (projects keep playing the clip); `GET /api/assets?trashed=1` is the trash, `POST .../restore` takes one
+  back, `GET .../usage` names the projects that use it (`doc->'assets'->id`). `POST /api/assets/trash/empty` is the
+  one hand-made permanent delete: jobs stop, exports made of the clips and their links go, rows (tombstoned for
+  desktops) and files go. `MEDIA_TRASH_DAYS` (30; 0 off) and `EXPORT_RETENTION_DAYS` (0 = keep; a working share
+  link keeps its export) run in the worker's housekeeping (`sweepLibrary`, from `services/retention.ts`).
+- **Replace in place**: `POST /api/assets/:id/replace` (ticket) → PUT → `.../replace/complete` swaps the clip's file
+  under the same id (same kind only), drops what was derived from the old one and processes it again. Desktops drop
+  a cloud clip's cached copy when its sha256 changes, and mirror the cloud's trash.
+- **Exports** (`routes/library.ts`): `GET /api/exports?workspaceId=&q=&format=` pages every export of a space;
+  `DELETE /api/exports/:id` removes it, its links and its file (kept as a clip when a project uses it).
+- **Search** (`GET /api/search?workspaceId=&q=`): projects/templates (name, tags, script narration), media (name,
+  transcript segment text with its time, voiceover text), voices, exports, members; every word, any order, plain
+  `ILIKE` with `%`/`_` escaped (no extensions: PGlite and Postgres answer alike). The web's command palette
+  (`shell/palette/`, Ctrl+K) shows it beside its commands.
+- **Copies between spaces**: `POST /api/projects/:id/copy` and `/api/assets/:id/copy` `{workspaceId, move?}` copy
+  the files to new ids in the other space and rewrite the document to them (`remapAssetIds`); `move` trashes the
+  original. Project tags are `doc.tags` (`PATCH /api/projects/:id {tags}`), so they sync with the document.
+
 ## Saving, versions and live updates
 - **Saves** are `PUT /api/projects/:id {project, baseVersion}` (409 with the current document when another save
   won). The editor merges its changes onto that document when they don't overlap (`apps/web/src/editor/rebase.ts`,
