@@ -90,6 +90,9 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'ai.produce.assemble': 'Producer AI',
   'voicestudio.install': 'Installing VoiceStudio',
   'media.scenes': 'Finding scene changes',
+  'media.stabilise': 'Stabilising',
+  'media.denoise': 'Denoising',
+  'media.bgremove': 'Removing the background',
 }
 
 /** Short jobs people wait on in the editor: they get slots long exports can't take (QUICK_JOB_CONCURRENCY). */

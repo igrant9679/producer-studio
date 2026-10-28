@@ -23,6 +23,9 @@ import {
   pasteItems,
   projectDuration,
   sampleKeyframes,
+  isMaskProp,
+  readMaskProp,
+  writeMaskProp,
   separateAudio,
   separateAudioRefusal,
   setKeyframe,
@@ -258,6 +261,7 @@ type VisualProp = Exclude<AnimProp, 'volume'>
 export function readProp(it: Item, prop: AnimProp, playhead = S().playhead): number {
   const lt = localTime(it, playhead)
   const kfs = 'keyframes' in it ? it.keyframes[prop] : undefined
+  if (isMaskProp(prop)) return readMaskProp(it, prop, lt)
   let base = 0
   if (prop === 'volume') base = 'volume' in it ? it.volume : 1
   else if (prop === 'opacity') base = 'opacity' in it ? it.opacity : 1
@@ -272,6 +276,7 @@ export function writeProp(p: Project, itemId: string, prop: AnimProp, value: num
   const it = f.item
   const kfs = 'keyframes' in it ? it.keyframes[prop] : undefined
   if (kfs && kfs.length) return setKeyframe(p, itemId, prop, localTime(it, playhead), value)
+  if (isMaskProp(prop)) return writeMaskProp(p, itemId, prop, value, localTime(it, playhead))
   if (prop === 'volume') return updateItem(p, itemId, { volume: value } as Partial<Item>)
   if (prop === 'opacity') return updateItem(p, itemId, { opacity: value } as Partial<Item>)
   if ('transform' in it) return updateItem(p, itemId, { transform: { ...it.transform, [prop as VisualProp]: value } } as Partial<Item>)

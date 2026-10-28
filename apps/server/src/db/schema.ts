@@ -101,6 +101,10 @@ export interface AssetMeta {
   jobId?: string
   /** An export's sidecar caption file, stored next to it. */
   captions?: { key: string; format: 'srt' | 'vtt' }
+  /** The picture has transparency (its proxy is a VP9 WebM with alpha). */
+  alpha?: boolean
+  /** A smart tool's copy of another clip (E-21): which, by which tool, and where in that file it starts (seconds). */
+  derivedFrom?: { assetId: string; tool: string; offset: number; settings?: Record<string, unknown> }
 }
 
 export const assets = pgTable('assets', {

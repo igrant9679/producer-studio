@@ -1,0 +1,30 @@
+/* Smart tools (E-21): the Smart tab of the Properties panel, and mask handles / path drawing / the eyedropper on the canvas. */
+
+/* ---------- panel ---------- */
+.ed-smart-set { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ed-smart-actions { gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+.ed-smart-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; box-shadow: 0 0 0 1px var(--border); }
+.ed-smart-tools { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.ed-smart-tool { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ed-smart-tool .why { font-size: 0.6875rem; color: var(--text-3); line-height: 1.4; flex: 1 1 160px; }
+.ed-smart-run { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--field-2); font-size: 0.75rem; }
+.ed-smart-run .msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-smart-run progress { grid-column: 1 / -1; width: 100%; height: 4px; accent-color: var(--accent); }
+
+/* ---------- canvas ---------- */
+.cv-smart { position: absolute; z-index: 8; inset: 0; }
+.cv-smart.catch { cursor: crosshair; }
+.cv-mask { position: absolute; pointer-events: none; overflow: visible; }
+.cv-mask svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.cv-mask-outline { fill: rgba(53, 224, 255, .06); stroke: var(--canvas-accent); stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; pointer-events: auto; cursor: move; }
+.cv-mask-feather { fill: none; stroke: var(--canvas-accent); stroke-width: 1; opacity: .45; vector-effect: non-scaling-stroke; }
+.cv-mask-box { fill: none; stroke: var(--canvas-accent); stroke-width: 1; opacity: .5; vector-effect: non-scaling-stroke; }
+.cv-mask-h { fill: #fff; stroke: var(--canvas-accent); stroke-width: 1.5; pointer-events: auto; vector-effect: non-scaling-stroke; }
+.cv-mask-h.corner { cursor: nwse-resize; }
+.cv-mask-h.side { cursor: ew-resize; }
+.cv-mask-h.rot { cursor: grab; }
+.cv-mask-h.pt { fill: var(--canvas-accent); stroke: #fff; cursor: move; }
+.cv-draw-line { fill: rgba(53, 224, 255, .08); stroke: var(--canvas-accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.cv-draw-pt { fill: #fff; stroke: var(--canvas-accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.cv-draw-pt.first { fill: var(--canvas-accent); }
+.cv-smart-hint { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 9; padding: 5px 10px; border-radius: 8px; background: rgba(12, 14, 20, .82); color: #fff; font-size: 0.75rem; pointer-events: none; white-space: nowrap; }

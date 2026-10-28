@@ -75,6 +75,9 @@ export const JOB_LABELS: Record<JobKind, string> = {
   'voicestudio.install': 'Installing VoiceStudio',
   'voicestudio.task': 'VoiceStudio',
   'media.scenes': 'Finding scene changes',
+  'media.stabilise': 'Stabilising',
+  'media.denoise': 'Denoising',
+  'media.bgremove': 'Removing the background',
 }
 
 export function initials(name: string | undefined): string {

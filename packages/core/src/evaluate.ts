@@ -2,6 +2,7 @@
 // (no clocks, seeded noise), so the browser preview and the HyperFrames export produce identical frames.
 import { frameAudio } from './audio'
 import { adjustToFilter, adjustmentLayer, itemGrades, spreadAdjustments } from './colour'
+import { smartLayer } from './masks'
 import { itemEnd } from './ops'
 import { textGradientCss, textMarkup } from './text'
 import type {
@@ -412,6 +413,8 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
     layer.shape = it
   }
   if (it.type === 'video' || it.type === 'image') layer.grades = itemGrades(p, it)
+  const smart = smartLayer(it, lt, layer.box)
+  if (smart) layer.smart = smart
   return layer
 }
 

@@ -4,6 +4,7 @@
 import { evaluate, textBoxCss, textInnerHtml } from './evaluate'
 import { GradeLayers, STAGES, snapshotFrame } from './gradeRuntime'
 import { itemEnd, projectDuration } from './ops'
+import { applyKey, keyFilterId, smartWrapCss } from './smartRuntime'
 import { fitScale, scaledTextStyle } from './text'
 import type { FrameLayer, Item, Project, TextStyle, Track, VideoItem } from './types'
 import { cssNumber, safeColor } from './util'
@@ -381,7 +382,8 @@ export class StageRenderer {
       (layer.blend !== 'normal' ? `mix-blend-mode:${layer.blend};` : '') +
       (layer.clipPath ? `clip-path:${layer.clipPath};` : '') +
       (layer.crop ? 'overflow:hidden;' : '') +
-      (layer.backdrop ? `backdrop-filter:${layer.backdrop};` : '')
+      (layer.backdrop ? `backdrop-filter:${layer.backdrop};` : '') +
+      smartWrapCss(layer)
     el.overlay.style.backgroundImage = layer.overlay ?? 'none'
     el.overlay.style.display = layer.overlay ? 'block' : 'none'
     this.ensureBackground(el, layer)
@@ -406,8 +408,11 @@ export class StageRenderer {
           bgStill.style.display = on && layer.background?.type === 'blur' ? 'block' : 'none'
         }
       }
+      applyKey(this.root, layer, [media, el.hold?.still])
       if (layer.type === 'video' && this.opts.mode === 'preview') this.syncVideo(media as HTMLVideoElement, layer.mediaTime ?? 0, layer.itemId)
-      this.grades.update(layer.itemId, el.wrap, media, layer, fill, el.hold && t < el.hold.until ? el.hold.still : undefined)
+      // a graded clip shows the grade's canvas in place of the picture: it carries the chroma key too
+      const keyed = layer.smart?.key ? `${fill};filter:url(#${keyFilterId(layer.itemId)})` : fill
+      this.grades.update(layer.itemId, el.wrap, media, layer, keyed, el.hold && t < el.hold.until ? el.hold.still : undefined)
     } else if (layer.text) {
       const st = layer.text.style
       const styleKey = JSON.stringify(st)

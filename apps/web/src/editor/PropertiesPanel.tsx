@@ -36,6 +36,7 @@ import { AlignButtons } from './AlignTools'
 import { AdjustmentLayerTab, ColourTab, EffectsSection } from './ColourPanel'
 import { KeyframesSection } from './KeyframePanel'
 import { FitFields, GlyphWarning, TextEffectsSection, WordStyles } from './TextTools'
+import { SmartTab } from './SmartPanel'
 import { thumbUrl } from './media'
 import { PROJECT_NAME_MAX, useEditor } from './store'
 import { timecode } from './timelineMath'
@@ -73,6 +74,7 @@ export function PropertiesPanel() {
       { id: 'animation', label: 'Animation' },
       { id: 'speed', label: 'Speed' },
       { id: 'audio', label: 'Audio' },
+      { id: 'smart', label: 'Smart' },
     ]
   else if (item.type === 'image')
     tabs = [
@@ -80,10 +82,11 @@ export function PropertiesPanel() {
       { id: 'adjust', label: 'Colour' },
       ...(f?.track.main ? [{ id: 'background', label: 'Canvas' }] : []),
       { id: 'animation', label: 'Animation' },
+      { id: 'smart', label: 'Smart' },
     ]
   else if (item.type === 'text') tabs = [{ id: 'text', label: 'Text' }, { id: 'basic', label: 'Transform' }, { id: 'animation', label: 'Animation' }]
   else if (item.type === 'shape') tabs = [{ id: 'shape', label: 'Shape' }, { id: 'basic', label: 'Transform' }, { id: 'animation', label: 'Animation' }]
-  else if (item.type === 'audio') tabs = [{ id: 'audio', label: 'Audio' }, { id: 'speed', label: 'Speed' }]
+  else if (item.type === 'audio') tabs = [{ id: 'audio', label: 'Audio' }, { id: 'speed', label: 'Speed' }, { id: 'smart', label: 'Smart' }]
   else if (item.type === 'caption') tabs = [{ id: 'caption', label: 'Captions' }]
   else if (item.type === 'adjustment') tabs = [{ id: 'adjust', label: 'Colour' }, { id: 'layer', label: 'Layer' }]
   const tab = tabs.find((t) => t.id === activeTab)?.id ?? tabs[0].id
@@ -118,6 +121,7 @@ export function PropertiesPanel() {
           {item && tab === 'text' && item.type === 'text' && <TextTab item={item} />}
           {item && tab === 'shape' && item.type === 'shape' && <ShapeTab item={item} />}
           {item && tab === 'caption' && item.type === 'caption' && <CaptionTab item={item} track={f!.track} />}
+          {item && tab === 'smart' && (item.type === 'video' || item.type === 'image' || item.type === 'audio') && <SmartTab item={item} />}
         </fieldset>
       </div>
     </aside>

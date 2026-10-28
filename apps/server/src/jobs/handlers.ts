@@ -3,6 +3,9 @@ import { produceAssemble, produceScript } from '../ai/produce'
 import { synthesizeToAsset, transcribeAsset } from '../ai/speech'
 import { processAsset } from '../media/process'
 import { detectScenes } from '../media/scenes'
+import { removeBackground } from '../media/bgremove'
+import { denoiseClip } from '../media/denoise'
+import { stabiliseClip } from '../media/stabilise'
 import { assetRecord } from '../dto'
 import { exportRender } from '../render/export'
 import { failAsset, reopenAsset } from '../services/asset-recovery'
@@ -41,4 +44,7 @@ export function registerHandlers() {
   registerHandler('ai.produce.assemble', produceAssemble)
   registerHandler('export.render', exportRender)
   registerHandler('media.scenes', detectScenes)
+  registerHandler('media.stabilise', stabiliseClip)
+  registerHandler('media.denoise', denoiseClip)
+  registerHandler('media.bgremove', removeBackground)
 }

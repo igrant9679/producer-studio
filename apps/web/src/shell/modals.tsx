@@ -278,6 +278,7 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Editor — timeline', [['Split at playhead', 'Ctrl B'], ['Zoom timeline', 'Ctrl + / −'], ['Fit timeline', 'Shift Z'], ['Previous / next frame', 'Ctrl ← / →'], ['Separate audio', 'Ctrl Shift S'], ['Link / unlink clips', 'Ctrl L'], ['Add marker', 'M'], ['Next / previous marker', 'Shift M / Alt M'], ['Previous / next keyframe', 'Alt [ / ]']]],
   ['Editor — sound', [['J / L cut (sound leads or trails the picture)', 'Shift drag audio edge'], ['J / L cut to the playhead', 'Shift [ / ]'], ['Add a volume keyframe', 'Double-click the volume line']]],
   ['Editor — canvas', [['Move tool', 'V'], ['Hand tool', 'H'], ['Fit canvas', 'Shift F'], ['Nudge 1 px', '↑ ↓ ← →'], ['Rulers and guides', 'Shift R'], ['Move without snapping', 'Alt drag']]],
+  ['Editor — masks (Smart tab)', [['Close a drawn mask', 'Enter'], ['Take the last corner back', 'Backspace'], ['Stop drawing or picking a key colour', 'Esc']]],
   ['Editor — transcript', [['Previous / next word', '← / →'], ['Cut the selected words', 'Delete'], ['Restore struck-through words', 'R']]],
   ['Editor — review playback', [['Shuttle back / stop / forward (again: faster)', 'J / K / L'], ['Mark in / out', 'I / O'], ['Clear in and out', 'Alt X']]],
 ]
