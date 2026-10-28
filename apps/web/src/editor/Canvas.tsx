@@ -2,7 +2,7 @@
 // the canvas, guides, safe zones and other objects, group transforms, inline text editing, floating object toolbar,
 // rulers, hand/zoom, drop target for media.
 import type { FrameLayer, ImageItem, Item, TextItem, VideoItem, VisualItem } from '@producer/core'
-import { StageRenderer, editable, evaluate, findItem, resetTransform, textCss, updateItem, updateTrack } from '@producer/core'
+import { StageRenderer, editable, evaluate, findItem, resetTransform, setTextContent, textCss, updateItem, updateTrack } from '@producer/core'
 import clsx from 'clsx'
 import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
@@ -528,6 +528,25 @@ function SelectionOverlay({ scale, boxRef, beginMove, margin }: { scale: number;
     track(move)
   }
 
+  /** Shrink to fit: the top and bottom handles set the box's height (both edges move, the centre stays). */
+  const startHeight = (e: React.PointerEvent, side: 1 | -1) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const orig = useEditor.getState().project
+    const it = findItem(orig, item.id)?.item as TextItem | undefined
+    if (!it || it.type !== 'text' || !it.style.fit) return
+    const sx = e.clientX
+    const sy = e.clientY
+    const h0 = it.style.fit.height
+    const rad = (geo.rot * Math.PI) / 180
+    const k = scale * A.readProp(it, 'scale')
+    track((ev) => {
+      const along = (-(ev.clientX - sx) * Math.sin(rad) + (ev.clientY - sy) * Math.cos(rad)) * side
+      const h = Math.max(20, Math.round(h0 + (2 * along) / k))
+      useEditor.getState().commit(updateItem<TextItem>(orig, it.id, { style: { ...it.style, fit: { height: h } } }), 'Text box height', { coalesce: `th:${it.id}` })
+    })
+  }
+
   /** Drag an edge of the picture inwards to crop it (the Crop panel's sliders do the same by keyboard). */
   const startCrop = (e: React.PointerEvent, edge: 'left' | 'right' | 'top' | 'bottom') => {
     e.stopPropagation()
@@ -577,6 +596,12 @@ function SelectionOverlay({ scale, boxRef, beginMove, margin }: { scale: number;
               <>
                 <div className="cv-handle side w" onPointerDown={(e) => startWidth(e, -1)} />
                 <div className="cv-handle side e" onPointerDown={(e) => startWidth(e, 1)} />
+                {(item as TextItem).style.fit && (
+                  <>
+                    <div className="cv-handle side n" title="Drag to set the box height" onPointerDown={(e) => startHeight(e, -1)} />
+                    <div className="cv-handle side s" title="Drag to set the box height" onPointerDown={(e) => startHeight(e, 1)} />
+                  </>
+                )}
               </>
             )}
             <div className="cv-rot-stem" />
@@ -848,7 +873,7 @@ function InlineTextEditor({ id }: { id: string }) {
 
   const done = (save: boolean) => {
     const s = useEditor.getState()
-    if (save && it && text !== it.text) s.commit(updateItem<TextItem>(s.project, id, { text, name: text.split('\n')[0].slice(0, 40) || 'Text' }), 'Edit text')
+    if (save && it && text !== it.text) s.commit(setTextContent(s.project, id, text), 'Edit text')
     s.set({ editingTextId: null })
   }
 

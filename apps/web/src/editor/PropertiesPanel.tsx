@@ -23,6 +23,7 @@ import {
   setAspect,
   setCanvasSize,
   setItemSpeed,
+  setTextContent,
   updateItem,
   updateProject,
   updateTrack,
@@ -35,6 +36,7 @@ import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segment
 import { resetDemoProject } from './demo'
 import { AlignButtons } from './AlignTools'
 import { KeyframesSection } from './KeyframePanel'
+import { FitFields, GlyphWarning, TextEffectsSection, WordStyles } from './TextTools'
 import { thumbUrl } from './media'
 import { PROJECT_NAME_MAX, useEditor } from './store'
 import { timecode } from './timelineMath'
@@ -642,11 +644,15 @@ function TextTab({ item }: { item: TextItem }) {
           value={text}
           onChange={(e) => {
             setText(e.target.value)
-            up<TextItem>(item, { text: e.target.value, name: e.target.value.split('\n')[0].slice(0, 40) || 'Text' }, 'Edit text', `text:${item.id}`)
+            // word styles stay on the words they were on
+            const s = useEditor.getState()
+            s.commit(setTextContent(s.project, item.id, e.target.value), 'Edit text', { coalesce: `text:${item.id}` })
           }}
           onBlur={() => useEditor.getState().endCoalesce()}
         />
+        <GlyphWarning item={item} />
       </Section>
+      <TextEffectsSection item={item} />
       <Section title="Font">
         <Field label="Family">
           <select className="ed-select" value={st.fontFamily} style={{ fontFamily: st.fontFamily }} onChange={(e) => set({ fontFamily: e.target.value }, 'Font')}>
@@ -682,7 +688,9 @@ function TextTab({ item }: { item: TextItem }) {
         <Slider label="Letter spacing" value={st.letterSpacing} min={-10} max={40} step={0.5} suffix="px" onChange={(v) => set({ letterSpacing: v }, 'Letter spacing', 'ls')} />
         <Slider label="Line height" value={st.lineHeight} min={0.7} max={2.5} step={0.05} onChange={(v) => set({ lineHeight: v }, 'Line height', 'lh')} />
         <Slider label="Box width" value={st.boxWidth} min={100} max={Math.max(3000, st.boxWidth)} step={10} suffix="px" onChange={(v) => set({ boxWidth: v }, 'Text width', 'bw')} />
+        <FitFields item={item} set={set} />
       </Section>
+      <WordStyles item={item} />
       <Section title="Fill & stroke">
         <Field label="Fill">
           <ColorInput value={st.color} onChange={(v) => set({ color: v }, 'Text colour', 'col')} />

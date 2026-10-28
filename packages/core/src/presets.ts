@@ -254,6 +254,19 @@ export const CAPTION_PRESETS: Array<{ id: string; name: string; caption: Omit<Ca
   },
 ]
 
+/**
+ * Where a template's text goes on a canvas (position relative to the centre): lower thirds sit low and to the left
+ * in landscape, higher up a portrait frame (clear of the platforms' captions); the rest start in the middle.
+ */
+export function templatePlacement(tpl: TextTemplate, style: TextStyle, canvas?: Canvas): { x: number; y: number } {
+  if (!canvas || tpl.category !== 'Lower thirds') return { x: 0, y: 0 }
+  const { width: W, height: H } = canvas
+  const ratio = W / H
+  const y = ratio > 1.1 ? 0.3 : ratio < 0.9 ? 0.2 : 0.27
+  const box = Math.min(style.boxWidth, W * 0.88)
+  return { x: Math.round(-W / 2 + W * 0.06 + box / 2), y: Math.round(H * y) }
+}
+
 /** A caption style from a preset, sized for `canvas` when given (see `textStyleFor`). */
 export function captionStyleFromPreset(id: string, canvas?: Canvas): CaptionStyle {
   const p = CAPTION_PRESETS.find((c) => c.id === id) ?? CAPTION_PRESETS[0]

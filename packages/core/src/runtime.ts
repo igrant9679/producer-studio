@@ -1,10 +1,11 @@
 // DOM renderer for evaluated frames. The editor preview uses it in 'preview' mode (it owns <video>/<audio>
 // playback); the HyperFrames export bundles it in 'export' mode (media elements are pre-declared in the
 // composition and HyperFrames owns their playback, the renderer only positions and styles them).
-import { evaluate, textBackgroundCss, textCss } from './evaluate'
+import { evaluate, textBoxCss, textInnerHtml } from './evaluate'
 import { itemEnd, projectDuration } from './ops'
-import type { FrameLayer, Item, Project, Track, VideoItem } from './types'
-import { cssNumber, escapeHtml, safeColor } from './util'
+import { fitScale, scaledTextStyle } from './text'
+import type { FrameLayer, Item, Project, TextStyle, Track, VideoItem } from './types'
+import { cssNumber, safeColor } from './util'
 
 /** `audio`: what the preview plays a clip's sound from (for a video, its small sound-only copy when there is one). */
 export type UrlResolver = (assetId: string, kind: 'media' | 'proxy' | 'audio') => string
@@ -28,6 +29,9 @@ interface LayerEl {
   lastText?: string
   lastStyle?: string
   lastFill?: string
+  /** Shrink to fit: what the scale was measured for, and the scale. */
+  lastFitKey?: string
+  fitK?: number
 }
 
 /** The loudest a clip plays (+12 dB), in the preview as in the export. */
@@ -77,6 +81,9 @@ export class StageRenderer {
   private items = new Map<string, { item: Item; track: Track }>()
   private rendering = false
   private bufferChanged = false
+  private lastT?: number
+  private primed = new Set<string>()
+  private onFonts?: () => void
 
   constructor(root: HTMLElement, project: Project, opts: RendererOptions) {
     this.root = root
@@ -86,12 +93,23 @@ export class StageRenderer {
     root.style.position = 'relative'
     root.style.overflow = 'hidden'
     root.style.background = safeColor(project.background, '#000000')
+    // a font that arrives changes how text measures: draw (and fit) it again
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined
+    if (fonts?.addEventListener) {
+      this.onFonts = () => {
+        for (const el of this.layers.values()) el.lastText = el.lastFitKey = undefined
+        if (this.lastT !== undefined && !this.rendering) this.render(this.lastT)
+      }
+      fonts.addEventListener('loadingdone', this.onFonts)
+    }
+    this.primeFonts()
   }
 
   setProject(p: Project) {
     this.project = p
     this.root.style.background = safeColor(p.background, '#000000')
     this.index()
+    this.primeFonts()
     // drop elements for items that no longer exist
     for (const [id, el] of this.layers) if (!this.items.has(id)) this.removeLayer(id, el)
     for (const id of [...this.voices.keys()]) if (!this.items.has(id)) this.dropVoice(id)
@@ -122,6 +140,7 @@ export class StageRenderer {
   }
 
   render(t: number) {
+    this.lastT = t
     this.rendering = true
     try {
       this.draw(t)
@@ -224,6 +243,7 @@ export class StageRenderer {
   }
 
   destroy() {
+    if (this.onFonts) document.fonts?.removeEventListener('loadingdone', this.onFonts)
     for (const [id, el] of this.layers) this.removeLayer(id, el)
     for (const id of [...this.voices.keys()]) this.dropVoice(id)
     if (this.waiting.size) {
@@ -374,13 +394,19 @@ export class StageRenderer {
       }
       if (layer.type === 'video' && this.opts.mode === 'preview') this.syncVideo(media as HTMLVideoElement, layer.mediaTime ?? 0, layer.itemId)
     } else if (layer.text) {
-      const styleKey = JSON.stringify(layer.text.style)
-      if (el.lastText !== layer.text.html || el.lastStyle !== styleKey) {
-        const bgCss = textBackgroundCss(layer.text.style)
-        el.content.style.cssText = textCss(layer.text.style) + ';position:relative;width:100%'
-        el.content.innerHTML = bgCss ? `<span style="${escapeHtml(bgCss)}">${layer.text.html}</span>` : layer.text.html
+      const st = layer.text.style
+      const styleKey = JSON.stringify(st)
+      const fit = st.fit && st.fit.height > 0 ? st.fit.height : 0
+      const fitKey = fit ? `${layer.text.full ?? layer.text.html}|${styleKey}|${layer.box.width}` : undefined
+      if (el.lastText !== layer.text.html || el.lastStyle !== styleKey || el.lastFitKey !== fitKey) {
+        // shrink to fit: measured once per text, style and box (the same search in the preview and the export)
+        if (fit && el.lastFitKey !== fitKey) el.fitK = this.measureFit(el.content, layer.text.full ?? layer.text.html, st, layer.box.width, fit)
+        const drawn = fit && (el.fitK ?? 1) < 1 ? scaledTextStyle(st, el.fitK!) : st
+        el.content.style.cssText = textBoxCss(drawn, !!fit)
+        el.content.innerHTML = textInnerHtml(drawn, layer.text.html)
         el.lastText = layer.text.html
         el.lastStyle = styleKey
+        el.lastFitKey = fitKey
       }
     } else if (layer.shape) {
       const s = layer.shape
@@ -390,6 +416,39 @@ export class StageRenderer {
         `border-radius:${s.shape === 'ellipse' ? '50%' : `${cssNumber(s.radius)}px`};` +
         (s.stroke ? `border:${cssNumber(s.stroke.width)}px solid ${safeColor(s.stroke.color, 'transparent')};` : '') +
         (s.shape === 'line' ? `border-top:${Math.max(2, cssNumber(s.height))}px solid ${fill};height:0;top:50%;` : '')
+    }
+  }
+
+  /** The scale at which `html` fits a width × height box, measured in the content element itself. */
+  private measureFit(content: HTMLElement, html: string, style: TextStyle, width: number, height: number): number {
+    return fitScale((k) => {
+      const s = k < 1 ? scaledTextStyle(style, k) : style
+      content.style.cssText = textBoxCss(s, true)
+      content.innerHTML = textInnerHtml(s, html)
+      return content.scrollHeight <= height + 0.5 && content.scrollWidth <= width + 0.5
+    })
+  }
+
+  /**
+   * Ask for every face the project's text uses straight away, so a page waiting on document.fonts (the export)
+   * waits for them all, and text first drawn later is measured in its own font.
+   */
+  private primeFonts() {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined
+    if (!fonts?.load) return
+    const ask = (family: string, weight: number, italic: boolean) => {
+      const key = `${italic ? 'italic ' : ''}${Math.round(cssNumber(weight, 400))} 16px "${String(family ?? '').replace(/["\\;{}<>]/g, '')}"`
+      if (this.primed.has(key)) return
+      this.primed.add(key)
+      void fonts.load(key).catch(() => undefined)
+    }
+    for (const track of this.project.tracks) {
+      if (track.captionStyle) ask(track.captionStyle.style.fontFamily, track.captionStyle.style.fontWeight, track.captionStyle.style.italic)
+      for (const it of track.items)
+        if (it.type === 'text') {
+          ask(it.style.fontFamily, it.style.fontWeight, it.style.italic)
+          for (const s of it.spans ?? []) ask(it.style.fontFamily, s.fontWeight ?? it.style.fontWeight, s.italic ?? it.style.italic)
+        }
     }
   }
 
