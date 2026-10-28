@@ -181,6 +181,11 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
               </div>
             )}
             {errors.password && <div className="ps-field-err">{errors.password}</div>}
+            {mode === 'login' && (
+              <div style={{ marginTop: 8, fontSize: '0.8125rem' }}>
+                <Link to="/forgot">Forgot password?</Link>
+              </div>
+            )}
           </div>
           <button className="btn primary" type="submit" disabled={busy}>
             {busy ? <Spinner /> : null}

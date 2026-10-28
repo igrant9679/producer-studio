@@ -24,6 +24,7 @@ const pages = {
   activity: () => import('./pages/ActivityPage'),
   settings: () => import('./pages/SettingsPage'),
   invite: () => import('./pages/InvitePage'),
+  account: () => import('./pages/AccountPage'),
 }
 
 /** Start loading the code for the shell page at `pathname` (no-op for paths that aren't shell pages). */
@@ -46,6 +47,7 @@ const ExportsPage = lazy(pages.exports)
 const ActivityPage = lazy(pages.activity)
 const SettingsPage = lazy(pages.settings)
 const InvitePage = lazy(pages.invite)
+const AccountPage = lazy(pages.account)
 const NotFound = lazy(() => import('./pages/NotFound'))
 
 /** Producer AI only makes new things: a viewer gets who can use it instead of a wizard that fails at the end. */
@@ -122,6 +124,7 @@ export function ShellRoutes() {
             <Route path="activity" element={<ActivityPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="invite/:token" element={<InvitePage />} />
+            <Route path="account" element={<AccountPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
