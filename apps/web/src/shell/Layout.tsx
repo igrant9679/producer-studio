@@ -340,17 +340,24 @@ function useWorkspaceEvents(workspaceId: string | undefined) {
     if (!workspaceId) return
     let alive = true
     reset([])
-    api
-      .jobs({ workspaceId })
-      .then((list) => {
-        if (!alive) return
-        const cutoff = Date.now() - 15 * 60_000
-        for (const j of list) if (isActive(j) || j.updatedAt > cutoff) upsert(j)
-      })
-      .catch(() => undefined)
+    const loadJobs = () =>
+      api
+        .jobs({ workspaceId })
+        .then((list) => {
+          if (!alive) return
+          const cutoff = Date.now() - 15 * 60_000
+          for (const j of list) if (isActive(j) || j.updatedAt > cutoff) upsert(j)
+        })
+        .catch(() => undefined)
+    void loadJobs()
     let unsub: (() => void) | undefined
     try {
       unsub = subscribeEvents(workspaceId, {
+        // back after missing events that can't be replayed: the jobs list and every page listening reload
+        resync: () => {
+          void loadJobs()
+          liveBus.emitResync()
+        },
         job: (j) => {
           upsert(j)
           liveBus.emitJob(j)

@@ -104,7 +104,7 @@ export function RenameSpaceModal({ ws, onClose }: { ws: Workspace; onClose: () =
     if (!trimmed || trimmed === ws.name) return onClose()
     setBusy(true)
     try {
-      const w = await api.renameWorkspace(ws.id, trimmed)
+      const w = await api.renameWorkspace(ws.id, trimmed, ws.etag)
       await refresh()
       toast(`Renamed to “${w.name}”`)
       onClose()

@@ -31,6 +31,8 @@ export interface Workspace {
   role: Role
   personal: boolean
   memberCount: number
+  /** Base version of its name: send as If-Match with PATCH /api/workspaces/:id (412 if renamed since). */
+  etag?: string
 }
 
 // ---- auth ----
@@ -186,6 +188,8 @@ export interface ProjectSummary {
   updatedAt: number
   createdAt: number
   createdBy: string
+  /** The saved version this summary describes: the base for a rename from a list (PATCH baseVersion). */
+  version?: number
 }
 
 export interface CreateProjectRequest {
@@ -207,6 +211,36 @@ export interface ProjectDocResponse {
   summary: ProjectSummary
   project: Project
   version: number
+}
+
+// ---- version history (P-15) ----
+// GET  /api/projects/:id/versions                  -> ProjectVersionSummary[] (newest first; viewers)
+// GET  /api/projects/:id/versions/:vid             -> ProjectVersionResponse (viewers)
+// GET  /api/projects/:id/versions/at/:version      -> ProjectVersionResponse (the version holding that project version)
+// POST /api/projects/:id/versions {name}           -> ProjectVersionSummary (name what's saved now; editors)
+// PATCH /api/projects/:id/versions/:vid {name}     -> ProjectVersionSummary (name or unname one; editors)
+// POST /api/projects/:id/versions/:vid/restore {baseVersion?} -> { version, updatedAt } (a new save; editors)
+export type ProjectVersionLabel = 'autosave' | 'named' | 'before-restore' | 'before-ai'
+
+export interface ProjectVersionSummary {
+  id: string
+  /** The project version this is a copy of. */
+  version: number
+  label: ProjectVersionLabel
+  name?: string
+  /** What made it ("Restored from …", "Producer AI assembly"). */
+  note?: string
+  sizeBytes: number
+  createdAt: number
+  createdBy?: string
+  authorName?: string
+  /** It is what's saved now. */
+  current?: true
+}
+
+export interface ProjectVersionResponse {
+  summary: ProjectVersionSummary
+  project: Project
 }
 
 export interface SaveProjectRequest {
@@ -257,6 +291,8 @@ export interface AssetRecord {
   light?: true
   /** On a light copy of a transcribed clip: which transcript it has (a different value means a different one). */
   transcriptRev?: string
+  /** Base version of its name and transcript: send as If-Match with PATCH /api/assets/:id (412 if changed since). */
+  etag?: string
 }
 
 /** Tells one transcript from another without sending it (cheap: no hashing of what can be an hour of words). */

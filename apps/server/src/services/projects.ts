@@ -6,6 +6,7 @@ import { ctx } from '../context'
 import { assets, projects } from '../db/schema'
 import { assetDoc, projectSummary } from '../dto'
 import { HttpError, invalid, notFound } from '../http'
+import { keepBefore, recordVersion } from './versions'
 
 export type ProjectRow = typeof projects.$inferSelect
 
@@ -91,12 +92,21 @@ export function derived(p: Project) {
   return { name: p.name.slice(0, 200) || 'Untitled project', width: Math.round(p.width), height: Math.round(p.height), duration: projectDuration(p) }
 }
 
+/** Who saved, and why, for version history (services/versions.ts). */
+export interface SaveOptions {
+  userId?: string | null
+  /** What is being replaced is kept and labelled this way first (a restore, a Producer AI assembly). */
+  before?: 'before-restore' | 'before-ai'
+  note?: string
+}
+
 /**
  * Save a project document. With baseVersion, fails with 409 if another save won; without it (server-side jobs),
- * writes unconditionally. Bumps version and emits a `project` event.
+ * writes unconditionally. Bumps version, keeps the result in version history and emits a `project` event.
  */
-export async function saveProjectDoc(id: string, doc: Project, baseVersion?: number): Promise<{ version: number; updatedAt: number; row: ProjectRow }> {
+export async function saveProjectDoc(id: string, doc: Project, baseVersion?: number, opts: SaveOptions = {}): Promise<{ version: number; updatedAt: number; row: ProjectRow }> {
   const row = await loadProjectRow(id)
+  if (opts.before && (baseVersion === undefined || baseVersion === row.version)) await keepBefore(row, opts.before)
   const p = validateProject({ ...doc, id })
   const now = Date.now()
   const thumbnail = await deriveThumbnail(p, row.workspaceId)
@@ -118,6 +128,7 @@ export async function saveProjectDoc(id: string, doc: Project, baseVersion?: num
     })
   }
   const r = updated[0]
+  await recordVersion(r, { userId: opts.userId, note: opts.note })
   ctx().bus.publish(r.workspaceId, 'project', { id: r.id, version: r.version }, { id: r.id, inline: { id: r.id, version: r.version } })
   return { version: r.version, updatedAt: now, row: r }
 }

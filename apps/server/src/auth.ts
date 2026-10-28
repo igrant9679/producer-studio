@@ -59,7 +59,11 @@ export async function createSession(c: Context, userId: string) {
 
 export async function destroySession(c: Context) {
   const token = getCookie(c, SESSION_COOKIE)
-  if (token) await ctx().db.delete(sessions).where(eq(sessions.id, sha256(token)))
+  if (token) {
+    const gone = await ctx().db.delete(sessions).where(eq(sessions.id, sha256(token))).returning({ userId: sessions.userId })
+    // the live-update streams this session opened close now, not at their next check
+    for (const s of gone) ctx().bus.accessChanged(s.userId)
+  }
   deleteCookie(c, SESSION_COOKIE, { path: '/' })
 }
 

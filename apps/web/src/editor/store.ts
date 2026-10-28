@@ -64,6 +64,17 @@ export interface EditorState {
   /** On a 409 (or a newer server version while we have unsaved edits): the other replica's version/doc. */
   conflictVersion?: number
   conflictProject?: Project
+  /** What both sides changed, in words, when the other replica's changes couldn't be merged with ours. */
+  conflictWhat?: string
+  /** The server's document at `version`: what local edits are merged against when another save lands first. */
+  base?: Project
+  /** When the scheduled automatic retry of a failed save runs (set only while one is scheduled). */
+  saveRetryAt?: number
+  /** Changes this browser kept from an earlier visit that never reached the server, offered back on open. */
+  journalOffer?: { savedAt: number; baseVersion: number; project: Project }
+  /** A saved version shown read-only on the canvas from Version history. */
+  versionPreview?: { id: string; label: string; project: Project }
+  versionsOpen: boolean
   canvasTool: CanvasTool
   /** Canvas zoom: 'fit' or a scale factor (1 = 100 %). */
   canvasZoom: 'fit' | number
@@ -209,6 +220,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   fullscreen: false,
   shortcutsOpen: false,
   exportOpen: false,
+  versionsOpen: false,
 
   load: ({ project, version, projectId, demo, workspaceId }) =>
     set({
@@ -229,6 +241,12 @@ export const useEditor = create<EditorState>((set, get) => ({
       saveError: undefined,
       conflictVersion: undefined,
       conflictProject: undefined,
+      conflictWhat: undefined,
+      base: project,
+      saveRetryAt: undefined,
+      journalOffer: undefined,
+      versionPreview: undefined,
+      versionsOpen: false,
     }),
 
   commit: (next0, label, opts = {}) => {

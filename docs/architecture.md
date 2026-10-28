@@ -50,7 +50,7 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   `assets(id, workspace_id, kind, name, mime, size, storage keys, meta jsonb, status)`, `jobs(id, kind,
   status, progress, message, input jsonb, result jsonb, error, project_id, workspace_id, user_id,
   timestamps, locked_by, locked_at)`, `exports`, `share_links(token, project_id, export_id)`,
-  `brand_kits(workspace_id, doc jsonb)`.
+  `brand_kits(workspace_id, doc jsonb)`, `project_versions` (saved versions, v10), `idempotency_keys` (v10).
 - **Object storage**: S3-compatible (`S3_*` env; R2/Railway buckets) with presigned PUT uploads and signed GET;
   dev falls back to local disk `.data/storage` with the same interface.
 - The project document is the `Project` type from core. Asset `src` = storage key; the client resolves media via
@@ -63,6 +63,28 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   are the stretch of the recording between two adjacent pieces of a clip (`struckWords`), and `restoreCut` plays it
   again. Caption tracks follow transcript cuts and restores. `project.fillerWords` is the transcript's filler list;
   speaker labels live on the clip's transcript segments (`speaker`), saved with `PATCH /api/assets/:id`.
+
+## Saving, versions and live updates
+- **Saves** are `PUT /api/projects/:id {project, baseVersion}` (409 with the current document when another save
+  won). The editor merges its changes onto that document when they don't overlap (`apps/web/src/editor/rebase.ts`,
+  clip by clip and field by field) and saves again; only overlapping changes raise the conflict banner. Until the
+  server has them, unsaved changes are kept in the browser (`editor/journal.ts`, localStorage per person and project)
+  and offered back on the next open.
+- **Version history** (`project_versions`, migration v10, `services/versions.ts`, `routes/versions.ts`): every save
+  is kept with author, time, size and a label (autosave, named, before-restore, before-ai), thinned to the last
+  `PROJECT_VERSIONS_KEEP` (50), one an hour for 7 days, one a day for 30 days after, and every named one. List, read,
+  name and restore under `/api/projects/:id/versions`; a restore is a new save that keeps what it replaced.
+- **Base versions on small records**: `PATCH /api/projects/:id` takes `baseVersion`; asset, brand kit and workspace
+  updates answer with an `ETag` of what they edit and refuse a stale `If-Match` with 412 (`etag.ts`). Without one,
+  they write as before.
+- **Idempotency keys** (`idempotency.ts`, table `idempotency_keys`): a POST with `Idempotency-Key` runs once per
+  person and key; a repeat answers with the first (successful) answer for 24 h. The web client sends one with every
+  job-creating request and retries a lost answer with the same key.
+- **Live updates** (`/api/events`, SSE; `events.ts` + `routes/jobs.ts`): one publish function,
+  `ctx().bus.publish(workspaceId, event, data, { id?, inline?, replay? })`. Events carry ids; each workspace's last
+  500 (10 min) are kept, so a stream reopened with Last-Event-ID (or `?lastEventId=`) gets what it missed, or
+  `resync` when that can't be told; `ready` carries the resume point. Streams close when access changes (removed,
+  role lowered, signed out, device revoked: `bus.accessChanged(userId)`).
 
 ## Jobs
 Postgres-backed queue (`SELECT … FOR UPDATE SKIP LOCKED`), polled by the worker loop. Kinds:
@@ -126,7 +148,7 @@ workspaces are the tenancy boundary (projects, assets, brand kit). Roles: owner,
 - **Push**: local writes are journaled (outbox). Assets: `POST /api/uploads {assetId, sha256}` → PUT bytes (skip on 409 exists) → complete. Projects: `PUT /api/projects/:id {baseVersion}`; new local projects `POST /api/projects {id}`.
 - **Conflicts**: a 409 on push (both sides edited since the last sync) marks the project conflicted; the user picks Keep local (force-push over the cloud version), Keep cloud, or Keep both (local becomes "(conflicted copy)" with a new id). Assets are immutable, so they never conflict.
 - Runs on launch, every 60 s while online, and immediately after local saves (debounced); state is surfaced in the top bar (`/api/sync/status`, SSE `sync`).
-- The web editor reloads silently when an SSE `project` event arrives for the open project with no unsaved edits; otherwise it shows the conflict banner.
+- The web editor reloads silently when an SSE `project` event arrives for the open project with no unsaved edits; otherwise it merges them onto the new version, and shows the conflict banner only when both changed the same thing.
 
 ### Desktop hardening (lessons from the Producer 0.1.x review)
 Signed builds, `sandbox: true` + context isolation, a narrow validated preload API (no generic `invoke`), `shell.openExternal` limited to http(s), no bundled test artefacts or personal paths, and skills/configs never written into the user's global `~/.claude`.

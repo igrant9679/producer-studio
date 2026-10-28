@@ -106,9 +106,14 @@ function onWorkspace(w: { id: string; deleted: boolean; brand?: boolean }) {
 }
 
 /** One SSE connection per workspace: asset status for the library, `project` saves for the open project, brand kit saves. */
-export function subscribeWorkspace(workspaceId: string, onProject: (p: { id: string; version: number }) => void): () => void {
+export function subscribeWorkspace(workspaceId: string, onProject: (p: { id: string; version: number }) => void, onResync?: () => void): () => void {
+  // back after missing events that can't be replayed: the library reloads, and the open project checks its version
+  const resync = () => {
+    void loadLibrary(workspaceId)
+    onResync?.()
+  }
   try {
-    return subscribeEvents(workspaceId, { asset: upsertRecord, project: onProject, job: trackJob, workspace: onWorkspace })
+    return subscribeEvents(workspaceId, { asset: upsertRecord, project: onProject, job: trackJob, workspace: onWorkspace, resync })
   } catch {
     return () => undefined
   }

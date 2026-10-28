@@ -1,7 +1,7 @@
 // Centre canvas: StageRenderer preview + selection overlay (move / scale / rotate / text width / crop), snapping to
 // the canvas, guides, safe zones and other objects, group transforms, inline text editing, floating object toolbar,
 // rulers, hand/zoom, drop target for media.
-import type { FrameLayer, ImageItem, Item, TextItem, VideoItem, VisualItem } from '@producer/core'
+import type { FrameLayer, ImageItem, Item, Project, TextItem, VideoItem, VisualItem } from '@producer/core'
 import { StageRenderer, editable, evaluate, findItem, resetTransform, setTextContent, textCss, updateItem, updateTrack } from '@producer/core'
 import clsx from 'clsx'
 import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
@@ -34,6 +34,9 @@ interface Geo {
   /** The item or its track is locked: no handles, no toolbar. */
   locked: boolean
 }
+
+/** What the canvas draws: a saved version on show from Version history (read-only), else the document. */
+const onCanvas = (s: { project: Project; versionPreview?: { project: Project } }) => s.versionPreview?.project ?? s.project
 
 export function Canvas() {
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -79,8 +82,8 @@ export function Canvas() {
   useEffect(() => {
     const root = stageRef.current!
     const st = useEditor.getState()
-    const resolve = makeResolver(() => useEditor.getState().project)
-    const r = new StageRenderer(root, st.project, {
+    const resolve = makeResolver(() => onCanvas(useEditor.getState()))
+    const r = new StageRenderer(root, onCanvas(st), {
       mode: 'preview',
       resolveUrl: (id, kind) => resolve(id, previewVariant(kind)),
       onBuffering: (b) => useEditor.setState({ buffering: b }),
@@ -93,8 +96,8 @@ export function Canvas() {
     let disposed = false
     const media = watchMediaLoading(root, setLoadingMedia, () => !disposed && r.render(useEditor.getState().playhead))
     const unsub = useEditor.subscribe((s, prev) => {
-      const pc = s.project !== prev.project
-      if (pc) r.setProject(s.project)
+      const pc = onCanvas(s) !== onCanvas(prev)
+      if (pc) r.setProject(onCanvas(s))
       if (s.playing !== prev.playing) applyTransport(r, s.playing)
       // buffering starts or ends: the other media pause for it, or carry on
       if (pc || s.playhead !== prev.playhead || s.playing !== prev.playing || s.buffering !== prev.buffering) {
@@ -138,6 +141,8 @@ export function Canvas() {
   }, [])
 
   const onPointerDown = (e: React.PointerEvent) => {
+    // a saved version on show (Version history) is read-only: pan, but nothing to pick
+    if (useEditor.getState().versionPreview && e.button !== 1 && tool !== 'hand') return
     if (e.button === 1 || tool === 'hand') {
       startPan(e)
       return
@@ -259,7 +264,7 @@ export function Canvas() {
 
   const onDoubleClick = (e: React.MouseEvent) => {
     const id = hitTest(e.clientX, e.clientY)
-    if (!id) return
+    if (!id || useEditor.getState().versionPreview) return
     const f = findItem(useEditor.getState().project, id)
     if (f?.item.type === 'text' && editable(f)) useEditor.setState({ selection: [id], editingTextId: id, playing: false })
     if (f?.item.type === 'caption') useEditor.setState({ selection: [id], activeRightTab: 'caption' })
