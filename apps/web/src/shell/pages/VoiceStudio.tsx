@@ -164,7 +164,7 @@ function HistoryRow({ a, onChange, onRemove }: { a: AssetRecord; onChange: (a: A
               setRenaming(false)
               onChange({ ...a, asset: { ...a.asset, name } })
               try {
-                onChange(await api.renameAsset(a.asset.id, name))
+                onChange(await api.renameAsset(a.asset.id, name, a.etag))
               } catch (e) {
                 onChange(a)
                 toastError(e)

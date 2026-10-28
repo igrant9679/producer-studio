@@ -61,15 +61,34 @@ export function noteStatus(path: string, status: number) {
   if (status === 401 && !path.startsWith('/auth/')) onUnauthorized?.()
 }
 
-async function req<T>(method: string, path: string, body?: unknown, init: RequestInit = {}): Promise<T> {
+/**
+ * Base versions (P-14): the ETag a record's GET or update answered with, by path. A later PUT/PATCH to the same path
+ * sends it as If-Match, so a change made elsewhere since is answered 412 instead of being overwritten.
+ */
+const etags = new Map<string, string>()
+const pathOnly = (path: string) => path.split('?')[0]
+
+/** Extra request headers: `ifMatch` (null: none, even a remembered one) and `idempotencyKey`. */
+interface ReqOpts {
+  ifMatch?: string | null
+  idempotencyKey?: string
+}
+
+async function req<T>(method: string, path: string, body?: unknown, opts: ReqOpts = {}): Promise<T> {
+  const headers: Record<string, string> = {}
+  if (body !== undefined) headers['content-type'] = 'application/json'
+  const ifMatch = opts.ifMatch === null ? undefined : opts.ifMatch ?? (method === 'PUT' || method === 'PATCH' ? etags.get(pathOnly(path)) : undefined)
+  if (ifMatch) headers['if-match'] = ifMatch
+  if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey
   const res = await fetch(`/api${path}`, {
     method,
     credentials: 'include',
-    headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
-    ...init,
   })
   noteStatus(path, res.status)
+  const tag = res.headers?.get?.('etag')
+  if (tag && res.ok) etags.set(pathOnly(path), tag)
   if (!res.ok) {
     let err: ApiError = { error: res.statusText }
     try {
@@ -81,6 +100,28 @@ async function req<T>(method: string, path: string, body?: unknown, init: Reques
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
+}
+
+const newKey = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `k${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`)
+/** Waits between tries of a request that starts a job. */
+export const IDEMPOTENT_RETRY_MS = [1000, 3000]
+
+/**
+ * A POST that starts work (an export, a voiceover, a transcription): sent with an Idempotency-Key, and when the
+ * answer is lost (network down, the proxy gave up) sent again with the same key, so the server answers with the job
+ * it already made instead of making a second one.
+ */
+async function reqOnce<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const key = newKey()
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await req<T>(method, path, body, { idempotencyKey: key })
+    } catch (e) {
+      const lost = !(e instanceof HttpError) || e.status === 502 || e.status === 503 || e.status === 504
+      if (!lost || attempt >= IDEMPOTENT_RETRY_MS.length) throw e
+      await new Promise((r) => setTimeout(r, IDEMPOTENT_RETRY_MS[attempt]))
+    }
+  }
 }
 
 const qs = (o: Record<string, string | number | boolean | undefined>) => {
@@ -187,7 +228,8 @@ export const api = {
   // workspaces
   workspaces: () => req<Workspace[]>('GET', '/workspaces'),
   createWorkspace: (name: string) => req<Workspace>('POST', '/workspaces', { name }),
-  renameWorkspace: (id: string, name: string) => req<Workspace>('PATCH', `/workspaces/${id}`, { name }),
+  /** `etag`: the space's base (Workspace.etag); a rename made elsewhere since is refused (412). */
+  renameWorkspace: (id: string, name: string, etag?: string) => req<Workspace>('PATCH', `/workspaces/${id}`, { name }, { ifMatch: etag }),
   deleteWorkspace: (id: string) => req<{ ok: true }>('DELETE', `/workspaces/${id}`),
   members: (id: string) => req<Member[]>('GET', `/workspaces/${id}/members`),
   invite: (id: string, email: string, role: string) => req<{ ok: true; inviteUrl: string; expiresAt: number }>('POST', `/workspaces/${id}/invites`, { email, role }),
@@ -199,6 +241,7 @@ export const api = {
   inviteInfo: (token: string) => req<InviteInfo>('GET', `/invites/${encodeURIComponent(token)}`),
   acceptInvite: (token: string) => req<Workspace>('POST', `/invites/${encodeURIComponent(token)}/accept`),
   brand: (id: string) => req<BrandKitDoc>('GET', `/workspaces/${id}/brand`),
+  /** Sent with the base its last read or save answered with: a save made elsewhere since is refused (412). */
   saveBrand: (id: string, doc: BrandKitDoc) => req<BrandKitDoc>('PUT', `/workspaces/${id}/brand`, doc),
 
   // projects
@@ -207,7 +250,8 @@ export const api = {
   createProject: (body: CreateProjectRequest) => req<ProjectDocResponse>('POST', '/projects', body),
   project: (id: string) => req<ProjectDocResponse>('GET', `/projects/${id}`),
   saveProject: (id: string, project: Project, baseVersion: number) => req<{ version: number; updatedAt: number }>('PUT', `/projects/${id}`, { project, baseVersion }),
-  patchProject: (id: string, patch: { name?: string; trashed?: boolean; isTemplate?: boolean }) => req<ProjectSummary>('PATCH', `/projects/${id}`, patch),
+  /** `baseVersion`: the version the screen showed; a save or rename made since is refused (409). */
+  patchProject: (id: string, patch: { name?: string; trashed?: boolean; isTemplate?: boolean; baseVersion?: number }) => req<ProjectSummary>('PATCH', `/projects/${id}`, patch),
   duplicateProject: (id: string) => req<ProjectSummary>('POST', `/projects/${id}/duplicate`),
   deleteProject: (id: string) => req<{ ok: true }>('DELETE', `/projects/${id}`),
 
@@ -215,9 +259,10 @@ export const api = {
   /** Light records (no transcripts): `asset(id)` has the full one. */
   assets: (workspaceId: string, kind?: string) => listAll<AssetRecord>(`/assets${qs({ workspaceId, kind })}`),
   asset: (id: string) => req<AssetRecord>('GET', `/assets/${id}`),
-  renameAsset: (id: string, name: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { name }),
+  /** `etag`: the record's base (AssetRecord.etag); a change made elsewhere since is refused (412). */
+  renameAsset: (id: string, name: string, etag?: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { name }, { ifMatch: etag }),
   /** A clip's transcript with its speaker labels changed (editors). */
-  setTranscript: (id: string, transcript: Transcript) => req<AssetRecord>('PATCH', `/assets/${id}`, { transcript }),
+  setTranscript: (id: string, transcript: Transcript, etag?: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { transcript }, { ifMatch: etag }),
   deleteAsset: (id: string) => req<{ ok: true }>('DELETE', `/assets/${id}`),
   /** Upload a File: ticket -> PUT bytes -> complete. onProgress 0..1. */
   async upload(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
@@ -247,7 +292,7 @@ export const api = {
     return req<AssetRecord>('POST', `/assets/${ticket.assetId}/complete`)
   },
   /** Re-run processing for a clip that failed (its file must already be in storage). */
-  retryAsset: (id: string) => req<AssetRecord>('POST', `/assets/${id}/complete`),
+  retryAsset: (id: string) => reqOnce<AssetRecord>('POST', `/assets/${id}/complete`),
 
   // jobs
   job: <R = unknown>(id: string) => req<Job<R>>('GET', `/jobs/${id}`),
@@ -255,17 +300,17 @@ export const api = {
   cancelJob: (id: string) => req<Job>('POST', `/jobs/${id}/cancel`),
 
   // ai
-  transcribe: (assetId: string, language?: string) => req<Job<{ assetId: string; transcript: Transcript }>>('POST', '/ai/transcribe', { assetId, language }),
-  tts: (body: TtsRequest) => req<Job<{ asset: AssetRecord; duration: number }>>('POST', '/ai/tts', body),
+  transcribe: (assetId: string, language?: string) => reqOnce<Job<{ assetId: string; transcript: Transcript }>>('POST', '/ai/transcribe', { assetId, language }),
+  tts: (body: TtsRequest) => reqOnce<Job<{ asset: AssetRecord; duration: number }>>('POST', '/ai/tts', body),
   voices: (workspaceId?: string) => req<Voice[]>('GET', `/ai/voices${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   voiceSampleUrl: (id: string) => `/api/ai/voices/${encodeURIComponent(id)}/sample`,
   write: (body: WriteRequest, onDelta: (text: string) => void, signal?: AbortSignal) =>
     postStream('/ai/write', body, (ev, data) => {
       if (ev === 'delta') onDelta((data as { text: string }).text)
     }, signal),
-  produceScript: (body: ProduceScriptRequest) => req<Job<{ script: { scenes: ScriptScene[] } }>>('POST', '/ai/produce/script', body),
+  produceScript: (body: ProduceScriptRequest) => reqOnce<Job<{ script: { scenes: ScriptScene[] } }>>('POST', '/ai/produce/script', body),
   /** 409 { details: { reason: 'edited' } }: the timeline was edited since the last assembly (send replace or intoCopy). */
-  produceAssemble: (body: ProduceAssembleRequest) => req<Job<{ version: number; notes?: string[] }>>('POST', '/ai/produce/assemble', body),
+  produceAssemble: (body: ProduceAssembleRequest) => reqOnce<Job<{ version: number; notes?: string[] }>>('POST', '/ai/produce/assemble', body),
   saveProducerDraft: (body: ProduceDraftRequest) => req<{ version: number }>('PUT', '/ai/produce/draft', body),
   produceCapabilities: (workspaceId: string) => req<ProduceCapabilities>('GET', `/ai/produce/capabilities${qs({ workspaceId })}`),
   assistant: (body: AssistantRequest, on: { text?: (d: string) => void; tool?: (name: string, summary: string) => void }, signal?: AbortSignal) =>
@@ -282,9 +327,9 @@ export const api = {
     }),
 
   // export / share / templates
-  exportProject: (id: string, body: ExportRequest) => req<Job<ExportResult>>('POST', `/projects/${id}/export`, body),
+  exportProject: (id: string, body: ExportRequest) => reqOnce<Job<ExportResult>>('POST', `/projects/${id}/export`, body),
   /** Scene changes in a video clip's file (E-10): a short job; `from`/`to` are seconds into the file. */
-  detectScenes: (assetId: string, body: { from?: number; to?: number; threshold?: number } = {}) => req<Job<SceneCuts>>('POST', `/assets/${assetId}/scenes`, body),
+  detectScenes: (assetId: string, body: { from?: number; to?: number; threshold?: number } = {}) => reqOnce<Job<SceneCuts>>('POST', `/assets/${assetId}/scenes`, body),
   exports: (projectId: string) => req<ExportRecord[]>('GET', `/exports${qs({ projectId })}`),
   share: (id: string, exportId?: string) => req<ShareLink>('POST', `/projects/${id}/share`, { exportId }),
   shares: (id: string) => req<ShareLink[]>('GET', `/projects/${id}/shares`),

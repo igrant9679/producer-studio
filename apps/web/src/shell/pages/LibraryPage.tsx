@@ -192,7 +192,8 @@ function ProjectsTab({ trash, q }: { trash: boolean; q: string }) {
   const rename = (p: ProjectSummary) => (name: string) => {
     setRenaming(undefined)
     patchLocal(p.id, { name })
-    void act(() => api.patchProject(p.id, { name }))
+    // with the version this list showed: a save or rename made elsewhere since is refused, and the list reloads
+    void act(() => api.patchProject(p.id, { name, baseVersion: p.version }))
   }
   const open = (p: ProjectSummary) => (trash ? undefined : navigate(projectPath(p)))
   const allSelected = list.length > 0 && list.every((p) => sel.has(p.id))
@@ -543,7 +544,7 @@ function AssetsTab({ q }: { q: string }) {
                         setRenaming(undefined)
                         upsert({ ...a, asset: { ...a.asset, name } })
                         try {
-                          upsert(await api.renameAsset(a.asset.id, name))
+                          upsert(await api.renameAsset(a.asset.id, name, a.etag))
                         } catch (e) {
                           upsert(a)
                           toastError(e)

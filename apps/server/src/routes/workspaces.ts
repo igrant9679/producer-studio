@@ -8,6 +8,7 @@ import { brandKits, exportsTable, invites, jobs, memberships, projects, shareLin
 import { HttpError, body, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { newId, randomToken } from '../ids'
 import { jobsDeleted } from '../jobs/queue'
+import { checkIfMatch, etagOf, setEtag } from '../etag'
 
 export async function createWorkspace(userId: string, name: string, personal = false): Promise<Workspace> {
   const id = newId('ws')
@@ -15,7 +16,7 @@ export async function createWorkspace(userId: string, name: string, personal = f
   const db = ctx().db
   await db.insert(workspaces).values({ id, name, personal, createdBy: userId, createdAt: now })
   await db.insert(memberships).values({ workspaceId: id, userId, role: 'owner', createdAt: now })
-  return { id, name, role: 'owner', personal, memberCount: 1 }
+  return { id, name, role: 'owner', personal, memberCount: 1, etag: etagOf({ name }) }
 }
 
 export async function listWorkspaces(userId: string): Promise<Workspace[]> {
@@ -35,7 +36,7 @@ export async function listWorkspaces(userId: string): Promise<Workspace[]> {
   const byWs = new Map(counts.map((c) => [c.ws, Number(c.n)]))
   // personal workspace first
   return rows
-    .map((r) => ({ id: r.w.id, name: r.w.name, role: r.role as Role, personal: r.w.personal, memberCount: byWs.get(r.w.id) ?? 1 }))
+    .map((r) => ({ id: r.w.id, name: r.w.name, role: r.role as Role, personal: r.w.personal, memberCount: byWs.get(r.w.id) ?? 1, etag: etagOf({ name: r.w.name }) }))
     .sort((a, b) => Number(b.personal) - Number(a.personal))
 }
 
@@ -110,7 +111,11 @@ const NameSchema = z.object({ name: z.string().trim().min(1).max(80) })
 workspaceRoutes.patch('/:id', async (c) => {
   const u = requireUser(c)
   const b = await body(c, NameSchema)
-  return c.json(await renameWorkspace(u.id, c.req.param('id'), b.name))
+  const cur = (await ctx().db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, c.req.param('id'))).limit(1))[0]
+  if (cur) checkIfMatch(c, { name: cur.name }, 'This space')
+  const ws = await renameWorkspace(u.id, c.req.param('id'), b.name)
+  if (ws.etag) c.header('ETag', ws.etag)
+  return c.json(ws)
 })
 
 workspaceRoutes.delete('/:id', async (c) => {
@@ -245,7 +250,9 @@ workspaceRoutes.get('/:id/brand', async (c) => {
   const u = requireUser(c)
   const id = c.req.param('id')
   await requireRole(u.id, id, 'viewer')
-  return c.json(await getBrand(id))
+  const doc = await getBrand(id)
+  setEtag(c, doc)
+  return c.json(doc)
 })
 
 workspaceRoutes.put('/:id/brand', async (c) => {
@@ -253,6 +260,7 @@ workspaceRoutes.put('/:id/brand', async (c) => {
   const id = c.req.param('id')
   await requireRole(u.id, id, 'editor')
   const doc = (await body(c, BrandSchema)) as BrandKitDoc
+  checkIfMatch(c, await getBrand(id), 'The brand kit')
   const known = new Set<string>(FONTS)
   for (const f of [doc.fonts.headline, doc.fonts.body]) if (!known.has(f)) throw new HttpError(400, 'invalid', `Unknown font "${f}". Available: ${FONTS.join(', ')}`)
   const now = Date.now()
@@ -263,6 +271,7 @@ workspaceRoutes.put('/:id/brand', async (c) => {
   // open Brand kit pages and editors reload it
   const ev = { id, deleted: false, brand: true }
   ctx().bus.publish(id, 'workspace', ev, { id, inline: ev })
+  setEtag(c, doc)
   return c.json(doc)
 })
 

@@ -7,7 +7,8 @@ import type { UploadTicket } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
-import { assetRecord } from '../dto'
+import { assetEditable, assetRecord } from '../dto'
+import { checkIfMatch } from '../etag'
 import { HttpError, body, invalid, requireRole } from '../http'
 import { newId } from '../ids'
 import { cancelJobsOfAsset, enqueue } from '../jobs/queue'
@@ -193,7 +194,9 @@ assetRoutes.get('/:id', async (c) => {
   const u = requireUser(c)
   const row = await loadAsset(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'viewer')
-  return c.json(assetRecord(row))
+  const rec = assetRecord(row)
+  c.header('ETag', rec.etag!)
+  return c.json(rec)
 })
 
 /** A clip's transcript as a desktop sends one it made (PATCH /api/assets/:id). */
@@ -218,7 +221,10 @@ assetRoutes.patch('/:id', async (c) => {
   const row = await loadAsset(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'editor')
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), transcript: TranscriptSchema.optional() }).refine((x) => x.name !== undefined || x.transcript !== undefined, 'Nothing to change'))
-  return c.json(assetRecord(await updateAsset(row.id, { ...(b.name !== undefined ? { name: b.name } : {}), ...(b.transcript ? { meta: { transcript: b.transcript } } : {}) })))
+  checkIfMatch(c, assetEditable(row), 'This clip')
+  const rec = assetRecord(await updateAsset(row.id, { ...(b.name !== undefined ? { name: b.name } : {}), ...(b.transcript ? { meta: { transcript: b.transcript } } : {}) }))
+  c.header('ETag', rec.etag!)
+  return c.json(rec)
 })
 
 assetRoutes.delete('/:id', async (c) => {

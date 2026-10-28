@@ -31,6 +31,8 @@ export interface Workspace {
   role: Role
   personal: boolean
   memberCount: number
+  /** Base version of its name: send as If-Match with PATCH /api/workspaces/:id (412 if renamed since). */
+  etag?: string
 }
 
 // ---- auth ----
@@ -287,6 +289,8 @@ export interface AssetRecord {
   light?: true
   /** On a light copy of a transcribed clip: which transcript it has (a different value means a different one). */
   transcriptRev?: string
+  /** Base version of its name and transcript: send as If-Match with PATCH /api/assets/:id (412 if changed since). */
+  etag?: string
 }
 
 /** Tells one transcript from another without sending it (cheap: no hashing of what can be an hour of words). */

@@ -2,6 +2,7 @@
 import { transcriptRev, type Asset, type AssetRecord, type AssetStatus, type ExportRecord, type Job, type JobKind, type JobStatus, type ProjectSummary, type User } from '@producer/core'
 import type { AssetMeta, assets, exportsTable, jobs, projects, users } from './db/schema'
 import { WAVEFORM_RATE, inlineWaveform } from './media/waveform'
+import { etagOf } from './etag'
 
 export const mediaPath = (assetId: string, variant: 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' | 'waveform') => `/api/media/${encodeURIComponent(assetId)}/${variant}`
 
@@ -79,12 +80,19 @@ export function assetRecord(a: typeof assets.$inferSelect, opts: { light?: boole
     error: a.error ?? undefined,
     origin: a.origin,
     createdAt: a.createdAt,
+    etag: etagOf(assetEditable(a)),
   }
   if (!opts.light) return rec
   const { transcript, ...rest } = doc
   return { ...rec, asset: rest, light: true, ...(transcript ? { transcriptRev: transcriptRev(transcript) } : {}) }
 }
 
+
+/** What PATCH /api/assets/:id changes, for its If-Match base (etag.ts). */
+export function assetEditable(a: typeof assets.$inferSelect) {
+  const t = a.meta?.transcript
+  return { name: a.name, transcript: t ? transcriptRev(t) : null }
+}
 
 export function jobDto(j: typeof jobs.$inferSelect): Job {
   return {

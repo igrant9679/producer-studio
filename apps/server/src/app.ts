@@ -9,6 +9,7 @@ import { ctx } from './context'
 import { assets, jobs, projects } from './db/schema'
 import { assetRecord, jobDto } from './dto'
 import { HttpError } from './http'
+import { idempotency } from './idempotency'
 import { log } from './log'
 import { aiConfigured } from './ai/claude'
 import { aiRoutes } from './routes/ai'
@@ -102,6 +103,7 @@ export function createApp() {
     return bodyLimit({ maxSize: max, onError: (x) => x.json({ error: 'Request body too large', code: 'quota' }, 413) })(c, next)
   })
   app.use('/api/*', sessionMiddleware)
+  app.use('/api/*', idempotency)
 
   // desktop-only routes first: they shadow signup and (while linked) workspace creation
   if (ctx().config.mode === 'desktop') app.route('/api', desktopRoutes)

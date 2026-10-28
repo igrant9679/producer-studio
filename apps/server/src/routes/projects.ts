@@ -9,7 +9,7 @@ import { projects } from '../db/schema'
 import { projectSummary } from '../dto'
 import { HttpError, body, invalid, notFound, requireRole } from '../http'
 import { getLook, starterProject } from '../services/looks'
-import { hydrateAssets, insertProject, loadProjectRow, saveProjectDoc, validateProject, withFreshIds } from '../services/projects'
+import { hydrateAssets, insertProject, loadProjectRow, saveProjectDoc, validateProject, withFreshIds, type ProjectRow } from '../services/projects'
 import { recordVersion } from '../services/versions'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 import { getBrand } from './workspaces'
@@ -142,7 +142,9 @@ projectRoutes.patch('/:id', async (c) => {
   const id = c.req.param('id')
   const row = await loadProjectRow(id)
   await requireRole(u.id, row.workspaceId, 'editor')
-  const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), trashed: z.boolean().optional(), isTemplate: z.boolean().optional() }))
+  const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), trashed: z.boolean().optional(), isTemplate: z.boolean().optional(), baseVersion: z.number().int().optional() }))
+  // a rename made from a stale screen (the project was saved or renamed since it was listed) must not win unseen
+  if (b.baseVersion !== undefined && b.baseVersion !== row.version) throw staleProject(row)
   const now = Date.now()
   const set: PgUpdateSetSource<typeof projects> = { updatedAt: now }
   if (b.name !== undefined) {
@@ -153,12 +155,19 @@ projectRoutes.patch('/:id', async (c) => {
   }
   if (b.trashed !== undefined) set.trashedAt = b.trashed ? now : null
   if (b.isTemplate !== undefined) set.isTemplate = b.isTemplate
-  const [updated] = await ctx().db.update(projects).set(set).where(eq(projects.id, id)).returning()
+  const conds = [eq(projects.id, id)]
+  if (b.baseVersion !== undefined) conds.push(eq(projects.version, b.baseVersion))
+  const [updated] = await ctx().db.update(projects).set(set).where(and(...conds)).returning()
+  if (!updated) throw staleProject(await loadProjectRow(id))
   if (b.name !== undefined) await recordVersion(updated, { userId: u.id, note: 'Renamed' })
   // trash, restore and template changes keep the version but still change what other screens list
   announce(updated)
   return c.json({ ...projectSummary(updated), version: updated.version })
 })
+
+function staleProject(cur: ProjectRow) {
+  return new HttpError(409, 'conflict', `This project was changed since you opened this list (it’s now “${cur.name}”). Check it and try again.`, { version: cur.version, summary: projectSummary(cur) })
+}
 
 projectRoutes.post('/:id/duplicate', async (c) => {
   const u = requireUser(c)
