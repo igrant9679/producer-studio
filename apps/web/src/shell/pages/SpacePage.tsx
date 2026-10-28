@@ -1,11 +1,13 @@
-import { Check, Clock, Copy, Crown, Eye, Pencil, Plus, Settings2, Trash2, UserPlus, Users } from 'lucide-react'
-import type { Member } from '@producer/core'
+import { Check, Clock, Copy, Crown, Eye, Pencil, Plus, Send, Settings2, Trash2, UserPlus, Users } from 'lucide-react'
+import type { Member, PendingInvite } from '@producer/core'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
+import { accountApi } from '../../lib/accountApi'
 import { useSession } from '../../lib/session'
 import { toast, toastError } from '../../lib/toast'
-import { absoluteUrl, copyText } from '../util'
+import { useSystem } from '../system'
+import { absoluteUrl, copyText, relativeTime } from '../util'
 import { CreateSpaceModal, DeleteSpaceModal, InviteForm, RenameSpaceModal } from '../modals'
 import { Avatar, ConfirmDialog, EmptyState, spaceColor, useAsync, usePageTitle } from '../ui'
 
@@ -13,6 +15,15 @@ const ROLE: Record<string, { label: string; icon: React.ReactNode; desc: string 
   owner: { label: 'Owner', icon: <Crown size={13} />, desc: 'Manage members, brand kit and everything in the space' },
   editor: { label: 'Editor', icon: <Pencil size={13} />, desc: 'Create and edit projects, upload media' },
   viewer: { label: 'Viewer', icon: <Eye size={13} />, desc: 'View projects and exports' },
+}
+
+const shortDate = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+
+/** The second line of a waiting invite: its role, when it was emailed, and until when the link works. */
+export function inviteLine(p: PendingInvite): string {
+  const role = ROLE[p.role]?.label ?? p.role
+  if (p.status === 'expired') return `${role} · expired ${shortDate(p.expiresAt)}; send it again for 7 more days`
+  return `${role} · ${p.sentAt ? `emailed ${relativeTime(p.sentAt)} · ` : ''}link works until ${shortDate(p.expiresAt)}`
 }
 
 export default function SpacePage() {
@@ -30,15 +41,21 @@ export default function SpacePage() {
   const navigate = useNavigate()
   const refreshWorkspaces = useSession((s) => s.refreshWorkspaces)
   const [removing, setRemoving] = useState<Member>()
+  const [handingOver, setHandingOver] = useState<Member>()
+  const [handTo, setHandTo] = useState('')
   const [busy, setBusy] = useState<string>()
-  async function changeRole(m: Member, role: Member['role']) {
+  const mail = useSystem((s) => !!s.info?.mail)
+  async function changeRole(m: Member, role: Member['role'], undoing = false) {
     if (!workspaceId || role === m.role) return
     setBusy(m.userId)
     try {
       await api.setMemberRole(workspaceId, m.userId, role)
       members.setData((cur) => (cur ?? []).map((x) => (x.userId === m.userId ? { ...x, role } : x)))
       if (m.userId === user?.id) await refreshWorkspaces()
-      toast(`${m.name} is now ${ROLE[role]?.label.toLowerCase() ?? role}`)
+      const was = m.role
+      // stepping yourself down leaves you no way back: no Undo then
+      const canUndo = !undoing && m.userId !== user?.id
+      toast(`${m.name} is now ${ROLE[role]?.label.toLowerCase() ?? role}`, canUndo ? { label: 'Undo', run: () => void changeRole({ ...m, role }, was, true) } : undefined)
     } catch (e) {
       toastError(e)
     } finally {
@@ -63,6 +80,34 @@ export default function SpacePage() {
       }
     } catch (e) {
       toastError(e)
+    } finally {
+      setBusy(undefined)
+    }
+  }
+  async function resend(p: PendingInvite) {
+    if (!workspaceId) return
+    setBusy(p.token)
+    try {
+      const r = await accountApi.resendInvite(workspaceId, p.token)
+      toast(r.emailed ? `Sent the invite to ${p.email} again` : `The link for ${p.email} works for 7 more days. Copy it and send it to them.`)
+      pending.reload()
+    } catch (e) {
+      toastError(e, 'Couldn’t send it again')
+    } finally {
+      setBusy(undefined)
+    }
+  }
+  async function handOver(m: Member) {
+    if (!workspaceId) return
+    setBusy('handover')
+    try {
+      await accountApi.transferOwnership(workspaceId, m.userId)
+      setHandingOver(undefined)
+      await refreshWorkspaces()
+      members.reload()
+      toast(`${m.name} is now an owner of “${ws?.name}”. You’re an editor.`)
+    } catch (e) {
+      toastError(e, 'Couldn’t hand the space over')
     } finally {
       setBusy(undefined)
     }
@@ -100,7 +145,7 @@ export default function SpacePage() {
         </div>
       ) : (
         <section className="card ps-brand-sec" style={{ marginBottom: 18 }}>
-          <div className="ps-brand-sec-head"><UserPlus size={15} /> <strong>Invite people</strong><span className="muted">Make a link for one person to join {ws?.name}</span></div>
+          <div className="ps-brand-sec-head"><UserPlus size={15} /> <strong>Invite people</strong><span className="muted">{mail ? 'Email' : 'Make'} a link for one person to join {ws?.name}</span></div>
           {isOwner && workspaceId ? (
             <InviteForm
               workspaceId={workspaceId}
@@ -115,24 +160,33 @@ export default function SpacePage() {
           {isOwner && !!pending.data?.length && (
             <div className="ps-members" style={{ marginTop: 16 }}>
               <div className="muted" style={{ fontSize: '0.75rem', marginBottom: 6 }}>Waiting to be accepted</div>
-              {pending.data.map((p) => (
-                <div key={p.token} className="ps-member">
-                  <Clock size={18} style={{ color: 'var(--text-3)', flex: 'none' }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <strong>{p.email}</strong>
-                    <span>{ROLE[p.role]?.label ?? p.role} · link works until {new Date(p.expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
+              {pending.data.map((p) => {
+                const expired = p.status === 'expired'
+                return (
+                  <div key={p.token} className="ps-member">
+                    <Clock size={18} style={{ color: expired ? 'var(--danger)' : 'var(--text-3)', flex: 'none' }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <strong>{p.email}</strong>
+                      <span>{inviteLine(p)}</span>
+                    </div>
+                    {!expired && (
+                      <button
+                        className="btn sm"
+                        aria-label={`Copy the invite link for ${p.email}`}
+                        onClick={async () => {
+                          if (await copyText(absoluteUrl(p.inviteUrl))) setCopied(p.token)
+                        }}
+                      >
+                        {copied === p.token ? <Check size={14} /> : <Copy size={14} />} {copied === p.token ? 'Copied' : 'Copy link'}
+                      </button>
+                    )}
+                    <button className="btn sm" disabled={busy === p.token} onClick={() => void resend(p)} aria-label={`${mail ? 'Resend the invite to' : 'Renew the invite link for'} ${p.email}`}>
+                      <Send size={14} /> {mail ? 'Resend' : 'Renew'}
+                    </button>
+                    <button className="btn sm ghost" onClick={() => void withdraw(p.token, p.email)} aria-label={`Withdraw the invite for ${p.email}`}>Withdraw</button>
                   </div>
-                  <button
-                    className="btn sm"
-                    onClick={async () => {
-                      if (await copyText(absoluteUrl(p.inviteUrl))) setCopied(p.token)
-                    }}
-                  >
-                    {copied === p.token ? <Check size={14} /> : <Copy size={14} />} {copied === p.token ? 'Copied' : 'Copy link'}
-                  </button>
-                  <button className="btn sm ghost" onClick={() => void withdraw(p.token, p.email)}>Withdraw</button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </section>
@@ -183,6 +237,25 @@ export default function SpacePage() {
             </div>
             <button className="btn sm" onClick={() => setModal('rename')}><Pencil size={14} /> Rename</button>
           </div>
+          {!ws.personal && (
+            <div className="ps-space-setting">
+              <div>
+                <strong>Hand over this space</strong>
+                <span className="muted">Make someone else an owner and step down to editor in one go.</span>
+              </div>
+              <div className="row" style={{ gap: 6 }}>
+                <select className="input" style={{ width: 170 }} value={handTo} onChange={(e) => setHandTo(e.target.value)} aria-label="Member to hand the space to">
+                  <option value="">Choose a member…</option>
+                  {(members.data ?? [])
+                    .filter((m) => m.userId !== user?.id)
+                    .map((m) => (
+                      <option key={m.userId} value={m.userId}>{m.name}</option>
+                    ))}
+                </select>
+                <button className="btn sm" disabled={!handTo} onClick={() => setHandingOver(members.data?.find((m) => m.userId === handTo))}><Crown size={14} /> Hand over</button>
+              </div>
+            </div>
+          )}
           <div className="ps-space-setting">
             <div>
               <strong>Delete this space</strong>
@@ -223,6 +296,16 @@ export default function SpacePage() {
           busy={busy === removing.userId}
           onConfirm={() => void remove(removing)}
           onClose={() => setRemoving(undefined)}
+        />
+      )}
+      {handingOver && (
+        <ConfirmDialog
+          title={`Hand “${ws?.name}” over to ${handingOver.name}?`}
+          body={`${handingOver.name} becomes an owner and you become an editor. You can only get ownership back if an owner gives it to you.`}
+          confirmLabel="Hand over"
+          busy={busy === 'handover'}
+          onConfirm={() => void handOver(handingOver)}
+          onClose={() => setHandingOver(undefined)}
         />
       )}
       {modal === 'create' && <CreateSpaceModal onClose={() => setModal(undefined)} />}

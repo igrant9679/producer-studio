@@ -183,6 +183,7 @@ export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; on
   const [err, setErr] = useState<string>()
   const [copied, setCopied] = useState(false)
   const [confirmOwner, setConfirmOwner] = useState(false)
+  const [emailed, setEmailed] = useState(false)
   function submit(e: FormEvent) {
     e.preventDefault()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return setErr('Enter a valid email address')
@@ -196,6 +197,7 @@ export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; on
     setErr(undefined)
     try {
       const r = await api.invite(workspaceId, email.trim(), role)
+      setEmailed(!!r.emailed)
       setUrl(absoluteUrl(r.inviteUrl))
       setSentTo(email.trim())
       setCopied(false)
@@ -225,7 +227,9 @@ export function InviteForm({ workspaceId, onInvited }: { workspaceId: string; on
         <div className="ps-alert info" style={{ marginTop: 14, alignItems: 'center' }}>
           <Link2 size={16} style={{ flex: 'none' }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, marginBottom: 2 }}>Invite link ready. Send it to {sentTo}: only that address can use it, once, within 7 days.</div>
+            <div style={{ fontWeight: 600, marginBottom: 2 }} role="status">
+              {emailed ? `Invite emailed to ${sentTo}. Only that address can use the link, once, within 7 days. You can copy it too:` : `Invite link ready. Send it to ${sentTo}: only that address can use it, once, within 7 days.`}
+            </div>
             <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', wordBreak: 'break-all' }}>{url}</code>
           </div>
           <button

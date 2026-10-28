@@ -238,7 +238,7 @@ export const api = {
   renameWorkspace: (id: string, name: string, etag?: string) => req<Workspace>('PATCH', `/workspaces/${id}`, { name }, { ifMatch: etag }),
   deleteWorkspace: (id: string) => req<{ ok: true }>('DELETE', `/workspaces/${id}`),
   members: (id: string) => req<Member[]>('GET', `/workspaces/${id}/members`),
-  invite: (id: string, email: string, role: string) => req<{ ok: true; inviteUrl: string; expiresAt: number }>('POST', `/workspaces/${id}/invites`, { email, role }),
+  invite: (id: string, email: string, role: string) => req<{ ok: true; inviteUrl: string; expiresAt: number; emailed?: boolean }>('POST', `/workspaces/${id}/invites`, { email, role }),
   setMemberRole: (id: string, userId: string, role: Member['role']) => req<{ ok: true; role: Member['role'] }>('PATCH', `/workspaces/${id}/members/${encodeURIComponent(userId)}`, { role }),
   /** Remove a member (owner), or leave when `userId` is your own. */
   removeMember: (id: string, userId: string) => req<{ ok: true }>('DELETE', `/workspaces/${id}/members/${encodeURIComponent(userId)}`),
