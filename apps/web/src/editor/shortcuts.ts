@@ -4,6 +4,7 @@
 // Delete, Backspace, Escape and Ctrl+A are its own.
 import { useEffect } from 'react'
 import * as A from './actions'
+import { addMarkerAtPlayhead, jumpToMarker } from './markerActions'
 import { flush } from './persistence'
 import { useEditor } from './store'
 
@@ -92,7 +93,10 @@ export function handleKey(e: KeyboardEvent) {
   if (e.shiftKey && (k === ')' || k === '0')) return done(), s.set({ canvasZoom: 0.5 })
   if (e.shiftKey && (k === '!' || k === '1')) return done(), s.set({ canvasZoom: 1 })
   if (e.shiftKey && (k === '@' || k === '2')) return done(), s.set({ canvasZoom: 2 })
+  // by key position too: Alt+M types another character on a Mac
+  if ((lower === 'm' || e.code === 'KeyM') && (e.shiftKey || e.altKey)) return done(), jumpToMarker(e.shiftKey ? 1 : -1)
   if (e.shiftKey || e.altKey) return
+  if (lower === 'm') return done(), void addMarkerAtPlayhead()
   if (lower === 's') return done(), s.set({ snapping: !s.snapping })
   if (lower === 'v') return done(), s.set({ canvasTool: 'select' })
   if (lower === 'h') return done(), s.set({ canvasTool: 'hand' })

@@ -23,7 +23,9 @@ import {
 } from '@producer/core'
 import clsx from 'clsx'
 import {
+  Activity,
   ArrowLeftRight,
+  Bookmark,
   AudioLines,
   ClipboardPaste,
   Copy,
@@ -62,6 +64,8 @@ import {
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
 import { Menu, MenuItem, Slider } from './controls'
+import { addMarkerAtPlayhead, clearBeatMarkers, detectBeatsOn } from './markerActions'
+import { MarkerFlags, MarkerLines } from './Markers'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
 import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
@@ -717,6 +721,7 @@ function TimelineBody() {
                   <div className="tl-ghost drop" style={{ left: dropHint.x, top: dropHint.target.row.top, width: dropHint.w, height: dropHint.target.row.height }} />
                 )
               )}
+              <MarkerLines zoom={zoom} />
               <PlayheadLine />
             </div>
           </div>
@@ -803,7 +808,7 @@ function TimelineToolbar({ viewW }: { viewW: number }) {
         <ToolBtn
           icon={<Magnet size={15} />}
           title={`Snapping ${snapping ? 'on' : 'off'}`}
-          desc="While dragging, clips snap to the playhead and to each other's edges."
+          desc="While dragging or trimming, clips snap to the playhead, markers, keyframes and each other's edges. Hold Alt to drag freely."
           kbd="S"
           active={snapping}
           onClick={() => useEditor.setState({ snapping: !snapping })}
@@ -883,6 +888,7 @@ const Ruler = memo(function Ruler({ width, zoom, fps, duration, onPointerDown }:
           {rulerLabel(t, major, fps)}
         </span>
       ))}
+      <MarkerFlags zoom={zoom} fps={fps} />
       <PlayheadHead onPointerDown={onPointerDown} />
     </div>
   )
@@ -1328,6 +1334,9 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
               <MenuItem icon={<Snowflake size={14} />} label="Freeze frame" onClick={run(() => A.freezeClip(it.id, ctx.time))} />
             </>
           )}
+          {(it.type === 'audio' || (it.type === 'video' && it.freezeAt === undefined)) && (
+            <MenuItem icon={<Activity size={14} />} label="Detect beats" onClick={run(() => void detectBeatsOn(it.id))} />
+          )}
           {(it.type === 'video' || it.type === 'audio') && (
             <MenuItem icon={<FileText size={14} />} label="Transcript editing" onClick={run(() => useEditor.setState({ activeLeftTab: 'transcript', leftCollapsed: false }))} />
           )}
@@ -1349,6 +1358,8 @@ function ContextMenu({ ctx, onClose, onTransition }: { ctx: Ctx; onClose: () => 
           <MenuItem icon={<ClipboardPaste size={14} />} label="Paste at playhead" kbd="Ctrl V" onClick={run(A.paste)} disabled={!clipboard.length} />
           <MenuItem icon={<Layers size={14} />} label="Select all" kbd="Ctrl A" onClick={run(A.selectAll)} />
           <MenuItem icon={<Scissors size={14} />} label="Split at playhead" kbd="Ctrl B" onClick={run(A.split)} />
+          <MenuItem icon={<Bookmark size={14} />} label="Add marker at playhead" kbd="M" onClick={run(() => void addMarkerAtPlayhead())} />
+          {project.markers?.some((m) => m.beat) && <MenuItem icon={<Trash2 size={14} />} label="Remove beat markers" onClick={run(clearBeatMarkers)} />}
         </>
       )}
     </Menu>

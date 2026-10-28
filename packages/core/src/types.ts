@@ -345,6 +345,15 @@ export interface BrandKit {
   logoAssetId?: Id
 }
 
+/** A named point on the timeline (M adds one at the playhead); `beat` ones come from beat detection on a music clip. */
+export interface Marker {
+  id: Id
+  /** Timeline seconds. */
+  t: number
+  name?: string
+  beat?: boolean
+}
+
 export interface Project {
   id: Id
   schema: 1
@@ -360,6 +369,8 @@ export interface Project {
   tracks: Track[]
   assets: Record<Id, Asset>
   brand?: BrandKit
+  /** Timeline markers, by time. */
+  markers?: Marker[]
   /** Producer AI metadata (brief, script) for projects built by the AI pipeline. */
   ai?: ProducerMeta
   createdAt: number

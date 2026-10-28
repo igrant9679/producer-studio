@@ -598,6 +598,16 @@
 .tl-tick { position: absolute; top: 4px; font: 0.625rem var(--font-mono); color: var(--text-3); padding-left: 4px; pointer-events: none; white-space: nowrap; }
 .tl-ruler-end { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: .6; pointer-events: none; }
 .tl-ph-head { position: absolute; left: -6px; top: 10px; width: 13px; height: 18px; cursor: ew-resize; z-index: 3; }
+.tl-markers { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.tl-marker { position: absolute; top: 0; height: 15px; margin-left: -5px; padding: 0; display: flex; align-items: flex-start; gap: 3px; background: transparent; border: 0; color: var(--amber); cursor: grab; pointer-events: auto; }
+.tl-marker svg { flex: none; fill: currentColor; filter: drop-shadow(0 1px 1px var(--shadow-drop)); }
+.tl-marker.beat { color: var(--cyan); }
+.tl-marker.beat svg { transform: scale(.75); transform-origin: 50% 0; }
+.tl-marker .nm { font: 600 0.625rem var(--font); color: var(--text-2); white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; line-height: 12px; }
+.tl-marker:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+.tl-marker-input { position: absolute; top: 1px; z-index: 5; width: 140px; height: 20px; padding: 0 6px; font: 0.6875rem var(--font); color: var(--text); background: var(--surface); border: 1px solid var(--accent); border-radius: 4px; pointer-events: auto; }
+.tl-marker-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--amber); opacity: .35; pointer-events: none; }
+.tl-marker-line.beat { background: var(--cyan); opacity: .18; }
 .tl-ph-head svg { display: block; fill: var(--playhead); filter: drop-shadow(0 1px 2px var(--shadow-drop)); }
 .tl-rows { position: relative; min-width: 100%; }
 .tl-row { position: absolute; left: 0; right: 0; display: flex; }

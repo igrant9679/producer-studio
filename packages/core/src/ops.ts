@@ -721,7 +721,9 @@ export function snapPoints(p: Project, exclude: Set<string>, playhead?: number):
       if (exclude.has(it.id)) continue
       pts.add(round(it.start, 4))
       pts.add(round(itemEnd(it), 4))
+      if ('keyframes' in it && it.keyframes) for (const list of Object.values(it.keyframes)) for (const k of list ?? []) if (k.t > EPS && k.t < it.duration - EPS) pts.add(round(it.start + k.t, 4))
     }
+  for (const m of p.markers ?? []) pts.add(round(m.t, 4))
   return [...pts].sort((a, b) => a - b)
 }
 
