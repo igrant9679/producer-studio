@@ -8,13 +8,13 @@ import { buildProducerTimeline, syntheticTranscript } from '../ai/produce'
 import { ctx } from '../context'
 import { assets, exportsTable, jobs } from '../db/schema'
 import { assetDoc } from '../dto'
-import { cancelJob, claimNext, enqueue, getJob, onCancel } from '../jobs/queue'
+import { cancelJob, enqueue, getJob, onCancel } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
 import { probe, processAsset } from '../media/process'
 import { type RenderSteps, exportRender, lintComposition, parseRenderProgress, prepareRenderDir, renderArgs, renderWorkers, targetSize } from '../render/export'
 import { createAssetFromFile } from '../services/assets'
-import { type Client, setup, signup } from './helpers'
+import { type Client, claimJob, setup, signup } from './helpers'
 
 // every ffmpeg call still runs; the spy shows how the reversed copies are made
 vi.mock('../media/proc', async (importOriginal) => {
@@ -210,8 +210,8 @@ describe('saving an export (PIP-28, PIP-2)', () => {
   /** A claimed export job, cancelled the way the worker cancels its running jobs; `saving` runs as it starts saving. */
   async function start(saving?: (id: string) => void) {
     const job = await enqueue('export.render', { projectId, resolution: '720p', fps: 30, quality: 'draft', format: 'mp4' }, { workspaceId, userId, projectId })
-    const claimed = (await claimNext('test-worker'))!
-    expect(claimed.id).toBe(job.id)
+    // by id: on a shared Postgres another file's job may be queued too
+    const claimed = await claimJob(job.id)
     const ac = new AbortController()
     const off = onCancel((id) => id === job.id && ac.abort())
     const jc = { ...inlineContext(claimed, ac.signal), progress: (_p: number, m?: string) => void (m === 'Saving export' && saving?.(job.id)) }
