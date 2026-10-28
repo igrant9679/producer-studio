@@ -1121,7 +1121,7 @@ interface ClipProps {
   events: ClipEvents
 }
 
-const TYPE_NAME: Record<Item['type'], string> = { video: 'Video', image: 'Image', audio: 'Audio', text: 'Text', caption: 'Caption', shape: 'Shape' }
+const TYPE_NAME: Record<Item['type'], string> = { video: 'Video', image: 'Image', audio: 'Audio', text: 'Text', caption: 'Caption', shape: 'Shape', adjustment: 'Adjustment layer' }
 
 const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMain, zoom, height, dragging, tabStop, adjacent, linked, visFrom, visTo, events }: ClipProps) {
   const selected = useEditor((s) => s.selection.includes(item.id))

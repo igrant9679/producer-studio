@@ -2,6 +2,7 @@
 // playback); the HyperFrames export bundles it in 'export' mode (media elements are pre-declared in the
 // composition and HyperFrames owns their playback, the renderer only positions and styles them).
 import { evaluate, textBoxCss, textInnerHtml } from './evaluate'
+import { GradeLayers, STAGES, snapshotFrame } from './gradeRuntime'
 import { itemEnd, projectDuration } from './ops'
 import { fitScale, scaledTextStyle } from './text'
 import type { FrameLayer, Item, Project, TextStyle, Track, VideoItem } from './types'
@@ -84,11 +85,16 @@ export class StageRenderer {
   private lastT?: number
   private primed = new Set<string>()
   private onFonts?: () => void
+  /** Curves, HSL and LUTs drawn over the clips (gradeRuntime.ts). */
+  private grades: GradeLayers
 
   constructor(root: HTMLElement, project: Project, opts: RendererOptions) {
     this.root = root
     this.project = project
     this.opts = opts
+    this.grades = new GradeLayers(root, opts.mode, () => this.project)
+    STAGES.set(root, this)
+    root.dataset.psStage = opts.mode
     this.index()
     root.style.position = 'relative'
     root.style.overflow = 'hidden'
@@ -242,7 +248,13 @@ export class StageRenderer {
     return undefined
   }
 
+  /** Preview: the picture under the playhead, small (clips and images as drawn, graded), for the scopes. */
+  snapshot(maxWidth = 320): ImageData | null {
+    return snapshotFrame(this.project, this.lastT ?? 0, (id) => this.layers.get(id)?.content, this.grades, maxWidth)
+  }
+
   destroy() {
+    this.grades.destroy()
     if (this.onFonts) document.fonts?.removeEventListener('loadingdone', this.onFonts)
     for (const [id, el] of this.layers) this.removeLayer(id, el)
     for (const id of [...this.voices.keys()]) this.dropVoice(id)
@@ -266,6 +278,7 @@ export class StageRenderer {
       this.setWaiting(id, false)
     }
     this.layers.delete(id)
+    this.grades.remove(id)
   }
 
   private createLayer(layer: FrameLayer): LayerEl {
@@ -367,7 +380,8 @@ export class StageRenderer {
       (layer.filter ? `filter:${layer.filter};` : '') +
       (layer.blend !== 'normal' ? `mix-blend-mode:${layer.blend};` : '') +
       (layer.clipPath ? `clip-path:${layer.clipPath};` : '') +
-      (layer.crop ? 'overflow:hidden;' : '')
+      (layer.crop ? 'overflow:hidden;' : '') +
+      (layer.backdrop ? `backdrop-filter:${layer.backdrop};` : '')
     el.overlay.style.backgroundImage = layer.overlay ?? 'none'
     el.overlay.style.display = layer.overlay ? 'block' : 'none'
     this.ensureBackground(el, layer)
@@ -393,6 +407,7 @@ export class StageRenderer {
         }
       }
       if (layer.type === 'video' && this.opts.mode === 'preview') this.syncVideo(media as HTMLVideoElement, layer.mediaTime ?? 0, layer.itemId)
+      this.grades.update(layer.itemId, el.wrap, media, layer, fill, el.hold && t < el.hold.until ? el.hold.still : undefined)
     } else if (layer.text) {
       const st = layer.text.style
       const styleKey = JSON.stringify(st)

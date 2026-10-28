@@ -104,7 +104,7 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
         body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><img data-ps-content src="${attr(opts.assetPath(it.assetId))}" alt=""></div>`)
         if (it.background?.type === 'blur' && track.main)
           body.push(`<div data-ps-bg="${attr(it.id)}" style="position:absolute;inset:0;display:none;overflow:hidden"><img src="${attr(opts.assetPath(it.assetId))}" alt=""></div>`)
-      } else if (it.type === 'text' || it.type === 'shape') {
+      } else if (it.type === 'text' || it.type === 'shape' || it.type === 'adjustment') {
         body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><div data-ps-content></div></div>`)
       }
     }
