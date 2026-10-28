@@ -14,6 +14,10 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash').notNull(),
   avatarColor: text('avatar_color').notNull(),
   createdAt: ms('created_at').notNull(),
+  /** v12: when the address was confirmed through mail (null: not yet, or mail is off). */
+  emailVerifiedAt: ms('email_verified_at'),
+  /** v12: notification choices (NotificationPrefs); {} = the defaults. */
+  notify: jsonb('notify').$type<Record<string, unknown>>().notNull().default({}),
 })
 
 export const sessions = pgTable('sessions', {
@@ -22,6 +26,8 @@ export const sessions = pgTable('sessions', {
   expiresAt: ms('expires_at').notNull(),
   createdAt: ms('created_at').notNull(),
   userAgent: text('user_agent'),
+  /** v12; written at most every few minutes. */
+  lastSeenAt: ms('last_seen_at'),
 })
 
 export const workspaces = pgTable('workspaces', {
@@ -57,6 +63,22 @@ export const invites = pgTable('invites', {
   /** v7; null on rows made before it (they expire 7 days after createdAt). */
   expiresAt: ms('expires_at'),
   revokedAt: ms('revoked_at'),
+  /** v12: when it was last emailed, and how many times. */
+  sentAt: ms('sent_at'),
+  sends: integer('sends').notNull().default(0),
+})
+
+/** v12: password-reset and email-verification tokens. `id` is sha256(token); the token itself only goes in the mail. */
+export const authTokens = pgTable('auth_tokens', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  /** 'reset' | 'verify' (confirm the account's address) | 'email' (confirm a new address, `email`). */
+  purpose: text('purpose').notNull(),
+  email: text('email').notNull(),
+  ip: text('ip'),
+  createdAt: ms('created_at').notNull(),
+  expiresAt: ms('expires_at').notNull(),
+  usedAt: ms('used_at'),
 })
 
 export const projects = pgTable('projects', {
@@ -335,4 +357,4 @@ export const idempotencyKeys = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.key] })],
 )
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys }
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, authTokens }

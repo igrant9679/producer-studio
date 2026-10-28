@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -461,6 +461,32 @@ CREATE TABLE IF NOT EXISTS activity (
 CREATE INDEX IF NOT EXISTS activity_ws_idx ON activity(workspace_id, created_at, id);
 `
 
+/**
+ * v12 — accounts and mail. Single-use tokens for password reset and email verification (only their sha256 is kept),
+ * when an account's address was confirmed, its notification choices, when a session was last used, and when an
+ * invite was last emailed.
+ */
+export const DDL_V12 = `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at double precision;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen_at double precision;
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS sent_at double precision;
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS sends integer NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  id text PRIMARY KEY,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose text NOT NULL,
+  email text NOT NULL,
+  ip text,
+  created_at double precision NOT NULL,
+  expires_at double precision NOT NULL,
+  used_at double precision
+);
+CREATE INDEX IF NOT EXISTS auth_tokens_user_idx ON auth_tokens(user_id, purpose, created_at);
+CREATE INDEX IF NOT EXISTS auth_tokens_ip_idx ON auth_tokens(ip, created_at);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -476,4 +502,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [9, DDL_V9],
   [10, DDL_V10],
   [11, DDL_V11],
+  [12, DDL_V12],
 ]
