@@ -1,7 +1,7 @@
 import type { AssetRecord } from '@producer/core'
 import { addAsset, addItem, createAudioItem, scriptSeconds } from '@producer/core'
 import clsx from 'clsx'
-import { AudioLines, BookA, BookOpen, Columns3, FileSpreadsheet, Layers, Library, Users, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import { AudioLines, BookA, BookOpen, Columns3, FileSpreadsheet, Layers, Library, Users, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, mediaUrl, waitForJob } from '../../lib/api'
@@ -12,7 +12,7 @@ import { toast, toastError } from '../../lib/toast'
 import { InlineRename } from '../components/ProjectCard'
 import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } from '../components/VoiceCard'
 import { liveBus, useJobs } from '../stores'
-import { EmptyState, MenuList, Popover, Progress, RadioCards, Spinner, TabPanel, Tabs, useAsync, useAudioPreview, useEditGate, usePageTitle } from '../ui'
+import { EmptyState, MenuList, Modal, Popover, Progress, RadioCards, Spinner, TabPanel, Tabs, useAsync, useAudioPreview, useEditGate, usePageTitle } from '../ui'
 import { useIsDesktop } from '../system'
 import { MyVoices } from '../voicestudio/MyVoices'
 
@@ -64,22 +64,27 @@ async function generateVoiceover(workspaceId: string, voice: string, voiceName: 
   }
 }
 
+/**
+ * The AI writer, in the shared Modal: Tab stays inside it, Escape closes it, and focus goes back to where it was
+ * opened from (the script, or the AI writer button).
+ */
 function AiWriter({ onClose, hasText, onStream }: { onClose: () => void; hasText: boolean; onStream: (kind: 'voiceover' | 'rewrite', prompt: string) => void }) {
   const [kind, setKind] = useState<'voiceover' | 'rewrite'>('voiceover')
   const [prompt, setPrompt] = useState('')
-  const ref = useRef<HTMLInputElement>(null)
-  useEffect(() => ref.current?.focus(), [])
   return (
-    <div className="ps-ai-pop" role="dialog" aria-label="AI writer">
-      <div className="row" style={{ marginBottom: 10 }}>
-        <Sparkles size={15} style={{ color: 'var(--violet)' }} />
-        <strong style={{ fontFamily: 'var(--font-display)' }}>AI writer</strong>
-        <span className="spacer" />
-        <div className="ps-seg">
-          <button className={kind === 'voiceover' ? 'on' : ''} onClick={() => setKind('voiceover')}>Write new</button>
-          <button className={kind === 'rewrite' ? 'on' : ''} onClick={() => setKind('rewrite')} disabled={!hasText}>Rewrite</button>
-        </div>
-        <button className="btn ghost sm icon" onClick={onClose} aria-label="Close AI writer"><X size={14} /></button>
+    <Modal
+      title={
+        <span className="row" style={{ gap: 8 }}>
+          <Sparkles size={15} style={{ color: 'var(--violet)' }} aria-hidden /> AI writer
+        </span>
+      }
+      onClose={onClose}
+      width={560}
+      initialFocus="#vs-ai-prompt"
+    >
+      <div className="ps-seg" role="group" aria-label="What the AI writer does" style={{ marginBottom: 10 }}>
+        <button type="button" className={kind === 'voiceover' ? 'on' : ''} aria-pressed={kind === 'voiceover'} onClick={() => setKind('voiceover')}>Write new</button>
+        <button type="button" className={kind === 'rewrite' ? 'on' : ''} aria-pressed={kind === 'rewrite'} onClick={() => setKind('rewrite')} disabled={!hasText}>Rewrite</button>
       </div>
       <form
         className="row"
@@ -90,21 +95,21 @@ function AiWriter({ onClose, hasText, onStream }: { onClose: () => void; hasText
         }}
       >
         <input
-          ref={ref}
+          id="vs-ai-prompt"
           className="input"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
+          aria-label={kind === 'voiceover' ? 'What should it say?' : 'How should it change?'}
           placeholder={kind === 'voiceover' ? 'What should it say? e.g. a 30-second intro for our spring launch' : 'How should it change? e.g. warmer, half the length'}
-          onKeyDown={(e) => e.key === 'Escape' && onClose()}
         />
         <button className="btn primary" disabled={kind === 'voiceover' && !prompt.trim()}><Wand2 size={14} /> {kind === 'voiceover' ? 'Write' : 'Rewrite'}</button>
       </form>
       <div className="row" style={{ gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
         {(kind === 'voiceover' ? ['30-second product intro', 'Friendly welcome for new users', 'Upbeat event announcement'] : ['Make it shorter', 'More conversational', 'More confident', 'Fix grammar only']).map((c) => (
-          <button key={c} className="chip" onClick={() => onStream(kind, c)}>{c}</button>
+          <button key={c} type="button" className="chip" onClick={() => onStream(kind, c)}>{c}</button>
         ))}
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -274,6 +279,8 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
 
   async function stream(kind: 'voiceover' | 'rewrite', prompt: string) {
     setWriter(false)
+    // the writer closed: the script it writes into has focus (the AI writer button is disabled while it writes)
+    setTimeout(() => taRef.current?.focus(), 0)
     const ta = taRef.current
     const original = text
     // Voiceover: insert at the cursor (replacing the typed "/"); rewrite: replace the whole text (or selection).
