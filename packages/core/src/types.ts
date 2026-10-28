@@ -59,13 +59,19 @@ export interface Asset {
   createdAt?: number
 }
 
-export type EaseName = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' | 'hold'
+/** How a keyframe eases into the next one; `bezier` follows the keyframe's own curve. */
+export type EaseName = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' | 'hold' | 'bezier'
+
+/** CSS-style cubic-bezier control points x1, y1, x2, y2 (x in 0..1; y may overshoot). */
+export type Bezier = [number, number, number, number]
 
 export interface Keyframe {
   /** Seconds from the item's start. */
   t: number
   value: number
   ease?: EaseName
+  /** The curve to the next keyframe when `ease` is 'bezier'. */
+  bezier?: Bezier
 }
 
 /** Every keyframe-able numeric property. */

@@ -59,6 +59,7 @@ import {
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as A from './actions'
 import { Menu, MenuItem, Slider } from './controls'
+import { KeyframeDots } from './KeyframeDots'
 import { dragPayload, filmstripUrl, isInternalDrag, thumbUrl } from './media'
 import { useAppearance } from '../lib/appearance'
 import { tipProps } from '../lib/tooltip'
@@ -1147,22 +1148,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
         </div>
         {(item.type === 'video' || item.type === 'audio') && item.fadeIn > 0 && <div className="tl-fade in" style={{ width: Math.min(width, item.fadeIn * zoom) }} />}
         {(item.type === 'video' || item.type === 'audio') && item.fadeOut > 0 && <div className="tl-fade out" style={{ width: Math.min(width, item.fadeOut * zoom) }} />}
-        {kfTimes.map((t) => (
-          <button
-            key={t}
-            tabIndex={-1}
-            className="tl-kfdot"
-            style={{ left: t * zoom }}
-            title={`Keyframe at ${t.toFixed(2)}s`}
-            onPointerDown={(e) => {
-              e.stopPropagation()
-              useEditor.getState().select([item.id])
-              A.seek(item.start + t)
-            }}
-          >
-            <Diamond size={8} fill="currentColor" />
-          </button>
-        ))}
+        <KeyframeDots item={item} times={kfTimes} zoom={zoom} locked={locked} />
         {!locked && grip > 0 && (
           <>
             <div className="tl-trim l" style={grip < 8 ? { width: grip } : undefined} onPointerDown={(e) => events.trimDown(e, item, 'start')} />

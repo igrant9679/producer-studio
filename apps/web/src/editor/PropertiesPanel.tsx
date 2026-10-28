@@ -1,6 +1,6 @@
 // Right-hand, context-sensitive properties panel. Tabs depend on the selected item's type; with nothing
 // selected it edits the project. Numeric transform/opacity/volume props carry ◇ keyframe toggles.
-import type { AnimationPreset, AudioItem, BlendMode, CaptionItem, CaptionStyle, ColorAdjust, ImageItem, Item, Project, ShapeItem, TextItem, TextStyle, Track, VideoItem, VisualItem } from '@producer/core'
+import type { AnimProp, AnimationPreset, AudioItem, BlendMode, CaptionItem, CaptionStyle, ColorAdjust, ImageItem, Item, Project, ShapeItem, TextItem, TextStyle, Track, VideoItem, VisualItem } from '@producer/core'
 import {
   ANIMATION_PRESETS,
   ASPECT_RATIOS,
@@ -33,6 +33,7 @@ import { useEffect, useState } from 'react'
 import * as A from './actions'
 import { ColorInput, Empty, Field, KeyframeToggle, NumberInput, Section, Segmented, Slider, Toggle, useThrottledPlayhead } from './controls'
 import { resetDemoProject } from './demo'
+import { KeyframesSection } from './KeyframePanel'
 import { thumbUrl } from './media'
 import { PROJECT_NAME_MAX, useEditor } from './store'
 import { timecode } from './timelineMath'
@@ -282,6 +283,8 @@ function PropSlider({ item, prop, label, min, max, step, pct, suffix }: { item: 
   )
 }
 
+const VISUAL_KF: AnimProp[] = ['x', 'y', 'scale', 'rotation', 'opacity']
+
 function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
   const W = useEditor((s) => s.project.width)
   const H = useEditor((s) => s.project.height)
@@ -330,6 +333,7 @@ function BasicTab({ item, main }: { item: VisualItem; main: boolean }) {
           </select>
         </Field>
       </Section>
+      <KeyframesSection item={item} only={VISUAL_KF} />
       <EffectsSection item={item} />
       {main && media && <p className="ed-note">Main-track clip · letterbox fill lives in the Canvas tab.</p>}
     </>
@@ -595,6 +599,7 @@ function AudioTab({ item }: { item: VideoItem | AudioItem }) {
         <Slider label="Fade in" value={item.fadeIn} min={0} max={maxFade} step={0.05} suffix="s" onChange={(v) => up<VideoItem>(item as VideoItem, { fadeIn: v }, 'Fade in', `fin:${item.id}`)} />
         <Slider label="Fade out" value={item.fadeOut} min={0} max={maxFade} step={0.05} suffix="s" onChange={(v) => up<VideoItem>(item as VideoItem, { fadeOut: v }, 'Fade out', `fout:${item.id}`)} />
       </Section>
+      <KeyframesSection item={item} only={['volume']} />
       {item.type === 'video' && (
         <Section title="Separate">
           <p className="ed-note">Moves this clip's sound to its own audio track (linked, the video is muted).</p>

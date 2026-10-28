@@ -1,0 +1,27 @@
+/* Keyframe lanes, the curve editor, canvas rulers / guides / safe zones, group selection and crop handles, text tools. */
+
+/* ---------- keyframes ---------- */
+.kf-row { display: grid; grid-template-columns: calc(84px * var(--ui-scale, 1)) 1fr; align-items: center; gap: 8px; min-height: 26px; }
+.kf-name { font-size: 0.75rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kf-lane { position: relative; height: 20px; border-radius: 5px; background: var(--field-2); border: 1px solid var(--border); margin: 0 7px; }
+.kf-head { position: absolute; top: -2px; bottom: -2px; width: 1.5px; margin-left: -.75px; background: var(--accent); pointer-events: none; }
+.kf-mark { position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; display: grid; place-items: center; border: 0; padding: 0; border-radius: 4px; background: transparent; color: var(--key, var(--cyan)); cursor: ew-resize; touch-action: none; }
+.kf-mark:hover { color: var(--text); }
+.kf-mark.on { color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan-line, var(--cyan)); }
+.kf-mark.hold svg { transform: scale(.8); }
+.kf-mark:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.kf-actions { gap: 6px; margin: 8px 0 4px; flex-wrap: wrap; }
+.kf-detail { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
+.kf-detail > .btn { margin-top: 6px; }
+
+.cv-curve { display: flex; gap: 10px; align-items: flex-start; margin: 6px 0; flex-wrap: wrap; }
+.cv-curve svg { flex: none; background: var(--field-2); border: 1px solid var(--border); border-radius: 8px; touch-action: none; }
+.cv-curve-box { fill: none; stroke: var(--border-strong, var(--border)); stroke-dasharray: 2 3; }
+.cv-curve-diag { stroke: var(--border); }
+.cv-curve-line { fill: none; stroke: var(--cyan); stroke-width: 2; }
+.cv-curve-arm { stroke: var(--text-3); stroke-width: 1; }
+.cv-curve-pt { fill: #fff; stroke: var(--cyan); stroke-width: 2; cursor: grab; }
+.cv-curve-pt:focus-visible { outline: none; stroke: var(--accent); stroke-width: 3; }
+.cv-curve-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cv-curve-nums { display: grid; grid-template-columns: repeat(2, auto); gap: 4px; }
+.cv-curve-presets { display: flex; gap: 4px; flex-wrap: wrap; }
