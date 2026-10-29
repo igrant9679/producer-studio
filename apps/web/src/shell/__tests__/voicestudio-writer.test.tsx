@@ -79,7 +79,6 @@ describe('the AI writer dialog', () => {
   it('writing closes it and puts focus in the script it writes into', async () => {
     const write = vi.spyOn(api, 'write').mockImplementation(async (_b, onDelta) => {
       onDelta('Hello there.')
-      return 'Hello there.'
     })
     show()
     typeSlash()
