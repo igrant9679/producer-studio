@@ -260,9 +260,9 @@ and comment.
   time and optionally a frame point (0–1); replies name the first comment. Members comment (viewers too); share
   visitors comment with a name when the link allows it, at video times mapped through the export's range. Changes go
   out as `comment` events on the workspace stream.
-- **Presence** (`services/presence.ts`): open editors POST a heartbeat every 20 s per tab; the API process keeps who
-  is in each project in memory (gone after 50 s without one) and publishes `presence` events when that changes. One
-  API process is assumed; several replicas would each know only their own visitors.
+- **Presence** (`services/presence.ts`, table `presence`, v16): open editors POST a heartbeat every 20 s per tab;
+  each tab is a row (gone after 50 s without one), so every API process sees every visitor. A change in who is there
+  goes out as a `presence` event (to other processes too, inline); whichever process sweeps a stale tab announces it.
 - **Activity** (`services/activity.ts`, table `activity`): created, renamed, exported, shared, link changed/revoked,
   commented and member changes, recorded per space by the routes (and the export job) and listed newest first in
   pages (`GET /api/workspaces/:id/activity`), shown on the shell's Activity page.
@@ -341,6 +341,52 @@ and comment.
 ### Desktop hardening (lessons from the Producer 0.1.x review)
 Signed builds, `sandbox: true` + context isolation, a narrow validated preload API (no generic `invoke`), `shell.openExternal` limited to http(s), no bundled test artefacts or personal paths, and skills/configs never written into the user's global `~/.claude`.
 
+## Operations (migration v16; contract in `packages/core/src/operations.ts`)
+- **Request ids** (`request-id.ts`, `log.ts`): every request takes the caller's `X-Request-Id` (when sane) or a new
+  one, answers it in the header, and every log line it causes carries `reqId` (an AsyncLocalStorage context; job log
+  lines carry `jobId` the same way). Every error body has `requestId`; a 500 says "quote reference …", and the web's
+  `HttpError` adds the reference to any other 5xx message.
+- **Metrics** (`metrics.ts`): `GET /api/metrics`, Prometheus text, only with `METRICS_TOKEN` set (Bearer; 404 when
+  unset). Per process: requests by status class, live-update streams, failed sign-ins, and in a worker job runs,
+  failures, durations and waits by kind; from the database: queue depth and the oldest wait per lane (quick / long),
+  jobs running. Scrape each service. Each job also records `wait_ms`, `run_ms` and `peak_rss` (the worker process and
+  the tools it runs, sampled at each heartbeat; with several jobs at once it includes the others) and keeps its raw
+  error in `error_detail` for operators, while `error` is the plain sentence people see (`jobs/errors.ts`).
+- **Health** (`routes/health.ts`): `/api/health` (unchanged shape, public; a worker-only process answers 503 while its
+  worker is stuck), `/api/health/live` (the process answers), `/api/health/ready` (database, migrations at
+  `SCHEMA_VERSION` or newer, storage not failing, and in a worker: its claim loop went round in the last 2 minutes and
+  no job it has room for has waited past `WORKER_MAX_LAG_MINUTES`). `WORKER_STUCK_EXIT_MINUTES` makes a stuck worker
+  exit so the platform restarts it.
+- **Audit log** (`services/audit.ts`, table `audit_log`): sign-ins and failed ones, sign-ups, password, email and
+  reset events, sessions ended, desktop links made and revoked, invites, roles, hand-overs and removals, AI keys and
+  the built-in AI switch, space and account deletes, and every operator action, with actor, IP, browser and request
+  id. A space's owners read its entries (`GET /api/workspaces/:id/audit`, the Audit tab beside Activity).
+- **Operators** (`routes/operator.ts`, `services/operator.ts`): accounts in `OPERATOR_EMAILS` (cloud only; with mail on
+  their address must be confirmed) get `/api/operator/*` and the Operator page; everyone else gets 404. Find, disable
+  (sessions and app links end, sign-in refused) or enable a person; mail a reset or make a one-time reset link; list,
+  inspect, requeue or cancel any job; storage per space; orphaned storage (`services/orphans.ts`: objects under `ws/`
+  whose space, clip, font or preview is gone and that are over a day old, listed by a dry run and removed only with
+  that run's id). Storage gained an optional `list(prefix)`.
+- **Janitor** (`services/retention.ts`, every 6 hours in the worker): expired sessions and tokens, finished jobs after
+  `JOB_RETENTION_DAYS`, the audit log after `AUDIT_RETENTION_DAYS`, spent invites, stale presence rows and, in the
+  cloud only, tombstones after `TOMBSTONE_RETENTION_DAYS` (0 keeps any of them). Before tombstones go, the highest
+  change number cleared is stored (`ops_state`, `tombstoneHorizon()`); `GET /api/sync/changes` answers 409
+  `{details: {reason: 'resync', horizon}}` to a cursor behind it, so that desktop must sync from the start. (A device
+  token unused for 90 days stops working anyway, so in practice only a re-linked desktop starts over.)
+- **Shared state across replicas**: the sign-in limiter counts in `rate_windows` (`limits.ts` `hit()` / `assertRoom()`);
+  If-Match saves of clips, spaces and brand kits are one conditional UPDATE (`etag.ts` `matchRequired`,
+  `changedMeanwhile`); `claimNext` takes a transaction-level advisory lock so two workers never count the same running
+  jobs for one round.
+- **OpenAPI** (`openapi.ts`): `GET /api/openapi.json`, built on first request from Hono's route table, with each
+  request body from the zod schema its handler gives `body()` (found in the route source and evaluated with its
+  consts and imports, then `z.toJSONSchema`); routes without one say why in `x-request-schema`.
+
 ## Deploy
 Single Docker image (Node 22 + ffmpeg + chrome-headless-shell deps + whisper.cpp) on Railway: `web` (API +
 static SPA) and `worker` services from the same image, Postgres plugin, S3-compatible bucket.
+
+Health checks: point each Railway service's health check path at `/api/health/ready` (Railway checks it to pass a
+deploy: a web service whose migrations or database aren't there yet, or a worker whose loop is stuck, isn't put into
+service). Railway doesn't poll it afterwards, so for a worker that gets stuck later set `WORKER_STUCK_EXIT_MINUTES`
+(for example 10) with the restart policy "on failure". `/api/health/live` is for a platform that restarts on a
+failed liveness probe; `/api/health` keeps working for anything already pointed at it.
