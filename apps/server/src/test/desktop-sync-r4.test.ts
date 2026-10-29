@@ -1,10 +1,22 @@
 // Desktop sync, release 4 (R4-C): a full resync after the cloud compacted its deletes (D-6), a space's other brand
 // kits and fonts (carried from R3). Same harness as desktop-sync.test.ts (a real cloud in a child process, this process
 // as the desktop), with a proxy in between that can drop the network or rewrite the cloud's answers.
+import crypto from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Project, SyncStatus } from '@producer/core'
 import { type Cloud, type Desktop, type Http, PASSWORD, deskSession, startCloud, startDesktop } from './desktop-harness'
 import { type CloudProxy, startProxy } from './cloud-proxy'
+
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+const png = (extra: number) => Buffer.concat([PNG, crypto.randomBytes(extra)])
+
+async function deskUpload(bytes: Buffer, filename = 'clip.png'): Promise<string> {
+  const t = await desk.json('POST', '/api/uploads', { workspaceId: A.workspaceId, filename, mime: 'image/png', size: bytes.length })
+  expect(t.status).toBe(200)
+  expect((await desk.json('PUT', t.body.url, bytes, { 'content-type': 'image/png' })).status).toBe(200)
+  expect((await desk.json('POST', `/api/assets/${t.body.assetId}/complete`)).status).toBe(200)
+  return t.body.assetId
+}
 
 const FONT = Buffer.from([0x77, 0x4f, 0x46, 0x32, ...new Array(80).fill(9)]) // 'wOF2' and some bytes
 
@@ -233,6 +245,75 @@ describe('sync again as soon as the network comes back (D-8)', () => {
     expect(r.status).toBe(200)
     await until(async () => (await desk.json<SyncStatus>('GET', '/api/sync/status')).body.state === 'idle', 20_000)
   }, 60_000)
+})
+
+describe('uploads: projects before big media, a few at a time, in the background (D-7)', () => {
+  const puts = (ids: string[]) => proxy.log.filter((l) => l.startsWith('PUT /api/uploads/') && ids.some((id) => l.includes(id)))
+  const status = async () => (await desk.json<SyncStatus>('GET', '/api/sync/status')).body
+
+  it('small clips, then projects, then big files three at a time; a sync meanwhile doesn’t wait for them', async () => {
+    const engine = d.engine as unknown as { smallUploadBytes: number }
+    engine.smallUploadBytes = 100_000
+    const small = await deskUpload(png(100), 'small.png')
+    const bigs: string[] = []
+    for (let i = 0; i < 4; i++) bigs.push(await deskUpload(png(300_000), `big-${i}.png`))
+    const proj = (await desk.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Uses big media' })).body.project.id as string
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    proxy.hold = (m, path) => (m === 'PUT' && bigs.some((b) => path.includes(b)) ? held : undefined)
+    const from = proxy.log.length
+    // the cycle itself ends without waiting for the big files
+    expect((await sync()).state).toBe('idle')
+    await until(() => puts(bigs).length === 3)
+    await new Promise((r) => setTimeout(r, 500))
+    expect(puts(bigs)).toHaveLength(3)
+    const log = proxy.log.slice(from)
+    const at = (pred: (l: string) => boolean) => log.findIndex(pred)
+    const smallPut = at((l) => l.startsWith(`PUT /api/uploads/${small}/data`))
+    const projectPost = at((l) => l.startsWith('POST /api/projects') && !l.includes('/delete'))
+    const firstBig = at((l) => l.startsWith('PUT /api/uploads/') && bigs.some((b) => l.includes(b)))
+    expect(smallPut).toBeGreaterThanOrEqual(0)
+    expect(projectPost).toBeGreaterThan(smallPut)
+    expect(firstBig).toBeGreaterThan(projectPost)
+    // the cloud already has the project, and lists the big clips as on their way
+    expect((await A.http.json('GET', `/api/projects/${proj}`)).status).toBe(200)
+    expect((await A.http.json('GET', `/api/assets/${bigs[3]}`)).body.status).toBe('uploading')
+    // what's going up, with bytes
+    const ups = (await status()).uploads ?? []
+    expect(ups.map((u) => u.id).sort()).toEqual([...bigs].sort())
+    expect(ups.filter((u) => u.startedAt > 0)).toHaveLength(3)
+    for (const u of ups.filter((x) => x.startedAt > 0)) expect(u.sent).toBe(u.bytes)
+    expect((await status()).pending).toBeGreaterThanOrEqual(4)
+    // another sync while they go: it doesn't wait for them, nor send them twice
+    expect((await sync()).state).toBe('idle')
+    expect(puts(bigs)).toHaveLength(3)
+    proxy.hold = undefined
+    release()
+    await until(async () => ((await status()).uploads ?? []).length === 0 && (await status()).pending === 0, 30_000)
+    for (const b of bigs) expect(['processing', 'ready']).toContain((await A.http.json('GET', `/api/assets/${b}`)).body.status)
+    expect(puts(bigs)).toHaveLength(4)
+  }, 90_000)
+
+  it('a drop during a big upload: offline, then that file goes up again once the cloud answers', async () => {
+    const engine = d.engine as unknown as { probeMs: number }
+    engine.probeMs = 300
+    const big = await deskUpload(png(300_000), 'dropped.png')
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    proxy.hold = (m, path) => (m === 'PUT' && path.includes(big) ? held : undefined)
+    expect((await sync()).state).toBe('idle')
+    await until(() => puts([big]).length === 1)
+    // the network goes while its bytes are in flight
+    proxy.down = true
+    proxy.hold = undefined
+    release()
+    await until(async () => (await status()).state === 'offline')
+    expect(((await status()).failures ?? []).map((f) => f.id)).not.toContain(big)
+    proxy.down = false
+    await until(async () => ['processing', 'ready'].includes((await A.http.json('GET', `/api/assets/${big}`)).body.status), 30_000)
+    expect(puts([big]).length).toBeGreaterThanOrEqual(2)
+    engine.probeMs = 5_000
+  }, 90_000)
 })
 
 export type { Project }

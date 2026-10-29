@@ -35,6 +35,7 @@ import { adoptCloudIdentity, localUserId } from './identity'
 import { applyFont, applyFontDelete, applyKit, applyKitDelete, dropUnseenBrand, pushBrandDelete, pushBrandExtras } from './brand-sync'
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
 import { SyncLock } from './lock'
+import { UploadBoard, inLanes, sendFile } from './uploads'
 import { prefetchAllMedia } from './media'
 import { getSettings, onSettingsChange } from './settings'
 
@@ -49,6 +50,10 @@ const INTERVAL_MS = 60_000
 const AFTER_SAVE_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
 const RELAY_POLL_MS = 5_000
+/** Clips up to this size go up before projects; bigger ones after them, in the background (D-7). */
+const SMALL_UPLOAD_BYTES = 16 * 1024 * 1024
+/** Files going up at once. */
+const UPLOAD_LANES = 3
 /** While offline, a cheap request this often checks whether the cloud is back (D-8). */
 const PROBE_MS = 5_000
 const RELAY_BEAT_MS = 15_000
@@ -207,6 +212,12 @@ export class SyncEngine {
   /** While offline: how often to check whether the cloud answers again (a sync then starts at once, D-8). */
   probeMs = PROBE_MS
   private probeTimer?: NodeJS.Timeout
+  /** Clips at most this big go up before projects (D-7). */
+  smallUploadBytes = SMALL_UPLOAD_BYTES
+  /** Clip files going up, or queued for a lane. */
+  readonly uploads = new UploadBoard(() => void this.emit())
+  /** Ends the background uploads (an unlink). */
+  private uploadAbort = new AbortController()
 
   async start() {
     const link = await loadLink()
@@ -295,6 +306,8 @@ export class SyncEngine {
   /** Unlinking stops the cycle under way, then waits for its turn. */
   unlink(): Promise<SyncStatus> {
     this.cycleAbort?.abort(new Error('unlinked'))
+    this.uploadAbort.abort(new Error('unlinked'))
+    this.uploadAbort = new AbortController()
     return this.lock.run('unlink', () => this.unlinkLocked())
   }
 
@@ -336,6 +349,7 @@ export class SyncEngine {
       pending: await this.pendingCount(rows, failures),
       conflicts: names.map((n) => ({ projectId: n.id, name: n.name, localVersion: n.version, cloudVersion: conflicted.find((c) => c.id === n.id)!.conflictVersion! })),
       failures: [...failures.values()],
+      uploads: this.uploads.list(),
       notices: (await listNotices()).map(({ data: _data, ...n }) => n),
       ...(this.error ? { error: this.error } : {}),
     }
@@ -615,7 +629,10 @@ export class SyncEngine {
       await this.pull(c)
       step()
       await pushBrandExtras(c, new Set((await kvGet<string[]>('cloudWorkspaces')) ?? []), (kind, id, name, fn) => this.item(kind, id, name, fn), (kind, id) => this.resolved(kind, id))
-      await this.pushAssets(c)
+      // small clips first, then projects, so one big file never holds up the rest; big files go up after, in the
+      // background, a few at a time (the cloud already lists them as uploading)
+      const big = await this.pushAssets(c)
+      step()
       await this.pushProjects(c)
       await this.pushBrandKits(c)
       await this.pushVoiceProfiles(c)
@@ -629,6 +646,7 @@ export class SyncEngine {
       if (this.retrying && this.debounce) clearTimeout(this.debounce)
       this.retrying = false
       this.setState('idle')
+      this.uploadInBackground(big)
       if (getSettings().mediaSync === 'all') void prefetchAllMedia()
     } catch (err) {
       if (ac.signal.aborted) {
@@ -637,11 +655,7 @@ export class SyncEngine {
       } else if (err instanceof CloudError && err.offline) {
         this.backoffMs = Math.min(MAX_BACKOFF_MS, Math.max(5000, this.backoffMs * 2))
         this.backoffUntil = Date.now() + this.backoffMs
-        this.setState('offline', undefined)
-        log.info('desktop: cloud offline, backing off', { ms: this.backoffMs })
-        this.schedule(this.backoffMs)
-        this.retrying = true
-        this.armProbe()
+        this.wentOffline()
       } else if (err instanceof CloudError && err.status === 401) {
         this.setState('error', 'The cloud no longer accepts this computer’s device token (it may have been revoked). Unlink and link again.')
       } else {
@@ -651,6 +665,17 @@ export class SyncEngine {
     } finally {
       if (this.cycleAbort === ac) this.cycleAbort = undefined
     }
+  }
+
+  /** The cloud stopped answering: wait (doubling, at most 5 minutes) and check meanwhile whether it's back. */
+  private wentOffline() {
+    this.backoffMs = Math.min(MAX_BACKOFF_MS, Math.max(5000, this.backoffMs * 2))
+    this.backoffUntil = Date.now() + this.backoffMs
+    this.setState('offline', undefined)
+    log.info('desktop: cloud offline, backing off', { ms: this.backoffMs })
+    this.schedule(this.backoffMs)
+    this.retrying = true
+    this.armProbe()
   }
 
   // ---------------- workspaces ----------------
@@ -1194,10 +1219,12 @@ export class SyncEngine {
     }
   }
 
-  private async pushAssets(c: CloudClient) {
+  /** Sends what changed of clips already in the cloud, and the small new ones; returns the big new ones (D-7). */
+  private async pushAssets(c: CloudClient): Promise<AssetRow[]> {
     const cloudWs = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
     const rows = await syncRows('asset')
     const local = await ctx().db.select().from(assets)
+    const todo: AssetRow[] = []
     for (const a of local) {
       const s = rows.get(a.id)
       if (!cloudWs.has(a.workspaceId)) continue
@@ -1212,8 +1239,47 @@ export class SyncEngine {
       }
       // a clip put in the trash here before it was ever sent up stays here (emptying the trash removes it)
       if (a.origin === 'render' || a.status === 'uploading' || a.trashedAt != null) continue
-      await this.item('asset', a.id, a.name, () => this.pushAsset(c, a))
+      // already going up in the background
+      if (this.uploads.has(a.id) || !this.due(this.failures.get(failureKey('asset', a.id)))) continue
+      todo.push(a)
     }
+    todo.sort((x, y) => x.size - y.size)
+    const small = todo.filter((a) => a.size <= this.smallUploadBytes)
+    await inLanes(small, UPLOAD_LANES, (a) => this.item('asset', a.id, a.name, () => this.pushAsset(c, a)))
+    const big = todo.filter((a) => a.size > this.smallUploadBytes)
+    // the cloud lists them now (as uploading), before the projects that use them arrive
+    for (const a of big) await this.item('asset', a.id, a.name, () => this.pushAsset(c, a, { registerOnly: true }))
+    return big
+  }
+
+  /**
+   * Big clips go up after the cycle, outside the sync lock, so a conflict choice or the next cycle never waits for
+   * them. A dropped connection stops the lanes (that file starts again when the cloud is back); an unlink ends them.
+   */
+  private uploadInBackground(list: AssetRow[]) {
+    const fresh = list.filter((a) => !this.uploads.has(a.id))
+    if (!fresh.length) return
+    for (const a of fresh) this.uploads.queue(a.id, a.name, a.size)
+    const ac = this.uploadAbort
+    const c = cloud(ac.signal)
+    if (!c) return
+    void inLanes(fresh, UPLOAD_LANES, async (a) => {
+      ac.signal.throwIfAborted()
+      // still waiting, and still here: it may have been deleted, uploaded or skipped since it was queued
+      const row = (await ctx().db.select().from(assets).where(eq(assets.id, a.id)).limit(1))[0]
+      if (!row || (await syncRow('asset', a.id))?.uploaded) return this.uploads.done(a.id)
+      await this.item('asset', a.id, a.name, () => this.pushAsset(c, row, { finish: (fn) => this.lock.run('upload', fn) }))
+      this.uploads.done(a.id)
+    })
+      .catch((err) => {
+        if (ac.signal.aborted) return
+        if (err instanceof CloudError && err.offline) this.wentOffline()
+        else if (err instanceof CloudError && err.status === 401) this.setState('error', 'The cloud no longer accepts this computer’s device token (it may have been revoked). Unlink and link again.')
+      })
+      .finally(() => {
+        for (const a of fresh) this.uploads.done(a.id)
+        void this.emit()
+      })
   }
 
   /** A clip's name or transcript changed here since it last matched the cloud's: send what changed. */
@@ -1229,7 +1295,11 @@ export class SyncEngine {
     await putSync('asset', a.id, { base: { ...here } })
   }
 
-  private async pushAsset(c: CloudClient, a: typeof assets.$inferSelect) {
+  /**
+   * One clip's file. `registerOnly`: just let the cloud know it's coming (its ticket makes the cloud's record).
+   * `finish`: how the bookkeeping after the bytes runs (under the sync lock, for background uploads).
+   */
+  private async pushAsset(c: CloudClient, a: typeof assets.$inferSelect, o: { registerOnly?: boolean; finish?: (fn: () => Promise<void>) => Promise<void> } = {}) {
     if (!(await ctx().storage.stat(a.sourceKey))) return
     let sha = a.sha256
     if (!sha) {
@@ -1256,22 +1326,19 @@ export class SyncEngine {
       }
       throw err
     }
-    const body = Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream
-    const put = await c.request('PUT', ticket.url, { body, headers: { ...ticket.headers, 'content-length': String(bytes) }, idleTimeoutMs: IDLE_MS })
-    if (!put.ok) {
-      const text = await put.text().catch(() => '')
-      let parsed: { error?: string } | undefined
-      try {
-        parsed = JSON.parse(text)
-      } catch {
-        /* not json */
-      }
-      throw new CloudError(put.status, { error: `Upload of ${a.name} failed: ${parsed?.error ?? (text.slice(0, 200) || put.statusText)}` })
+    if (o.registerOnly) return
+    this.uploads.start(a.id, a.name, bytes)
+    try {
+      await sendFile({ client: c, ticket, file, bytes, name: a.name, onProgress: (sent) => this.uploads.progress(a.id, sent), idleMs: IDLE_MS })
+    } finally {
+      this.uploads.done(a.id)
     }
-    await put.body?.cancel().catch(() => undefined)
-    const done = await c.json<AssetRecord | undefined>('POST', `/api/assets/${encodeURIComponent(a.id)}/complete`)
-    // what the cloud has now: a name it shortened, no transcript yet (one made here goes up next)
-    await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...clipFields(done?.asset?.name ?? a.name, done?.asset?.transcript) } })
+    const finish = o.finish ?? ((fn: () => Promise<void>) => fn())
+    await finish(async () => {
+      const done = await c.json<AssetRecord | undefined>('POST', `/api/assets/${encodeURIComponent(a.id)}/complete`)
+      // what the cloud has now: a name it shortened, no transcript yet (one made here goes up next)
+      await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...clipFields(done?.asset?.name ?? a.name, done?.asset?.transcript) } })
+    })
     log.info('desktop: uploaded asset', { assetId: a.id, bytes })
   }
 
