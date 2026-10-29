@@ -10,6 +10,7 @@ import { toast, toastError } from '../../lib/toast'
 import { syncSummary } from '../SystemChrome'
 import { aiLabel, aiLabelHasModel, DESKTOP_DOWNLOAD_URL, sysFetch, systemApi, useSystem } from '../system'
 import { AiProviders } from './AiProviders'
+import { ClaudeCliFlags } from './ClaudeCliFlags'
 import { DictationSettings } from '../voicestudio/Dictation'
 import { AppearanceSettings } from './AppearanceSettings'
 import { Avatar, EmptyState, Spinner, useAsync, usePageTitle } from '../ui'
@@ -241,13 +242,16 @@ type Builtin = AiSettings['builtin']
 function BuiltinInfo({ builtin }: { builtin?: Builtin }) {
   if (!builtin) return <div className="skeleton" style={{ height: 56 }} />
   return (
-    <div className={clsx('ps-ai-status', builtin.available ? 'ok' : 'bad')}>
-      {builtin.available ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <strong>{builtin.id === 'claude-cli' ? 'Claude Code CLI' : builtin.id === 'none' ? 'AI disabled' : 'Claude API'}{builtin.model ? ` · ${builtin.model}` : ''}</strong>
-        <span>{builtin.detail || (builtin.available ? 'Ready' : 'Not available')}</span>
+    <>
+      <div className={clsx('ps-ai-status', builtin.available ? 'ok' : 'bad')}>
+        {builtin.available ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <strong>{builtin.id === 'claude-cli' ? 'Claude Code CLI' : builtin.id === 'none' ? 'AI disabled' : 'Claude API'}{builtin.model ? ` · ${builtin.model}` : ''}</strong>
+          <span>{builtin.detail || (builtin.available ? 'Ready' : 'Not available')}</span>
+        </div>
       </div>
-    </div>
+      {builtin.cli && <ClaudeCliFlags cli={builtin.cli} />}
+    </>
   )
 }
 

@@ -14,7 +14,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { WriteRequest } from '@producer/core'
+import type { ClaudeCliFlag, ClaudeCliInfo, WriteRequest } from '@producer/core'
 import { SERVER_ROOT } from '../config'
 import { HttpError } from '../http'
 import { log } from '../log'
@@ -32,6 +32,40 @@ const TIMEOUT = { write: 3 * 60_000, structured: 10 * 60_000, agent: 10 * 60_000
 const STATUS_TTL_MS = 30_000
 /** Passed on every run (they keep the user's settings, MCP servers and permission mode out of it), so no fallback. */
 export const REQUIRED_FLAGS = ['--permission-mode', '--setting-sources', '--strict-mcp-config']
+
+/**
+ * Every option Producer Studio looks for, as Settings → AI lists them. `pass`: 'required' (never run without it),
+ * 'always' (passed on those runs as is), 'if-listed' (passed only when --help lists it). Keep in step with baseArgs()
+ * and the run methods below.
+ */
+const CLI_FLAGS: Array<Omit<ClaudeCliFlag, 'detected' | 'used' | 'required'> & { pass: 'required' | 'always' | 'if-listed' }> = [
+  { flag: '--permission-mode', pass: 'required', when: 'every run', purpose: 'Set to “default”: your own permission mode and allow rules never apply.' },
+  { flag: '--setting-sources', pass: 'required', when: 'every run', purpose: 'Left empty: your Claude Code settings, hooks and CLAUDE.md files stay out of it.' },
+  { flag: '--strict-mcp-config', pass: 'required', when: 'every run', purpose: 'Only Producer Studio’s own tools, none of your MCP servers.' },
+  { flag: '--no-session-persistence', pass: 'if-listed', when: 'every run', purpose: 'Runs aren’t saved to your Claude Code history.' },
+  { flag: '--disable-slash-commands', pass: 'if-listed', when: 'every run', purpose: 'Slash commands in a prompt are read as text.' },
+  { flag: '--permission-prompts', pass: 'if-listed', when: 'every run', purpose: 'Set to “none”: a run never stops to ask (anything not allowed is refused).' },
+  { flag: '--system-prompt-file', pass: 'always', when: 'every run', purpose: 'Producer Studio’s instructions, from a file in the run’s own folder.' },
+  { flag: '--tools', pass: 'always', when: 'every run', purpose: 'Built-in tools off (only Read for a Producer script’s contact sheets).' },
+  { flag: '--include-partial-messages', pass: 'if-listed', when: 'streaming', purpose: 'The AI writer and the assistant show words as they’re written.' },
+  { flag: '--json-schema', pass: 'if-listed', when: 'Producer script', purpose: 'Scripts come back in the expected shape. Without it Producer scripts can’t use this CLI.' },
+  { flag: '--mcp-config', pass: 'always', when: 'editor assistant', purpose: 'The editing tools, served by Producer Studio over a private pipe.' },
+  { flag: '--allowedTools', pass: 'always', when: 'editor assistant', purpose: 'Only Producer Studio’s tools may run (Read inside the run folder for scripts).' },
+  { flag: '--model', pass: 'always', when: 'model override', purpose: 'The model override in these settings, when one is set.' },
+]
+
+/**
+ * Which options this CLI lists (`flags`, from --help; undefined when it couldn't be asked) and which Producer Studio
+ * passes. Nothing is used when the CLI can't be run (`usable` false: not signed in, too old, --help unanswered).
+ */
+export function cliFlagReport(flags: Set<string> | undefined, usable: boolean, model = getSettings().claudeModel.trim()): ClaudeCliFlag[] {
+  return CLI_FLAGS.map(({ pass, ...f }) => {
+    const detected = !!flags?.has(f.flag)
+    let used = usable && (pass === 'always' || detected)
+    if (f.flag === '--model') used = usable && !!model
+    return { ...f, detected, used, required: pass === 'required' }
+  })
+}
 
 /**
  * Permission rule that lets the Read tool open files under `dir` and nowhere else. The CLI's rule syntax wants
@@ -61,6 +95,16 @@ interface Probe {
   optionsUnknown?: boolean
   /** Required flags this CLI doesn't list. */
   missing?: string[]
+}
+
+/** describe() plus the CLI found and its options (Settings → AI). */
+function describeWithCli(p: Probe): ProviderStatus {
+  const s = describe(p)
+  if (!p.install) return s
+  const cli: ClaudeCliInfo = { path: p.install.path, source: p.install.source, flags: cliFlagReport(p.flags, s.available) }
+  if (p.version && p.version !== 'unknown') cli.version = p.version
+  if (p.optionsUnknown) cli.optionsUnknown = true
+  return { ...s, cli }
 }
 
 function describe(p: Probe): ProviderStatus {
@@ -124,7 +168,7 @@ export class ClaudeCliProvider implements ClaudeProvider {
   }
 
   async status(): Promise<ProviderStatus> {
-    return describe(await this.getProbe())
+    return describeWithCli(await this.getProbe())
   }
 
   /** Resolved binary + flags, or a 503 when the CLI can't be used. */

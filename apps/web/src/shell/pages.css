@@ -375,3 +375,10 @@
 .ps-btn-danger-outline { border-color: var(--danger-line); color: var(--danger); }
 .ps-btn-danger-outline:hover { background: var(--danger-soft); border-color: var(--danger); }
 @media (max-width: 560px) { .ps-space-setting { flex-wrap: wrap; } }
+/* Settings → AI (desktop): the Claude Code CLI's options, detected and used */
+.ps-cli-table th[scope="row"] { font-weight: 500; white-space: nowrap; color: var(--text); }
+.ps-cli-table tbody tr { cursor: default; }
+.ps-cli-table tbody tr:hover { background: none; }
+.ps-cli-mark { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); white-space: nowrap; }
+.ps-cli-mark[data-on] { color: var(--green); }
+.ps-cli-req { font: 600 0.625rem/1 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--amber); margin-left: 6px; }

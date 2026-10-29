@@ -826,6 +826,32 @@ export type AiKeyProvider = 'openai' | 'gemini' | 'anthropic'
 export type AiChoice = 'builtin' | AiKeyProvider
 export type AiFeature = 'writer' | 'script' | 'assistant'
 
+/** One Claude Code CLI option the desktop looks for in `claude --help` (Settings → AI lists them). */
+export interface ClaudeCliFlag {
+  flag: string
+  /** This CLI's --help lists it. */
+  detected: boolean
+  /** Producer Studio passes it on the runs `when` names (false when it can't run this CLI at all, or the CLI lacks it). */
+  used: boolean
+  /** Without it Producer Studio doesn't run the CLI (it's reported as too old instead). */
+  required: boolean
+  /** Which runs carry it. */
+  when: 'every run' | 'streaming' | 'Producer script' | 'editor assistant' | 'model override'
+  /** What it does, in plain words. */
+  purpose: string
+}
+
+/** The Claude Code CLI the desktop found and what it passes to it. Optional: older servers omit it. */
+export interface ClaudeCliInfo {
+  path: string
+  /** Where it was found: settings, desktop-bundle, msix, local-bin, path. */
+  source: string
+  version?: string
+  /** --help didn't answer in time: which options it has is unknown (asked again on the next check). */
+  optionsUnknown?: boolean
+  flags: ClaudeCliFlag[]
+}
+
 export interface AiKeyProviderSettings {
   /** Model id sent to the provider (free text; defaults picked from the live model list). */
   model: string
@@ -847,7 +873,7 @@ export interface AiSettings {
   perFeature: Partial<Record<AiFeature, AiChoice>>
   providers: Partial<Record<AiKeyProvider, AiKeyProviderSettings>>
   /** The built-in provider for this edition and whether it's usable. */
-  builtin: { id: AiProviderId; available: boolean; detail: string; model?: string }
+  builtin: { id: AiProviderId; available: boolean; detail: string; model?: string; cli?: ClaudeCliInfo }
   /** Effective provider per feature after resolution. */
   effective: Record<AiFeature, { provider: AiProviderId; model?: string }>
   /** True when the caller may change keys and settings (workspace owner; always on desktop). */

@@ -304,9 +304,47 @@ describe('ClaudeCliProvider against a fake claude binary', () => {
 
   it('status reports the signed-in account and version', async () => {
     const p = new ClaudeCliProvider()
-    expect(await p.status()).toEqual({ available: true, detail: 'Signed in as tester@example.com · max plan · Claude Code 9.9.9', model: 'sonnet' })
+    const { cli, ...s } = await p.status()
+    expect(s).toEqual({ available: true, detail: 'Signed in as tester@example.com · max plan · Claude Code 9.9.9', model: 'sonnet' })
+    expect(cli).toMatchObject({ path: FAKE, source: 'settings', version: '9.9.9' })
   })
 
+  it('status lists the CLI options it found and which it passes (D-16), matching what a run really gets', async () => {
+    const p = new ClaudeCliProvider()
+    const { cli } = await p.status()
+    const by = new Map(cli!.flags.map((f) => [f.flag, f]))
+    // the three it can't run without: detected, passed, and marked required
+    for (const f of REQUIRED_FLAGS) expect(by.get(f)).toMatchObject({ detected: true, used: true, required: true, when: 'every run' })
+    expect(by.get('--no-session-persistence')).toMatchObject({ detected: true, used: true, required: false })
+    expect(by.get('--json-schema')).toMatchObject({ detected: true, used: true, when: 'Producer script' })
+    // a model override is set in this suite's settings
+    expect(by.get('--model')).toMatchObject({ used: true, when: 'model override' })
+    for (const f of cli!.flags) expect(f.purpose.length).toBeGreaterThan(10)
+    // every option reported as used on every run is on a real run's command line, and nothing reported unused is
+    await p.write({ kind: 'headline', prompt: 'x' }, () => undefined)
+    const argv = runs().at(-1)!.argv
+    for (const f of cli!.flags.filter((f) => f.when === 'every run' || f.when === 'streaming' || f.when === 'model override')) expect(argv.includes(f.flag)).toBe(f.used)
+  })
+
+  it('an older CLI shows which options are missing and that none are used', async () => {
+    const { saveSettings } = await import('../desktop/settings')
+    const copy = path.join(path.dirname(log), 'fake-claude-old-flags.mjs')
+    fs.copyFileSync(FAKE, copy)
+    saveSettings({ claudePath: copy })
+    process.env.FAKE_CLAUDE_HELP = 'old'
+    try {
+      const { available, cli } = await new ClaudeCliProvider().status()
+      expect(available).toBe(false)
+      const by = new Map(cli!.flags.map((f) => [f.flag, f]))
+      for (const f of REQUIRED_FLAGS) expect(by.get(f)).toMatchObject({ detected: false, used: false, required: true })
+      // listed but not passed: Producer Studio doesn't run this CLI at all
+      expect(by.get('--json-schema')).toMatchObject({ detected: true, used: false })
+      expect(cli!.flags.every((f) => !f.used)).toBe(true)
+    } finally {
+      delete process.env.FAKE_CLAUDE_HELP
+      saveSettings({ claudePath: FAKE })
+    }
+  })
   it('write streams deltas with no tools, a temp cwd (removed afterwards) and a clean environment', async () => {
     const p = new ClaudeCliProvider()
     const deltas: string[] = []
