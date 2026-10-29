@@ -94,7 +94,7 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   inside storage (S3 CopyObject, in 1 GB parts above 5 GB). Copying a clip to another space is the `asset.copy` job.
 - **Processing** (`media/process.ts`, `PROCESSING_VERSION` 2): proxies ≤ 720p (1080p for a 4K source), ≤ 60 fps, a
   keyframe every half second, tagged with the source's colour matrix (`media/colour.ts`), on the machine's video
-  hardware when there is some (`media/hwenc.ts`, `HW_ENCODE`). The first stereo track is the sound used; pictures get a
+  hardware when `HW_ENCODE=auto` and there is some (`media/hwenc.ts`; off by default). The first stereo track is the sound used; pictures get a
   display copy when browsers don't draw them, they're stored sideways, or they're huge. An upload with the same sha256
   as a clip of the space processed by this version reuses its files (`media/reuse.ts`).
 - **Export sources** (`render/sources.ts`): HyperFrames draws video from JPEG frames, read as BT.601 whatever the file

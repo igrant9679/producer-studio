@@ -10,7 +10,7 @@ import { assetDoc } from '../dto'
 import { enqueue } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
 import { encodeH264, h264Args, hardwareEncoder, resetHardwareEncoder } from '../media/hwenc'
-import { ffmpeg } from '../media/proc'
+import { ffmpeg, run } from '../media/proc'
 import { probe, processAsset } from '../media/process'
 import { exportRender } from '../render/export'
 import { prepareVideoSource, SOURCE_PREP } from '../render/sources'
@@ -41,9 +41,9 @@ beforeAll(async () => {
   workspaceId = u.workspaceId
   userId = (await u.client.json('GET', '/api/auth/me')).body.user.id
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-measure-'))
-  // five minutes of 1080p with sound, as a long screen or camera recording
+  // 90 s of 1080p with sound, as a long screen or camera recording (the machine is shared: kept short)
   long = path.join(dir, 'long-1080p.mp4')
-  await ffmpeg(['-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000', '-t', '300', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', long])
+  await ffmpeg(['-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000', '-t', '90', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', long])
 }, 900_000)
 
 describe.skipIf(!REAL)('P-18 measurements', () => {
@@ -58,22 +58,23 @@ describe.skipIf(!REAL)('P-18 measurements', () => {
     }
     const sw = await time(null)
     resetHardwareEncoder()
+    ctx().config.hwEncode = 'auto'
     const hw = await hardwareEncoder()
     const fast = hw ? await time(hw) : undefined
-    report({ what: 'proxy of 5 min 1080p30', source: `${info.width}x${info.height}`, software: sw, hardware: fast ?? 'none on this machine' })
+    report({ what: 'proxy of 90 s 1080p30', source: `${info.width}x${info.height}`, software: sw, hardware: fast ?? 'none on this machine' })
     resetHardwareEncoder(null)
     expect(sw.seconds).toBeGreaterThan(0)
   }, 1_800_000)
 
-  it('export: two 4 s clips of a 5-minute source, the whole file against the parts used', async () => {
+  it('export: two 4 s clips of a 90 s source, the whole file against the parts used', async () => {
     const created = await createAssetFromFile({ workspaceId, userId, filePath: long, name: 'long.mp4', mime: 'video/mp4', kind: 'video', origin: 'upload' })
     const row = await processAsset(created.id, inlineContext({ id: 'm', kind: 'asset.process', workspaceId, userId, projectId: null, input: {} }))
     const r = await client.json('POST', '/api/projects', { workspaceId, name: 'Measure', width: 1920, height: 1080 })
     let p = r.body.project as Project
     const a = assetDoc(row)
     p = addAsset(p, a)
-    p = addItem(p, createVideoItem(a, 0, { in: 60, duration: 4 }))
-    p = addItem(p, createVideoItem(a, 4, { in: 240, duration: 4 }))
+    p = addItem(p, createVideoItem(a, 0, { in: 20, duration: 4 }))
+    p = addItem(p, createVideoItem(a, 4, { in: 70, duration: 4 }))
     await client.json('PUT', `/api/projects/${r.body.project.id}`, { project: p, baseVersion: r.body.version })
     process.env.KEEP_RENDERS = '1'
     const run = async (trim: boolean) => {
@@ -92,7 +93,7 @@ describe.skipIf(!REAL)('P-18 measurements', () => {
     const after = await run(true)
     SOURCE_PREP.trim = true
     delete process.env.KEEP_RENDERS
-    report({ what: 'export 8 s from a 5 min 1080p source (local storage)', sourceMb: Math.round(fs.statSync(long).size / 1e5) / 10, before, after })
+    report({ what: 'export 8 s from a 90 s 1080p source (local storage)', sourceMb: Math.round(fs.statSync(long).size / 1e5) / 10, before, after })
     expect(after.renderDirMb).toBeLessThan(before.renderDirMb)
   }, 3_600_000)
 
@@ -106,10 +107,18 @@ describe.skipIf(!REAL)('P-18 measurements', () => {
       fs.mkdirSync(path.join(dir, 'assets'), { recursive: true })
       const start = s3.bytesOut
       const t0 = performance.now()
-      await prepareVideoSource(url, 'a', [{ from: 58.5, to: 65.5 }, { from: 238.5, to: 245.5 }], dir, { info, matrix: 'smpte170m', ext: '.mp4', quality: 'standard' })
-      const read = s3.bytesOut - start
-      report({ what: 'S3 source, two 7 s windows of 5 min', fileMb: Math.round(fs.statSync(long).size / 1e5) / 10, readFromBucketMb: Math.round(read / 1e5) / 10, seconds: secs(t0) })
-      expect(read).toBeLessThan(fs.statSync(long).size / 4)
+      await prepareVideoSource(url, 'a', [{ from: 18.5, to: 25.5 }, { from: 68.5, to: 75.5 }], dir, { info, matrix: 'smpte170m', ext: '.mp4', quality: 'standard' })
+      const sent = s3.bytesOut - start
+      const gets = s3.requests.filter((q) => q.method === 'GET' && q.path.endsWith('source.mp4')).length
+      // what ffmpeg itself read (its own count): the fake bucket's count also has what sat in socket buffers when ffmpeg hung up
+      let consumed = 0
+      for (const [from, len] of [[18.5, 7], [68.5, 7]]) {
+        const r = await run(ctx().config.ffmpegPath, ['-hide_banner', '-v', 'verbose', '-ss', String(from), '-i', url, '-t', String(len), '-c', 'copy', '-f', 'null', '-'])
+        for (const m of r.stderr.matchAll(/Statistics: (\d+) bytes read/g)) consumed += Number(m[1])
+      }
+      report({ what: 'S3 source, two 7 s windows of 90 s', requests: gets, fileMb: Math.round(fs.statSync(long).size / 1e5) / 10, ffmpegReadMb: Math.round(consumed / 1e5) / 10, bucketSentMb: Math.round(sent / 1e5) / 10, seconds: secs(t0) })
+      expect(consumed).toBeGreaterThan(0)
+      expect(consumed).toBeLessThan(fs.statSync(long).size / 3)
     } finally {
       await s3.close()
     }

@@ -11,7 +11,7 @@ export interface FakeS3 {
   uploads: Map<string, { key: string; parts: Map<number, Buffer> }>
   /** Answer the next `n` requests (matching `match`, default any) with 503 SlowDown. */
   failNext(n: number, match?: (method: string, url: URL) => boolean): void
-  requests: Array<{ method: string; path: string; query: string }>
+  requests: Array<{ method: string; path: string; query: string; range?: string }>
   /** Object bytes sent in GET answers so far. */
   readonly bytesOut: number
   close(): Promise<void>
@@ -32,7 +32,21 @@ export async function startFakeS3(bucket = 'b'): Promise<FakeS3> {
     const body = Buffer.concat(chunks)
     const u = new URL(req.url ?? '/', 'http://x')
     const method = req.method ?? 'GET'
-    requests.push({ method, path: u.pathname, query: u.search })
+    requests.push({ method, path: u.pathname, query: u.search, range: req.headers.range })
+    // in pieces, counting only what goes out before the client hangs up (ffmpeg reads a little and closes)
+    const send = (b: Buffer) => {
+      let at = 0
+      const next = () => {
+        while (at < b.length && !res.destroyed) {
+          const piece = b.subarray(at, at + 65536)
+          at += piece.length
+          bytesOut += piece.length
+          if (!res.write(piece)) return void res.once('drain', next)
+        }
+        if (!res.destroyed) res.end()
+      }
+      next()
+    }
     const xml = (status: number, s: string, headers: Record<string, string> = {}) => {
       res.writeHead(status, { 'content-type': 'application/xml', ...headers })
       res.end(`<?xml version="1.0" encoding="UTF-8"?>${s}`)
@@ -140,12 +154,10 @@ export async function startFakeS3(bucket = 'b'): Promise<FakeS3> {
         const start = Number(m[1])
         const end = m[2] ? Math.min(Number(m[2]), obj.body.length - 1) : obj.body.length - 1
         res.writeHead(206, { 'content-length': String(end - start + 1), 'content-range': `bytes ${start}-${end}/${obj.body.length}` })
-        bytesOut += end - start + 1
-        return res.end(obj.body.subarray(start, end + 1))
+        return send(obj.body.subarray(start, end + 1))
       }
       res.writeHead(200, { 'content-length': String(obj.body.length), 'content-type': obj.type ?? 'application/octet-stream' })
-      bytesOut += obj.body.length
-      return res.end(obj.body)
+      return send(obj.body)
     }
     return error(405, 'MethodNotAllowed')
   })
