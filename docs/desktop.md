@@ -19,17 +19,59 @@ Architecture overview: [architecture.md](architecture.md) ("Two products, one co
 ## Process model
 
 ```
-Producer Studio.exe (main)  ── spawns ──▶  Producer Studio.exe  (ELECTRON_RUN_AS_NODE=1)  resources/server/server.mjs
-  splash → wait /api/health                  MODE=desktop  HOST=127.0.0.1  PORT=<free>  DATA_DIR=<settings dataDir>
-  POST /api/desktop/session (secret)         DESKTOP_SECRET=<random per launch>  DESKTOP_SECRET_KEY=<safeStorage key>
-  set ps_session cookie → load UI            stdin held by main: server exits when main goes away
+Producer Studio.exe (main)  ── utilityProcess.fork ──▶  engine (utility process)  resources/server/server.mjs
+  backup the database if this build migrates it         MODE=desktop  HOST=127.0.0.1  PORT=<free>  DATA_DIR=<dataDir>
+  splash → wait /api/health                             DESKTOP_SECRET=<random per launch>  DESKTOP_SECRET_KEY=<key>
+  POST /api/desktop/session (secret)                    DESKTOP_PARENT_PORT=1: stops on {type:'stop'} from main
+  set ps_session cookie → load UI → tool check          (dev / fallback: a child with ELECTRON_RUN_AS_NODE=1 that
+  tray icon, update check (signed builds)                exits when main closes its stdin)
 ```
 
-- Quit closes the server's stdin (graceful PGlite shutdown), waits 5 s, then `taskkill /T /F` sweeps the tree.
+- **Engine host (D-12).** Packaged builds fork the engine as an Electron utility process (`src/engine-host.ts`), so the
+  main process never needs `ELECTRON_RUN_AS_NODE`; dev runs it as a Node child through tsx. A utility process that
+  can't start the engine falls back to the child once per launch (`server.log` says so); `PS_ENGINE_HOST=child|utility`
+  overrides. Inside Electron the engine's own children get `ELECTRON_RUN_AS_NODE=1` from `childEnv()` (TTS worker,
+  renderer, the MCP server Claude starts), never the Claude CLI itself.
+- **Fuses (D-12).** `scripts/release.mjs` `FUSES`, flipped by electron-builder at packaging: `NODE_OPTIONS` and
+  `--inspect`/SIGUSR1 ignored, only `app.asar` loads and its embedded integrity hash is checked (Windows: Electron 30+),
+  cookies encrypted, no extra `file://` privileges. `runAsNode` stays **on**: the engine still starts those Node children
+  with the app binary; switching it off needs them moved to utility processes too (the MCP server is started by the
+  Claude CLI, so it would need a separate Node). With `NODE_OPTIONS` off, the renderer's `--use-system-ca` (only used
+  when HyperFrames downloads its own browser) has no effect; packaged builds ship that browser. Check a real build with
+  `npx @electron/fuses read --app "release/win-unpacked/Producer Studio.exe"`.
+- Quit asks the engine to stop (a stop message to the utility process, or its stdin closed; graceful PGlite shutdown),
+  waits 12 s, then `taskkill /T /F` sweeps the tree.
 - A server crash shows **Restart / Open logs / Quit**. "Sign out" in the web UI just opens a fresh local session.
 - Packaged layout: `resources/app.asar` (main, preload, splash), `resources/server/` (esbuild bundle `server.mjs`,
   `node_modules/` with only the native/wasm-heavy externals and their closure, `scripts/tts-worker.mjs`,
   `scripts/mcp-server.mjs`, `runtime.js`, `skill/`), `resources/web/` (SPA without sourcemaps), `resources/tools/`.
+
+## Settings → This computer
+
+The desktop app's own settings live in `%APPDATA%\Producer Studio\shell.json` (the engine's `settings.json` keeps only
+its own keys), changed from Settings → This computer through the preload's `producerDesktop.app`.
+
+- **Tray (D-2).** A tray icon: Open / Show Producer Studio, Dictate (its shortcut), "Keep running when the window is
+  closed", Settings…, Quit Producer Studio. With keep running on, closing the window hides it: the engine, the dictation
+  shortcut and the voice relay keep going (a Windows balloon says so the first time). Off by default; a desktop without
+  a tray (some Linux) always quits on close.
+- **Look for new versions (D-4).** See "Updates".
+- **Database backups (D-10).** Before the first start of a build with a newer database schema (or, schema unknown,
+  another app version), the PGlite folder `<data>/pg` is copied to `<data>/backups/db-<UTC time>-from-<version>/pg`
+  while nothing has it open; the newest 3 are kept, media isn't copied. A backup that fails offers Quit or "Continue
+  without a backup". `build-info.json` carries the schema; `shell.json` `lastStart` the last start's. **To restore:**
+  quit Producer Studio (and from the tray, if it keeps running), rename `<data>\pg` to `pg.broken`, copy
+  `<data>\backups\db-…\pg` to `<data>\pg`, and start the version named in the backup (an older app can't open a newer
+  database). Settings shows the backups and opens their folder. Move data folder takes them along.
+- **Crash reports and Copy diagnostics (D-14).** Opt-in, off by default, applied at the next start: Electron's
+  crashReporter with `uploadToServer: false`, so minidumps stay in `app.getPath('crashDumps')` and nothing is sent (an
+  upload endpoint is an owner item). Renderer and child-process exits are always logged to `main.log`. Copy diagnostics
+  (Settings, or Help → Copy diagnostics) puts on the clipboard: versions, build (signed, schema), engine host, paths,
+  these settings, the tool check, the crash reports' names and the last lines of `main.log` and `server.log`, with
+  tokens, keys, cookies, passwords and email addresses taken out (`src/diagnostics.ts` `redact`).
+- **Bundled tools (D-13).** At start the engine checks ffmpeg and ffprobe (run), whisper and its model, the Kokoro
+  model and the renderer (`GET /api/tools/health`, `services/tool-health.ts`); a broken one gets a dialog naming it,
+  what it's for and the fix. Settings lists them all with Check again.
 
 ## Bundled tools and how CI gets them
 
