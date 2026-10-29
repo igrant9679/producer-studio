@@ -1,7 +1,7 @@
 // Fill apps/desktop/build/tools with the offline tools the installer bundles:
 //   whisper/        whisper-cli.exe + its DLLs, ggml-small.en.bin
 //   models/onnx-community/Kokoro-82M-v1.0-ONNX/   config, tokenizer, onnx/model_quantized.onnx
-//   chrome/         chrome-headless-shell (win64) for HyperFrames rendering
+//   chrome/         chrome-headless-shell (this platform's) for HyperFrames rendering
 // Local builds copy from existing installs (env overrides first, then the Producer 0.1 offline bundle and the
 // HyperFrames browser cache). CI passes --download to fetch pinned upstream artefacts instead (see docs/desktop.md):
 // every download is checked against the sha256 below before it is used, Hugging Face files come from a fixed commit
@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { chromeLayout } from './release.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dest = path.join(root, 'build', 'tools')
@@ -41,6 +42,8 @@ const KOKORO_FILES = {
 const PUPPETEER_BROWSERS = '@puppeteer/browsers@3.2.3'
 const CHROME_VERSION = process.env.CHROME_HEADLESS_SHELL_VERSION || '152.0.7977.30'
 
+// this platform's chrome-headless-shell (win64, linux64, mac-x64 / mac-arm64)
+const CHROME = chromeLayout(process.platform, process.arch)
 const exists = (p) => p && fs.existsSync(p)
 const firstDir = (...ps) => ps.find((p) => exists(p))
 
@@ -88,7 +91,9 @@ async function whisper() {
   const out = path.join(dest, 'whisper')
   const model = path.join(out, 'ggml-small.en.bin')
   fs.mkdirSync(out, { recursive: true })
-  if (download) {
+  const windows = process.platform === 'win32'
+  const exe = windows ? 'whisper-cli.exe' : 'whisper-cli'
+  if (download && windows) {
     // the CLI zip is small: fetched and checked every run, so the binaries always come out of the pinned release
     const zip = path.join(os.tmpdir(), 'whisper-bin-x64.zip')
     await fetchVerified(WHISPER_ZIP, zip)
@@ -97,13 +102,22 @@ async function whisper() {
     await fetchVerified(WHISPER_MODEL, model)
     return 'ok'
   }
-  if (exists(path.join(out, 'whisper-cli.exe')) && exists(model)) return 'cached'
-  const src = firstDir(process.env.WHISPER_DIR, path.join(producerOffline, 'tools', 'whisper'))
-  if (!src) throw new Error('whisper not found: set WHISPER_DIR or run with --download')
-  const bin = exists(path.join(src, 'Release', 'whisper-cli.exe')) ? path.join(src, 'Release') : src
-  // the CLI and its DLLs only (no tests, demos or other tools)
-  for (const f of fs.readdirSync(bin)) if (f === 'whisper-cli.exe' || /\.dll$/i.test(f)) fs.copyFileSync(path.join(bin, f), path.join(out, f))
-  fs.copyFileSync(path.join(src, 'ggml-small.en.bin'), model)
+  // Linux / macOS: whisper.cpp publishes no prebuilt CLI there, so the model is fetched and the CLI comes from a local
+  // build (WHISPER_DIR); without one the app ships without transcription and its tool check says so
+  if (download && !(await cachedOk(model, WHISPER_MODEL.sha256))) await fetchVerified(WHISPER_MODEL, model)
+  if (exists(path.join(out, exe)) && exists(model)) return 'cached'
+  const src = firstDir(process.env.WHISPER_DIR, windows ? path.join(producerOffline, 'tools', 'whisper') : undefined)
+  if (!src) {
+    if (windows) throw new Error('whisper not found: set WHISPER_DIR or run with --download')
+    console.warn('whisper: no whisper-cli for this platform (build whisper.cpp and set WHISPER_DIR): the app will ship without transcription')
+    return 'skipped'
+  }
+  const bin = exists(path.join(src, 'Release', exe)) ? path.join(src, 'Release') : exists(path.join(src, 'build', 'bin', exe)) ? path.join(src, 'build', 'bin') : src
+  // the CLI and its libraries only (no tests, demos or other tools)
+  for (const f of fs.readdirSync(bin)) if (f === exe || /\.(dll|dylib|so(\.\d+)*)$/i.test(f)) fs.copyFileSync(path.join(bin, f), path.join(out, f))
+  if (!windows) fs.chmodSync(path.join(out, exe), 0o755)
+  if (exists(path.join(src, 'ggml-small.en.bin'))) fs.copyFileSync(path.join(src, 'ggml-small.en.bin'), model)
+  if (!exists(model)) throw new Error(`whisper model not found: put ggml-small.en.bin in ${src} or run with --download`)
   return 'ok'
 }
 
@@ -129,17 +143,17 @@ async function kokoro() {
 
 function newestChrome(base) {
   if (!exists(base)) return undefined
-  const dirs = fs.readdirSync(base).filter((d) => /^win64-/.test(d)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  const dirs = fs.readdirSync(base).filter((d) => d.startsWith(CHROME.cachePrefix)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
   for (const d of dirs) {
-    const p = path.join(base, d, 'chrome-headless-shell-win64')
-    if (exists(path.join(p, 'chrome-headless-shell.exe'))) return p
+    const p = path.join(base, d, CHROME.folder)
+    if (exists(path.join(p, CHROME.exe))) return p
   }
   return undefined
 }
 
 async function chrome() {
   const out = path.join(dest, 'chrome')
-  if (exists(path.join(out, 'chrome-headless-shell.exe'))) return 'cached'
+  if (exists(path.join(out, CHROME.exe))) return 'cached'
   let src = process.env.CHROME_DIR || newestChrome(path.join(home, '.cache', 'hyperframes', 'chrome', 'chrome-headless-shell'))
   if (!src && download) {
     const cache = path.join(os.tmpdir(), 'ps-chrome')

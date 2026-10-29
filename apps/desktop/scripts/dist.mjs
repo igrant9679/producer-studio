@@ -1,12 +1,13 @@
 // Full installer build: web → main/preload → tools → stage (server bundle, node_modules closure, web, tools) →
 // electron-builder, through its API so scripts/release.mjs can lay the fuses and the signing settings from the
 // environment over electron-builder.yml (docs/desktop.md, "Code signing"). Unsigned when nothing is set.
-// Flags: --no-web (reuse apps/web/dist), --dir (unpacked build only, no installer), --download (CI: fetch tools).
+// Flags: --no-web (reuse apps/web/dist), --dir (unpacked build only, no installer), --download (CI: fetch tools),
+// --win / --linux / --mac (default: this machine's; each is built on its own OS, whose native packages npm installed).
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { releaseConfig } from './release.mjs'
+import { platformOf, releaseConfig, targetsFor } from './release.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = path.resolve(root, '..', '..')
@@ -17,9 +18,14 @@ const run = (cmd, a, cwd, shell = false, env = process.env) => {
   if (r.status !== 0) process.exit(r.status ?? 1)
 }
 
+const platform = platformOf(args, process.platform)
+if (platform !== process.platform) {
+  console.error(`desktop build: build the ${platform} app on ${platform}: ffmpeg, sharp and onnxruntime are installed for this machine (${process.platform}).`)
+  process.exit(1)
+}
 let release
 try {
-  release = releaseConfig({ env: process.env, platform: 'win32' })
+  release = releaseConfig({ env: process.env, platform })
 } catch (err) {
   console.error(`desktop build: ${err.message}`)
   process.exit(1)
@@ -32,4 +38,5 @@ run(process.execPath, [path.join(root, 'scripts', 'fetch-tools.mjs'), ...(args.i
 run(process.execPath, [path.join(root, 'scripts', 'stage.mjs')], root)
 // electron-builder is hoisted to the repo root; `config` is merged over electron-builder.yml, which it still loads
 const builder = createRequire(path.join(repo, 'package.json'))('electron-builder')
-await builder.build({ projectDir: root, config: release.config, win: args.includes('--dir') ? ['dir'] : release.targets, publish: 'never' })
+const key = platform === 'darwin' ? 'mac' : platform === 'linux' ? 'linux' : 'win'
+await builder.build({ projectDir: root, config: release.config, [key]: targetsFor(platform, args.includes('--dir')), publish: 'never' })

@@ -10,6 +10,8 @@ Architecture overview: [architecture.md](architecture.md) ("Two products, one co
 |---|---|
 | Dev | `npm run dev -w @producer/desktop` builds `apps/web`, builds main/preload, starts Electron, which spawns `apps/server/src/index.ts` through tsx with Electron's Node. `--no-web` skips the web build. `PS_USER_DATA=<dir>` uses a throwaway profile. |
 | Installer | `npm run dist -w @producer/desktop` → `apps/desktop/release/Producer-Studio-Setup-<version>.exe` (+ `release/win-unpacked/`). `--no-web` reuses `apps/web/dist`; `--dir` builds only `win-unpacked`; `--download` fetches the bundled tools from upstream (CI). |
+| Linux | On Linux (after `npm ci` there, so ffmpeg, sharp and onnxruntime are Linux builds): `npm run dist -w @producer/desktop -- --linux` → `release/Producer-Studio-<version>-x64.AppImage` and `.deb` (the deb recommends `xdotool`, `wtype` and `libappindicator3-1`). whisper.cpp has no Linux release binary: build it and set `WHISPER_DIR` to the folder holding `whisper-cli` (`--download` still fetches the model); without it the app ships without transcription and its tool check says so. Each platform is built on its own OS; dist.mjs refuses a cross build. |
+| macOS (prepared) | `npm run dist -w @producer/desktop -- --mac` on a Mac → `.dmg` + `.zip`, hardened runtime with `installer/entitlements.mac.plist` (JIT, unsigned executable memory and library validation off for the native modules, microphone, Apple Events for dictation's paste). Signed with a Developer ID (`CSC_LINK` / `CSC_NAME`) and notarised when an Apple account is also set (`APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`): both owner items. Not built or run yet. |
 | Silent install | `Producer-Studio-Setup-0.1.0.exe /S /D=C:\path\to\dir` (per-user, assisted NSIS; `/D=` must be last and unquoted). Uninstall: `"Uninstall Producer Studio.exe" /S`. |
 | Data | `%APPDATA%\Producer Studio\` — `logs\main.log`, `logs\server.log` (rotated at 10 MB while running), `settings.json`, `keystore.bin`. The data folder (PGlite, media, renders) is `%LOCALAPPDATA%\Producer Studio\data\` for new installs; an install from before keeps `%APPDATA%\Producer Studio\data\`. Its path is in `settings.json` (`dataDir`); Settings → Storage or File → Move data folder… moves it (copy, check, switch, remove the old one). A folder that can't be opened at launch (a drive that isn't connected) is reported, with the default folder offered instead. |
 
@@ -70,8 +72,11 @@ the build config; the signing module reads them from the environment.
   a sandboxed viewer window; anything else local is denied. Permission requests are denied except clipboard-write,
   fullscreen and microphone-only media (Voice Studio records reference clips for voice cloning) for the local origin. Downloads always show a save dialog.
 - Preload exposes only `window.producerDesktop = { version, platform, openExternal(url), showItemInFolder(path),
-  setNativeTheme(mode), dictation: { configure, result, cancel, toggle, onCommand } }` (system-wide dictation: global
-  shortcut, the `/dictate` widget window, clipboard + SendKeys paste; see voicestudio.md).
+  setNativeTheme(mode), moveDataFolder(), app: { settings, setSettings }, dictation: { configure, result, cancel,
+  toggle, onCommand } }` (system-wide dictation: global shortcut, the `/dictate` widget window, clipboard + paste:
+  SendKeys on Windows, `wtype` on Wayland or `xdotool` on X11 when installed, else the text stays on the clipboard,
+  System Events on macOS; see voicestudio.md). `app` is the shell's own settings (Settings → This computer), and
+  `setSettings` takes only the known on/off keys.
   IPC handlers check the sender is the local origin and re-validate: `openExternal` takes http(s) URLs only (no
   credentials, ≤ 2 KB); `showItemInFolder` resolves symlinks and only accepts paths inside the data folder (the folder
   itself opens in Explorer). No generic `invoke`, no remote module.
@@ -157,7 +162,10 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
 
 ## Known gaps
 
-- Builds are unsigned; Windows only (macOS/Linux targets not configured).
+- Builds are unsigned until the owner sets up signing (see "Code signing"). Linux packages are configured but not yet
+  built on Linux; macOS is prepared (config, entitlements, notarisation switch) but needs a Mac and an Apple account.
+  On Linux the AppImage relies on unprivileged user namespaces for Chromium's sandbox (Ubuntu 24.04+ restricts them
+  through AppArmor); the .deb installs Electron's chrome-sandbox helper instead. A real build must check both.
 - Moving the data folder on macOS/Linux also moves VoiceStudio (it lives inside the data folder there), whose Python
   environment may need reinstalling afterwards. On Windows VoiceStudio has its own folder in Local AppData.
 - Brand-kit conflicts are last-writer-wins (local edits since the last sync win until pushed).

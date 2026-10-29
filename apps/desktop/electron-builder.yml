@@ -60,3 +60,30 @@ nsis:
   installerHeaderIcon: assets/icon.ico
   artifactName: Producer-Studio-Setup-${version}.exe
   deleteAppDataOnUninstall: false
+# Linux (D-17): build on Linux (npm ci there installs that platform's ffmpeg, sharp and onnxruntime binaries):
+#   npm run dist -w @producer/desktop -- --linux
+linux:
+  target: [AppImage, deb]
+  icon: assets/icon.png
+  category: AudioVideo
+  executableName: producer-studio
+  synopsis: AI video production and a timeline editor, offline
+  maintainer: Producer Studio
+  artifactName: Producer-Studio-${version}-${arch}.${ext}
+deb:
+  # dictation pastes with xdotool (X11) or wtype (Wayland) when one is installed; the tray needs an indicator library
+  recommends: [xdotool, wtype, libappindicator3-1]
+# macOS (D-17, prepared): build on a Mac. Signing (Developer ID in CSC_LINK / CSC_NAME) and notarisation (an Apple
+# developer account: APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
+# APPLE_TEAM_ID) are the owner's; scripts/release.mjs turns notarisation on only when both are there.
+mac:
+  target: [dmg, zip]
+  icon: assets/icon.png
+  category: public.app-category.video
+  hardenedRuntime: true
+  entitlements: installer/entitlements.mac.plist
+  entitlementsInherit: installer/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Producer Studio records reference clips for voice cloning and dictation with your microphone.
+    NSAppleEventsUsageDescription: Dictation pastes what you said into the app you are typing in, through System Events.
+  artifactName: Producer-Studio-${version}-${arch}.${ext}

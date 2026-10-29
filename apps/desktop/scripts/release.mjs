@@ -106,6 +106,30 @@ export function releaseConfig({ env = {}, platform = 'win32' } = {}) {
   return { config, signed, notes, targets: targetsFor(platform) }
 }
 
+const SKIP_FILE = /(\.map|\.d\.ts|\.d\.mts|\.d\.cts|\.tsbuildinfo)$|^(README|CHANGELOG|HISTORY)(\.[a-z]+)?$/i
+
+/**
+ * Whether stage.mjs copies a file of the server's node_modules into a build for `platform`/`arch` (the machine it
+ * builds on: native packages are installed for it). Other platforms' prebuilt binaries, tests, maps and docs stay out.
+ */
+export function keepStagedPath(rel, platform = 'win32', arch = 'x64') {
+  const n = rel.replace(/\\/g, '/')
+  const onnx = /onnxruntime-node\/bin\/napi-v\d+\/([^/]+)(\/|$)/.exec(n)
+  if (onnx && onnx[1] !== platform) return false
+  const probe = /ffprobe-static\/bin\/([^/]+)(?:\/([^/]+))?/.exec(n)
+  if (probe && (probe[1] !== platform || (probe[2] && probe[2] !== arch))) return false
+  if (/@img\/sharp-wasm32(\/|$)/.test(n)) return false
+  if (/\/(\.github|\.vscode|__tests__|coverage)(\/|$)/.test(n)) return false
+  return !SKIP_FILE.test(n.split('/').pop() ?? '')
+}
+
+/** Where chrome-headless-shell lives in @puppeteer/browsers' cache, and its binary, per platform (fetch-tools.mjs). */
+export function chromeLayout(platform = 'win32', arch = 'x64') {
+  if (platform === 'linux') return { cachePrefix: 'linux-', folder: 'chrome-headless-shell-linux64', exe: 'chrome-headless-shell' }
+  if (platform === 'darwin') return arch === 'arm64' ? { cachePrefix: 'mac_arm-', folder: 'chrome-headless-shell-mac-arm64', exe: 'chrome-headless-shell' } : { cachePrefix: 'mac-', folder: 'chrome-headless-shell-mac-x64', exe: 'chrome-headless-shell' }
+  return { cachePrefix: 'win64-', folder: 'chrome-headless-shell-win64', exe: 'chrome-headless-shell.exe' }
+}
+
 /** SCHEMA_VERSION from apps/server/src/db/migrate.ts's source, or undefined. */
 export function schemaVersionOf(migrateSource) {
   const m = /export const SCHEMA_VERSION\s*=\s*(\d+)/.exec(migrateSource)

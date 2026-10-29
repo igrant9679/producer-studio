@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { FUSES, buildInfo, releaseConfig, schemaVersionOf, updateRepoOf, windowsSigning } from '../../scripts/release.mjs'
+import { FUSES, buildInfo, chromeLayout, keepStagedPath, platformOf, releaseConfig, schemaVersionOf, targetsFor, updateRepoOf, windowsSigning } from '../../scripts/release.mjs'
 import { parseBuildInfo } from '../build-info'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -85,6 +85,61 @@ describe('code signing from the environment (D-3)', () => {
   it('a .pfx certificate (CSC_LINK) signs as electron-builder always did, now required to succeed', () => {
     expect(windowsSigning({ CSC_LINK: 'cert.pfx' })).toEqual({ mode: 'certificate' })
     expect(releaseConfig({ env: { WIN_CSC_LINK: 'x' }, platform: 'win32' })).toMatchObject({ signed: true, config: { win: { forceCodeSigning: true } } })
+  })
+})
+
+describe('Linux build, macOS prepared (D-17)', () => {
+  it('builds for the platform asked, else this machine’s, with its installers', () => {
+    expect(platformOf(['--linux'], 'win32')).toBe('linux')
+    expect(platformOf(['--mac', '--dir'], 'linux')).toBe('darwin')
+    expect(platformOf([], 'linux')).toBe('linux')
+    expect(targetsFor('linux')).toEqual(['AppImage', 'deb'])
+    expect(targetsFor('darwin')).toEqual(['dmg', 'zip'])
+    expect(targetsFor('win32')).toEqual(['nsis'])
+    expect(targetsFor('linux', true)).toEqual(['dir'])
+  })
+
+  it('Linux packages carry the fuses and aren’t signed; Windows signing settings don’t apply there', () => {
+    const r = releaseConfig({ env: { CSC_LINK: 'x.pfx' }, platform: 'linux' })
+    expect(r).toMatchObject({ signed: false, targets: ['AppImage', 'deb'], config: { electronFuses: FUSES } })
+    expect(r.config.win).toBeUndefined()
+  })
+
+  it('macOS is notarised only with a signing identity and an Apple account; otherwise it says what it is', () => {
+    const none = releaseConfig({ env: {}, platform: 'darwin' })
+    expect(none).toMatchObject({ signed: false, config: { mac: { notarize: false } } })
+    expect(none.notes[0]).toMatch(/not notarised/)
+    expect(releaseConfig({ env: { CSC_NAME: 'Developer ID Application: Producer' }, platform: 'darwin' }).config.mac).toEqual({ notarize: false })
+    const full = releaseConfig({ env: { CSC_LINK: 'id.p12', APPLE_API_KEY: 'k.p8', APPLE_API_KEY_ID: 'K', APPLE_API_ISSUER: 'I' }, platform: 'darwin' })
+    expect(full).toMatchObject({ signed: true, config: { mac: { notarize: true } } })
+  })
+
+  it('the staged server keeps only this platform’s native binaries', () => {
+    expect(keepStagedPath('onnxruntime-node/bin/napi-v6/linux/x64/libonnxruntime.so.1', 'linux')).toBe(true)
+    expect(keepStagedPath('onnxruntime-node/bin/napi-v6/win32/x64/onnxruntime.dll', 'linux')).toBe(false)
+    expect(keepStagedPath('onnxruntime-node\\bin\\napi-v6\\darwin\\arm64\\x.node', 'win32')).toBe(false)
+    expect(keepStagedPath('ffprobe-static/bin/linux/x64/ffprobe', 'linux', 'x64')).toBe(true)
+    expect(keepStagedPath('ffprobe-static/bin/linux/ia32/ffprobe', 'linux', 'x64')).toBe(false)
+    expect(keepStagedPath('ffprobe-static/bin/win32/x64/ffprobe.exe', 'win32', 'x64')).toBe(true)
+    expect(keepStagedPath('ffprobe-static/bin/darwin/x64/ffprobe', 'win32', 'x64')).toBe(false)
+    // as before: no wasm sharp, no tests, maps or readmes
+    for (const p of ['@img/sharp-wasm32/lib/x.wasm', 'pkg/__tests__/a.js', 'pkg/dist/a.js.map', 'pkg/README.md', 'pkg/index.d.ts']) expect(keepStagedPath(p, 'linux')).toBe(false)
+    expect(keepStagedPath('pkg/dist/index.js', 'linux')).toBe(true)
+  })
+
+  it('finds chrome-headless-shell in the browser cache for each platform', () => {
+    expect(chromeLayout('win32')).toEqual({ cachePrefix: 'win64-', folder: 'chrome-headless-shell-win64', exe: 'chrome-headless-shell.exe' })
+    expect(chromeLayout('linux')).toMatchObject({ folder: 'chrome-headless-shell-linux64', exe: 'chrome-headless-shell' })
+    expect(chromeLayout('darwin', 'arm64')).toMatchObject({ cachePrefix: 'mac_arm-', folder: 'chrome-headless-shell-mac-arm64' })
+  })
+
+  it('electron-builder.yml has the Linux and macOS sections, and the entitlements file exists', () => {
+    const yml = fs.readFileSync(path.resolve(here, '..', '..', 'electron-builder.yml'), 'utf8').replace(/\r\n/g, '\n')
+    expect(yml).toMatch(/^linux:\n {2}target: \[AppImage, deb\]/m)
+    expect(yml).toMatch(/^deb:\n.*\n {2}recommends: \[xdotool, wtype/m)
+    expect(yml).toMatch(/^mac:\n {2}target: \[dmg, zip\]/m)
+    const ent = /entitlements: (\S+)/.exec(yml)![1]
+    expect(fs.readFileSync(path.resolve(here, '..', '..', ent), 'utf8')).toContain('com.apple.security.device.audio-input')
   })
 })
 

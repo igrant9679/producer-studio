@@ -51,6 +51,8 @@ export function windowsSigning(env?: Record<string, string | undefined>): { mode
 export function platformOf(args: string[], host: Platform): Platform
 export function targetsFor(platform: Platform, dir?: boolean): string[]
 export function releaseConfig(o?: { env?: Record<string, string | undefined>; platform?: Platform }): ReleaseConfig
+export function keepStagedPath(rel: string, platform?: Platform, arch?: string): boolean
+export function chromeLayout(platform?: Platform, arch?: string): { cachePrefix: string; folder: string; exe: string }
 export function schemaVersionOf(migrateSource: string): number | undefined
 export function updateRepoOf(raw: unknown): string | undefined
 export function buildInfo(o: { version: string; migrateSource: string; env?: Record<string, string | undefined>; now?: number }): BuildInfo
