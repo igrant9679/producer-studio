@@ -12,6 +12,7 @@ import { HttpError } from './http'
 import { idempotency } from './idempotency'
 import { log } from './log'
 import { countRequest, metricsRoute } from './metrics'
+import { openApiFor } from './openapi'
 import { requestId, requestIdOf, serverErrorMessage } from './request-id'
 import { healthRoutes } from './routes/health'
 import { spaceAuditRoutes } from './routes/audit'
@@ -94,6 +95,8 @@ export function createApp() {
   // as a device token
   app.route('/api/health', healthRoutes())
   app.get('/api/metrics', metricsRoute)
+  // P-24: the API described from its routes and their zod request schemas
+  app.get('/api/openapi.json', async (c) => c.json(await openApiFor(app)))
 
   // every request body is capped before anything reads it (sign-in included); the upload stream has its own cap
   app.use('/api/*', async (c, next) => {

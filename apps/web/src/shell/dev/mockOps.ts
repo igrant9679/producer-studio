@@ -167,6 +167,12 @@ export function registerOpsMocks(k: MockOpsKit) {
     orphans.splice(0)
     return json({ scanId: b.scanId, dryRun: false, objects: [], count: removed, bytes, scanned: 1240, removed })
   })
+  // health and the API description (P-9, P-24): public, like the server's; metrics stay off (no METRICS_TOKEN)
+  on('GET', '/api/health/live', () => json({ ok: true, role: 'all', uptimeSec: Math.round((Date.now() - now) / 1000) }))
+  on('GET', '/api/health/ready', () => json({ ok: true, role: 'all', checks: { db: 'ok', migrations: { ok: true, version: 16, expected: 16 }, storage: 'ok' } }))
+  on('GET', '/api/metrics', () => fail(404, 'Metrics are off on this server (METRICS_TOKEN is not set).', 'not_found'))
+  on('GET', '/api/openapi.json', () => json({ openapi: '3.1.0', info: { title: 'Producer Studio API (dev mock)', version: 'mock' }, paths: {}, components: {} }))
+
   on('GET', '/api/operator/audit', (_m, q) => {
     const denied = opOnly()
     if (denied) return denied
