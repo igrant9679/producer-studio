@@ -96,10 +96,11 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'media.denoise': 'Denoising',
   'media.bgremove': 'Removing the background',
   'media.smooth': 'Smooth slow motion',
+  'asset.copy': 'Copying the clip',
 }
 
 /** Short jobs people wait on in the editor: they get slots long exports can't take (QUICK_JOB_CONCURRENCY). */
-export const QUICK_KINDS: readonly JobKind[] = ['asset.process', 'ai.transcribe', 'ai.tts', 'media.scenes']
+export const QUICK_KINDS: readonly JobKind[] = ['asset.process', 'ai.transcribe', 'ai.tts', 'media.scenes', 'asset.copy']
 
 /** The longest a job of this kind may run: renders long, processing medium, voice short. */
 export function maxRunMs(kind: string): number {

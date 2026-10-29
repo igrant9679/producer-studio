@@ -36,7 +36,7 @@ import { adoptCloudIdentity, localUserId } from './identity'
 import { applyFont, applyFontDelete, applyKit, applyKitDelete, dropUnseenBrand, pushBrandDelete, pushBrandExtras } from './brand-sync'
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
 import { SyncLock } from './lock'
-import { UploadBoard, inLanes, sendFile } from './uploads'
+import { MULTIPART_FROM_BYTES, UploadBoard, inLanes, sendFile } from './uploads'
 import { LOW_DISK_BYTES, blockedBy, compareSides, freeBytes, projectDirty, sideSummary, syncItems } from './panel'
 import { prefetchAllMedia } from './media'
 import { keepOffline } from './offline'
@@ -1484,7 +1484,7 @@ export class SyncEngine {
     const bytes = fs.statSync(file).size
     let ticket: UploadTicket
     try {
-      ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: bytes, assetId: a.id, sha256: sha, origin: a.origin, ...(a.meta?.tts ? { tts: a.meta.tts } : {}), ...(a.projectId ? { projectId: a.projectId } : {}) })
+      ticket = await c.json<UploadTicket>('POST', '/api/uploads', { workspaceId: a.workspaceId, filename, mime: a.mime, size: bytes, assetId: a.id, sha256: sha, origin: a.origin, ...(bytes >= MULTIPART_FROM_BYTES ? { multipart: true } : {}), ...(a.meta?.tts ? { tts: a.meta.tts } : {}), ...(a.projectId ? { projectId: a.projectId } : {}) })
     } catch (err) {
       const exists = err instanceof CloudError && err.status === 409 ? (err.body?.details as { exists?: boolean; asset?: AssetRecord; sha256?: string } | undefined) : undefined
       if (exists?.exists) {

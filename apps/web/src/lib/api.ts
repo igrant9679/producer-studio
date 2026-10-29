@@ -53,6 +53,8 @@ import type {
   Workspace,
   WriteRequest,
 } from '@producer/core'
+import type { MultipartPlan, TranscriptionInfo } from '@producer/core'
+import { MULTIPART_FROM_BYTES, rememberUpload, resumeKey, savedUpload, sendParts, UploadPausedError, xhrTransport } from './multipartUpload'
 
 export class HttpError extends Error {
   status: number
@@ -301,7 +303,13 @@ export const api = {
   assetUsage: (id: string) => req<AssetUsage>('GET', `/assets/${id}/usage`),
   /** Remove trashed clips for good: all of the space's, or only `ids`. */
   emptyTrash: (workspaceId: string, ids?: string[]) => req<EmptyTrashResult>('POST', '/assets/trash/empty', { workspaceId, ids }),
-  copyAsset: (id: string, body: CopyAssetRequest) => req<AssetRecord>('POST', `/assets/${id}/copy`, body),
+  /** A job on the server (a big file takes a while); resolves with the copy once it's made. */
+  async copyAsset(id: string, body: CopyAssetRequest): Promise<AssetRecord> {
+    const job = await reqOnce<Job<{ asset: AssetRecord }>>('POST', `/assets/${id}/copy`, body)
+    const done = job.status === 'done' ? job : await waitForJob<{ asset: AssetRecord }>(job.id)
+    if (done.status !== 'done' || !done.result) throw new Error(done.error || 'The clip couldn’t be copied')
+    return done.result.asset
+  },
   /** A new file for a clip, kept under its id (every project using it follows). onProgress 0..1. */
   async replaceAsset(id: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
     const ticket = await req<UploadTicket>('POST', `/assets/${id}/replace`, { filename: file.name, mime: file.type || 'application/octet-stream', size: file.size })
@@ -319,6 +327,8 @@ export const api = {
   },
   /** Upload a File: ticket -> PUT bytes -> complete. onProgress 0..1. */
   async upload(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
+    // big files go up in parts that survive a drop or a reload (P-5)
+    if (file.size >= MULTIPART_FROM_BYTES) return uploadResumable(workspaceId, file, onProgress)
     const ticket = await req<{ assetId: string; url: string; method: 'PUT'; headers: Record<string, string> }>('POST', '/uploads', {
       workspaceId,
       filename: file.name,
@@ -354,6 +364,8 @@ export const api = {
 
   // ai
   transcribe: (assetId: string, language?: string) => reqOnce<Job<{ assetId: string; transcript: Transcript }>>('POST', '/ai/transcribe', { assetId, language }),
+  /** What transcription on this server can do: its model, and the languages it can be asked for (P-20). */
+  transcription: () => req<TranscriptionInfo>('GET', '/ai/transcription'),
   tts: (body: TtsRequest) => reqOnce<Job<{ asset: AssetRecord; duration: number }>>('POST', '/ai/tts', body),
   voices: (workspaceId?: string) => req<Voice[]>('GET', `/ai/voices${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   voiceSampleUrl: (id: string) => `/api/ai/voices/${encodeURIComponent(id)}/sample`,
@@ -491,6 +503,41 @@ export function subscribeEvents(
 /** First wait before reopening a live-update stream the server closed; doubles up to the max. */
 export const LIVE_RETRY_MS = 2000
 export const LIVE_RETRY_MAX_MS = 60_000
+
+/**
+ * A big file in parts (P-5). The same file chosen again after a drop or a reload (this browser remembers it) carries on
+ * from the parts already in storage; an upload that stops part way keeps them and says so.
+ */
+async function uploadResumable(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
+  const key = resumeKey(workspaceId, file)
+  const ask = (assetId?: string) =>
+    req<UploadTicket>('POST', '/uploads', { workspaceId, filename: file.name, mime: file.type || 'application/octet-stream', size: file.size, multipart: true, ...(assetId ? { assetId } : {}) })
+  const saved = savedUpload(key)
+  let ticket: UploadTicket
+  try {
+    ticket = await ask(saved)
+  } catch (e) {
+    // that upload finished, or is no longer this space's: start a new one
+    if (!saved || !(e instanceof HttpError) || (e.status !== 409 && e.status !== 404)) throw e
+    rememberUpload(key, undefined)
+    ticket = await ask()
+  }
+  if (!ticket.multipart) throw new Error(`${file.name}: this server can't take uploads in parts`)
+  rememberUpload(key, ticket.assetId)
+  try {
+    await sendParts(file, ticket as UploadTicket & { multipart: MultipartPlan }, xhrTransport((m, p, b) => req(m, p, b)), { onProgress })
+  } catch (e) {
+    if (!(e instanceof UploadPausedError)) {
+      // refused for good: the parts go, and the clip says why
+      rememberUpload(key, undefined)
+      await req('POST', `/assets/${ticket.assetId}/abort`, { reason: e instanceof Error ? e.message : String(e) }).catch(() => undefined)
+    }
+    throw new Error(`${file.name}: upload failed — ${e instanceof Error ? e.message : String(e)}`)
+  }
+  const rec = await req<AssetRecord>('POST', `/assets/${ticket.assetId}/complete`)
+  rememberUpload(key, undefined)
+  return rec
+}
 
 /** Poll/await a job until it finishes (uses GET; SSE listeners update UI in parallel). */
 export async function waitForJob<R>(id: string, onUpdate?: (j: Job<R>) => void, intervalMs = 1000): Promise<Job<R>> {

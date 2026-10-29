@@ -41,7 +41,8 @@ const MB = 1024 * 1024
  */
 export function bodyLimitFor(method: string, path: string): number | null {
   if (ctx().config.mode !== 'cloud' || method === 'GET' || method === 'HEAD') return null
-  if (/^\/api\/uploads\/[^/]+\/data$/.test(path)) return null
+  // file bodies: capped as they are written (a part at its own size, P-5)
+  if (/^\/api\/uploads\/[^/]+\/(data|parts\/\d+)$/.test(path) || /^\/api\/assets\/[^/]+\/replace\/data$/.test(path)) return null
   if (/^\/api\/projects(\/[^/]+)?$/.test(path) || path === '/api/ai/assistant') return 64 * MB
   if (path.startsWith('/api/ai/') || path.startsWith('/api/voice/') || path.startsWith('/api/sync')) return 8 * MB
   // a brand kit's font file (A-21: at most 5 MB, checked by the route too)

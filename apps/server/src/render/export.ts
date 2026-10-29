@@ -20,6 +20,7 @@ import { type AssetRow, assetPrefix, createAssetFromFile, localSource, updateAss
 import { recordActivity } from '../services/activity'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { brandFontFaces } from './brandFonts'
+import { pointAtPrepared, type PreparedSource, prepareVideoSource, probeSource, shownMatrix, usedWindows, worthTrimming } from './sources'
 import { buildFontFaces, fontsUsed } from './fonts'
 import { normalizeLoudness } from './loudness'
 import { makePitchShiftCopies } from './pitch'
@@ -131,7 +132,7 @@ export async function prepareRenderDir(
   project: Project,
   workspaceId: string,
   dir: string,
-  opts: { useProxy?: boolean; signal?: AbortSignal; progress?: (f: number, m: string) => void; output?: { w: number; h: number }; fps?: number } = {},
+  opts: { useProxy?: boolean; quality?: ExportRequest['quality']; signal?: AbortSignal; progress?: (f: number, m: string) => void; output?: { w: number; h: number }; fps?: number } = {},
 ): Promise<PreparedRender> {
   fs.mkdirSync(path.join(dir, 'assets'), { recursive: true })
   const files: string[] = []
@@ -143,12 +144,21 @@ export async function prepareRenderDir(
   if (notReady.length) throw new HttpError(409, 'conflict', `Some media has not finished uploading: ${notReady.map((r) => r.name).join(', ')}`)
   const rel = new Map<string, string>()
   const localFiles = new Map<string, string>()
+  // the source windows the edit uses (P-18): a long S3 source used a little is read in place, never downloaded whole
+  const windows = usedWindows(project)
+  const storage = ctx().storage
+  const inPlace = new Set<string>()
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
     opts.progress?.(i / Math.max(1, rows.length), `Gathering media (${i + 1}/${rows.length})`)
     const key = renderMediaKey(r, opts.useProxy)
     const name = `${r.id}${path.extname(key) || '.bin'}`
     const dest = path.join(dir, 'assets', name)
+    if (r.kind === 'video' && !storage.localPath && storage.presignGet && worthTrimming(windows.get(r.id) ?? [], r.meta?.duration)) {
+      localFiles.set(r.id, await storage.presignGet(key, { expiresSec: 6 * 3600 }))
+      inPlace.add(r.id)
+      continue
+    }
     const src = await localSource(r, path.join(dir, '.dl'), key)
     if (src !== dest) {
       try {
@@ -201,6 +211,46 @@ export async function prepareRenderDir(
   // sound whose pitch follows its speed (E-17)
   const pitch = await makePitchShiftCopies(project, localFiles, dir, opts.signal)
   files.push(...pitch.values())
+  // the video files the render reads: in the colours the editor showed, cut to what the edit uses (render/sources.ts)
+  const prepared = new Map<string, PreparedSource[]>()
+  const videos = rows.filter((r) => r.kind === 'video')
+  for (let i = 0; i < videos.length; i++) {
+    const r = videos[i]
+    const src = localFiles.get(r.id)
+    if (!src) continue
+    const proxy = renderMediaKey(r, opts.useProxy) !== r.sourceKey
+    const info = await probeSource(src, opts.signal)
+    const key = renderMediaKey(r, opts.useProxy)
+    if (info) {
+      opts.progress?.(0.9 + (i / videos.length) * 0.1, `Preparing video (${i + 1}/${videos.length})`)
+      const ps = await prepareVideoSource(src, r.id, windows.get(r.id), dir, { info, matrix: shownMatrix(info, { proxy, recorded: r.meta?.colorMatrix }), ext: path.extname(key) || '.mp4', quality: opts.quality ?? (opts.useProxy ? 'draft' : 'standard'), signal: opts.signal })
+      if (ps) {
+        prepared.set(r.id, ps)
+        const whole = rel.get(r.id)
+        ps.forEach((x, k) => {
+          rel.set(ps.length > 1 ? `${r.id}~${k + 1}` : r.id, `assets/${x.name}`)
+          files.push(`assets/${x.name}`)
+        })
+        // a clip held as a freeze frame still names the asset: it gets the first window
+        if (ps.length > 1) rel.set(r.id, `assets/${ps[0].name}`)
+        // the whole file is no longer read
+        if (whole && !ps.some((x) => `assets/${x.name}` === whole)) {
+          fs.rmSync(path.join(dir, whole), { force: true })
+          files.splice(files.indexOf(whole), 1)
+        }
+        continue
+      }
+    }
+    if (inPlace.has(r.id)) {
+      // read in place to be cut, but it couldn't be: download it after all
+      const name = `${r.id}${path.extname(key) || '.bin'}`
+      await localSource(r, path.join(dir, 'assets', '.dl'), key).then((f) => fs.renameSync(f, path.join(dir, 'assets', name)))
+      fs.rmSync(path.join(dir, 'assets', '.dl'), { recursive: true, force: true })
+      rel.set(r.id, `assets/${name}`)
+      files.push(`assets/${name}`)
+    }
+  }
+  const compiled = pointAtPrepared(project, prepared)
   fs.writeFileSync(path.join(dir, 'runtime.js'), await runtimeBundle())
   fs.copyFileSync(gsapPath(), path.join(dir, 'gsap.min.js'))
   files.push('runtime.js', 'gsap.min.js')
@@ -209,7 +259,7 @@ export async function prepareRenderDir(
   // fonts uploaded to the space for a brand kit (A-21)
   const brand = await brandFontFaces(workspaceId, fontsUsed(project), dir)
   files.push(...brand.files)
-  const html = compileToHyperFrames(project, {
+  const html = compileToHyperFrames(compiled, {
     assetPath: (id) => rel.get(id) ?? '',
     freezeFramePath: (id) => freeze.get(id),
     reversedPath: (id) => reversed.get(id),
@@ -228,11 +278,15 @@ export async function prepareRenderDir(
   return { dir, index, files, project, duration: projectDuration(project) }
 }
 
-function hfEnv(): NodeJS.ProcessEnv {
+/** The environment HyperFrames runs in: no telemetry or colour codes, the system CA on Windows, its frame cache on the data volume. */
+export function hfEnv(): NodeJS.ProcessEnv {
   const env = childEnv()
   // Windows hosts behind TLS inspection need the system trust store for any browser download
   if (process.platform === 'win32' && !/--use-system-ca/.test(env.NODE_OPTIONS ?? '')) env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --use-system-ca`.trim()
   if (!env.CHROME_PATH && ctx().config.chromePath && process.env.HF_USE_CACHED_CHROME === '1') env.CHROME_PATH = ctx().config.chromePath
+  // the frames HyperFrames extracted, kept between exports on the data volume (P-18): the container's own disk is
+  // small and goes with every deploy
+  env.HYPERFRAMES_EXTRACT_CACHE_DIR ??= ctx().config.renderCacheDir
   env.HYPERFRAMES_NO_TELEMETRY = '1'
   env.DO_NOT_TRACK = '1'
   env.FORCE_COLOR = '0'
@@ -376,7 +430,7 @@ export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: 
     // Render natively at the requested size: the stage is scaled inside the composition so text, shapes and
     // captions are drawn at full resolution and source footage keeps its detail (no post-render upscale).
     const tgt = plan.size
-    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: plan.quality === 'draft', signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt, fps: plan.fps })
+    const prep = await prepareRenderDir(project, row.workspaceId, dir, { useProxy: plan.quality === 'draft', quality: plan.quality, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.08, m), output: tgt, fps: plan.fps })
     jc.check()
     jc.progress(0.09, 'Checking composition')
     const lint = await steps.lint(dir, jc.signal)

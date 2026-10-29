@@ -633,6 +633,25 @@ CREATE INDEX IF NOT EXISTS auth_tokens_expires_idx ON auth_tokens(expires_at);
 `
 
 /**
+ * v17 — the media pipeline (P-5, P-21): resumable multipart uploads in progress (which storage upload holds a clip's
+ * parts), and an index for finding an identical file already processed in the same space (same sha256), so an upload
+ * of it reuses that clip's proxy, thumbnails and waveform instead of making them again.
+ */
+export const DDL_V17 = `
+CREATE TABLE IF NOT EXISTS upload_sessions (
+  asset_id text PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+  key text NOT NULL,
+  upload_id text NOT NULL,
+  part_size double precision NOT NULL,
+  size double precision NOT NULL,
+  created_at double precision NOT NULL,
+  updated_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS upload_sessions_updated_idx ON upload_sessions(updated_at);
+CREATE INDEX IF NOT EXISTS assets_ws_sha256_idx ON assets(workspace_id, sha256) WHERE sha256 IS NOT NULL;
+`
+
+/**
  * v18 — a sync feed that can forget (R4-C). Deleting tombstones (compaction) raises the feed's horizon: a replica whose
  * cursor is below it may have missed deletes and does a full resync. A space's other brand kits and its font files
  * now sync to desktops (change_seq, tombstones 'brand_kit' / 'brand_font', republished to a member who joins).
@@ -705,5 +724,6 @@ export const MIGRATIONS: Array<[number, string]> = [
   [14, DDL_V14],
   [15, DDL_V15],
   [16, DDL_V16],
+  [17, DDL_V17],
   [18, DDL_V18],
 ]

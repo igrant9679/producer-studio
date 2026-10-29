@@ -2,7 +2,7 @@
 // for good (by hand and by retention), and copying clips and projects into another space.
 import path from 'node:path'
 import { and, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm'
-import { uid, type AssetUsage, type Project } from '@producer/core'
+import { uid, type AssetRecord, type AssetUsage, type Project } from '@producer/core'
 import { ctx } from '../context'
 import { assets, exportsTable, projects, shareLinks } from '../db/schema'
 import { HttpError } from '../http'
@@ -10,7 +10,9 @@ import { newId } from '../ids'
 import { cancelJobsOfAsset } from '../jobs/queue'
 import { log } from '../log'
 import { waveformKey } from '../media/process'
-import { type AssetRow, assetDirs, assetPrefix, emitAsset } from './assets'
+import { type AssetRow, assetDirs, assetPrefix, emitAsset, loadAsset } from './assets'
+import { assetRecord } from '../dto'
+import type { JobContext } from '../jobs/worker'
 import { insertProject, type ProjectRow, withFreshIds } from './projects'
 
 const DAY = 24 * 3600 * 1000
@@ -118,11 +120,11 @@ export async function sweepLibrary(now = Date.now()): Promise<{ media: number; e
 
 // ---------------- copies into another space ----------------
 
-/** Copy one stored object (any size; S3 streams through a temp file). False when there is nothing to copy. */
+/** Copy one stored object inside storage (S3: on the bucket's side, any size). False when there is nothing to copy. */
 async function copyObject(from: string, to: string, contentType?: string): Promise<boolean> {
   const storage = ctx().storage
   if (!(await storage.stat(from))) return false
-  await storage.put(to, await storage.getStream(from), { contentType })
+  await storage.copy(from, to, contentType)
   return true
 }
 
@@ -147,6 +149,18 @@ export async function copyAssetTo(row: AssetRow, workspaceId: string, userId: st
     .returning()
   emitAsset(saved)
   return saved
+}
+
+/** The asset.copy job: a clip copied into another space (and, for a move, the original put in the trash once it's there). */
+export async function copyAssetJob(jc: JobContext): Promise<{ asset: AssetRecord }> {
+  const { assetId, workspaceId, move } = jc.job.input as { assetId: string; workspaceId: string; move?: boolean }
+  const row = await loadAsset(assetId)
+  jc.progress(0.1, `Copying ${row.name}`)
+  const copy = await copyAssetTo(row, workspaceId, jc.job.userId)
+  jc.check()
+  if (move) await setAssetTrashed(row, true)
+  jc.progress(1, move ? 'Moved' : 'Copied')
+  return { asset: assetRecord(copy, { light: true }) }
 }
 
 /** A document with clip ids swapped for their copies' (every place an id is written, and the media URLs). */

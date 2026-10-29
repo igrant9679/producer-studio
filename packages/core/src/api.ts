@@ -284,12 +284,37 @@ export interface UploadRequest {
   /** Client-generated id (desktop sync keeps ids identical across replicas). */
   assetId?: string
   sha256?: string
+  /** Send the file in parts that can be resumed (P-5); the answer then carries `multipart` and no single-PUT url. */
+  multipart?: boolean
 }
 
 export interface UploadTicket {
   assetId: string
   url: string
   method: 'PUT'
+  headers: Record<string, string>
+  /** A resumable upload (P-5): ask POST /api/uploads/:assetId/parts for part URLs, PUT each, then complete. */
+  multipart?: MultipartPlan
+}
+
+// Resumable uploads (P-5):
+// POST /api/uploads {..., multipart: true}           -> UploadTicket with `multipart` (resuming: send the same assetId)
+// GET  /api/uploads/:assetId/parts                   -> MultipartPlan (which parts have arrived)
+// POST /api/uploads/:assetId/parts {parts: number[]} -> {parts: UploadPartUrl[]} (each URL takes exactly `size` bytes)
+// POST /api/assets/:id/complete                      -> AssetRecord (joins the parts, then processing as usual)
+export interface MultipartPlan {
+  size: number
+  partSize: number
+  partCount: number
+  /** Part numbers (1-based) already in storage: a resumed upload sends only the others. */
+  done: number[]
+}
+
+export interface UploadPartUrl {
+  partNumber: number
+  url: string
+  /** Bytes of the file this part holds: [(partNumber - 1) * partSize, + size). */
+  size: number
   headers: Record<string, string>
 }
 
@@ -334,7 +359,7 @@ export function transcriptRev(t: Transcript): string {
 // GET /api/events?workspaceId=         -> text/event-stream, events: `job` (Job), `asset` (AssetRecord), `project`
 //   ({id, version, deleted?}: created, saved, renamed, trashed/restored, template flag, deleted), `workspace`
 //   ({id, name?, deleted, members?, brand?}: renamed, deleted, members changed, brand kit saved), `sync`
-export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task' | 'media.scenes' | 'media.stabilise' | 'media.denoise' | 'media.bgremove' | 'media.smooth'
+export type JobKind = 'asset.process' | 'ai.transcribe' | 'ai.tts' | 'ai.produce.script' | 'ai.produce.assemble' | 'export.render' | 'voice.relay' | 'voicestudio.install' | 'voicestudio.task' | 'media.scenes' | 'media.stabilise' | 'media.denoise' | 'media.bgremove' | 'media.smooth' | 'asset.copy'
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
 export interface Job<R = unknown> {
@@ -360,6 +385,8 @@ export interface Job<R = unknown> {
 
 // ---- AI ----
 // POST /api/ai/transcribe  {assetId, language?}                     -> Job<{assetId, transcript: Transcript}>
+//      language: a code from TranscriptionInfo.languages, or "auto" / nothing (detected on a multilingual model)
+// GET  /api/ai/transcription                                       -> TranscriptionInfo (the model, what it can hear)
 // POST /api/ai/tts         TtsRequest                              -> Job<{asset: AssetRecord, duration: number}>
 // GET  /api/ai/voices                                              -> Voice[]
 // GET  /api/ai/voices/:id/sample                                   -> audio/wav (cached sample line)
@@ -367,6 +394,21 @@ export interface Job<R = unknown> {
 // POST /api/ai/produce/script   ProduceScriptRequest               -> Job<{script: {scenes: ScriptScene[]}}>
 // POST /api/ai/produce/assemble {projectId, scenes: ScriptScene[]} -> Job<{version: number}>  (server writes the project)
 // POST /api/ai/assistant   AssistantRequest                        -> text/event-stream: `text` {delta}, `tool` {name, summary}, `done` AssistantResult
+/** What transcription on this server can do (P-20). */
+export interface TranscriptionInfo {
+  available: boolean
+  /** The speech model installed (its file name). */
+  model?: string
+  /** It hears languages other than English. */
+  multilingual: boolean
+  /** It can tell which language is spoken ("auto"). */
+  detect: boolean
+  /** Languages it can be asked for, English first. */
+  languages: Array<{ code: string; name: string }>
+  /** One sentence for people: what it can do, and what's needed for more. */
+  summary: string
+}
+
 export interface TtsRequest {
   workspaceId: string
   projectId?: string

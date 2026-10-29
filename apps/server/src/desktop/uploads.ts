@@ -1,11 +1,15 @@
-// How a clip's file goes up to the cloud (D-7), and what is going up now (SyncStatus.uploads). Today: one PUT to the
-// ticket's URL, whose size the cloud signs into it; an upload cut short starts that file again (from its first byte)
-// on the next try. The resumable multipart protocol (R4-B's P-5) plugs in through setFileSender without the engine
-// changing: a sender gets the ticket, the file and a progress callback, and resolves once the cloud holds every byte.
+// How a clip's file goes up to the cloud (D-7), and what is going up now (SyncStatus.uploads). A big file asks the
+// cloud for an upload in parts (P-5, storage/multipart-client.ts): a drop or a restart carries on from the parts
+// already in storage. A small file, or a cloud too old to offer parts, gets one PUT to the ticket's URL, whose size
+// the cloud signs into it; that one starts again from its first byte. setFileSender swaps the whole thing (tests).
 import fs from 'node:fs'
 import { Readable, Transform } from 'node:stream'
 import type { SyncUpload, UploadTicket } from '@producer/core'
+import { uploadInParts } from '../storage/multipart-client'
 import { type CloudClient, CloudError } from './cloud'
+
+/** Files from this size up are sent in parts when the cloud offers it (the web uses the same size). */
+export const MULTIPART_FROM_BYTES = 32 * 1024 * 1024
 
 export interface SendFile {
   client: CloudClient
@@ -49,11 +53,24 @@ export const putWhole: FileSender = async ({ client, ticket, file, bytes, name, 
   await put.body?.cancel().catch(() => undefined)
 }
 
-let sender: FileSender = putWhole
+/** In parts when the ticket carries a plan (only the parts not yet in storage), else one PUT. */
+export const sendResumable: FileSender = async (a) => {
+  const { ticket } = a
+  if (!ticket.multipart) return putWhole(a)
+  await uploadInParts({
+    ticket: { ...ticket, multipart: ticket.multipart },
+    file: a.file,
+    request: (method, url, init) => a.client.request(method, url, { body: init.body as BodyInit, headers: init.headers, signal: init.signal, idleTimeoutMs: a.idleMs }),
+    json: (method, path, body) => a.client.json(method, path, body),
+    onProgress: (sent) => a.onProgress(sent),
+  })
+}
 
-/** Swap how files go up (a resumable protocol); undefined puts the single PUT back. */
+let sender: FileSender = sendResumable
+
+/** Swap how files go up; undefined puts the default back. */
 export function setFileSender(fn: FileSender | undefined) {
-  sender = fn ?? putWhole
+  sender = fn ?? sendResumable
 }
 
 export const sendFile = (a: SendFile) => sender(a)
