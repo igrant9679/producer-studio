@@ -75,6 +75,8 @@ describe('tombstone compaction', () => {
   })
 })
 
+/** Ids unique to this run (a real Postgres keeps earlier runs' rows). */
+const run = Date.now().toString(36)
 const FONT = new Uint8Array([0x77, 0x4f, 0x46, 0x32, ...new Array(60).fill(7)]) // 'wOF2' and some bytes
 
 describe('a space’s other brand kits and font files sync', () => {
@@ -85,42 +87,42 @@ describe('a space’s other brand kits and font files sync', () => {
     const kit = (await A.client.json('GET', `/api/workspaces/${ws}/brand-kits`)).body.items[0].doc
 
     // a font file made on a desktop, under its own id
-    const put = await A.client.req('PUT', `/api/sync/brand-fonts/bf_desk1?workspaceId=${ws}&family=Desk%20Sans&weight=700`, FONT, { 'content-type': 'application/octet-stream' })
+    const put = await A.client.req('PUT', `/api/sync/brand-fonts/bf_desk_${run}?workspaceId=${ws}&family=Desk%20Sans&weight=700`, FONT, { 'content-type': 'application/octet-stream' })
     expect(put.status).toBe(200)
     expect((await put.json()).family).toBe('Desk Sans')
     // sending it again is harmless
-    expect((await A.client.req('PUT', `/api/sync/brand-fonts/bf_desk1?workspaceId=${ws}&family=Desk%20Sans&weight=700`, FONT, { 'content-type': 'application/octet-stream' })).status).toBe(200)
-    const file = await A.client.req('GET', '/api/sync/brand-fonts/bf_desk1/file')
+    expect((await A.client.req('PUT', `/api/sync/brand-fonts/bf_desk_${run}?workspaceId=${ws}&family=Desk%20Sans&weight=700`, FONT, { 'content-type': 'application/octet-stream' })).status).toBe(200)
+    const file = await A.client.req('GET', `/api/sync/brand-fonts/bf_desk_${run}/file`)
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(FONT)
 
     // a kit using it, under the desktop's id
     const doc = { ...kit, name: 'Desk kit', fonts: { headline: 'Desk Sans', body: kit.fonts.body } }
-    expect((await A.client.json('PUT', '/api/sync/brand-kits/bk_desk1', { workspaceId: ws, doc })).status).toBe(200)
+    expect((await A.client.json('PUT', `/api/sync/brand-kits/bk_desk_${run}`, { workspaceId: ws, doc })).status).toBe(200)
     const kits = (await A.client.json('GET', `/api/workspaces/${ws}/brand-kits`)).body.items
-    expect(kits.find((k: { id: string }) => k.id === 'bk_desk1')?.doc.customFonts).toEqual(['Desk Sans'])
+    expect(kits.find((k: { id: string }) => k.id === `bk_desk_${run}`)?.doc.customFonts).toEqual(['Desk Sans'])
 
     const page = await feed(A.client, c0)
-    expect(page.brandFonts.map((f: { id: string }) => f.id)).toEqual(['bf_desk1'])
-    expect(page.extraBrandKits.map((k: { id: string; doc: { name: string } }) => [k.id, k.doc.name])).toEqual([['bk_desk1', 'Desk kit']])
+    expect(page.brandFonts.map((f: { id: string }) => f.id)).toEqual([`bf_desk_${run}`])
+    expect(page.extraBrandKits.map((k: { id: string; doc: { name: string } }) => [k.id, k.doc.name])).toEqual([[`bk_desk_${run}`, 'Desk kit']])
     // a font still used by a kit can't go; the kit first
-    expect((await A.client.json('POST', '/api/sync/brand-fonts/bf_desk1/delete')).status).toBe(409)
-    expect((await A.client.json('POST', '/api/sync/brand-kits/bk_desk1/delete')).status).toBe(200)
-    expect((await A.client.json('POST', '/api/sync/brand-fonts/bf_desk1/delete')).status).toBe(200)
+    expect((await A.client.json('POST', `/api/sync/brand-fonts/bf_desk_${run}/delete`)).status).toBe(409)
+    expect((await A.client.json('POST', `/api/sync/brand-kits/bk_desk_${run}/delete`)).status).toBe(200)
+    expect((await A.client.json('POST', `/api/sync/brand-fonts/bf_desk_${run}/delete`)).status).toBe(200)
     const after = await feed(A.client, page.cursor)
-    expect(after.deleted.brandKits).toEqual(['bk_desk1'])
-    expect(after.deleted.brandFonts).toEqual(['bf_desk1'])
-    expect((await A.client.json('POST', '/api/sync/brand-kits/bk_desk1/delete')).status).toBe(404)
+    expect(after.deleted.brandKits).toEqual([`bk_desk_${run}`])
+    expect(after.deleted.brandFonts).toEqual([`bf_desk_${run}`])
+    expect((await A.client.json('POST', `/api/sync/brand-kits/bk_desk_${run}/delete`)).status).toBe(404)
   })
 
   it('only members of that space (editors) push them', async () => {
     const A = await signup(t.app)
     const B = await signup(t.app)
     const kit = (await A.client.json('GET', `/api/workspaces/${A.workspaceId}/brand-kits`)).body.items[0].doc
-    expect((await B.client.json('PUT', '/api/sync/brand-kits/bk_other', { workspaceId: A.workspaceId, doc: kit })).status).toBe(404)
-    expect((await B.client.req('PUT', `/api/sync/brand-fonts/bf_other?workspaceId=${A.workspaceId}&family=X`, FONT)).status).toBe(404)
+    expect((await B.client.json('PUT', `/api/sync/brand-kits/bk_other_${run}`, { workspaceId: A.workspaceId, doc: kit })).status).toBe(404)
+    expect((await B.client.req('PUT', `/api/sync/brand-fonts/bf_other_${run}?workspaceId=${A.workspaceId}&family=X`, FONT)).status).toBe(404)
     // an id already used in another space is refused
-    expect((await A.client.json('PUT', '/api/sync/brand-kits/bk_mine', { workspaceId: A.workspaceId, doc: kit })).status).toBe(200)
-    expect((await B.client.json('PUT', '/api/sync/brand-kits/bk_mine', { workspaceId: B.workspaceId, doc: kit })).status).toBe(409)
+    expect((await A.client.json('PUT', `/api/sync/brand-kits/bk_mine_${run}`, { workspaceId: A.workspaceId, doc: kit })).status).toBe(200)
+    expect((await B.client.json('PUT', `/api/sync/brand-kits/bk_mine_${run}`, { workspaceId: B.workspaceId, doc: kit })).status).toBe(409)
   })
 })
 
