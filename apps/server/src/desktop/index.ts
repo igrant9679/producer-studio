@@ -189,7 +189,7 @@ desktopRoutes.post('/sync/unlink', async (c) => {
   return c.json(await syncEngine.unlink())
 })
 
-const FAILURE_KINDS = ['project', 'asset', 'brand', 'voice', 'project-delete', 'asset-delete', 'voice-delete'] as const
+const FAILURE_KINDS = ['project', 'asset', 'brand', 'voice', 'kit', 'font', 'project-delete', 'asset-delete', 'voice-delete', 'kit-delete', 'font-delete'] as const
 
 /** An item that keeps failing to sync: try it again now, or skip it (it stays on this computer). */
 desktopRoutes.post('/sync/failures/:kind/:id', async (c) => {

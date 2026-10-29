@@ -32,6 +32,7 @@ import { derived, hydrateAssets, insertProject } from '../services/projects'
 import { CloudClient, CloudError, normalizeCloudUrl } from './cloud'
 import { type FailureKind, addNotice, clearFailure, clearFailures, clearSync, deleteSync, failureKey, failureMap, kvGet, kvSet, listNotices, putSync, rawQuery, recordFailure, removeNotice, setFailure, syncRow, syncRows, type SyncRow } from './db'
 import { adoptCloudIdentity, localUserId } from './identity'
+import { applyFont, applyFontDelete, applyKit, applyKitDelete, dropUnseenBrand, pushBrandDelete, pushBrandExtras } from './brand-sync'
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
 import { prefetchAllMedia } from './media'
 import { getSettings, onSettingsChange } from './settings'
@@ -65,6 +66,23 @@ interface ParkedAccount {
   cursor: number
   /** Where pushing this computer's deletes had got to (deletes in its spaces made since are pushed when it's back). */
   tombCursor?: number
+}
+
+/** What a full resync pulled, to tell what the cloud no longer has. */
+export class Seen {
+  workspaces?: Set<string>
+  projects = new Set<string>()
+  assets = new Set<string>()
+  voices = new Set<string>()
+  kits = new Set<string>()
+  fonts = new Set<string>()
+  add(ch: SyncChanges) {
+    for (const p of ch.projects) this.projects.add(p.project.id)
+    for (const a of ch.assets) this.assets.add(a.asset.id)
+    for (const v of ch.voiceProfiles ?? []) this.voices.add(v.id)
+    for (const k of ch.extraBrandKits ?? []) this.kits.add(k.id)
+    for (const f of ch.brandFonts ?? []) this.fonts.add(f.id)
+  }
 }
 
 const accountKey = (cloudUrl: string, cloudUserId: string) => `${cloudUrl}|${cloudUserId}`
@@ -135,7 +153,10 @@ interface VoiceFields {
 const voiceFields = (v: { name: string; language?: string | null; gender?: string | null; description?: string | null }): VoiceFields => ({ name: v.name, language: v.language ?? null, gender: v.gender ?? null, description: v.description ?? null })
 
 /** What a failed delete is called in the sync menu (the item itself is gone from this computer). */
-const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted here', voice: 'A voice deleted here' } as const
+const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted here', voice: 'A voice deleted here', kit: 'A brand kit deleted here', font: 'A font deleted here' } as const
+
+/** Tombstone kinds (as the triggers write them) to the sync engine's kinds. */
+const TOMB_KIND: Record<string, keyof typeof DELETED_NAME> = { project: 'project', asset: 'asset', voice_profile: 'voice', brand_kit: 'kit', brand_font: 'font' }
 
 function isDirty(p: Pick<ProjectRow, 'version' | 'trashedAt' | 'isTemplate'>, s: SyncRow | undefined): boolean {
   if (!s || s.cloudVersion == null) return true
@@ -184,7 +205,9 @@ export class SyncEngine {
     this.lastSyncAt = (await kvGet<number>('lastSyncAt')) ?? undefined
     this.unsubs.push(
       ctx().bus.onAny((e) => {
-        if (this.quiet || (e.event !== 'project' && e.event !== 'asset')) return
+        // a save of a project, a clip or a brand kit
+        const brand = e.event === 'workspace' && !!(e.data as { brand?: boolean } | undefined)?.brand
+        if (this.quiet || (e.event !== 'project' && e.event !== 'asset' && !brand)) return
         if (getSettings().autoSync) this.schedule(AFTER_SAVE_MS)
       }),
       onSettingsChange((s, prev) => {
@@ -321,6 +344,8 @@ export class SyncEngine {
         (f.kind = 'asset' AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.id = f.id)) OR
         (f.kind = 'voice' AND NOT EXISTS (SELECT 1 FROM voice_profiles v WHERE v.id = f.id)) OR
         (f.kind = 'brand' AND NOT EXISTS (SELECT 1 FROM brand_kits b WHERE b.workspace_id = f.id)) OR
+        (f.kind = 'kit' AND NOT EXISTS (SELECT 1 FROM extra_brand_kits k WHERE k.id = f.id)) OR
+        (f.kind = 'font' AND NOT EXISTS (SELECT 1 FROM brand_fonts b WHERE b.id = f.id)) OR
         (f.kind LIKE '%-delete' AND NOT EXISTS (SELECT 1 FROM desktop_sync s WHERE s.id = f.id AND s.kind = split_part(f.kind, '-', 1)))`)
   }
 
@@ -506,6 +531,7 @@ export class SyncEngine {
       this.failures = await failureMap()
       await this.pushDeletes(c)
       await this.pull(c)
+      await pushBrandExtras(c, new Set((await kvGet<string[]>('cloudWorkspaces')) ?? []), (kind, id, name, fn) => this.item(kind, id, name, fn), (kind, id) => this.resolved(kind, id))
       await this.pushAssets(c)
       await this.pushProjects(c)
       await this.pushBrandKits(c)
@@ -564,7 +590,7 @@ export class SyncEngine {
     const kit = (await db.select().from(brandKits).where(eq(brandKits.workspaceId, from)).limit(1))[0]
     const target = (await db.select().from(brandKits).where(eq(brandKits.workspaceId, to)).limit(1))[0]
     await db.transaction(async (tx) => {
-      for (const t of ['projects', 'assets', 'jobs', 'exports', 'voice_profiles']) await tx.execute(sql.raw(`UPDATE ${t} SET workspace_id = '${to.replace(/'/g, "''")}' WHERE workspace_id = '${from.replace(/'/g, "''")}'`))
+      for (const t of ['projects', 'assets', 'jobs', 'exports', 'voice_profiles', 'extra_brand_kits', 'brand_fonts']) await tx.execute(sql.raw(`UPDATE ${t} SET workspace_id = '${to.replace(/'/g, "''")}' WHERE workspace_id = '${from.replace(/'/g, "''")}'`))
       if (kit && !target) await tx.execute(sql`UPDATE brand_kits SET workspace_id = ${to} WHERE workspace_id = ${from}`)
       await tx.execute(sql`DELETE FROM brand_kits WHERE workspace_id = ${from}`)
       await tx.execute(sql`DELETE FROM memberships WHERE workspace_id = ${from}`)
@@ -722,10 +748,14 @@ export class SyncEngine {
 
   // ---------------- pull ----------------
 
-  private async pull(c: CloudClient) {
-    let cursor = (await kvGet<number>('cursor')) ?? 0
+  private async pull(c: CloudClient): Promise<void> {
+    // a full resync (deletes this computer hadn't pulled were compacted away in the cloud) starts from nothing and, once
+    // every page is in, drops what the cloud no longer has; cut short, it starts over next time
+    const full = !!(await kvGet<boolean>('fullResync'))
+    const seen = full ? new Seen() : undefined
+    let cursor = full ? 0 : ((await kvGet<number>('cursor')) ?? 0)
     // a cloud that reports `safe` never lets the cursor pass a change still being written; older ones get a lookback
-    let since = Math.max(0, cursor - ((await kvGet<boolean>('safeCursor')) ? 0 : LOOKBACK))
+    let since = full ? 0 : Math.max(0, cursor - ((await kvGet<boolean>('safeCursor')) ? 0 : LOOKBACK))
     // where the next pull starts: below the first change the cloud said may still be committing
     let hold: number | undefined
     for (;;) {
@@ -738,6 +768,13 @@ export class SyncEngine {
         throw err
       }
       this.pageBytes = Math.min(PAGE_BYTES, this.pageBytes * 2)
+      if (ch.resync && !seen) {
+        await kvSet('fullResync', true)
+        log.info('desktop: the cloud compacted deletes past this computer’s cursor; pulling everything again', { since })
+        return this.pull(c)
+      }
+      if (seen && since === 0) seen.workspaces = new Set(ch.workspaces.map((w) => w.id))
+      seen?.add(ch)
       if (ch.workspaces.length) await this.mirrorWorkspaces(ch.workspaces)
       const known = new Set((await ctx().db.select({ id: workspaces.id }).from(workspaces)).map((w) => w.id))
       const missingWs = [...ch.projects.map((p) => p.summary.workspaceId), ...ch.assets.map((a) => a.workspaceId)].filter((w) => !known.has(w))
@@ -749,6 +786,11 @@ export class SyncEngine {
       for (const id of ch.deleted.projects) await this.applyProjectDelete(id)
       for (const v of ch.voiceProfiles ?? []) await this.applyVoiceProfile(v)
       for (const id of ch.deleted.voiceProfiles ?? []) await this.applyVoiceProfileDelete(id)
+      const quietly = (fn: () => void) => this.quietly(fn)
+      for (const f of ch.brandFonts ?? []) await applyFont(c, f, quietly)
+      for (const k of ch.extraBrandKits ?? []) await applyKit(k, quietly)
+      for (const id of ch.deleted.brandKits ?? []) await applyKitDelete(id, quietly)
+      for (const id of ch.deleted.brandFonts ?? []) await applyFontDelete(id, quietly)
       for (const id of ch.deleted.workspaces ?? []) await this.applyWorkspaceDelete(id)
       cursor = Math.max(cursor, ch.cursor)
       if (ch.safe != null) {
@@ -761,6 +803,33 @@ export class SyncEngine {
       if (!ch.more || ch.cursor <= since) break
       since = ch.cursor
     }
+    if (seen) {
+      await this.dropUnseen(seen)
+      await kvSet('fullResync', false)
+    }
+  }
+
+  /**
+   * After a full pull: what this computer had from the cloud and the cloud no longer has was deleted there (its
+   * tombstone compacted away). It goes here as the feed's delete would: a project edited here is kept and pushed anew.
+   */
+  private async dropUnseen(seen: Seen) {
+    const db = ctx().db
+    const cloudWs = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
+    if (seen.workspaces) for (const id of cloudWs) if (!seen.workspaces.has(id)) await this.applyWorkspaceDelete(id)
+    const live = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
+    const [pr, ar, vr] = await Promise.all([syncRows('project'), syncRows('asset'), syncRows('voice')])
+    for (const p of await db.select({ id: projects.id, ws: projects.workspaceId }).from(projects)) {
+      if (live.has(p.ws) && pr.get(p.id)?.cloudVersion != null && !seen.projects.has(p.id)) await this.applyProjectDelete(p.id)
+    }
+    for (const a of await db.select({ id: assets.id, ws: assets.workspaceId }).from(assets)) {
+      const s = ar.get(a.id)
+      if (live.has(a.ws) && (s?.remote || s?.uploaded) && !seen.assets.has(a.id)) await this.applyAssetDelete(a.id)
+    }
+    for (const v of await db.select({ id: voiceProfiles.id, ws: voiceProfiles.workspaceId }).from(voiceProfiles)) {
+      if (live.has(v.ws) && vr.get(v.id)?.cloudVersion != null && !seen.voices.has(v.id)) await this.applyVoiceProfileDelete(v.id)
+    }
+    await dropUnseenBrand(live, seen, (fn) => this.quietly(fn))
   }
 
   private async applyAsset(rec: AssetRecord & { sha256?: string; changeSeq: number }) {
@@ -969,8 +1038,8 @@ export class SyncEngine {
     for (const t of rows) {
       // membership tombstones (local workspace merges/deletes) aren't pushed, nor deletes in spaces this account
       // doesn't sync (another account's, set aside here: the cloud copy simply stays)
-      const kind = t.kind === 'voice_profile' ? 'voice' : t.kind
-      if ((kind === 'project' || kind === 'asset' || kind === 'voice') && cloudWs.has(t.ws)) await this.item(`${kind}-delete`, t.id, DELETED_NAME[kind], () => this.pushDelete(c, kind, t.id))
+      const kind = TOMB_KIND[t.kind]
+      if (kind && cloudWs.has(t.ws)) await this.item(`${kind}-delete`, t.id, DELETED_NAME[kind], () => this.pushDelete(c, kind, t.id))
       cursor = Number(t.seq)
       await kvSet('tombCursor', cursor)
     }
@@ -982,7 +1051,8 @@ export class SyncEngine {
     }
   }
 
-  private async pushDelete(c: CloudClient, kind: 'project' | 'asset' | 'voice', id: string) {
+  private async pushDelete(c: CloudClient, kind: keyof typeof DELETED_NAME, id: string) {
+    if (kind === 'kit' || kind === 'font') return pushBrandDelete(c, kind, id)
     const s = await syncRow(kind, id)
     if (kind === 'project' && s?.cloudVersion != null) return this.pushProjectDelete(c, id, s)
     if (kind === 'voice') {
