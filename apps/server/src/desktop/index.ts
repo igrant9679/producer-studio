@@ -197,10 +197,28 @@ desktopRoutes.post('/sync/online', async (c) => {
   return c.json(await syncEngine.status())
 })
 
+const Credentials = z.object({ cloudUrl: z.string().min(1).max(500), email: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) })
+const Choice = z.discriminatedUnion('action', [z.object({ action: z.literal('merge'), into: z.string().min(1).max(80) }), z.object({ action: z.literal('new') }), z.object({ action: z.literal('local') })])
+
+/** Link straight away ({cloudUrl, email, password}), or as previewed ({previewId, choices}: one per local space). */
 desktopRoutes.post('/sync/link', async (c) => {
   requireUser(c)
-  const b = await body(c, z.object({ cloudUrl: z.string().min(1).max(500), email: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }))
+  const b = await body(c, z.union([Credentials, z.object({ previewId: z.string().min(1).max(80), choices: z.record(z.string().max(80), Choice).default({}) })]))
+  if ('previewId' in b) return c.json(await syncEngine.linkPreviewed(b.previewId, b.choices))
   return c.json(await syncEngine.link(b.cloudUrl, b.email, b.password))
+})
+
+/** What linking would merge and upload, a choice per space, before anything changes (D-5). */
+desktopRoutes.post('/sync/link/preview', async (c) => {
+  requireUser(c)
+  const b = await body(c, Credentials)
+  return c.json(await syncEngine.previewLink(b.cloudUrl, b.email, b.password))
+})
+
+desktopRoutes.post('/sync/link/cancel', async (c) => {
+  requireUser(c)
+  const b = await body(c, z.object({ previewId: z.string().min(1).max(80) }))
+  return c.json({ ok: await syncEngine.cancelPreview(b.previewId) })
 })
 
 desktopRoutes.post('/sync/unlink', async (c) => {

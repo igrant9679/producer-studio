@@ -22,10 +22,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncConflictPreview, type SystemInfo, type SyncFailure, type SyncProject, type SyncStatus, type Transcript, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
+import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type LinkChoice, type LinkPreview, type LinkPreviewSpace, type SyncChanges, type SyncConflictPreview, type SystemInfo, type SyncFailure, type SyncProject, type SyncStatus, type Transcript, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
 import { ctx } from '../context'
 import { type AssetMeta, assets, brandKits, comments, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
 import { HttpError } from '../http'
+import { newId } from '../ids'
 import { log } from '../log'
 import { type AssetRow, assetDirs, assetPrefix, emitAsset, extFor, hashObject, uploadMime } from '../services/assets'
 import { derived, hydrateAssets, insertProject } from '../services/projects'
@@ -91,6 +92,29 @@ export class Seen {
     for (const v of ch.voiceProfiles ?? []) this.voices.add(v.id)
     for (const k of ch.extraBrandKits ?? []) this.kits.add(k.id)
     for (const f of ch.brandFonts ?? []) this.fonts.add(f.id)
+  }
+}
+
+type LinkDevice = { deviceId: string; token: string }
+
+/** A link previewed and not yet made: its device token waits here (memory only) until used, cancelled or lapsed. */
+interface PendingLink {
+  cloudUrl: string
+  dev: LinkDevice
+  me: MeResponse
+  expiresAt: number
+  timer: NodeJS.Timeout
+}
+
+const PREVIEW_MS = 10 * 60_000
+
+/** Every choice names a space this account can add to. */
+function validateChoices(choices: Record<string, LinkChoice>, cloudList: Workspace[]) {
+  for (const c of Object.values(choices)) {
+    if (c.action !== 'merge') continue
+    const into = cloudList.find((w) => w.id === c.into)
+    if (!into) throw new HttpError(400, 'invalid', 'Pick one of your cloud spaces to merge into')
+    if (into.role === 'viewer') throw new HttpError(403, 'forbidden', `You can only view “${into.name}” in the cloud, so nothing can be merged into it`)
   }
 }
 
@@ -294,6 +318,93 @@ export class SyncEngine {
     this.backoffMs = 0
     this.backoffUntil = 0
     this.schedule(0)
+  }
+
+  // ---------------- first-link preview (D-5) ----------------
+
+  private previews = new Map<string, PendingLink>()
+
+  /**
+   * What linking this account would do, before anything changes here: each of this computer's spaces (its projects,
+   * clips and the bytes that would go up) and where it would go, the account's cloud spaces, and another account's
+   * spaces that would be set aside. The device link made for it lapses after 10 minutes unless used.
+   */
+  async previewLink(cloudUrlIn: string, email: string, password: string): Promise<LinkPreview> {
+    const { cloudUrl, dev, me } = await this.obtainDevice(cloudUrlIn, email, password)
+    const db = ctx().db
+    const last = await kvGet<LastLink>('lastLink')
+    const same = !!last && last.cloudUrl === cloudUrl && last.cloudUserId === me.user.id
+    const mirrored = (await kvGet<string[]>('cloudWorkspaces')) ?? []
+    const parked = (await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}
+    const resumed = parked[accountKey(cloudUrl, me.user.id)]?.workspaces ?? []
+    // what stays out of it: recovered spaces, other accounts' set aside here, and (switching account) the last one's
+    const away = new Set([...((await kvGet<string[]>('localOnlySpaces')) ?? []), ...Object.entries(parked).filter(([k]) => k !== accountKey(cloudUrl, me.user.id)).flatMap(([, p]) => p.workspaces), ...(last && !same ? mirrored : [])])
+    const cloudIds = new Set(me.workspaces.map((w) => w.id))
+    const personal = me.workspaces.find((w) => w.personal) ?? me.workspaces[0]
+    const me0 = await localUserId()
+    const local = await db
+      .select({ id: workspaces.id, name: workspaces.name, personal: workspaces.personal })
+      .from(workspaces)
+      .innerJoin(memberships, eq(memberships.workspaceId, workspaces.id))
+      .where(eq(memberships.userId, me0))
+    const [pr, ar] = await Promise.all([syncRows('project'), syncRows('asset')])
+    const spaces: LinkPreviewSpace[] = []
+    for (const w of local) {
+      if (away.has(w.id)) continue
+      const synced = cloudIds.has(w.id) || resumed.includes(w.id)
+      const projs = await db.select({ id: projects.id, version: projects.version, trashedAt: projects.trashedAt, isTemplate: projects.isTemplate }).from(projects).where(eq(projects.workspaceId, w.id))
+      const clips = (await db.select({ id: assets.id, size: assets.size, origin: assets.origin, trashedAt: assets.trashedAt }).from(assets).where(eq(assets.workspaceId, w.id))).filter((a) => a.origin !== 'render' && a.trashedAt == null)
+      const goingUp = clips.filter((a) => !(synced && (ar.get(a.id)?.uploaded || ar.get(a.id)?.remote)))
+      const voices = (await db.select({ id: voiceProfiles.id }).from(voiceProfiles).where(eq(voiceProfiles.workspaceId, w.id))).length
+      spaces.push({
+        id: w.id,
+        name: w.name,
+        personal: w.personal,
+        projects: synced ? projs.filter((p) => isDirty(p, pr.get(p.id))).length : projs.length,
+        clips: goingUp.length,
+        uploadBytes: goingUp.reduce((n, a) => n + a.size, 0),
+        voices,
+        suggested: w.personal && personal ? { action: 'merge', into: personal.id } : { action: 'new' },
+        ...(synced ? { synced: true } : {}),
+      })
+    }
+    const id = newId('lp')
+    const expiresAt = Date.now() + PREVIEW_MS
+    const timer = setTimeout(() => void this.cancelPreview(id), PREVIEW_MS)
+    timer.unref?.()
+    this.previews.set(id, { cloudUrl, dev, me, expiresAt, timer })
+    const setAside = last && !same && mirrored.length ? { account: last.account, spaces: (await db.select({ name: workspaces.name }).from(workspaces).where(inArray(workspaces.id, mirrored))).map((w) => w.name) } : undefined
+    return {
+      previewId: id,
+      account: me.user.email,
+      cloudUrl,
+      expiresAt,
+      spaces,
+      cloudSpaces: me.workspaces.map((w) => ({ id: w.id, name: w.name, personal: w.personal, role: w.role })),
+      ...(setAside?.spaces.length ? { setAside } : {}),
+    }
+  }
+
+  /** Link as previewed, each local space as chosen (what isn't named goes as suggested). */
+  linkPreviewed(previewId: string, choices: Record<string, LinkChoice>): Promise<SyncStatus> {
+    return this.lock.run('link', async () => {
+      const p = this.previews.get(previewId)
+      if (!p || p.expiresAt < Date.now()) throw new HttpError(410, 'not_found', 'That link preview has lapsed. Sign in again to see what linking would do.')
+      const out = await this.completeLink(p.cloudUrl, p.dev, p.me, choices)
+      clearTimeout(p.timer)
+      this.previews.delete(previewId)
+      return out
+    })
+  }
+
+  /** Not linking after all: the device link made for the preview is removed from the cloud. */
+  async cancelPreview(previewId: string): Promise<boolean> {
+    const p = this.previews.get(previewId)
+    if (!p) return false
+    this.previews.delete(previewId)
+    clearTimeout(p.timer)
+    await new CloudClient(p.cloudUrl, p.dev.token).json('DELETE', `/api/devices/${encodeURIComponent(p.dev.deviceId)}`, undefined, 10_000).catch(() => undefined)
+    return true
   }
 
   // ---------------- one at a time (D-11) ----------------
@@ -505,6 +616,12 @@ export class SyncEngine {
   // ---------------- link / unlink ----------------
 
   private async linkLocked(cloudUrlIn: string, email: string, password: string): Promise<SyncStatus> {
+    const { cloudUrl, dev, me } = await this.obtainDevice(cloudUrlIn, email, password)
+    return this.completeLink(cloudUrl, dev, me)
+  }
+
+  /** Credentials → a device token, and who it belongs to (nothing on this computer changes yet). */
+  private async obtainDevice(cloudUrlIn: string, email: string, password: string): Promise<{ cloudUrl: string; dev: LinkDevice; me: MeResponse }> {
     if (linkInfo()) throw new HttpError(409, 'conflict', `Already linked to ${linkInfo()!.account}. Unlink first.`)
     let cloudUrl: string
     try {
@@ -513,7 +630,7 @@ export class SyncEngine {
       throw new HttpError(400, 'invalid', (err as Error).message)
     }
     const anon = new CloudClient(cloudUrl)
-    let dev: { deviceId: string; token: string }
+    let dev: LinkDevice
     try {
       dev = await anon.json('POST', '/api/devices', { name: `Producer Studio desktop · ${os.hostname()}`.slice(0, 100), email, password })
     } catch (err) {
@@ -523,8 +640,15 @@ export class SyncEngine {
       if (err instanceof CloudError && err.status === 404) throw new HttpError(502, 'server', `${cloudUrl} doesn’t look like a Producer Studio cloud (no device API).`)
       throw err
     }
+    const me = await new CloudClient(cloudUrl, dev.token).json<MeResponse>('GET', '/api/auth/me')
+    return { cloudUrl, dev, me }
+  }
+
+  /** Link with a device token already made (directly, or for a preview); this computer's spaces go as `choices` say. */
+  private async completeLink(cloudUrl: string, dev: LinkDevice, me: MeResponse, choices?: Record<string, LinkChoice>): Promise<SyncStatus> {
+    if (linkInfo()) throw new HttpError(409, 'conflict', `Already linked to ${linkInfo()!.account}. Unlink first.`)
+    if (choices) validateChoices(choices, me.workspaces)
     const c = new CloudClient(cloudUrl, dev.token)
-    const me = await c.json<MeResponse>('GET', '/api/auth/me')
     const last = await kvGet<LastLink>('lastLink')
     if (!last) {
       // the first link: nothing we know about sync state applies
@@ -540,7 +664,7 @@ export class SyncEngine {
     const resumed = await this.resumeAccount(cloudUrl, me.user.id)
     await adoptCloudIdentity(me.user)
     await this.mirrorWorkspaces(me.workspaces)
-    await this.mergeLocalWorkspaces(c, me.workspaces)
+    await this.mergeLocalWorkspaces(c, me.workspaces, choices)
     // the same account again: deletes made here while unlinked are pushed. A first link has nothing in the cloud to
     // delete; an account linked again after another carries on from where its deletes stopped.
     if (!last || last.cloudUrl !== cloudUrl || last.cloudUserId !== me.user.id) {
@@ -756,7 +880,7 @@ export class SyncEngine {
     })
   }
 
-  private async mergeLocalWorkspaces(c: CloudClient, cloudList: Workspace[]) {
+  private async mergeLocalWorkspaces(c: CloudClient, cloudList: Workspace[], choices: Record<string, LinkChoice> = {}) {
     const me = await localUserId()
     // the account's own spaces, and spaces that stay on this computer: recovered ones and another account's
     const skip = new Set([...cloudList.map((w) => w.id), ...((await kvGet<string[]>('localOnlySpaces')) ?? []), ...(await this.parkedSpaces())])
@@ -768,7 +892,13 @@ export class SyncEngine {
       .where(eq(memberships.userId, me))
     for (const w of local) {
       if (skip.has(w.id)) continue
-      if (w.personal && personal) await this.rehomeWorkspace(w.id, personal.id)
+      const choice = choices[w.id]
+      if (choice?.action === 'local') {
+        // stays on this computer, never synced (the cloud's personal space is the personal one now)
+        await ctx().db.update(workspaces).set({ personal: false }).where(eq(workspaces.id, w.id))
+        await kvSet('localOnlySpaces', [...((await kvGet<string[]>('localOnlySpaces')) ?? []), w.id])
+      } else if (choice?.action === 'merge') await this.rehomeWorkspace(w.id, choice.into)
+      else if (!choice && w.personal && personal) await this.rehomeWorkspace(w.id, personal.id)
       else {
         const created = await c.json<Workspace>('POST', '/api/workspaces', { name: w.name })
         await this.mirrorWorkspaces([created])

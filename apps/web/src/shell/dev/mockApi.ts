@@ -1461,6 +1461,40 @@ on('GET', '/api/sync/conflicts/([^/]+)', desktopOnly((m) => {
     changes: [`Named “${c.name}” here and “${c.name} (client notes)” in the cloud`, '1:34 long here, 1:28 in the cloud', '1 clip only in this computer’s copy'],
   })
 }))
+const offlinePinned = new Set<string>()
+on('GET', '/api/sync/offline', desktopOnly((_m, q) => {
+  const ws = q.get('workspaceId') ?? ''
+  if (!sync.linked) return json({ projects: {}, cloudOnly: [] })
+  const mine = projects.filter((p) => p.workspaceId === ws)
+  const clips = assets.filter((a) => a.workspaceId === ws)
+  return json({
+    projects: Object.fromEntries(mine.filter((p) => offlinePinned.has(p.id)).map((p) => [p.id, { pinned: true, missing: 0, missingBytes: 0 }])),
+    cloudOnly: clips.filter((_a, i) => i % 3 === 1).map((a) => a.asset.id),
+  })
+}))
+on('PUT', '/api/sync/offline/([^/]+)', desktopOnly((m, _q, b) => {
+  const p = projects.find((x) => x.id === m[1])
+  if (!p) return fail(404, 'Project not found', 'not_found')
+  if (b.pinned) offlinePinned.add(p.id)
+  else offlinePinned.delete(p.id)
+  return json({ projects: Object.fromEntries([...offlinePinned].filter((id) => projects.some((x) => x.id === id && x.workspaceId === p.workspaceId)).map((id) => [id, { pinned: true, missing: 0, missingBytes: 0 }])), cloudOnly: [] })
+}))
+on('POST', '/api/sync/link/preview', desktopOnly(async (_m, _q, b) => {
+  await delay(500)
+  if (String(b.password).length < 8) return fail(401, 'Invalid email or password', 'unauthorized')
+  return json({
+    previewId: 'lp_mock',
+    account: String(b.email),
+    cloudUrl: String(b.cloudUrl),
+    expiresAt: Date.now() + 10 * MIN,
+    cloudSpaces: [{ id: 'ws_cloud_personal', name: `${String(b.email).split('@')[0]}’s space`, personal: true, role: 'owner' }, { id: 'ws_cloud_team', name: 'Team', personal: false, role: 'editor' }],
+    spaces: [
+      { id: 'ws_local_personal', name: 'My space', personal: true, projects: 4, clips: 11, uploadBytes: 3.4 * 1024 ** 3, voices: 1, suggested: { action: 'merge', into: 'ws_cloud_personal' } },
+      { id: 'ws_local_side', name: 'Side project', personal: false, projects: 1, clips: 2, uploadBytes: 120 * 1024 ** 2, voices: 0, suggested: { action: 'new' } },
+    ],
+  })
+}))
+on('POST', '/api/sync/link/cancel', desktopOnly(() => json({ ok: true })))
 on('POST', '/api/sync/online', desktopOnly(() => {
   if (sync.state === 'offline') {
     sync.state = 'syncing'
@@ -1475,6 +1509,7 @@ on('POST', '/api/sync/online', desktopOnly(() => {
 }))
 on('POST', '/api/sync/link', desktopOnly(async (_m, _q, b) => {
   await delay(700)
+  if (b.previewId) b = { ...b, cloudUrl: 'https://producerstudio.app', email: 'alex@example.com', password: 'previewed' }
   if (String(b.password).length < 8) return fail(401, 'Invalid email or password', 'unauthorized')
   Object.assign(sync, { linked: true, cloudUrl: String(b.cloudUrl), account: String(b.email), state: 'syncing', pending: 0, error: undefined })
   setTimeout(() => {

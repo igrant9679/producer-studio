@@ -367,4 +367,52 @@ describe('the sync panel (D-1)', () => {
   }, 60_000)
 })
 
+describe('the first-link preview (D-5)', () => {
+  it('shows what would be merged and uploaded, changes nothing until confirmed, and links as chosen', async () => {
+    expect((await desk.json('POST', '/api/sync/unlink')).status).toBe(200)
+    // made while unlinked: a space of its own, with a project and a clip
+    const ws = (await desk.json('POST', '/api/workspaces', { name: 'Offline work' })).body.id as string
+    const proj = (await desk.json('POST', '/api/projects', { workspaceId: ws, name: 'Made offline' })).body.project.id as string
+    const t = await desk.json('POST', '/api/uploads', { workspaceId: ws, filename: 'offline.png', mime: 'image/png', size: PNG.length + 5_000 })
+    const bytes = png(5_000)
+    expect((await desk.json('PUT', t.body.url, bytes, { 'content-type': 'image/png' })).status).toBe(200)
+    expect((await desk.json('POST', `/api/assets/${t.body.assetId}/complete`)).status).toBe(200)
+
+    const B = await cloud.signup('Bo')
+    const ask = () => desk.json<import('@producer/core').LinkPreview>('POST', '/api/sync/link/preview', { cloudUrl: proxy.url, email: B.email, password: PASSWORD })
+    const first = await ask()
+    expect(first.status).toBe(200)
+    const p = first.body
+    expect(p.account).toBe(B.email)
+    expect(p.cloudSpaces.map((w) => w.id)).toEqual([B.workspaceId])
+    // the account linked before keeps its spaces here, set aside
+    expect(p.setAside?.account).toBe(A.email)
+    const mine = p.spaces.find((s) => s.id === ws)!
+    expect(mine).toMatchObject({ name: 'Offline work', projects: 1, clips: 1, suggested: { action: 'new' } })
+    expect(mine.uploadBytes).toBe(bytes.length)
+    expect(p.spaces.map((s) => s.id)).toEqual([ws])
+    // nothing changed: still unlinked, nothing new in the cloud
+    expect((await desk.json<SyncStatus>('GET', '/api/sync/status')).body.linked).toBe(false)
+    expect((await B.http.json('GET', '/api/workspaces')).body).toHaveLength(1)
+    expect((await B.http.json('GET', '/api/devices')).body).toHaveLength(1)
+
+    // cancelled: its device link goes
+    expect((await desk.json('POST', '/api/sync/link/cancel', { previewId: p.previewId })).body).toEqual({ ok: true })
+    expect((await B.http.json('GET', '/api/devices')).body).toHaveLength(0)
+    expect((await desk.json('POST', '/api/sync/link', { previewId: p.previewId, choices: {} })).status).toBe(410)
+
+    // again, merging the space into Bo's own instead of creating one
+    const again = (await ask()).body
+    expect((await desk.json('POST', '/api/sync/link', { previewId: again.previewId, choices: { [ws]: { action: 'merge', into: 'w_not_mine' } } })).status).toBe(400)
+    const linked = await desk.json<SyncStatus>('POST', '/api/sync/link', { previewId: again.previewId, choices: { [ws]: { action: 'merge', into: B.workspaceId } } })
+    expect(linked.status).toBe(200)
+    expect(linked.body.account).toBe(B.email)
+    await sync()
+    await until(async () => (await B.http.json('GET', `/api/projects/${proj}`)).status === 200)
+    expect((await B.http.json('GET', `/api/projects/${proj}`)).body.summary.workspaceId).toBe(B.workspaceId)
+    expect((await B.http.json('GET', '/api/workspaces')).body).toHaveLength(1)
+    await until(async () => ['processing', 'ready'].includes((await B.http.json('GET', `/api/assets/${t.body.assetId}`)).body.status))
+  }, 120_000)
+})
+
 export type { Project }
