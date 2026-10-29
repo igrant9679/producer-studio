@@ -177,6 +177,6 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
     const s = r.provider === b ? bs : await r.provider.status()
     effective[f] = { provider: r.provider.id, model: s.model }
   }
-  return { defaultProvider: doc.defaultProvider, perFeature: doc.perFeature, providers, builtin: { id: b.id, available: bs.available, detail: bs.detail, model: bs.model }, effective, canEdit }
+  return { defaultProvider: doc.defaultProvider, perFeature: doc.perFeature, providers, builtin: { id: b.id, available: bs.available, detail: bs.detail, model: bs.model, ...(bs.cli ? { cli: bs.cli } : {}) }, effective, canEdit }
 }
 

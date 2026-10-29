@@ -8,6 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Hono } from 'hono'
 import type { AppEnv } from '../auth'
+import { bootWaitMs } from './boot-wait'
 
 const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -57,7 +58,9 @@ export interface Cloud {
 
 export const PASSWORD = 'correct-horse-1'
 
-export async function startCloud(env: Record<string, string> = {}): Promise<Cloud> {
+/** `bootMs`: how long to wait for the cloud to answer (default PS_TEST_BOOT_MS, else 3 minutes; see boot-wait.ts). */
+export async function startCloud(env: Record<string, string> = {}, opts: { bootMs?: number } = {}): Promise<Cloud> {
+  const bootMs = opts.bootMs ?? bootWaitMs()
   const port = await freePort()
   const url = `http://127.0.0.1:${port}`
   const cloudData = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-cloud-'))
@@ -68,14 +71,19 @@ export async function startCloud(env: Record<string, string> = {}): Promise<Clou
   })
   let err = ''
   proc.stderr!.on('data', (b) => (err += String(b)))
-  for (let i = 0; ; i++) {
+  const t0 = Date.now()
+  for (;;) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) break
+      if ((await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(5000) })).ok) break
     } catch {
       /* booting */
     }
-    // a loaded machine (several suites at once) can take a minute to compile and boot the cloud
-    if (i > 600 || proc.exitCode != null) throw new Error(`cloud did not start: ${err}`)
+    if (proc.exitCode != null) throw new Error(`cloud exited during startup (code ${proc.exitCode}): ${err}`)
+    // a loaded machine (several suites at once) can take minutes to compile and boot the cloud
+    if (Date.now() - t0 > bootMs) {
+      proc.kill()
+      throw new Error(`cloud did not start within ${Math.round(bootMs / 1000)} s (raise PS_TEST_BOOT_MS on a slow machine): ${err}`)
+    }
     await new Promise((r) => setTimeout(r, 150))
   }
   // a pooled keep-alive socket the cloud has just closed resets the next request on it; the test client tries once more

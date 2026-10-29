@@ -1,6 +1,6 @@
 // Stage everything the packaged app ships outside app.asar, under apps/desktop/build/stage/:
 //   server/server.mjs          apps/server bundled with esbuild (native/wasm-heavy packages left external)
-//   server/node_modules/       only those external packages + their dependency closure (win32-x64 binaries only)
+//   server/node_modules/       only those external packages + their dependency closure (this platform's binaries only)
 //   server/scripts/            tts-worker.mjs, mcp-server.mjs (plain Node scripts, run with Electron-as-Node)
 //   server/skill/              vendored producer-pipeline skill (looks + house rules)
 //   server/runtime.js          packages/core runtime bundle used by exports (no esbuild at runtime)
@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { keepStagedPath } from './release.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = path.resolve(root, '..', '..')
@@ -106,16 +107,8 @@ for (const name of EXTERNAL) {
   walk(dir)
 }
 
-const SKIP_FILE = /(\.map|\.d\.ts|\.d\.mts|\.d\.cts|\.tsbuildinfo)$|^(README|CHANGELOG|HISTORY)(\.[a-z]+)?$/i
-function keepPath(p) {
-  const n = p.replace(/\\/g, '/')
-  // other platforms' prebuilt binaries
-  if (/onnxruntime-node\/bin\/napi-v\d+\/(darwin|linux)(\/|$)/.test(n)) return false
-  if (/ffprobe-static\/bin\/(darwin|linux|win32\/ia32)(\/|$)/.test(n)) return false
-  if (/@img\/sharp-wasm32(\/|$)/.test(n)) return false
-  if (/\/(\.github|\.vscode|__tests__|coverage)(\/|$)/.test(n)) return false
-  return !SKIP_FILE.test(path.basename(n))
-}
+// other platforms' prebuilt binaries, tests, maps and docs stay out (release.mjs; native packages are this machine's)
+const keepPath = (p) => keepStagedPath(p, process.platform, process.arch)
 let bytes = 0
 for (const rel of [...topLevel].sort()) {
   const src = path.join(nm, rel)

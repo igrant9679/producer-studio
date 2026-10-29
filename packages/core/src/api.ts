@@ -703,6 +703,27 @@ export interface SystemInfo {
   mail?: boolean
 }
 
+// GET /api/tools/health[?refresh=1] -> ToolHealth   (desktop, the local session; checked at start, cached 5 minutes)
+/** One bundled tool the desktop engine needs, checked at start (D-13). */
+export interface ToolCheck {
+  id: 'ffmpeg' | 'ffprobe' | 'whisper' | 'kokoro' | 'renderer'
+  name: string
+  /** What it's for, in plain words ("Exports and clean-up tools"). */
+  needed: string
+  /** ok: works; warn: works with a catch (downloads on first use); error: what it's for won't work. */
+  status: 'ok' | 'warn' | 'error'
+  /** What was found ("ffmpeg 7.0.2"), or what is wrong and what to do. */
+  detail: string
+  path?: string
+}
+
+export interface ToolHealth {
+  checkedAt: number
+  /** No tool is in error. */
+  ok: boolean
+  tools: ToolCheck[]
+}
+
 /** Result of the server's storage self-check: write, read back and delete a small object. */
 export interface StorageHealth {
   status: 'unknown' | 'ok' | 'error'
@@ -839,6 +860,32 @@ export type AiKeyProvider = 'openai' | 'gemini' | 'anthropic'
 export type AiChoice = 'builtin' | AiKeyProvider
 export type AiFeature = 'writer' | 'script' | 'assistant'
 
+/** One Claude Code CLI option the desktop looks for in `claude --help` (Settings → AI lists them). */
+export interface ClaudeCliFlag {
+  flag: string
+  /** This CLI's --help lists it. */
+  detected: boolean
+  /** Producer Studio passes it on the runs `when` names (false when it can't run this CLI at all, or the CLI lacks it). */
+  used: boolean
+  /** Without it Producer Studio doesn't run the CLI (it's reported as too old instead). */
+  required: boolean
+  /** Which runs carry it. */
+  when: 'every run' | 'streaming' | 'Producer script' | 'editor assistant' | 'model override'
+  /** What it does, in plain words. */
+  purpose: string
+}
+
+/** The Claude Code CLI the desktop found and what it passes to it. Optional: older servers omit it. */
+export interface ClaudeCliInfo {
+  path: string
+  /** Where it was found: settings, desktop-bundle, msix, local-bin, path. */
+  source: string
+  version?: string
+  /** --help didn't answer in time: which options it has is unknown (asked again on the next check). */
+  optionsUnknown?: boolean
+  flags: ClaudeCliFlag[]
+}
+
 export interface AiKeyProviderSettings {
   /** Model id sent to the provider (free text; defaults picked from the live model list). */
   model: string
@@ -860,7 +907,7 @@ export interface AiSettings {
   perFeature: Partial<Record<AiFeature, AiChoice>>
   providers: Partial<Record<AiKeyProvider, AiKeyProviderSettings>>
   /** The built-in provider for this edition and whether it's usable. */
-  builtin: { id: AiProviderId; available: boolean; detail: string; model?: string }
+  builtin: { id: AiProviderId; available: boolean; detail: string; model?: string; cli?: ClaudeCliInfo }
   /** Effective provider per feature after resolution. */
   effective: Record<AiFeature, { provider: AiProviderId; model?: string }>
   /** True when the caller may change keys and settings (workspace owner; always on desktop). */

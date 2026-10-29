@@ -75,5 +75,9 @@ if (process.env.DESKTOP_PARENT_STDIN === '1') {
   process.stdin.on('close', () => void shutdown('parent-exit'))
   process.stdin.resume()
 }
+// desktop, hosted in an Electron utility process (packaged builds): the main process asks us to stop over the parent
+// port (Electron ends a utility process whose parent has gone)
+const parentPort = (process as unknown as { parentPort?: { on(event: 'message', fn: (e: { data: unknown }) => void): void } }).parentPort
+if (process.env.DESKTOP_PARENT_PORT === '1' && parentPort) parentPort.on('message', (e) => (e.data as { type?: unknown } | null)?.type === 'stop' && void shutdown('parent-stop'))
 process.on('SIGTERM', () => void shutdown('SIGTERM'))
 process.on('unhandledRejection', (err) => log.error('unhandled rejection', { err }))

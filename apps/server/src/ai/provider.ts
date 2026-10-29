@@ -7,7 +7,7 @@
 // validated with zod and executed by `runTool` in tools.ts, so every provider (and the CLI over MCP) exposes the very
 // same tools. Which provider serves a request is resolved per scope + feature in resolve.ts.
 import type * as z from 'zod/v4'
-import type { AiFeature, AiProviderId, WriteRequest } from '@producer/core'
+import type { AiFeature, AiProviderId, ClaudeCliInfo, WriteRequest } from '@producer/core'
 
 export type ProviderId = AiProviderId
 
@@ -17,6 +17,8 @@ export interface ProviderStatus {
   model?: string
   /** builtin-off: the server's own key isn't turned on for this space (its owner can turn it on). */
   reason?: 'builtin-off'
+  /** claude-cli: the CLI found, and which of its options are detected and used. */
+  cli?: ClaudeCliInfo
 }
 
 export interface ScriptImage {

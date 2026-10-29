@@ -330,6 +330,17 @@ and comment.
 - Detects `claude` the way Producer did (Claude desktop bundle `%APPDATA%\Claude\claude-code\<v>\claude.exe`, MSIX `Claude_*` package cache, `~/.local/bin`, `where claude`), or uses the path in Settings; `claude auth status` for sign-in state; Setup offers "Sign in to Claude".
 - Runs `claude -p <prompt> --output-format stream-json --verbose` with a **local MCP server** (`--mcp-config`) that exposes the same editing tools as the cloud assistant (`get_timeline`, `split_at`, `add_text`, `generate_captions`, …) plus `submit_script` for structured Producer scripts. `--allowedTools` is restricted to those MCP tools (no Bash/Write, **no `--dangerously-skip-permissions`**); a per-run temp working dir; stream events relayed to the UI exactly like the API provider.
 - Same `ClaudeProvider` interface as `AnthropicApiProvider`, so features are identical in both products.
+- Its status carries `cli` (path, where it was found, version, and per option: detected in `--help`, passed on runs,
+  required, which runs, what for), from one table in `ai/cli.ts` (`cliFlagReport`); Settings → AI lists it.
+
+### Desktop shell (apps/desktop)
+- The engine runs in an Electron utility process in packaged builds (fallback: a Node child); `childEnv()` gives the
+  engine's own Node children `ELECTRON_RUN_AS_NODE=1` inside Electron. Fuses, signing, Linux/macOS targets:
+  `apps/desktop/scripts/release.mjs`, laid over `electron-builder.yml` by `dist.mjs`. Details in [desktop.md](desktop.md).
+- `GET /api/tools/health` (desktop only, `routes/tools.ts` → `services/tool-health.ts`): ffmpeg/ffprobe run, whisper +
+  model, Kokoro model, renderer; ok / warn / error with what to do. The shell checks it at start.
+- Tests: the end-to-end sync suites wait `PS_TEST_BOOT_MS` (default 3 minutes) for the cloud they start
+  (`test/boot-wait.ts`); the suite's hook timeout follows.
 
 ### Sync (desktop ⇄ cloud)
 - Cloud is the source of truth; the desktop is a full offline-capable replica. Ids are global, so a project/asset has one id everywhere.

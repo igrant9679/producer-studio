@@ -10,6 +10,8 @@ import { toast, toastError } from '../../lib/toast'
 import { syncSummary } from '../SystemChrome'
 import { aiLabel, aiLabelHasModel, DESKTOP_DOWNLOAD_URL, sysFetch, systemApi, useSystem } from '../system'
 import { AiProviders } from './AiProviders'
+import { ClaudeCliFlags } from './ClaudeCliFlags'
+import { DesktopAppSettings } from './DesktopAppSettings'
 import { DictationSettings } from '../voicestudio/Dictation'
 import { AppearanceSettings } from './AppearanceSettings'
 import { LinkForm } from '../sync/LinkFlow'
@@ -192,13 +194,16 @@ type Builtin = AiSettings['builtin']
 function BuiltinInfo({ builtin }: { builtin?: Builtin }) {
   if (!builtin) return <div className="skeleton" style={{ height: 56 }} />
   return (
-    <div className={clsx('ps-ai-status', builtin.available ? 'ok' : 'bad')}>
-      {builtin.available ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <strong>{builtin.id === 'claude-cli' ? 'Claude Code CLI' : builtin.id === 'none' ? 'AI disabled' : 'Claude API'}{builtin.model ? ` · ${builtin.model}` : ''}</strong>
-        <span>{builtin.detail || (builtin.available ? 'Ready' : 'Not available')}</span>
+    <>
+      <div className={clsx('ps-ai-status', builtin.available ? 'ok' : 'bad')}>
+        {builtin.available ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <strong>{builtin.id === 'claude-cli' ? 'Claude Code CLI' : builtin.id === 'none' ? 'AI disabled' : 'Claude API'}{builtin.model ? ` · ${builtin.model}` : ''}</strong>
+          <span>{builtin.detail || (builtin.available ? 'Ready' : 'Not available')}</span>
+        </div>
       </div>
-    </div>
+      {builtin.cli && <ClaudeCliFlags cli={builtin.cli} />}
+    </>
   )
 }
 
@@ -525,6 +530,12 @@ export default function SettingsPage() {
           {desktop && (
             <Section id="storage" icon={<HardDrive size={18} />} title="Storage" sub="Where Producer keeps your media on this computer.">
               <DesktopStorage settings={settings} onSettings={onSettings} />
+            </Section>
+          )}
+
+          {desktop && (
+            <Section id="computer" icon={<Laptop size={18} />} title="This computer" sub="The desktop app itself: its tools, and how it runs on this computer.">
+              <DesktopAppSettings />
             </Section>
           )}
 

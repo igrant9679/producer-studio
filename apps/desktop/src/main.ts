@@ -3,15 +3,23 @@
 // the same web UI the cloud serves, from http://127.0.0.1:<port>. Renderers are sandboxed with context isolation;
 // the preload exposes a version, the platform and three validated functions; navigation never leaves the local origin.
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
+import { BrowserWindow, Menu, type MenuItemConstructorOptions, Tray, app, clipboard, crashReporter, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron'
 import { isDev } from './paths'
 import { dataDirProblem, defaultDataDir, moveDataDir, moveProblem, writeSettings } from './datadir'
+import { backupDatabase, backupsDir, dbDir, listBackups, needsBackup } from './backup'
+import { readBuildInfo } from './build-info'
+import { crashReporterOptions, diagnosticsText, listCrashDumps, tailLog } from './diagnostics'
 import { setupDictation } from './dictation'
+import { fetchToolReport, toolsWarning } from './health'
 import { deviceKey, keystoreProblem, resetDeviceKey } from './keystore'
 import { RotatingLog } from './logs'
 import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, nativeThemeMode, openExternal, setLocalOrigin } from './security'
 import { ServerProcess, dataDirEnv, desktopPaths } from './server'
+import { type ShellSettings, readShellSettings, shellPatch, shellSettingsFile, writeShellSettings } from './shell-settings'
+import { TRAY_HINT, closeAction, trayMenu } from './tray'
+import { UPDATE_FIRST_CHECK_MS, UPDATE_INTERVAL_MS, type UpdateState, checkForUpdate, updatesOffered } from './updates'
 
 app.enableSandbox()
 app.setAppUserModelId('studio.producer.desktop')
@@ -29,12 +37,67 @@ if (!app.requestSingleInstanceLock()) {
   let restarting = false
   /** The data folder is being moved: the engine is stopped on purpose. */
   let moving = false
+  /** The local session's token (also the ps_session cookie), for the main process's own calls to the engine. */
+  let sessionToken = ''
+  // the shell's own settings (tray, updates, crash reports), apart from the engine's settings.json
+  const shellFile = shellSettingsFile(app.getPath('userData'))
+  let shellSettings = readShellSettings(shellFile)
+  let tray: Tray | undefined
+  /** What this build is (dist/build-info.json): schema version, signed, update feed. */
+  const build = readBuildInfo(__dirname, app.getVersion())
+  const startInfo = { version: app.getVersion(), ...(build.schemaVersion ? { schema: build.schemaVersion } : {}) }
+  /** The data folder whose database was checked for a backup this launch. */
+  let backupChecked = ''
   // window + taskbar icon (packaged: inside app.asar next to dist/; dev: apps/desktop/assets)
   const appIcon = [path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'), path.join(__dirname, '..', 'assets', 'icon.png')].find((p) => fs.existsSync(p))
 
   // rotated by size while the app runs, not only at launch
   const mainLog = new RotatingLog(path.join(app.getPath('userData'), 'logs', 'main.log'))
   const logLine = (msg: string) => mainLog.write(`${new Date().toISOString()} ${msg}\n`)
+
+  // opt-in crash reports (D-14): Electron's minidumps kept on this computer only, never uploaded; started before ready
+  const crashOptions = crashReporterOptions(shellSettings.crashReports)
+  if (crashOptions) crashReporter.start(crashOptions)
+  // which part of the app went away, and why, always goes to the log
+  app.on('render-process-gone', (_e, wc, d) => logLine(`renderer gone (${d.reason}, exit ${d.exitCode}): ${wc.getURL()}`))
+  app.on('child-process-gone', (_e, d) => logLine(`${d.type} process gone (${d.reason}, exit ${d.exitCode})${d.name ? `: ${d.name}` : ''}`))
+
+  /** Copy diagnostics (D-14): versions, paths, tool check, settings, crash reports and log tails, secrets taken out. */
+  async function copyDiagnostics(): Promise<{ ok: boolean; chars?: number; error?: string }> {
+    try {
+      const logsDir = path.join(app.getPath('userData'), 'logs')
+      const tools = server && sessionToken ? await fetchToolReport(server.origin, sessionToken) : undefined
+      const text = diagnosticsText({
+        now: Date.now(),
+        app: {
+          version: app.getVersion(),
+          build: build.builtAt,
+          signed: build.signed,
+          schema: build.schemaVersion,
+          electron: process.versions.electron,
+          chromium: process.versions.chrome,
+          node: process.versions.node,
+          platform: `${process.platform} ${process.arch}`,
+          os: os.release(),
+          packaged: app.isPackaged,
+          engine: server ? `${server.host === 'utility' ? 'utility process' : 'child process'}, ${server.running ? 'running' : 'stopped'}` : 'not started',
+        },
+        paths: { userData: app.getPath('userData'), dataDir: server?.paths.dataDir, logs: logsDir, crashDumps: app.getPath('crashDumps') },
+        settings: { keepRunning: shellSettings.keepRunning, updateCheck: shellSettings.updateCheck, crashReports: shellSettings.crashReports, crashReportsActive: !!crashOptions, tray: !!tray, lastStart: shellSettings.lastStart },
+        tools,
+        crashes: listCrashDumps(app.getPath('crashDumps')),
+        logs: [
+          { name: 'main.log', lines: tailLog(path.join(logsDir, 'main.log'), 150) },
+          { name: 'server.log', lines: tailLog(path.join(logsDir, 'server.log'), 200) },
+        ],
+      })
+      clipboard.writeText(text)
+      logLine(`diagnostics copied (${text.length} characters)`)
+      return { ok: true, chars: text.length }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  }
 
   function createSplash() {
     const w = new BrowserWindow({
@@ -85,11 +148,23 @@ if (!app.requestSingleInstanceLock()) {
     }
     w.webContents.on('did-navigate', onNav)
     w.webContents.on('did-navigate-in-page', onNav)
+    // "Keep running when the window is closed" (tray): the window hides, the engine, dictation and voice relay go on
+    w.on('close', (e) => {
+      if (closeAction({ keepRunning: shellSettings.keepRunning, quitting, hasTray: !!tray }) !== 'hide') return
+      e.preventDefault()
+      w.hide()
+      refreshTray()
+      if (!shellSettings.trayHintShown) {
+        if (process.platform === 'win32') tray?.displayBalloon({ title: 'Producer Studio', content: TRAY_HINT, iconType: 'info' })
+        setShell({ trayHintShown: true })
+      }
+    })
+    w.on('show', () => refreshTray())
     w.on('closed', () => {
       if (mainWin !== w) return
       mainWin = undefined
-      // the app has no tray: closing its window quits it, even when the dictation widget (a window of its own) is
-      // still around; otherwise the engine, VoiceStudio and the shortcut would keep running unseen
+      // closing the window quits (unless it was kept running in the tray above), even when the dictation widget (a
+      // window of its own) is still around; otherwise the engine, VoiceStudio and the shortcut would keep running unseen
       if (!quitting) app.quit()
     })
     void w.loadURL(`${origin}/`)
@@ -100,6 +175,7 @@ if (!app.requestSingleInstanceLock()) {
 
   async function setSessionCookie() {
     const s = await server!.session()
+    sessionToken = s.token
     await session.defaultSession.cookies.set({ url: server!.origin, name: 'ps_session', value: s.token, httpOnly: true, secure: false, sameSite: 'lax', expirationDate: Math.floor(s.expiresAt / 1000) })
   }
 
@@ -188,16 +264,52 @@ if (!app.requestSingleInstanceLock()) {
     }
   }
 
+  /**
+   * Before the first start of a newer engine (the one that migrates the database), copy the database aside (D-10).
+   * A backup that can't be made is said, with the choice to go on without one. False when the person chose Quit.
+   */
+  async function backupBeforeStart(dataDir: string): Promise<boolean> {
+    if (backupChecked === dataDir) return true
+    backupChecked = dataDir
+    const last = shellSettings.lastStart
+    if (!needsBackup(last, startInfo, fs.existsSync(dbDir(dataDir)))) return true
+    try {
+      const b = backupDatabase(dataDir, { label: `from-${last?.version ?? 'earlier'}${last?.schema ? `-schema${last.schema}` : ''}` })
+      logLine(`database backed up before starting ${startInfo.version} (schema ${startInfo.schema ?? '?'}): ${b?.dir}`)
+      return true
+    } catch (err) {
+      logLine(`database backup failed: ${(err as Error).message}`)
+      const r = await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Producer Studio',
+        message: 'Producer Studio couldn’t back up its database before updating it.',
+        detail: `${(err as Error).message}\n\nThis version updates the database when it starts. You can go on without a backup, or quit, free some space on the drive and start again.`,
+        buttons: ['Quit', 'Continue without a backup'],
+        defaultId: 0,
+        cancelId: 0,
+      })
+      if (r.response === 0) {
+        quitting = true
+        app.quit()
+        return false
+      }
+      return true
+    }
+  }
+
   async function startServer(): Promise<boolean> {
     for (;;) {
       if (!(await checkDataDir())) return false
       server ??= new ServerProcess()
       server.refreshPaths()
+      if (!(await backupBeforeStart(server.paths.dataDir))) return false
       try {
         await server.start()
         setLocalOrigin(server.origin)
         await setSessionCookie()
         logLine(`server ready at ${server.origin}`)
+        // this database is now at this build's schema: the next backup comes before a newer one
+        setShell({ lastStart: startInfo })
         return true
       } catch (err) {
         logLine(`server failed to start: ${(err as Error).message}`)
@@ -336,7 +448,7 @@ if (!app.requestSingleInstanceLock()) {
           { label: 'Move data folder…', click: () => void moveDataFolder() },
           { label: 'Open logs folder', click: () => void shell.openPath(server!.paths.logsDir) },
           { type: 'separator' },
-          { role: 'quit' },
+          { role: 'quit', label: 'Quit Producer Studio' },
         ],
       },
       { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
@@ -350,11 +462,30 @@ if (!app.requestSingleInstanceLock()) {
           { label: 'Check Claude sign-in', click: go('/settings#ai') },
           { label: 'Cloud sync', click: go('/settings#account') },
           { type: 'separator' },
+          ...(updatesOffered(build).offered ? [{ label: 'Check for updates…', click: () => void runUpdateCheck('menu') } as MenuItemConstructorOptions] : []),
+          {
+            label: 'Copy diagnostics',
+            click: () =>
+              void copyDiagnostics().then((r) =>
+                messageBox({ type: r.ok ? 'info' : 'warning', title: 'Producer Studio', message: r.ok ? 'Diagnostics copied.' : 'Couldn’t copy the diagnostics.', detail: r.ok ? 'Paste them into your support request. Keys, tokens and email addresses are taken out.' : (r.error ?? ''), buttons: ['OK'] }),
+              ),
+          },
           { label: 'About Producer Studio', click: () => void about() },
         ],
       },
     ]
     Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  }
+
+  /** Once per launch: a bundled tool that's missing or broken is named, with what it's for and what to do (D-13). */
+  async function checkTools() {
+    if (!server || !sessionToken) return
+    const report = await fetchToolReport(server.origin, sessionToken)
+    if (report) logLine(`tools: ${report.tools.map((t) => `${t.id}=${t.status}`).join(' ')}`)
+    const w = toolsWarning(report)
+    if (!w) return
+    const r = await messageBox({ type: 'warning', title: 'Producer Studio', message: w.message, detail: w.detail, buttons: ['Open Settings', 'Continue'], defaultId: 0, cancelId: 1 })
+    if (r.response === 0) void mainWin?.loadURL(`${server.origin}/settings#computer`)
   }
 
   // ---- IPC: one validated handler per preload function, only for our own local pages ----
@@ -393,22 +524,160 @@ if (!app.requestSingleInstanceLock()) {
     preload: path.join(__dirname, 'preload.cjs'),
     secure: { ...SECURE_PREFS, additionalArguments: [`--ps-version=${app.getVersion()}`] },
     log: logLine,
+    onChange: () => refreshTray(),
   })
-  app.on('will-quit', () => dictation.dispose())
+  app.on('will-quit', () => {
+    dictation.dispose()
+    tray?.destroy()
+  })
 
   app.on('web-contents-created', (_e, wc) => hardenContents(wc))
 
-  app.on('second-instance', () => {
-    // launched again while running: show the window, or open one if it was closed (never "nothing happens")
+  /** Show the main window (from the tray, or a second launch), or open one if it was closed. */
+  function showMain() {
     if (!mainWin) {
       if (server?.running && !quitting) mainWin = createMain(server.origin)
       return
     }
     if (mainWin.isMinimized()) mainWin.restore()
+    mainWin.show()
     mainWin.focus()
+  }
+
+  function setShell(patch: Partial<ShellSettings>) {
+    try {
+      shellSettings = writeShellSettings(shellFile, patch)
+    } catch (err) {
+      logLine(`shell settings not saved: ${(err as Error).message}`)
+      shellSettings = { ...shellSettings, ...patch }
+    }
+    refreshTray()
+    return shellSettings
+  }
+
+  /** The tray's menu, rebuilt whenever what it shows changes (window shown or hidden, dictation, keep running). */
+  function refreshTray() {
+    if (!tray) return
+    const click: Record<string, () => void> = {
+      open: showMain,
+      dictate: () => dictation.toggle(),
+      settings: () => {
+        showMain()
+        if (server) void mainWin?.loadURL(`${server.origin}/settings#computer`)
+      },
+      keep: () => void setShell({ keepRunning: !shellSettings.keepRunning }),
+      quit: () => app.quit(),
+    }
+    const items = trayMenu({ windowShown: !!mainWin?.isVisible(), keepRunning: shellSettings.keepRunning, dictation: dictation.state() })
+    tray.setContextMenu(
+      Menu.buildFromTemplate(
+        items.map((i): MenuItemConstructorOptions =>
+          i.id === 'sep' ? { type: 'separator' } : i.id === 'keep' ? { label: i.label, type: 'checkbox', checked: i.checked, click: click.keep } : { label: i.label, enabled: i.enabled ?? true, click: click[i.id] },
+        ),
+      ),
+    )
+  }
+
+  function createTray() {
+    if (tray || !appIcon) return
+    try {
+      const img = nativeImage.createFromPath(appIcon)
+      tray = new Tray(process.platform === 'win32' ? img : img.resize({ width: 16, height: 16 }))
+      tray.setToolTip('Producer Studio')
+      // a click on the icon opens the window (Windows, most Linux desktops); the menu has the rest
+      tray.on('click', showMain)
+      refreshTray()
+    } catch (err) {
+      // some Linux desktops have no tray: closing the window then quits, as without the setting
+      tray = undefined
+      logLine(`no tray icon: ${(err as Error).message}`)
+    }
+  }
+
+  // ---- IPC: the desktop app's own settings (Settings → This computer) ----
+  // ---- update check (D-4): signed builds with a release feed, behind the setting; it only tells and links ----
+  let updateState: UpdateState = { status: 'idle' }
+  let updateTimer: NodeJS.Timeout | undefined
+
+  /**
+   * Ask the release feed. 'auto' (at start and daily, setting on) offers a new version once with Download / Later /
+   * Skip this version; 'menu' (Help → Check for updates…) always answers; 'settings' just returns the state.
+   */
+  async function runUpdateCheck(how: 'auto' | 'menu' | 'settings'): Promise<UpdateState> {
+    if (!updatesOffered(build).offered || !build.updateRepo) return updateState
+    if (how === 'auto' && !shellSettings.updateCheck) return updateState
+    updateState = await checkForUpdate({ repo: build.updateRepo, current: app.getVersion(), skippedVersion: shellSettings.skippedVersion })
+    logLine(`update check: ${updateState.status}${updateState.status === 'available' ? ` ${updateState.update.version}` : updateState.status === 'error' ? ` (${updateState.error})` : ''}`)
+    if (how === 'settings') return updateState
+    if (updateState.status === 'available' && (how === 'menu' || !updateState.skipped)) {
+      const u = updateState.update
+      const r = await messageBox({
+        type: 'info',
+        title: 'Producer Studio',
+        message: `Producer Studio ${u.version} is available.`,
+        detail: `You have ${app.getVersion()}. Download opens its release page, where the installer is.`,
+        buttons: ['Download', 'Later', 'Skip this version'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      if (r.response === 0) openExternal(u.url)
+      if (r.response === 2) setShell({ skippedVersion: u.version })
+    } else if (how === 'menu')
+      await messageBox({
+        type: updateState.status === 'error' ? 'warning' : 'info',
+        title: 'Producer Studio',
+        message: updateState.status === 'current' ? 'Producer Studio is up to date.' : 'Producer Studio couldn’t check for updates.',
+        detail: updateState.status === 'current' ? `You have ${app.getVersion()}, the latest version.` : updateState.status === 'error' ? updateState.error : '',
+        buttons: ['OK'],
+      })
+    return updateState
+  }
+
+  function scheduleUpdateChecks() {
+    if (updateTimer || !updatesOffered(build).offered) return
+    updateTimer = setTimeout(function tick() {
+      void runUpdateCheck('auto')
+      updateTimer = setTimeout(tick, UPDATE_INTERVAL_MS)
+      updateTimer.unref()
+    }, UPDATE_FIRST_CHECK_MS)
+    updateTimer.unref()
+  }
+
+  ipcMain.handle('desktop:check-updates', async (e) => (isLocal(e.senderFrame?.url ?? '') ? { ...(await runUpdateCheck('settings')) } : null))
+
+  const appSettingsView = () => {
+    const dataDir = server?.paths.dataDir
+    const offer = updatesOffered(build)
+    return {
+      keepRunning: shellSettings.keepRunning,
+      updateCheck: shellSettings.updateCheck,
+      crashReports: shellSettings.crashReports,
+      tray: !!tray,
+      updates: { offered: offer.offered, ...(offer.reason ? { reason: offer.reason } : {}), version: app.getVersion(), state: updateState },
+      // database copies made before updates (D-10); the folder can be shown (it is inside the data folder)
+      backups: dataDir ? { folder: backupsDir(dataDir), items: listBackups(dataDir).map(({ name, at, bytes }) => ({ name, at, bytes })) } : undefined,
+      // crash reports (D-14): being kept this launch, and how many are on this computer
+      crash: { active: !!crashOptions, count: listCrashDumps(app.getPath('crashDumps')).length },
+    }
+  }
+  ipcMain.handle('desktop:copy-diagnostics', (e) => (isLocal(e.senderFrame?.url ?? '') ? copyDiagnostics() : null))
+  ipcMain.handle('desktop:app-settings', (e) => (isLocal(e.senderFrame?.url ?? '') ? appSettingsView() : null))
+  ipcMain.handle('desktop:set-app-settings', (e, raw: unknown) => {
+    if (!isLocal(e.senderFrame?.url ?? '')) return null
+    const patch = shellPatch(raw)
+    if (!patch) return null
+    setShell(patch)
+    return appSettingsView()
+  })
+
+  app.on('second-instance', () => {
+    // launched again while running: show the window, or open one if it was closed (never "nothing happens")
+    showMain()
   })
 
   app.on('window-all-closed', () => app.quit())
+  // macOS: the Dock icon opens the window again
+  app.on('activate', () => showMain())
 
   app.on('before-quit', (e) => {
     quitting = true
@@ -428,6 +697,9 @@ if (!app.requestSingleInstanceLock()) {
     if (!(await startServer())) return
     server!.on('crash', (code) => void onCrash(code))
     menu()
+    createTray()
+    scheduleUpdateChecks()
     mainWin = createMain(server!.origin)
+    mainWin.once('ready-to-show', () => void checkTools())
   })
 }

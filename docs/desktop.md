@@ -10,23 +10,68 @@ Architecture overview: [architecture.md](architecture.md) ("Two products, one co
 |---|---|
 | Dev | `npm run dev -w @producer/desktop` builds `apps/web`, builds main/preload, starts Electron, which spawns `apps/server/src/index.ts` through tsx with Electron's Node. `--no-web` skips the web build. `PS_USER_DATA=<dir>` uses a throwaway profile. |
 | Installer | `npm run dist -w @producer/desktop` → `apps/desktop/release/Producer-Studio-Setup-<version>.exe` (+ `release/win-unpacked/`). `--no-web` reuses `apps/web/dist`; `--dir` builds only `win-unpacked`; `--download` fetches the bundled tools from upstream (CI). |
+| Linux | On Linux (after `npm ci` there, so ffmpeg, sharp and onnxruntime are Linux builds): `npm run dist -w @producer/desktop -- --linux` → `release/Producer-Studio-<version>-x64.AppImage` and `.deb` (the deb recommends `xdotool`, `wtype` and `libappindicator3-1`). whisper.cpp has no Linux release binary: build it and set `WHISPER_DIR` to the folder holding `whisper-cli` (`--download` still fetches the model); without it the app ships without transcription and its tool check says so. Each platform is built on its own OS; dist.mjs refuses a cross build. |
+| macOS (prepared) | `npm run dist -w @producer/desktop -- --mac` on a Mac → `.dmg` + `.zip`, hardened runtime with `installer/entitlements.mac.plist` (JIT, unsigned executable memory and library validation off for the native modules, microphone, Apple Events for dictation's paste). Signed with a Developer ID (`CSC_LINK` / `CSC_NAME`) and notarised when an Apple account is also set (`APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`): both owner items. Not built or run yet. |
 | Silent install | `Producer-Studio-Setup-0.1.0.exe /S /D=C:\path\to\dir` (per-user, assisted NSIS; `/D=` must be last and unquoted). Uninstall: `"Uninstall Producer Studio.exe" /S`. |
+| Uninstall | Apps & features → Producer Studio. After removing the app it asks two questions, both defaulting to **No** (`installer/uninstall.nsh`): remove the VoiceStudio engine (`%LOCALAPPDATA%\Producer Studio\VoiceStudio`, 10 GB or more), and delete the data on this computer (`%LOCALAPPDATA%\Producer Studio` and `%APPDATA%\Producer Studio`: projects, media, renders, voices, settings, saved keys; unsynced projects are lost). A silent uninstall (`/S`) and an update keep everything. A data folder moved elsewhere is never touched (delete it yourself). |
 | Data | `%APPDATA%\Producer Studio\` — `logs\main.log`, `logs\server.log` (rotated at 10 MB while running), `settings.json`, `keystore.bin`. The data folder (PGlite, media, renders) is `%LOCALAPPDATA%\Producer Studio\data\` for new installs; an install from before keeps `%APPDATA%\Producer Studio\data\`. Its path is in `settings.json` (`dataDir`); Settings → Storage or File → Move data folder… moves it (copy, check, switch, remove the old one). A folder that can't be opened at launch (a drive that isn't connected) is reported, with the default folder offered instead. |
 
 ## Process model
 
 ```
-Producer Studio.exe (main)  ── spawns ──▶  Producer Studio.exe  (ELECTRON_RUN_AS_NODE=1)  resources/server/server.mjs
-  splash → wait /api/health                  MODE=desktop  HOST=127.0.0.1  PORT=<free>  DATA_DIR=<settings dataDir>
-  POST /api/desktop/session (secret)         DESKTOP_SECRET=<random per launch>  DESKTOP_SECRET_KEY=<safeStorage key>
-  set ps_session cookie → load UI            stdin held by main: server exits when main goes away
+Producer Studio.exe (main)  ── utilityProcess.fork ──▶  engine (utility process)  resources/server/server.mjs
+  backup the database if this build migrates it         MODE=desktop  HOST=127.0.0.1  PORT=<free>  DATA_DIR=<dataDir>
+  splash → wait /api/health                             DESKTOP_SECRET=<random per launch>  DESKTOP_SECRET_KEY=<key>
+  POST /api/desktop/session (secret)                    DESKTOP_PARENT_PORT=1: stops on {type:'stop'} from main
+  set ps_session cookie → load UI → tool check          (dev / fallback: a child with ELECTRON_RUN_AS_NODE=1 that
+  tray icon, update check (signed builds)                exits when main closes its stdin)
 ```
 
-- Quit closes the server's stdin (graceful PGlite shutdown), waits 5 s, then `taskkill /T /F` sweeps the tree.
+- **Engine host (D-12).** Packaged builds fork the engine as an Electron utility process (`src/engine-host.ts`), so the
+  main process never needs `ELECTRON_RUN_AS_NODE`; dev runs it as a Node child through tsx. A utility process that
+  can't start the engine falls back to the child once per launch (`server.log` says so); `PS_ENGINE_HOST=child|utility`
+  overrides. Inside Electron the engine's own children get `ELECTRON_RUN_AS_NODE=1` from `childEnv()` (TTS worker,
+  renderer, the MCP server Claude starts), never the Claude CLI itself.
+- **Fuses (D-12).** `scripts/release.mjs` `FUSES`, flipped by electron-builder at packaging: `NODE_OPTIONS` and
+  `--inspect`/SIGUSR1 ignored, only `app.asar` loads and its embedded integrity hash is checked (Windows: Electron 30+),
+  cookies encrypted, no extra `file://` privileges. `runAsNode` stays **on**: the engine still starts those Node children
+  with the app binary; switching it off needs them moved to utility processes too (the MCP server is started by the
+  Claude CLI, so it would need a separate Node). With `NODE_OPTIONS` off, the renderer's `--use-system-ca` (only used
+  when HyperFrames downloads its own browser) has no effect; packaged builds ship that browser. Check a real build with
+  `npx @electron/fuses read --app "release/win-unpacked/Producer Studio.exe"`.
+- Quit asks the engine to stop (a stop message to the utility process, or its stdin closed; graceful PGlite shutdown),
+  waits 12 s, then `taskkill /T /F` sweeps the tree.
 - A server crash shows **Restart / Open logs / Quit**. "Sign out" in the web UI just opens a fresh local session.
 - Packaged layout: `resources/app.asar` (main, preload, splash), `resources/server/` (esbuild bundle `server.mjs`,
   `node_modules/` with only the native/wasm-heavy externals and their closure, `scripts/tts-worker.mjs`,
   `scripts/mcp-server.mjs`, `runtime.js`, `skill/`), `resources/web/` (SPA without sourcemaps), `resources/tools/`.
+
+## Settings → This computer
+
+The desktop app's own settings live in `%APPDATA%\Producer Studio\shell.json` (the engine's `settings.json` keeps only
+its own keys), changed from Settings → This computer through the preload's `producerDesktop.app`.
+
+- **Tray (D-2).** A tray icon: Open / Show Producer Studio, Dictate (its shortcut), "Keep running when the window is
+  closed", Settings…, Quit Producer Studio. With keep running on, closing the window hides it: the engine, the dictation
+  shortcut and the voice relay keep going (a Windows balloon says so the first time). Off by default; a desktop without
+  a tray (some Linux) always quits on close.
+- **Look for new versions (D-4).** See "Updates".
+- **Database backups (D-10).** Before the first start of a build with a newer database schema (or, schema unknown,
+  another app version), the PGlite folder `<data>/pg` is copied to `<data>/backups/db-<UTC time>-from-<version>/pg`
+  while nothing has it open; the newest 3 are kept, media isn't copied. A backup that fails offers Quit or "Continue
+  without a backup". `build-info.json` carries the schema; `shell.json` `lastStart` the last start's. **To restore:**
+  quit Producer Studio (and from the tray, if it keeps running), rename `<data>\pg` to `pg.broken`, copy
+  `<data>\backups\db-…\pg` to `<data>\pg`, and start the version named in the backup (an older app can't open a newer
+  database). Settings shows the backups and opens their folder. Move data folder takes them along.
+- **Crash reports and Copy diagnostics (D-14).** Opt-in, off by default, applied at the next start: Electron's
+  crashReporter with `uploadToServer: false`, so minidumps stay in `app.getPath('crashDumps')` and nothing is sent (an
+  upload endpoint is an owner item). Renderer and child-process exits are always logged to `main.log`. Copy diagnostics
+  (Settings, or Help → Copy diagnostics) puts on the clipboard: versions, build (signed, schema), engine host, paths,
+  these settings, the tool check, the crash reports' names and the last lines of `main.log` and `server.log`, with
+  tokens, keys, cookies, passwords and email addresses taken out (`src/diagnostics.ts` `redact`).
+- **Bundled tools (D-13).** At start the engine checks ffmpeg and ffprobe (run), whisper and its model, the Kokoro
+  model and the renderer (`GET /api/tools/health`, `services/tool-health.ts`); a broken one gets a dialog naming it,
+  what it's for and the fix. Settings lists them all with Check again.
 
 ## Bundled tools and how CI gets them
 
@@ -46,15 +91,34 @@ commit (`resolve/<sha>`), never `main`. Chrome for Testing publishes no checksum
 version only. To move a pin, take the new sha256 from the GitHub release API (asset `digest`) or Hugging Face's
 `paths-info` API (`lfs.oid`) — the comment in `fetch-tools.mjs` has the calls; no large download is needed.
 
-## Code signing (hooks in place, unsigned today)
+## Code signing (ready, unsigned until the owner sets it up)
 
-electron-builder signs automatically when these are present in the environment:
+`npm run dist` reads how to sign from the environment (`scripts/release.mjs` → `releaseConfig()`, laid over
+`electron-builder.yml` by `scripts/dist.mjs`) and prints what it will do (`desktop build: …`):
 
-- `CSC_LINK` (path, https URL or base64 of a `.pfx`) + `CSC_KEY_PASSWORD` — or `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`.
-- Azure Trusted Signing: add `win.azureSignOptions` (endpoint, certificate profile, account) to `electron-builder.yml`
-  and provide `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`.
+| Set in the environment | Result |
+|---|---|
+| nothing | Unsigned, exactly as before (SmartScreen warns on first run). `build-info.json` says `signed: false`. |
+| **Azure Trusted Signing**: `AZURE_TRUSTED_SIGNING_ENDPOINT` (e.g. `https://weu.codesigning.azure.net`), `AZURE_TRUSTED_SIGNING_ACCOUNT` (the Trusted Signing account name), `AZURE_TRUSTED_SIGNING_PROFILE` (the certificate profile), and the Entra ID app that may sign: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Optional `AZURE_TRUSTED_SIGNING_PUBLISHER` (default `Producer Studio`): must match the certificate's subject exactly. | The app, its executables and the installer are signed through `Invoke-TrustedSigning` (electron-builder installs the PowerShell module on first use; Windows build machines only). A signing failure fails the build (`forceCodeSigning`), never an unsigned installer. Only some of these six set stops the build and names the missing ones. |
+| a `.pfx`: `CSC_LINK` (path, https URL or base64) + `CSC_KEY_PASSWORD`, or `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` | Signed with that certificate (electron-builder's own), also required to succeed. |
 
-Without them the build logs "signing" steps but produces unsigned binaries (SmartScreen will warn on first run).
+Owner setup for Azure Trusted Signing: a Trusted Signing account and a public-trust certificate profile (identity
+validation of the organisation), an Entra ID app registration with a client secret, given the "Trusted Signing
+Certificate Profile Signer" role on the profile. Put the six values in the CI secrets. The secrets never go into
+the build config; the signing module reads them from the environment.
+
+## Updates (mechanism ready, off until builds are signed)
+
+electron-updater isn't a dependency and Electron's built-in autoUpdater doesn't drive NSIS installs, so the app checks
+a GitHub Releases feed itself (`src/updates.ts`): `GET https://api.github.com/repos/<owner>/<repo>/releases/latest`
+at start (after 30 s) and once a day, compares the tag with its version and, for a newer one, says so with
+**Download** (opens that release's page on github.com, the only kind of link it accepts), **Later** and **Skip this
+version**. It never downloads or installs anything itself. Help → Check for updates… and Settings → This computer →
+Check now ask at any time; the setting "Look for new versions" (on by default) turns the automatic checks off.
+
+It is offered only when the build says so in `build-info.json`: `signed: true` (signing configured, see above) and
+`updateRepo`, set at build time with `PS_UPDATE_REPO=<owner>/<repo>`. Unsigned builds show the setting greyed out with
+the reason. Owner items: signing, and publishing each release (tag `v<version>`, the installer attached) to that repo.
 
 ## Security
 
@@ -64,8 +128,11 @@ Without them the build logs "signing" steps but produces unsigned binaries (Smar
   a sandboxed viewer window; anything else local is denied. Permission requests are denied except clipboard-write,
   fullscreen and microphone-only media (Voice Studio records reference clips for voice cloning) for the local origin. Downloads always show a save dialog.
 - Preload exposes only `window.producerDesktop = { version, platform, openExternal(url), showItemInFolder(path),
-  setNativeTheme(mode), dictation: { configure, result, cancel, toggle, onCommand } }` (system-wide dictation: global
-  shortcut, the `/dictate` widget window, clipboard + SendKeys paste; see voicestudio.md).
+  setNativeTheme(mode), moveDataFolder(), app: { settings, setSettings }, dictation: { configure, result, cancel,
+  toggle, onCommand } }` (system-wide dictation: global shortcut, the `/dictate` widget window, clipboard + paste:
+  SendKeys on Windows, `wtype` on Wayland or `xdotool` on X11 when installed, else the text stays on the clipboard,
+  System Events on macOS; see voicestudio.md). `app` is the shell's own settings (Settings → This computer), and
+  `setSettings` takes only the known on/off keys.
   IPC handlers check the sender is the local origin and re-validate: `openExternal` takes http(s) URLs only (no
   credentials, ≤ 2 KB); `showItemInFolder` resolves symlinks and only accepts paths inside the data folder (the folder
   itself opens in Explorer). No generic `invoke`, no remote module.
@@ -180,7 +247,10 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
 
 ## Known gaps
 
-- Builds are unsigned; Windows only (macOS/Linux targets not configured).
+- Builds are unsigned until the owner sets up signing (see "Code signing"). Linux packages are configured but not yet
+  built on Linux; macOS is prepared (config, entitlements, notarisation switch) but needs a Mac and an Apple account.
+  On Linux the AppImage relies on unprivileged user namespaces for Chromium's sandbox (Ubuntu 24.04+ restricts them
+  through AppArmor); the .deb installs Electron's chrome-sandbox helper instead. A real build must check both.
 - Moving the data folder on macOS/Linux also moves VoiceStudio (it lives inside the data folder there), whose Python
   environment may need reinstalling afterwards. On Windows VoiceStudio has its own folder in Local AppData.
 - Brand-kit conflicts are last-writer-wins (local edits since the last sync win until pushed).

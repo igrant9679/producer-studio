@@ -1423,6 +1423,21 @@ on('GET', '/api/system', async () => {
   return json(systemInfo())
 })
 on('GET', '/api/settings', desktopOnly(() => json(desktopSettings)))
+// the desktop's bundled tools (D-13): one that downloads on first use, the rest fine
+on('GET', '/api/tools/health', desktopOnly(async () => {
+  await delay(150)
+  return json({
+    checkedAt: Date.now(),
+    ok: true,
+    tools: [
+      { id: 'ffmpeg', name: 'ffmpeg', needed: 'Uploads, proxies, clean-up tools and exports', status: 'ok', detail: 'ffmpeg 7.0.2-static' },
+      { id: 'ffprobe', name: 'ffprobe', needed: 'Reading what is in a clip (length, size, tracks)', status: 'ok', detail: 'ffprobe 7.0.2-static' },
+      { id: 'whisper', name: 'Transcription (whisper)', needed: 'Captions, transcripts and Producer scripts from speech', status: 'ok', detail: 'Model ggml-small.en.bin' },
+      { id: 'kokoro', name: 'Voices (Kokoro)', needed: 'Built-in voiceovers', status: 'warn', detail: 'The voice model isn’t on this computer yet: it downloads (about 90 MB) the first time you make a voiceover, which needs the internet.' },
+      { id: 'renderer', name: 'Renderer (HyperFrames)', needed: 'Exports', status: 'ok', detail: 'Browser chrome-headless-shell-win64' },
+    ],
+  })
+}))
 on('PUT', '/api/settings', desktopOnly(async (_m, _q, b) => {
   await delay(200)
   Object.assign(desktopSettings, b)

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Project, SyncStatus } from '@producer/core'
 import { type Cloud, type Desktop, type Http, PASSWORD, deskSession, startCloud, startDesktop } from './desktop-harness'
 import { type CloudProxy, startProxy } from './cloud-proxy'
+import { bootWaitMs } from './boot-wait'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
 const png = (extra: number) => Buffer.concat([PNG, crypto.randomBytes(extra)])
@@ -69,6 +70,7 @@ async function editName(h: Http, id: string, name: string) {
 
 const localIds = async () => ((await desk.json('GET', `/api/projects?workspaceId=${A.workspaceId}`)).body.items as Array<{ id: string }>).map((p) => p.id)
 
+// two servers boot here (the cloud and the desktop), then a sign-up, a link and a first sync
 beforeAll(async () => {
   cloud = await startCloud()
   proxy = await startProxy(cloud.url)
@@ -78,7 +80,7 @@ beforeAll(async () => {
   A = await cloud.signup('Rae')
   expect((await desk.json('POST', '/api/sync/link', { cloudUrl: proxy.url, email: A.email, password: PASSWORD })).status).toBe(200)
   await sync()
-}, 420_000)
+}, 2 * bootWaitMs() + 60_000)
 
 afterAll(async () => {
   d?.stop()

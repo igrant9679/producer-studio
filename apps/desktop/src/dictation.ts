@@ -1,11 +1,12 @@
 // System-wide dictation: a global shortcut opens a small always-on-top widget (never focused, so the app the user is
 // typing in keeps the caret) that streams the microphone to VoiceStudio and shows live text. Pressing the shortcut again
-// stops; the final text is put on the clipboard and pasted into the focused app with Ctrl+V, then the person's
-// clipboard (every format kept) is put back once the paste has happened. The widget is our own local page (/dictate);
-// IPC is accepted only from local pages.
+// stops; the final text is put on the clipboard and pasted into the focused app (paste.ts: Ctrl+V on Windows and
+// Linux, Cmd+V on macOS), then the person's clipboard (every format kept) is put back once the paste has happened. The
+// widget is our own local page (/dictate); IPC is accepted only from local pages.
 import { spawn } from 'node:child_process'
 import { BrowserWindow, ClipboardItem, clipboard, globalShortcut, ipcMain, screen } from 'electron'
 import { type ClipboardLike, pasteKeepingClipboard } from './clipboard'
+import { type PasteCommand, noPasteReason, onPath, pasteCommand } from './paste'
 
 const systemClipboard: ClipboardLike<ClipboardItem> = {
   read: () => clipboard.read(),
@@ -22,6 +23,8 @@ export interface DictationDeps {
   preload: string
   secure: Electron.WebPreferences
   log: (msg: string) => void
+  /** The shortcut was turned on, off or changed (the tray shows it). */
+  onChange?: () => void
 }
 
 interface Config {
@@ -112,14 +115,16 @@ export function setupDictation(d: DictationDeps) {
     if (widget && !widget.isDestroyed()) widget.hide()
   }
 
+  /** How this computer pastes (paste.ts), looked up when dictation is turned on; null: the text stays on the clipboard. */
+  let pasteCmd: PasteCommand | null = null
+
   /**
    * Paste into the foreground app (the widget never takes focus). Resolves once the keystroke has been sent (the
    * process exited, however long a cold PowerShell takes to start), failed, or after 15 s at most.
    */
-  function paste(): Promise<void> {
-    if (process.platform !== 'win32') return Promise.resolve()
+  function paste(cmd: PasteCommand): Promise<void> {
     return new Promise<void>((resolve) => {
-      const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')"], { windowsHide: true, stdio: 'ignore' })
+      const ps = spawn(cmd.cmd, cmd.args, { windowsHide: true, stdio: 'ignore' })
       const t = setTimeout(() => {
         d.log('dictation: paste took more than 15 s')
         resolve()
@@ -137,6 +142,12 @@ export function setupDictation(d: DictationDeps) {
   }
 
   function apply(next: Config): { ok: boolean; error?: string } {
+    const r = applyConfig(next)
+    d.onChange?.()
+    return r
+  }
+
+  function applyConfig(next: Config): { ok: boolean; error?: string } {
     cfg = next
     if (registered) {
       globalShortcut.unregister(registered)
@@ -155,7 +166,8 @@ export function setupDictation(d: DictationDeps) {
     }
     if (!ok) return { ok: false, error: 'Another app is already using that shortcut. Pick a different one.' }
     registered = cfg.shortcut
-    d.log(`dictation: global shortcut ${cfg.shortcut}`)
+    pasteCmd = pasteCommand({ platform: process.platform, env: process.env, has: (c) => onPath(c) })
+    d.log(`dictation: global shortcut ${cfg.shortcut}; ${pasteCmd ? `pastes with ${pasteCmd.via}` : noPasteReason(process.platform)}`)
     return { ok: true }
   }
 
@@ -170,10 +182,11 @@ export function setupDictation(d: DictationDeps) {
     hide()
     const text = typeof raw === 'string' ? raw.trim().slice(0, 20_000) : ''
     if (!text) return true
-    // without pasting (turned off, or not on Windows), the text stays on the clipboard for the person to paste
-    if (!cfg.paste || process.platform !== 'win32') await clipboard.writeText(text)
+    // without pasting (turned off, or no way to paste here), the text stays on the clipboard for the person to paste
+    const cmd = cfg.paste ? pasteCmd : null
+    if (!cmd) await clipboard.writeText(text)
     // the person's clipboard (every format of every item) comes back only after the paste has happened
-    else void pasteKeepingClipboard(systemClipboard, text, paste).catch((err) => d.log(`dictation: clipboard restore failed: ${String(err)}`))
+    else void pasteKeepingClipboard(systemClipboard, text, () => paste(cmd)).catch((err) => d.log(`dictation: clipboard restore failed: ${String(err)}`))
     return true
   })
 
@@ -190,6 +203,10 @@ export function setupDictation(d: DictationDeps) {
   })
 
   return {
+    /** Whether the shortcut is registered, and which (for the tray). */
+    state: () => ({ enabled: !!registered, shortcut: registered }),
+    /** Start or stop dictating, as the shortcut does (the tray's Dictate). */
+    toggle,
     dispose() {
       globalShortcut.unregisterAll()
       if (widget && !widget.isDestroyed()) widget.destroy()

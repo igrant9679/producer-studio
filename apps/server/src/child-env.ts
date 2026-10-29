@@ -26,9 +26,15 @@ export function desktopSecret(name: HeldSecret): string | undefined {
   return held[name]
 }
 
-/** Environment for a child process: `base` (default: this process's) plus `extra`, never the desktop secrets. */
-export function childEnv(base: NodeJS.ProcessEnv = process.env, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+/**
+ * Environment for a child process: `base` (default: this process's) plus `extra`, never the desktop secrets. Inside
+ * Electron (the desktop engine in a utility process, whose environment can't carry ELECTRON_RUN_AS_NODE) the program
+ * at process.execPath is the app itself, so children started with it (the TTS worker, the renderer, Claude's MCP
+ * server) get ELECTRON_RUN_AS_NODE=1 to run as Node instead of opening another app. Others ignore it.
+ */
+export function childEnv(base: NodeJS.ProcessEnv = process.env, extra: NodeJS.ProcessEnv = {}, inElectron = Boolean(process.versions.electron)): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base, ...extra }
   for (const k of HELD) delete env[k]
+  if (inElectron && env.ELECTRON_RUN_AS_NODE === undefined) env.ELECTRON_RUN_AS_NODE = '1'
   return env
 }
