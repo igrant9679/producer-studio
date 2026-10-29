@@ -29,6 +29,21 @@ export function checkIfMatch(c: Context, current: unknown, what = 'This'): void 
   if (!sent.includes(tag)) throw new HttpError(412, 'conflict', `${what} was changed by someone else since you opened it. Reload to see the latest, then make your change again.`, { etag: tag })
 }
 
+/**
+ * Whether the write must be conditional (an If-Match other than `*` was sent and passed checkIfMatch). Then the write
+ * is one UPDATE that only matches the row as it was checked, so of two saves in the same millisecond only one wins;
+ * the other gets changedMeanwhile().
+ */
+export function matchRequired(c: Context): boolean {
+  const want = c.req.header('if-match')
+  return Boolean(want && want.trim() !== '*')
+}
+
+/** The 412 for a conditional write that matched nothing: someone else's save landed between the check and the write. */
+export function changedMeanwhile(what = 'This', current?: unknown): HttpError {
+  return new HttpError(412, 'conflict', `${what} was changed by someone else since you opened it. Reload to see the latest, then make your change again.`, current === undefined ? undefined : { etag: etagOf(current) })
+}
+
 /** Set the ETag of what a route returns. */
 export function setEtag(c: Context, value: unknown): string {
   const tag = etagOf(value)

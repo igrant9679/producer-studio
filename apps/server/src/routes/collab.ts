@@ -40,7 +40,7 @@ projectCollabRoutes.get('/:id/presence', async (c) => {
   const u = requireUser(c)
   const row = await loadProjectRow(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'viewer')
-  return c.json(presenceOf(row.id))
+  return c.json(await presenceOf(row.id))
 })
 
 /** An open editor's heartbeat (`open: true`) or goodbye (`open: false`), per browser tab (`client`). */
@@ -49,7 +49,7 @@ projectCollabRoutes.post('/:id/presence', async (c) => {
   const row = await loadProjectRow(c.req.param('id'))
   const role = await requireRole(u.id, row.workspaceId, 'viewer')
   const b = await body(c, z.object({ client: z.string().min(1).max(64), open: z.boolean().default(true) }))
-  return c.json(beat(row, u, role, b.client, b.open))
+  return c.json(await beat(row, u, role, b.client, b.open))
 })
 
 /** Mounted at /api/comments. */

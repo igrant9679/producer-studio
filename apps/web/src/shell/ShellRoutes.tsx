@@ -22,6 +22,8 @@ const pages = {
   space: () => import('./pages/SpacePage'),
   exports: () => import('./pages/ExportsPage'),
   activity: () => import('./pages/ActivityPage'),
+  audit: () => import('./pages/AuditPage'),
+  operator: () => import('./pages/OperatorPage'),
   usage: () => import('./pages/UsagePage'),
   jobs: () => import('./pages/JobsPage'),
   settings: () => import('./pages/SettingsPage'),
@@ -47,6 +49,8 @@ const BrandPage = lazy(pages.brand)
 const SpacePage = lazy(pages.space)
 const ExportsPage = lazy(pages.exports)
 const ActivityPage = lazy(pages.activity)
+const AuditPage = lazy(pages.audit)
+const OperatorPage = lazy(pages.operator)
 const UsagePage = lazy(pages.usage)
 const JobsPage = lazy(pages.jobs)
 const SettingsPage = lazy(pages.settings)
@@ -126,6 +130,8 @@ export function ShellRoutes() {
             <Route path="space" element={<SpacePage />} />
             <Route path="exports" element={<ExportsPage />} />
             <Route path="activity" element={<ActivityPage />} />
+            <Route path="audit" element={<AuditPage />} />
+            <Route path="operator" element={<OperatorPage />} />
             <Route path="usage" element={<UsagePage />} />
             <Route path="jobs" element={<JobsPage />} />
             <Route path="settings" element={<SettingsPage />} />

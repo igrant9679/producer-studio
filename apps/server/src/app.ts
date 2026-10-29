@@ -11,7 +11,12 @@ import { assetRecord, jobDto } from './dto'
 import { HttpError } from './http'
 import { idempotency } from './idempotency'
 import { log } from './log'
-import { aiConfigured } from './ai/claude'
+import { countRequest, metricsRoute } from './metrics'
+import { openApiFor } from './openapi'
+import { requestId, requestIdOf, serverErrorMessage } from './request-id'
+import { healthRoutes } from './routes/health'
+import { spaceAuditRoutes } from './routes/audit'
+import { operatorRoutes } from './routes/operator'
 import { aiRoutes } from './routes/ai'
 import { voiceRoutes } from './routes/voice'
 import { aiSettingsRoutes } from './routes/ai-settings'
@@ -39,11 +44,9 @@ import { usageRoutes } from './routes/usage'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
 import { withActor } from './services/metering'
-import { storageHealth } from './services/storage-health'
+import { presenceOf } from './services/presence'
 import { bodyLimitFor, cloudHeaders } from './security'
 import { serveStatic } from './static'
-
-const started = Date.now()
 
 /** Postgres/PGlite unique_violation (23505), possibly wrapped by Drizzle as the error's `cause`. */
 function isUniqueViolation(err: unknown): boolean {
@@ -56,13 +59,17 @@ function isUniqueViolation(err: unknown): boolean {
 export function createApp() {
   const app = new Hono<AppEnv>()
 
+  // a request id first (P-7): every log line below carries it, and so does every error body
+  app.use('*', requestId)
   // request log
   app.use('*', async (c, next) => {
     const t0 = performance.now()
     await next()
     const p = c.req.path
-    if (p.startsWith('/api/') && p !== '/api/health' && !p.startsWith('/api/events')) {
-      log.info('http', { method: c.req.method, path: p, status: c.res.status, ms: Math.round(performance.now() - t0) })
+    if (p.startsWith('/api/') && !p.startsWith('/api/health') && p !== '/api/metrics' && !p.startsWith('/api/events')) {
+      const ms = Math.round(performance.now() - t0)
+      log.info('http', { method: c.req.method, path: p, status: c.res.status, ms })
+      countRequest(c.res.status)
     }
   })
 
@@ -71,48 +78,32 @@ export function createApp() {
   else app.use('*', cloudHeaders)
 
   app.onError((err, c) => {
-    if (err instanceof HttpError) return c.json({ error: err.message, code: err.code, ...(err.details !== undefined ? { details: err.details } : {}) }, err.status as 400)
+    // every error answer names the request, so a person can quote it and an operator can find its log lines
+    const ref = { requestId: requestIdOf(c) }
+    if (err instanceof HttpError) {
+      if (err.status >= 500) log.warn('request failed', { path: c.req.path, status: err.status, error: err.message })
+      return c.json({ error: err.message, code: err.code, ...(err.details !== undefined ? { details: err.details } : {}), ...ref }, err.status as 400)
+    }
     const status = (err as { status?: number }).status
-    if (status === 413) return c.json({ error: 'Request body too large', code: 'quota' }, 413)
+    if (status === 413) return c.json({ error: 'Request body too large', code: 'quota', ...ref }, 413)
     // two identical requests at once (a double click, a retry): the second hits a unique key, which is a conflict
-    if (isUniqueViolation(err)) return c.json({ error: 'This already exists. Refresh and try again.', code: 'conflict' }, 409)
+    if (isUniqueViolation(err)) return c.json({ error: 'This already exists. Refresh and try again.', code: 'conflict', ...ref }, 409)
     log.error('unhandled error', { path: c.req.path, err })
-    return c.json({ error: 'Internal server error', code: 'server' }, 500)
+    return c.json({ error: serverErrorMessage(ref.requestId), code: 'server', ...ref }, 500)
   })
 
-  app.get('/api/health', async (c) => {
-    let db = 'ok'
-    try {
-      await ctx().db.select({ id: jobs.id }).from(jobs).limit(1)
-    } catch {
-      db = 'error'
-    }
-    const cfg = ctx().config
-    return c.json(
-      {
-        ok: db === 'ok',
-        role: cfg.role,
-        db: ctx().database.driver,
-        dbStatus: db,
-        storage: ctx().storage.kind,
-        // reported, never gating: a deploy that brings new credentials must pass this check. The reason is for
-        // signed-in people only (/api/system): this endpoint is public.
-        storageStatus: storageHealth().status,
-        uptimeSec: Math.round((Date.now() - started) / 1000),
-        features: {
-          whisper: Boolean(cfg.whisperCli && cfg.whisperModel && fs.existsSync(cfg.whisperCli) && fs.existsSync(cfg.whisperModel)),
-          ai: aiConfigured(),
-        },
-      },
-      db === 'ok' ? 200 : 503,
-    )
-  })
+  // health (liveness, readiness, the platform's check) and metrics: before sign-in, so their bearer token isn't read
+  // as a device token
+  app.route('/api/health', healthRoutes())
+  app.get('/api/metrics', metricsRoute)
+  // P-24: the API described from its routes and their zod request schemas
+  app.get('/api/openapi.json', async (c) => c.json(await openApiFor(app)))
 
   // every request body is capped before anything reads it (sign-in included); the upload stream has its own cap
   app.use('/api/*', async (c, next) => {
     const max = bodyLimitFor(c.req.method, c.req.path)
     if (max === null) return next()
-    return bodyLimit({ maxSize: max, onError: (x) => x.json({ error: 'Request body too large', code: 'quota' }, 413) })(c, next)
+    return bodyLimit({ maxSize: max, onError: (x) => x.json({ error: 'Request body too large', code: 'quota', requestId: requestIdOf(x) }, 413) })(c, next)
   })
   app.use('/api/*', sessionMiddleware)
   // usage (AI tokens) inside the request is charged to the signed-in person
@@ -126,6 +117,7 @@ export function createApp() {
   app.route('/api/me', preferenceRoutes)
   app.route('/api/workspaces', workspaceShareRoutes)
   app.route('/api/workspaces', activityRoutes)
+  app.route('/api/workspaces', spaceAuditRoutes)
   app.route('/api/workspaces', brandRoutes)
   app.route('/api/workspaces', onboardingRoutes)
   app.route('/api/workspaces', voiceStudioRoutes)
@@ -159,8 +151,9 @@ export function createApp() {
   app.route('/api/devices', deviceRoutes)
   app.route('/api/sync', syncRoutes)
   app.route('/api/tools', toolRoutes)
+  app.route('/api/operator', operatorRoutes)
 
-  app.all('/api/*', (c) => c.json({ error: `No route for ${c.req.method} ${c.req.path}`, code: 'not_found' }, 404))
+  app.all('/api/*', (c) => c.json({ error: `No route for ${c.req.method} ${c.req.path}`, code: 'not_found', requestId: requestIdOf(c) }, 404))
 
   // SPA (production build) with index.html fallback for client routes (/edit/:id, /r/:token, ...)
   app.get('*', async (c) => {
@@ -193,6 +186,10 @@ export function createApp() {
     if (event === 'asset') {
       const a = (await db.select().from(assets).where(eq(assets.id, id)).limit(1))[0]
       return a ? { workspaceId: a.workspaceId, data: assetRecord(a, { light: true }) } : null
+    }
+    if (event === 'presence') {
+      const ws = (await db.select({ ws: projects.workspaceId }).from(projects).where(eq(projects.id, id)).limit(1))[0]
+      return ws ? { workspaceId: ws.ws, data: await presenceOf(id) } : null
     }
     const p = (await db.select({ id: projects.id, ws: projects.workspaceId, version: projects.version }).from(projects).where(eq(projects.id, id)).limit(1))[0]
     return p ? { workspaceId: p.ws, data: { id: p.id, version: p.version } } : null

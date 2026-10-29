@@ -7,6 +7,8 @@ export interface ApiError {
   error: string
   code?: 'unauthorized' | 'forbidden' | 'not_found' | 'conflict' | 'invalid' | 'quota' | 'server'
   details?: unknown
+  /** P-7: the request's id (also the X-Request-Id header): "quote reference …" finds its log lines. */
+  requestId?: string
 }
 
 /** `details` of a 409 from PUT /api/projects/:id. */
@@ -46,6 +48,8 @@ export interface Workspace {
 export interface MeResponse {
   user: User
   workspaces: Workspace[]
+  /** P-10: this account is an operator (OPERATOR_EMAILS): the Operator page is theirs. */
+  operator?: boolean
 }
 
 // ---- per-user appearance preferences ----

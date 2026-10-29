@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { eq, sql } from 'drizzle-orm'
+import { type SQL, and, eq, sql } from 'drizzle-orm'
 import { ctx } from '../context'
 import { type AssetMeta, assets, jobs } from '../db/schema'
 import { assetRecord } from '../dto'
@@ -26,13 +26,15 @@ export async function loadAsset(id: string): Promise<AssetRow> {
  * Update an asset row. `meta` is a patch merged into the stored metadata in SQL, never a snapshot written back:
  * processing, transcription and voice jobs write their own keys of the same clip at the same time.
  */
-export async function updateAsset(id: string, patch: Omit<Partial<AssetRow>, 'meta'> & { meta?: Partial<AssetMeta> }): Promise<AssetRow> {
+/** `opts.only`: an extra condition (an If-Match base); when the row no longer meets it, `opts.otherwise` is thrown. */
+export async function updateAsset(id: string, patch: Omit<Partial<AssetRow>, 'meta'> & { meta?: Partial<AssetMeta> }, opts: { only?: SQL; otherwise?: () => Error } = {}): Promise<AssetRow> {
   const { meta, ...rest } = patch
   const [row] = await ctx()
     .db.update(assets)
     .set({ ...rest, ...(meta ? { meta: sql`coalesce(${assets.meta}, '{}'::jsonb) || ${JSON.stringify(meta)}::jsonb` } : {}), updatedAt: Date.now() })
-    .where(eq(assets.id, id))
+    .where(opts.only ? and(eq(assets.id, id), opts.only) : eq(assets.id, id))
     .returning()
+  if (!row && opts.only && opts.otherwise) throw opts.otherwise()
   if (!row) throw notFound('Asset not found')
   emitAsset(row)
   return row

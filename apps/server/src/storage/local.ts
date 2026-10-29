@@ -90,4 +90,23 @@ export class LocalStorage implements Storage {
     const p = this.localPath(prefix.replace(/\/+$/, ''))
     await fsp.rm(p, { recursive: true, force: true })
   }
+
+  async *list(prefix: string): AsyncIterable<{ key: string; size: number; mtimeMs: number }> {
+    const base = prefix.replace(/\/+$/, '')
+    const stack = [base]
+    while (stack.length) {
+      const rel = stack.pop()!
+      const dir = rel ? this.localPath(rel) : this.root
+      const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])
+      for (const e of entries) {
+        const key = rel ? `${rel}/${e.name}` : e.name
+        if (e.isDirectory()) stack.push(key)
+        // a write still in progress (put's .part- file) isn't an object yet
+        else if (e.isFile() && !/\.part-\d+-\d+$/.test(e.name)) {
+          const st = await fsp.stat(path.join(dir, e.name)).catch(() => null)
+          if (st) yield { key, size: st.size, mtimeMs: st.mtimeMs }
+        }
+      }
+    }
+  }
 }

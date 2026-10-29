@@ -4,6 +4,7 @@ import { and, eq, gt, inArray, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import { estimateCost, type UsageLimitView, type UsageSummary } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
+import { audit } from '../services/audit'
 import { builtinProvider } from '../ai/resolve'
 import { ctx } from '../context'
 import { jobs, memberships, rateWindows, users, workspaces } from '../db/schema'
@@ -119,5 +120,6 @@ usageRoutes.put('/builtin-ai', async (c) => {
   await requireRole(u.id, b.workspaceId, 'owner')
   if (ctx().config.mode !== 'cloud') throw invalid('The desktop app uses your own Claude sign-in; there is no server key to turn on.')
   await setBuiltinAi(b.workspaceId, b.enabled, u.id)
+  await audit(c, { kind: 'ai.builtin', workspaceId: b.workspaceId, data: { enabled: b.enabled } })
   return c.json({ enabled: b.enabled })
 })

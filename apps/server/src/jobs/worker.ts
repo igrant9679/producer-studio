@@ -6,13 +6,14 @@ import { and, eq, inArray } from 'drizzle-orm'
 import type { JobKind } from '@producer/core'
 import { ctx } from '../context'
 import { assets, jobs, workspaces } from '../db/schema'
-import { log } from '../log'
+import { log, withLogContext } from '../log'
+import { recordJobMetrics, treeRss } from '../metrics'
 import { failAssetOfJob, reconcileAssets } from '../services/asset-recovery'
 import { recoverRelays } from '../routes/voice'
 import { assetPrefix, sweepTempDirs } from '../services/assets'
 import { pruneOldRows } from '../services/retention'
 import { pruneUsage, recordJobRun, withActor } from '../services/metering'
-import { publicJobError } from './errors'
+import { publicJobError, rawJobError } from './errors'
 import { type JobRow, cancelJob, claimNext, failJob, finishJob, onCancel, onWake, recoverStale, requeueForShutdown, updateProgress } from './queue'
 
 export class CancelledError extends Error {
@@ -119,6 +120,8 @@ interface Running {
   startedAt: number
   /** Last progress report: the no-progress watchdog's clock. */
   lastProgress: number
+  /** P-7: the most memory this worker (and the tools it runs) held while this job ran, sampled at each heartbeat. */
+  peakRss: number
 }
 
 const running = new Map<string, Running>()
@@ -126,9 +129,17 @@ const inflight = new Set<Promise<void>>()
 let started = false
 let wakeNow: () => void = () => undefined
 let graceMs = STOP_GRACE_MS
+/** What the worker health check reads (P-9): when the claim loop last went round, and this worker's slots. */
+const loopState = { lastLoopAt: 0, concurrency: 0, quick: 0 }
 
 export function runningJobIds() {
   return [...running.keys()]
+}
+
+/** This process's worker, for its health check: null when it runs no worker. */
+export function workerState(): { lastLoopAt: number; running: Array<{ kind: string }>; concurrency: number; quick: number } | null {
+  if (!started) return null
+  return { lastLoopAt: loopState.lastLoopAt, running: [...running.values()].map((r) => ({ kind: r.job.kind })), concurrency: loopState.concurrency, quick: loopState.quick }
 }
 
 function stop(id: string, reason: StopReason) {
@@ -189,13 +200,24 @@ export type JobOutcome = StopReason['kind'] | 'done' | 'error'
  * Everything that follows a job ending in this worker, whatever the outcome (the job row already says how it
  * ended). Runs after the slot is freed and never holds up the next claim. Add follow-ups (notifications) here.
  */
-async function afterJob(job: JobRow, outcome: JobOutcome, ms: number) {
+async function afterJob(job: JobRow, outcome: JobOutcome, ms: number, peakRss: number) {
+  // P-7: what it waited, ran and used, on the job (the operator's view) and in this worker's metrics
+  const waitMs = job.startedAt != null ? Math.max(0, job.startedAt - job.createdAt) : null
+  recordJobMetrics(job.kind, outcome, ms, waitMs)
+  if (outcome === 'gone') return
+  // a job another worker took over gets that worker's numbers when it ends there
+  if (outcome !== 'lost') await ctx().db.update(jobs).set({ waitMs, runMs: Math.round(ms), peakRss: Math.round(peakRss) }).where(eq(jobs.id, job.id))
   // the machine time was spent either way; a deleted space has nothing left to charge
-  if (outcome !== 'gone') await recordJobRun(job, ms)
+  await recordJobRun(job, ms)
 }
 
-async function runJob(job: JobRow, workerId: string) {
-  const entry: Running = { ac: new AbortController(), job, startedAt: Date.now(), lastProgress: Date.now() }
+function runJob(job: JobRow, workerId: string) {
+  // every log line the job causes names it
+  return withLogContext({ jobId: job.id }, () => runJobNow(job, workerId))
+}
+
+async function runJobNow(job: JobRow, workerId: string) {
+  const entry: Running = { ac: new AbortController(), job, startedAt: Date.now(), lastProgress: Date.now(), peakRss: sampleRss() }
   const { ac } = entry
   running.set(job.id, entry)
   log.info('job start', { jobId: job.id, kind: job.kind })
@@ -236,11 +258,11 @@ async function runJob(job: JobRow, workerId: string) {
     else {
       // the raw error (paths, ffprobe output) stays in the log; people get a sentence without them
       log.error('job failed', { jobId: job.id, kind: job.kind, err })
-      await failJob(job.id, publicJobError(job.kind, err), 'error', workerId).catch(() => undefined)
+      await failJob(job.id, publicJobError(job.kind, err), 'error', workerId, rawJobError(err)).catch(() => undefined)
     }
   } finally {
     clearTimeout(limitTimer)
-    void afterJob(job, outcome, Date.now() - entry.startedAt).catch((err) => log.warn('after-job steps failed', { err, jobId: job.id }))
+    void afterJob(job, outcome, Date.now() - entry.startedAt, Math.max(entry.peakRss, sampleRss())).catch((err) => log.warn('after-job steps failed', { err, jobId: job.id }))
     running.delete(job.id)
     wakeNow()
     // a job stopped because its clip or space was deleted may have written files since: sweep now, and again when
@@ -273,6 +295,10 @@ export async function sweepOrphans(job: Pick<JobRow, 'id' | 'workspaceId' | 'inp
 async function heartbeat(workerId: string) {
   const now = Date.now()
   const stallMs = ctx().config.jobLimits.stallMs
+  if (running.size) {
+    const rss = sampleRss()
+    for (const r of running.values()) r.peakRss = Math.max(r.peakRss, rss)
+  }
   for (const [id, r] of running) {
     if (now - r.lastProgress > stallMs) {
       const what = WHAT[r.job.kind as JobKind] ?? 'This job'
@@ -301,6 +327,15 @@ async function heartbeat(workerId: string) {
   for (const [id, assetId] of clipOf) if (!present.has(assetId)) await cancelJob(id, 'The clip was deleted')
 }
 
+/** This process and the tools it runs (ffmpeg, the renderer), in bytes; never throws. */
+function sampleRss(): number {
+  try {
+    return treeRss()
+  } catch {
+    return 0
+  }
+}
+
 /**
  * Which jobs this worker may claim now. `concurrency` slots take any job; `quick` more take only quick ones, which
  * also use a free shared slot first. Two long exports can't hold up processing for every new upload.
@@ -321,6 +356,7 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
   graceMs = opts.graceMs ?? STOP_GRACE_MS
   const quick = opts.quickConcurrency ?? ctx().config.quickJobConcurrency
   const workerId = ctx().instanceId
+  Object.assign(loopState, { lastLoopAt: Date.now(), concurrency: opts.concurrency, quick })
   let wakeResolve: (() => void) | undefined
   wakeNow = () => wakeResolve?.()
   onWake(() => wakeResolve?.())
@@ -329,6 +365,7 @@ export function startWorker(opts: { concurrency: number; quickConcurrency?: numb
   const loop = async () => {
     if (ctx().database.driver === 'pglite') await recoverStale(0).catch(() => 0) // single process: anything "running" is from a previous run
     while (!life.stopped) {
+      loopState.lastLoopAt = Date.now()
       try {
         while (!life.stopped) {
           const room = claimable([...running.values()].map((r) => r.job), opts.concurrency, quick)

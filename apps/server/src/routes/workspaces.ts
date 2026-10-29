@@ -3,6 +3,7 @@ import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import { FONTS, INVITE_TTL_MS, type BrandKitDoc, type InviteInfo, type InviteStatus, type Member, type PendingInvite, type Role, type Workspace } from '@producer/core'
 import { type AppEnv, appUrl, requireUser } from '../auth'
+import { audit } from '../services/audit'
 import { mailEnabled, sendMail } from '../mail'
 import { inviteMail } from '../mail/messages'
 import { ctx } from '../context'
@@ -11,7 +12,7 @@ import { recordActivity } from '../services/activity'
 import { HttpError, body, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { newId, randomToken } from '../ids'
 import { jobsDeleted } from '../jobs/queue'
-import { checkIfMatch, etagOf, setEtag } from '../etag'
+import { changedMeanwhile, checkIfMatch, etagOf, matchRequired, setEtag } from '../etag'
 
 export async function createWorkspace(userId: string, name: string, personal = false): Promise<Workspace> {
   const id = newId('ws')
@@ -47,9 +48,15 @@ export async function listWorkspaces(userId: string): Promise<Workspace[]> {
 }
 
 /** Rename a workspace (owner). The change_seq trigger republishes it to desktop replicas. */
-export async function renameWorkspace(userId: string, id: string, name: string): Promise<Workspace> {
+/** `base` (an If-Match): rename only while the name is still that, in one UPDATE; otherwise 412. */
+export async function renameWorkspace(userId: string, id: string, name: string, base?: string): Promise<Workspace> {
   await requireRole(userId, id, 'owner')
-  await ctx().db.update(workspaces).set({ name }).where(eq(workspaces.id, id))
+  const done = await ctx()
+    .db.update(workspaces)
+    .set({ name })
+    .where(base === undefined ? eq(workspaces.id, id) : and(eq(workspaces.id, id), eq(workspaces.name, base)))
+    .returning({ id: workspaces.id })
+  if (!done.length && base !== undefined) throw changedMeanwhile('This space')
   const ws = (await listWorkspaces(userId)).find((w) => w.id === id)!
   ctx().bus.publish(id, 'workspace', { id, name, deleted: false }, { id, inline: { id, name, deleted: false } })
   return ws
@@ -110,15 +117,36 @@ export const BrandSchema = z.object({
   customFonts: z.array(z.string().max(60)).max(4).optional(),
 })
 
-/** Save the space's default kit (fonts: bundled or uploaded to the space, see services/brand.ts). */
-export async function saveDefaultKit(workspaceId: string, raw: BrandKitDoc): Promise<BrandKitDoc> {
+/** The stored default kit (null: none saved yet, the space shows defaultBrand()), for an If-Match base. */
+export async function storedDefaultKit(workspaceId: string): Promise<BrandKitDoc | null> {
+  return (await ctx().db.select({ doc: brandKits.doc }).from(brandKits).where(eq(brandKits.workspaceId, workspaceId)).limit(1))[0]?.doc ?? null
+}
+
+/**
+ * Save the space's default kit (fonts: bundled or uploaded to the space, see services/brand.ts). With `base` (an
+ * If-Match: the stored kit that was checked, or null for none yet) it saves only while that is still what's stored,
+ * in one statement; otherwise 412.
+ */
+export async function saveDefaultKit(workspaceId: string, raw: BrandKitDoc, base?: { doc: BrandKitDoc | null }): Promise<BrandKitDoc> {
   const { checkKitDoc } = await import('../services/brand')
   const doc = await checkKitDoc(workspaceId, raw)
   const now = Date.now()
-  await ctx()
-    .db.insert(brandKits)
-    .values({ workspaceId, doc, updatedAt: now })
-    .onConflictDoUpdate({ target: brandKits.workspaceId, set: { doc, updatedAt: now } })
+  const db = ctx().db
+  if (!base)
+    await db
+      .insert(brandKits)
+      .values({ workspaceId, doc, updatedAt: now })
+      .onConflictDoUpdate({ target: brandKits.workspaceId, set: { doc, updatedAt: now } })
+  else {
+    const saved = base.doc
+      ? await db
+          .update(brandKits)
+          .set({ doc, updatedAt: now })
+          .where(and(eq(brandKits.workspaceId, workspaceId), sql`${brandKits.doc} = ${JSON.stringify(base.doc)}::jsonb`))
+          .returning({ id: brandKits.workspaceId })
+      : await db.insert(brandKits).values({ workspaceId, doc, updatedAt: now }).onConflictDoNothing().returning({ id: brandKits.workspaceId })
+    if (!saved.length) throw changedMeanwhile('The brand kit')
+  }
   // open Brand kit pages and editors reload it
   const ev = { id: workspaceId, deleted: false, brand: true }
   ctx().bus.publish(workspaceId, 'workspace', ev, { id: workspaceId, inline: ev })
@@ -142,14 +170,17 @@ workspaceRoutes.patch('/:id', async (c) => {
   const b = await body(c, NameSchema)
   const cur = (await ctx().db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, c.req.param('id'))).limit(1))[0]
   if (cur) checkIfMatch(c, { name: cur.name }, 'This space')
-  const ws = await renameWorkspace(u.id, c.req.param('id'), b.name)
+  const ws = await renameWorkspace(u.id, c.req.param('id'), b.name, cur && matchRequired(c) ? cur.name : undefined)
   if (ws.etag) c.header('ETag', ws.etag)
   return c.json(ws)
 })
 
 workspaceRoutes.delete('/:id', async (c) => {
   const u = requireUser(c)
-  await deleteWorkspace(u.id, c.req.param('id'))
+  const id = c.req.param('id')
+  const name = (await ctx().db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]?.name
+  await deleteWorkspace(u.id, id)
+  await audit(c, { kind: 'workspace.deleted', workspaceId: id, targetId: id, target: name ?? id, data: { name } })
   return c.json({ ok: true })
 })
 
@@ -192,7 +223,10 @@ workspaceRoutes.patch('/:id/members/:userId', async (c) => {
     throw new HttpError(409, 'conflict', 'A space needs at least one owner. Make someone else an owner first.')
   await ctx().db.update(memberships).set({ role: b.role }).where(and(eq(memberships.workspaceId, id), eq(memberships.userId, target)))
   membersChanged(id)
-  if (current !== b.role) await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: b.role } })
+  if (current !== b.role) {
+    await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: b.role } })
+    await audit(c, { kind: 'member.role', workspaceId: id, targetId: target, target: await userEmail(target), data: { from: current, to: b.role } })
+  }
   return c.json({ ok: true, role: b.role })
 })
 
@@ -223,6 +257,7 @@ workspaceRoutes.delete('/:id/members/:userId', async (c) => {
   })
   membersChanged(id)
   await recordActivity(self ? { workspaceId: id, actorId: u.id, kind: 'member.left' } : { workspaceId: id, actorId: u.id, kind: 'member.removed', data: { member: await userName(target) } })
+  await audit(c, { kind: self ? 'member.left' : 'member.removed', workspaceId: id, targetId: target, target: email ?? target, data: { role: current } })
   return c.json({ ok: true })
 })
 
@@ -245,6 +280,7 @@ workspaceRoutes.post('/:id/members/:userId/transfer', async (c) => {
   })
   membersChanged(id)
   await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: 'owner' } })
+  await audit(c, { kind: 'member.transfer', workspaceId: id, targetId: target, target: await userEmail(target), data: { to: 'owner', fromOwner: u.id } })
   return c.json({ ok: true })
 })
 
@@ -305,6 +341,7 @@ workspaceRoutes.post('/:id/invites', async (c) => {
   const expiresAt = now + INVITE_TTL_MS
   const [row] = await ctx().db.insert(invites).values({ token, workspaceId: id, email: b.email.toLowerCase(), role: b.role, createdBy: u.id, createdAt: now, expiresAt }).returning()
   const emailed = await mailInvite(c, row, u)
+  await audit(c, { kind: 'invite.created', workspaceId: id, target: row.email, data: { role: b.role, emailed } })
   return c.json({ ok: true, inviteUrl: inviteUrl(token), expiresAt, emailed })
 })
 
@@ -336,6 +373,7 @@ workspaceRoutes.post('/:id/invites/:token/resend', async (c) => {
   const [row] = await db.update(invites).set({ expiresAt: now + INVITE_TTL_MS }).where(eq(invites.token, inv.token)).returning()
   const emailed = await mailInvite(c, row, u)
   const fresh = (await db.select().from(invites).where(eq(invites.token, inv.token)).limit(1))[0] ?? row
+  await audit(c, { kind: 'invite.resent', workspaceId: id, target: inv.email, data: { role: inv.role, emailed } })
   return c.json({ ...pendingDto(fresh), emailed } satisfies PendingInvite)
 })
 
@@ -347,8 +385,9 @@ workspaceRoutes.delete('/:id/invites/:token', async (c) => {
     .db.update(invites)
     .set({ revokedAt: Date.now() })
     .where(and(eq(invites.token, c.req.param('token')), eq(invites.workspaceId, id), isNull(invites.acceptedAt)))
-    .returning({ token: invites.token })
+    .returning({ token: invites.token, email: invites.email, role: invites.role })
   if (!rows.length) throw notFound('Invite not found, or it was already used')
+  await audit(c, { kind: 'invite.withdrawn', workspaceId: id, target: rows[0].email, data: { role: rows[0].role } })
   return c.json({ ok: true })
 })
 
@@ -366,8 +405,9 @@ workspaceRoutes.put('/:id/brand', async (c) => {
   const id = c.req.param('id')
   await requireRole(u.id, id, 'editor')
   const raw = (await body(c, BrandSchema)) as BrandKitDoc
+  const stored = await storedDefaultKit(id)
   checkIfMatch(c, await getBrand(id), 'The brand kit')
-  const doc = await saveDefaultKit(id, raw)
+  const doc = await saveDefaultKit(id, raw, matchRequired(c) ? { doc: stored } : undefined)
   setEtag(c, doc)
   return c.json(doc)
 })
@@ -431,8 +471,10 @@ inviteRoutes.post('/:token/accept', async (c) => {
       await tx.update(memberships).set({ role: inv.role }).where(and(eq(memberships.workspaceId, inv.workspaceId), eq(memberships.userId, u.id)))
   })
   await recordActivity({ workspaceId: inv.workspaceId, actorId: u.id, kind: 'member.joined', data: { role: inv.role } })
+  await audit(c, { kind: 'invite.accepted', workspaceId: inv.workspaceId, targetId: u.id, target: inv.email, data: { role: inv.role, invitedBy: inv.createdBy } })
   const ws = (await listWorkspaces(u.id)).find((w) => w.id === inv.workspaceId)
   return c.json(ws)
 })
 
 const userName = async (id: string) => (await ctx().db.select({ name: users.name }).from(users).where(eq(users.id, id)).limit(1))[0]?.name ?? 'someone'
+const userEmail = async (id: string) => (await ctx().db.select({ email: users.email }).from(users).where(eq(users.id, id)).limit(1))[0]?.email ?? id

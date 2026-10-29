@@ -1,14 +1,14 @@
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { Hono } from 'hono'
-import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { EmptyTrashResult, TrashResult, UploadTicket } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
 import { assetEditable, assetRecord } from '../dto'
-import { checkIfMatch } from '../etag'
+import { changedMeanwhile, checkIfMatch, matchRequired } from '../etag'
 import { HttpError, body, invalid, requireRole } from '../http'
 import { newId } from '../ids'
 import { assertStorageRoom } from '../limits'
@@ -240,7 +240,14 @@ assetRoutes.patch('/:id', async (c) => {
   await requireRole(u.id, row.workspaceId, 'editor')
   const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), transcript: TranscriptSchema.optional() }).refine((x) => x.name !== undefined || x.transcript !== undefined, 'Nothing to change'))
   checkIfMatch(c, assetEditable(row), 'This clip')
-  const rec = assetRecord(await updateAsset(row.id, { ...(b.name !== undefined ? { name: b.name } : {}), ...(b.transcript ? { meta: { transcript: b.transcript } } : {}) }))
+  // with If-Match, the write only lands while the name and transcript are still the ones just checked
+  const t = row.meta?.transcript
+  const only = matchRequired(c)
+    ? and(eq(assets.name, row.name), t ? sql`(${assets.meta}->'transcript') = ${JSON.stringify(t)}::jsonb` : sql`(${assets.meta}->'transcript') IS NULL`)
+    : undefined
+  const rec = assetRecord(
+    await updateAsset(row.id, { ...(b.name !== undefined ? { name: b.name } : {}), ...(b.transcript ? { meta: { transcript: b.transcript } } : {}) }, { only, otherwise: () => changedMeanwhile('This clip') }),
+  )
   c.header('ETag', rec.etag!)
   return c.json(rec)
 })

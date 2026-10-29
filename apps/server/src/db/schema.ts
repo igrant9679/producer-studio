@@ -18,6 +18,8 @@ export const users = pgTable('users', {
   emailVerifiedAt: ms('email_verified_at'),
   /** v12: notification choices (NotificationPrefs); {} = the defaults. */
   notify: jsonb('notify').$type<Record<string, unknown>>().notNull().default({}),
+  /** v16: an operator disabled the account (it can't sign in; its sessions and app links ended). */
+  disabledAt: ms('disabled_at'),
 })
 
 export const sessions = pgTable('sessions', {
@@ -177,6 +179,12 @@ export const jobs = pgTable('jobs', {
   startedAt: ms('started_at'),
   createdAt: ms('created_at').notNull(),
   updatedAt: ms('updated_at').notNull(),
+  /** v16: how long the latest run waited in the queue and ran, and the worker's peak memory (bytes) while it ran. */
+  waitMs: doublePrecision('wait_ms'),
+  runMs: doublePrecision('run_ms'),
+  peakRss: doublePrecision('peak_rss'),
+  /** v16: the raw error (tool output, paths) for operators; `error` is the sentence people see. */
+  errorDetail: text('error_detail'),
 })
 
 export const exportsTable = pgTable('exports', {
@@ -449,4 +457,38 @@ export const workspaceUsageSettings = pgTable('workspace_usage_settings', {
   updatedAt: ms('updated_at').notNull(),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings, authTokens, syncHorizon }
+/** v16: the security audit log (services/audit.ts). Not synced. */
+export const auditLog = pgTable('audit_log', {
+  id: text('id').primaryKey(),
+  at: ms('at').notNull(),
+  kind: text('kind').notNull(),
+  actorId: text('actor_id'),
+  actorEmail: text('actor_email'),
+  workspaceId: text('workspace_id'),
+  /** Who or what it was done to: a user id, a job id; `target` says it in words (an email, a name). */
+  targetId: text('target_id'),
+  target: text('target'),
+  ip: text('ip'),
+  userAgent: text('user_agent'),
+  requestId: text('request_id'),
+  data: jsonb('data').$type<Record<string, unknown>>().notNull().default({}),
+})
+
+/** v16: open editor tabs per project (services/presence.ts); a row not seen for PRESENCE_TTL_MS is gone. Not synced. */
+export const presenceRows = pgTable(
+  'presence',
+  {
+    projectId: text('project_id').notNull(),
+    userId: text('user_id').notNull(),
+    client: text('client').notNull(),
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    color: text('color').notNull(),
+    role: text('role').notNull(),
+    since: ms('since').notNull(),
+    seen: ms('seen').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId, t.client] })],
+)
+
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings, authTokens, syncHorizon, auditLog, presenceRows }

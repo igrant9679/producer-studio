@@ -54,29 +54,37 @@ function wakeWorkers() {
  * Atomically claim the next queued job (of `kinds`, when given: a lane). Fair share (P-3): within the lane, the
  * space with the fewest jobs of that lane running goes first, then the oldest job; so one space's pile of exports
  * can't make every other space wait behind it. `workspaces` limits the claim to those spaces (tests on a shared
- * database). Two workers claiming at the same moment both see the same running counts, so for that one round a space
- * can get two slots; the next claims even it out.
+ * database). Claims take turns (a transaction-level advisory lock): two workers claiming at the same moment would
+ * otherwise both count the running jobs before either claim commits, and give one space two slots in one round. The
+ * second claim's statement starts after the first committed, so it sees that job running.
  */
+export const CLAIM_LOCK_KEY = 74318
+
 export async function claimNext(workerId: string, kinds?: readonly JobKind[], opts: { workspaces?: readonly string[] } = {}): Promise<JobRow | null> {
   const now = Date.now()
   const list = (xs: readonly string[]) => sql.join(xs.map((x) => sql`${x}`), sql`, `)
   const lane = (col: string) => (kinds ? sql`AND ${sql.raw(col)} IN (${list(kinds)})` : sql``)
   const only = opts.workspaces ? sql`AND q.workspace_id IN (${opts.workspaces.length ? list(opts.workspaces) : sql`NULL`})` : sql``
-  const rows = await ctx()
-    .db.update(jobs)
-    .set({ status: 'running', lockedBy: workerId, lockedAt: now, startedAt: now, updatedAt: now, attempts: sql`${jobs.attempts} + 1`, message: 'Starting' })
-    // voice.relay jobs are claimed by the owning desktop over /api/voice/relay/claim, never by a local worker
-    .where(
-      eq(
-        jobs.id,
-        sql`(SELECT q.id FROM jobs q
+  const rows = await ctx().db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${CLAIM_LOCK_KEY})`)
+    return (
+      tx
+        .update(jobs)
+        .set({ status: 'running', lockedBy: workerId, lockedAt: now, startedAt: now, updatedAt: now, attempts: sql`${jobs.attempts} + 1`, message: 'Starting' })
+        // voice.relay jobs are claimed by the owning desktop over /api/voice/relay/claim, never by a local worker
+        .where(
+          eq(
+            jobs.id,
+            sql`(SELECT q.id FROM jobs q
           LEFT JOIN (SELECT r.workspace_id, count(*) AS n FROM jobs r WHERE r.status = 'running' AND r.kind <> 'voice.relay' ${lane('r.kind')} GROUP BY r.workspace_id) busy ON busy.workspace_id = q.workspace_id
           WHERE q.status = 'queued' AND q.kind <> 'voice.relay' ${lane('q.kind')} ${only}
           ORDER BY coalesce(busy.n, 0), q.created_at, q.id
           LIMIT 1 FOR UPDATE OF q SKIP LOCKED)`,
-      ),
+          ),
+        )
+        .returning()
     )
-    .returning()
+  })
   return rows[0] ?? null
 }
 
@@ -107,11 +115,14 @@ export async function finishJob(id: string, result: unknown, lockedBy?: string):
   return rows[0] ?? null
 }
 
-/** End a running job. The error is shown to people, so any file path in it is dropped (callers log the raw text). */
-export async function failJob(id: string, error: string, status: 'error' | 'cancelled' = 'error', lockedBy?: string): Promise<JobRow | null> {
+/**
+ * End a running job. The error is shown to people, so any file path in it is dropped; `detail`, the raw error, is kept
+ * on the job for operators (and callers log it).
+ */
+export async function failJob(id: string, error: string, status: 'error' | 'cancelled' = 'error', lockedBy?: string, detail?: string): Promise<JobRow | null> {
   const rows = await ctx()
     .db.update(jobs)
-    .set({ status, error: scrubPaths(error).slice(0, 4000), message: status === 'cancelled' ? 'Cancelled' : 'Failed', updatedAt: Date.now(), lockedBy: null })
+    .set({ status, error: scrubPaths(error).slice(0, 4000), ...(detail !== undefined ? { errorDetail: detail.slice(0, 8000) } : {}), message: status === 'cancelled' ? 'Cancelled' : 'Failed', updatedAt: Date.now(), lockedBy: null })
     .where(runningBy(id, lockedBy))
     .returning()
   if (rows[0]) emitJob(rows[0])
@@ -134,6 +145,22 @@ export async function cancelJob(id: string, error = 'Cancelled by user'): Promis
     await failAssetOfJob(rows[0], ASSET_ERRORS.cancelled)
   }
   return row
+}
+
+/**
+ * An operator runs a job again (P-10): a failed, cancelled or stuck running one goes back in the queue as it is (same
+ * id, same input), its attempts counted from zero. A worker still holding it drops it at its next heartbeat.
+ */
+export async function requeueJob(id: string, message = 'Requeued by an operator'): Promise<JobRow | null> {
+  const rows = await ctx()
+    .db.update(jobs)
+    .set({ status: 'queued', lockedBy: null, lockedAt: null, cancelRequested: false, progress: 0, attempts: 0, error: null, message, updatedAt: Date.now() })
+    .where(and(eq(jobs.id, id), sql`${jobs.status} IN ('error', 'cancelled', 'running')`, ne(jobs.kind, 'voice.relay')))
+    .returning()
+  if (!rows[0]) return null
+  emitJob(rows[0])
+  wakeWorkers()
+  return rows[0]
 }
 
 /** Clip deleted: its processing and transcription jobs (queued or running) stop; nothing is left to work on. */

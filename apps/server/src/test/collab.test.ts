@@ -250,7 +250,7 @@ describe('presence and activity (A-23)', () => {
     const { A, wsId, others } = await team(['editor', 'viewer'])
     const [E, V] = others
     const { resetPresence, sweepPresence } = await import('../services/presence')
-    resetPresence()
+    await resetPresence()
     const p = (await A.client.json('POST', '/api/projects', { workspaceId: wsId, name: 'Live' })).body.summary
     const live = await events(wsId)
     expect((await A.client.json('POST', `/api/projects/${p.id}/presence`, { client: 'tab1' })).body.people.map((x: any) => x.name)).toEqual(['Ada Owner'])
@@ -270,7 +270,7 @@ describe('presence and activity (A-23)', () => {
     await V.client.json('POST', `/api/projects/${p.id}/presence`, { client: 'e1', open: false })
     expect((await V.client.json('GET', `/api/projects/${p.id}/presence`)).body.people).toHaveLength(1)
     // the editor's tab stops beating
-    sweepPresence(Date.now() + PRESENCE_TTL_MS + 1000)
+    await sweepPresence(Date.now() + PRESENCE_TTL_MS + 1000)
     expect((await V.client.json('GET', `/api/projects/${p.id}/presence`)).body.people).toEqual([])
     const changes = live.got.filter((e) => e.event === 'presence').map((e) => e.data.people.length)
     expect(changes).toEqual([1, 2, 1, 0])

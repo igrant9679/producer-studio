@@ -581,6 +581,58 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at double precision;
 `
 
 /**
+ * v16 — operations (R4-A): the security audit log (sign-ins, account and access changes, operator actions); who has
+ * a project open, in Postgres so several API processes share it; what each job waited, ran and used, and its raw
+ * error for operators (people see a plain sentence); an operator can disable an account. None of these sync to
+ * desktops.
+ */
+export const DDL_V16 = `
+CREATE TABLE IF NOT EXISTS audit_log (
+  id text PRIMARY KEY,
+  at double precision NOT NULL,
+  kind text NOT NULL,
+  actor_id text,
+  actor_email text,
+  workspace_id text,
+  target_id text,
+  target text,
+  ip text,
+  user_agent text,
+  request_id text,
+  data jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS audit_log_ws_idx ON audit_log(workspace_id, at, id);
+CREATE INDEX IF NOT EXISTS audit_log_at_idx ON audit_log(at, id);
+CREATE INDEX IF NOT EXISTS audit_log_actor_idx ON audit_log(actor_id, at);
+CREATE INDEX IF NOT EXISTS audit_log_target_idx ON audit_log(target_id, at);
+
+CREATE TABLE IF NOT EXISTS presence (
+  project_id text NOT NULL,
+  user_id text NOT NULL,
+  client text NOT NULL,
+  workspace_id text NOT NULL,
+  name text NOT NULL,
+  color text NOT NULL,
+  role text NOT NULL,
+  since double precision NOT NULL,
+  seen double precision NOT NULL,
+  PRIMARY KEY (project_id, user_id, client)
+);
+CREATE INDEX IF NOT EXISTS presence_seen_idx ON presence(seen);
+
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS wait_ms double precision;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS run_ms double precision;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS peak_rss double precision;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_detail text;
+CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at double precision;
+
+CREATE INDEX IF NOT EXISTS tombstones_deleted_idx ON tombstones(deleted_at);
+CREATE INDEX IF NOT EXISTS auth_tokens_expires_idx ON auth_tokens(expires_at);
+`
+
+/**
  * v18 — a sync feed that can forget (R4-C). Deleting tombstones (compaction) raises the feed's horizon: a replica whose
  * cursor is below it may have missed deletes and does a full resync. A space's other brand kits and its font files
  * now sync to desktops (change_seq, tombstones 'brand_kit' / 'brand_font', republished to a member who joins).
@@ -652,5 +704,6 @@ export const MIGRATIONS: Array<[number, string]> = [
   [13, DDL_V13],
   [14, DDL_V14],
   [15, DDL_V15],
+  [16, DDL_V16],
   [18, DDL_V18],
 ]
