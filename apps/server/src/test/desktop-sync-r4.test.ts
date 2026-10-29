@@ -316,4 +316,55 @@ describe('uploads: projects before big media, a few at a time, in the background
   }, 90_000)
 })
 
+describe('the sync panel (D-1)', () => {
+  const status = async () => (await desk.json<SyncStatus>('GET', '/api/sync/status')).body
+  const items = async () => (await desk.json('GET', '/api/sync/items')).body as import('@producer/core').SyncItems
+
+  it('lists what waits, what failed and why, with sizes; Skip keeps it here, Retry sends it', async () => {
+    const engine = d.engine as unknown as { smallUploadBytes: number }
+    engine.smallUploadBytes = 16 * 1024 * 1024
+    const proj = (await desk.json('POST', '/api/projects', { workspaceId: A.workspaceId, name: 'Refused by the cloud' })).body.project.id as string
+    proxy.fail = (m, path) => (m === 'POST' && path === '/api/projects' ? { status: 413, body: { error: 'This project is too large for the cloud', code: 'quota' } } : undefined)
+    await sync()
+    const listed = (await items()).items.find((i) => i.id === proj)
+    expect(listed).toMatchObject({ kind: 'project', name: 'Refused by the cloud', state: 'failed', reason: 'This project is too large for the cloud' })
+    // and a clip waiting, with its size
+    const clip = await deskUpload(png(2_000), 'waiting.png')
+    const waiting = (await items()).items.find((i) => i.id === clip)
+    expect(waiting).toMatchObject({ kind: 'asset', state: 'waiting' })
+    expect(waiting!.bytes).toBeGreaterThan(2_000)
+    expect((await items()).uploadBytes).toBeGreaterThanOrEqual(waiting!.bytes!)
+
+    expect((await desk.json('POST', `/api/sync/failures/project/${proj}`, { action: 'skip' })).status).toBe(200)
+    expect((await items()).items.find((i) => i.id === proj)?.state).toBe('skipped')
+    proxy.fail = undefined
+    expect((await desk.json('POST', `/api/sync/failures/project/${proj}`, { action: 'retry' })).status).toBe(200)
+    expect((await items()).items.find((i) => i.id === proj)).toBeUndefined()
+    expect((await A.http.json('GET', `/api/projects/${proj}`)).status).toBe(200)
+  }, 60_000)
+
+  it('previews a conflict side by side, and says why sync is held up', async () => {
+    const id = await cloudProject('Two versions')
+    await sync()
+    await editName(desk, id, 'Cut for the client')
+    await editName(A.http, id, 'Cut for the web')
+    const s = await sync()
+    expect(s.conflicts.map((c) => c.projectId)).toContain(id)
+    expect(s.blocked?.reason).toBe('conflict')
+    const p = (await desk.json('GET', `/api/sync/conflicts/${id}`)).body as import('@producer/core').SyncConflictPreview
+    expect(p.local.name).toBe('Cut for the client')
+    expect(p.cloud?.name).toBe('Cut for the web')
+    expect(p.changes).toContain('Named “Cut for the client” here and “Cut for the web” in the cloud')
+    expect((await desk.json('GET', '/api/sync/conflicts/p_nope')).status).toBe(404)
+    // offline says so, ahead of the conflict
+    proxy.down = true
+    expect((await sync()).blocked?.reason).toBe('offline')
+    proxy.down = false
+    await sync()
+    expect((await desk.json('POST', `/api/projects/${id}/sync`, { mode: 'keep-cloud' })).status).toBe(200)
+    // nothing holds it up now but the harness's own setting (automatic sync is off here)
+    expect((await status()).blocked?.reason).toBe('paused')
+  }, 60_000)
+})
+
 export type { Project }

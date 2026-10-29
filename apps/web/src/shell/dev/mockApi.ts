@@ -1441,6 +1441,26 @@ on('POST', '/api/sync/now', desktopOnly(() => {
   }, 2200)
   return json(sync)
 }))
+on('GET', '/api/sync/items', desktopOnly(() =>
+  json({
+    uploadBytes: 6.2 * 1024 ** 3,
+    items: [
+      ...(sync.failures ?? []).map((f) => ({ kind: f.kind.replace(/-delete$/, ''), id: f.id, name: f.name, workspaceId: f.kind.endsWith('-delete') ? '' : 'ws_personal', state: f.skipped ? 'skipped' : 'failed', reason: f.skipped ? 'Skipped: stays on this computer only' : f.error, ...(f.kind === 'asset' ? { bytes: 6.2 * 1024 ** 3 } : {}) })),
+      ...sync.conflicts.map((c) => ({ kind: 'project', id: c.projectId, name: c.name, workspaceId: 'ws_personal', state: 'waiting', reason: 'Edited here and in the cloud: choose which to keep' })),
+      ...(sync.pending ? [{ kind: 'project', id: 'p_pending', name: 'Spring promo (edited offline)', workspaceId: 'ws_personal', state: 'waiting' }] : []),
+    ],
+  }),
+))
+on('GET', '/api/sync/conflicts/([^/]+)', desktopOnly((m) => {
+  const c = sync.conflicts.find((x) => x.projectId === m[1])
+  if (!c) return fail(404, 'Project not found', 'not_found')
+  return json({
+    projectId: c.projectId,
+    local: { version: c.localVersion, name: c.name, updatedAt: Date.now() - 40 * MIN, duration: 94, tracks: 4, items: 23, clips: 9, trashed: false },
+    cloud: { version: c.cloudVersion, name: `${c.name} (client notes)`, updatedAt: Date.now() - 12 * MIN, duration: 88, tracks: 4, items: 21, clips: 8, trashed: false },
+    changes: [`Named “${c.name}” here and “${c.name} (client notes)” in the cloud`, '1:34 long here, 1:28 in the cloud', '1 clip only in this computer’s copy'],
+  })
+}))
 on('POST', '/api/sync/online', desktopOnly(() => {
   if (sync.state === 'offline') {
     sync.state = 'syncing'

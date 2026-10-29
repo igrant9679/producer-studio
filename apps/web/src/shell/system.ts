@@ -1,6 +1,6 @@
 // Server mode (cloud | desktop), AI provider and desktop sync state.
 // lib/api.ts doesn't cover these endpoints yet, so the shell calls them with a small fetch helper.
-import type { AiKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, SyncFailure, SyncStatus, SystemInfo } from '@producer/core'
+import type { AiKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, LinkChoice, LinkPreview, OfflineInfo, SyncConflictPreview, SyncFailure, SyncItems, SyncStatus, SystemInfo } from '@producer/core'
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { HttpError, noteStatus, subscribeEvents } from '../lib/api'
@@ -36,6 +36,17 @@ export const systemApi = {
   syncOnline: () => sysFetch<SyncStatus>('POST', '/sync/online'),
   link: (cloudUrl: string, email: string, password: string) => sysFetch<SyncStatus>('POST', '/sync/link', { cloudUrl, email, password }),
   unlink: () => sysFetch<SyncStatus>('POST', '/sync/unlink'),
+  /** What linking would merge and upload, before anything changes (the device link it makes lapses unless used). */
+  linkPreview: (cloudUrl: string, email: string, password: string) => sysFetch<LinkPreview>('POST', '/sync/link/preview', { cloudUrl, email, password }),
+  linkAsPreviewed: (previewId: string, choices: Record<string, LinkChoice>) => sysFetch<SyncStatus>('POST', '/sync/link', { previewId, choices }),
+  cancelLinkPreview: (previewId: string) => sysFetch<{ ok: true }>('POST', '/sync/link/cancel', { previewId }),
+  /** Everything waiting to go up, uploading, failed or skipped. */
+  syncItems: () => sysFetch<SyncItems>('GET', '/sync/items'),
+  /** This computer's copy of a conflicted project against the cloud's. */
+  conflictPreview: (projectId: string) => sysFetch<SyncConflictPreview>('GET', `/sync/conflicts/${encodeURIComponent(projectId)}`),
+  /** Projects kept available offline in a space, and its clips whose files are only in the cloud. */
+  offline: (workspaceId: string) => sysFetch<OfflineInfo>('GET', `/sync/offline?workspaceId=${encodeURIComponent(workspaceId)}`),
+  setOffline: (projectId: string, pinned: boolean) => sysFetch<OfflineInfo>('PUT', `/sync/offline/${encodeURIComponent(projectId)}`, { pinned }),
   resolve: (projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both') => sysFetch<SyncStatus>('POST', `/projects/${encodeURIComponent(projectId)}/sync`, { mode }),
   /** An item that keeps failing to sync: try again now, or skip it (it stays on this computer). */
   syncFailure: (f: Pick<SyncFailure, 'kind' | 'id'>, action: 'retry' | 'skip') => sysFetch<SyncStatus>('POST', `/sync/failures/${f.kind}/${encodeURIComponent(f.id)}`, { action }),

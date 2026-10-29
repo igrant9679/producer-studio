@@ -22,7 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncFailure, type SyncProject, type SyncStatus, type Transcript, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
+import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncConflictPreview, type SystemInfo, type SyncFailure, type SyncProject, type SyncStatus, type Transcript, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
 import { ctx } from '../context'
 import { type AssetMeta, assets, brandKits, comments, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
 import { HttpError } from '../http'
@@ -36,6 +36,7 @@ import { applyFont, applyFontDelete, applyKit, applyKitDelete, dropUnseenBrand, 
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
 import { SyncLock } from './lock'
 import { UploadBoard, inLanes, sendFile } from './uploads'
+import { LOW_DISK_BYTES, blockedBy, compareSides, freeBytes, projectDirty, sideSummary, syncItems } from './panel'
 import { prefetchAllMedia } from './media'
 import { getSettings, onSettingsChange } from './settings'
 
@@ -166,13 +167,7 @@ const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted
 /** Tombstone kinds (as the triggers write them) to the sync engine's kinds. */
 const TOMB_KIND: Record<string, keyof typeof DELETED_NAME> = { project: 'project', asset: 'asset', voice_profile: 'voice', brand_kit: 'kit', brand_font: 'font' }
 
-function isDirty(p: Pick<ProjectRow, 'version' | 'trashedAt' | 'isTemplate'>, s: SyncRow | undefined): boolean {
-  if (!s || s.cloudVersion == null) return true
-  if (s.localVersion !== p.version) return true
-  if (s.cloudTrashed != null && s.cloudTrashed !== (p.trashedAt != null)) return true
-  if (s.cloudTemplate != null && s.cloudTemplate !== p.isTemplate) return true
-  return false
-}
+const isDirty = projectDirty
 
 export class SyncEngine {
   private state: SyncStatus['state'] = 'unlinked'
@@ -218,6 +213,10 @@ export class SyncEngine {
   readonly uploads = new UploadBoard(() => void this.emit())
   /** Ends the background uploads (an unlink). */
   private uploadAbort = new AbortController()
+  /** What blocks sync, seen in the last cycle (D-1). */
+  private signedOut = false
+  private cloudStorage?: string
+  private diskFree?: number
 
   async start() {
     const link = await loadLink()
@@ -340,6 +339,8 @@ export class SyncEngine {
     const conflicted = [...rows.values()].filter((r) => r.conflictVersion != null)
     const names = conflicted.length ? await ctx().db.select({ id: projects.id, name: projects.name, version: projects.version }).from(projects).where(inArray(projects.id, conflicted.map((c) => c.id))) : []
     const failures = await failureMap()
+    const conflicts = names.map((n) => ({ projectId: n.id, name: n.name, localVersion: n.version, cloudVersion: conflicted.find((c) => c.id === n.id)!.conflictVersion! }))
+    const blocked = blockedBy({ linked: true, state: this.state, conflicts }, { signedOut: this.signedOut, credentials: !cloud(), autoSync: getSettings().autoSync, diskFree: this.diskFree, cloudStorage: this.cloudStorage })
     return {
       linked: true,
       cloudUrl: link.cloudUrl,
@@ -347,12 +348,33 @@ export class SyncEngine {
       state: this.state,
       lastSyncAt: this.lastSyncAt,
       pending: await this.pendingCount(rows, failures),
-      conflicts: names.map((n) => ({ projectId: n.id, name: n.name, localVersion: n.version, cloudVersion: conflicted.find((c) => c.id === n.id)!.conflictVersion! })),
+      conflicts,
       failures: [...failures.values()],
       uploads: this.uploads.list(),
       notices: (await listNotices()).map(({ data: _data, ...n }) => n),
       ...(this.error ? { error: this.error } : {}),
+      ...(blocked ? { blocked } : {}),
     }
+  }
+
+  /** Everything still to sync, for the sync panel (D-1). */
+  async items() {
+    return syncItems(await failureMap(), new Set(this.uploads.list().map((u) => u.id)))
+  }
+
+  /** This computer's copy of a conflicted project against the cloud's, to choose between them (D-1). */
+  async conflictPreview(projectId: string): Promise<SyncConflictPreview> {
+    const local = (await ctx().db.select().from(projects).where(eq(projects.id, projectId)).limit(1))[0]
+    if (!local) throw new HttpError(404, 'not_found', 'Project not found')
+    const c = cloud()
+    if (!c) throw new HttpError(409, 'conflict', 'This computer is not linked to a cloud account')
+    const remote = await c.json<ProjectDocResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}`).catch((err) => {
+      if (err instanceof CloudError && err.status === 404) return null
+      throw err
+    })
+    const l = sideSummary(local.doc, { version: local.version, updatedAt: local.updatedAt, trashed: local.trashedAt != null })
+    const r = remote ? sideSummary(remote.project, { version: remote.version, updatedAt: remote.summary.updatedAt, trashed: remote.summary.trashed }) : null
+    return { projectId, local: l, cloud: r, changes: compareSides(local.doc, remote?.project ?? null, l, r) }
   }
 
   async dismissNotice(id: string): Promise<SyncStatus> {
@@ -624,6 +646,13 @@ export class SyncEngine {
     const step = () => ac.signal.throwIfAborted()
     try {
       this.failures = await failureMap()
+      // what could hold sync up: this computer's free space, the cloud's storage (clips wait while it's failing)
+      this.diskFree = await freeBytes(ctx().config.dataDir)
+      const sys = await c.json<SystemInfo>('GET', '/api/system').catch((err) => {
+        if (err instanceof CloudError && (err.offline || err.status === 401)) throw err
+        return undefined
+      })
+      this.cloudStorage = sys?.storage?.status === 'error' ? (sys.storage.error ?? 'storage check failed') : undefined
       await this.pushDeletes(c)
       step()
       await this.pull(c)
@@ -642,12 +671,13 @@ export class SyncEngine {
       await kvSet('lastSyncAt', this.lastSyncAt)
       this.backoffMs = 0
       this.backoffUntil = 0
+      this.signedOut = false
       // a retry scheduled while offline has nothing left to do: it would otherwise run later, unasked (sync is off)
       if (this.retrying && this.debounce) clearTimeout(this.debounce)
       this.retrying = false
       this.setState('idle')
       this.uploadInBackground(big)
-      if (getSettings().mediaSync === 'all') void prefetchAllMedia()
+      if (getSettings().mediaSync === 'all' && !(this.diskFree != null && this.diskFree < LOW_DISK_BYTES)) void prefetchAllMedia()
     } catch (err) {
       if (ac.signal.aborted) {
         // unlinked meanwhile: what was done stays; the unlink says the rest
@@ -657,6 +687,7 @@ export class SyncEngine {
         this.backoffUntil = Date.now() + this.backoffMs
         this.wentOffline()
       } else if (err instanceof CloudError && err.status === 401) {
+        this.signedOut = true
         this.setState('error', 'The cloud no longer accepts this computer’s device token (it may have been revoked). Unlink and link again.')
       } else {
         log.warn('desktop: sync failed', { err })
@@ -1243,6 +1274,8 @@ export class SyncEngine {
       if (this.uploads.has(a.id) || !this.due(this.failures.get(failureKey('asset', a.id)))) continue
       todo.push(a)
     }
+    // the cloud's storage is failing: clips wait (projects and the rest still go)
+    if (this.cloudStorage) return []
     todo.sort((x, y) => x.size - y.size)
     const small = todo.filter((a) => a.size <= this.smallUploadBytes)
     await inLanes(small, UPLOAD_LANES, (a) => this.item('asset', a.id, a.name, () => this.pushAsset(c, a)))

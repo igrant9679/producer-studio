@@ -178,6 +178,18 @@ desktopRoutes.post('/sync/now', async (c) => {
   return c.json(await syncEngine.syncNow())
 })
 
+/** Everything still to sync: waiting, uploading, failed or skipped, with reasons and sizes (the sync panel). */
+desktopRoutes.get('/sync/items', async (c) => {
+  requireUser(c)
+  return c.json(await syncEngine.items())
+})
+
+/** A conflicted project: this computer's copy against the cloud's. */
+desktopRoutes.get('/sync/conflicts/:projectId', async (c) => {
+  requireUser(c)
+  return c.json(await viaCloud(() => syncEngine.conflictPreview(c.req.param('projectId'))))
+})
+
 /** The app saw its connection come back: sync now if sync waits offline (doesn't wait for the cycle). */
 desktopRoutes.post('/sync/online', async (c) => {
   requireUser(c)

@@ -9,6 +9,8 @@ export interface CloudProxy {
   down: boolean
   /** Change a JSON answer before the desktop sees it. */
   rewrite?: (path: string, body: any) => any
+  /** Answer this instead of asking the cloud (a refusal), by method and path. */
+  fail?: (method: string, path: string) => { status: number; body: unknown } | undefined
   /** Held while this resolves (a slow request), by path. */
   hold?: (method: string, path: string) => Promise<void> | undefined
   /** Paths requested, in order. */
@@ -27,6 +29,12 @@ export async function startProxy(target: string): Promise<CloudProxy> {
     for await (const c of req) chunks.push(c as Buffer)
     await p.hold?.(req.method ?? 'GET', path)
     if (p.down) return req.socket.destroy()
+    const refusal = p.fail?.(req.method ?? 'GET', path)
+    if (refusal) {
+      const text = JSON.stringify(refusal.body)
+      res.writeHead(refusal.status, { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(text)) })
+      return res.end(text)
+    }
     const headers: Record<string, string> = {}
     for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string' && k !== 'host' && k !== 'connection' && k !== 'content-length') headers[k] = v
     let up: Response

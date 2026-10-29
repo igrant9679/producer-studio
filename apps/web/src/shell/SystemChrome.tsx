@@ -1,13 +1,14 @@
 // Mode-aware chrome: Desktop badge, AI provider chip and the desktop sync indicator/popover.
 import type { SyncStatus } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, Check, Cloud, CloudOff, Copy, HardDrive, RefreshCw, Settings, Sparkles } from 'lucide-react'
+import { AlertTriangle, Check, Cloud, CloudOff, Copy, HardDrive, ListChecks, RefreshCw, Settings, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast, toastError } from '../lib/toast'
 import { aiLabel, systemApi, useSystem } from './system'
 import { Popover, Spinner } from './ui'
 import { relativeTime } from './util'
+import { SyncPanel } from './sync/SyncPanel'
 
 export function DesktopBadge() {
   const desktop = useSystem((s) => s.info?.mode === 'desktop')
@@ -64,6 +65,7 @@ export function SyncIndicator() {
   const setSync = useSystem((s) => s.setSync)
   const navigate = useNavigate()
   const [busy, setBusy] = useState<string>()
+  const [panel, setPanel] = useState(false)
   if (!desktop || !sync) return null
   const sum = syncSummary(sync)
 
@@ -83,6 +85,8 @@ export function SyncIndicator() {
     sum.tone === 'busy' && sync.state === 'syncing' ? <Spinner size={14} /> : !sync.linked || sync.state === 'offline' ? <CloudOff size={14} /> : sum.tone === 'bad' || sum.tone === 'warn' ? <AlertTriangle size={14} /> : <Cloud size={14} />
 
   return (
+    <>
+    {panel && <SyncPanel onClose={() => setPanel(false)} />}
     <Popover
       align="right"
       className="ps-sync-pop"
@@ -115,7 +119,11 @@ export function SyncIndicator() {
           ) : (
             <p className="muted" style={{ fontSize: '0.8125rem', margin: '0 8px 12px' }}>Link your Producer Studio account to back up projects and pick them up on any device. Everything keeps working offline.</p>
           )}
-          {sync.error && <div className="ps-alert" style={{ margin: '0 4px 10px', fontSize: '0.75rem' }}>{sync.error}</div>}
+          {sync.blocked ? (
+            <div className="ps-alert" role="status" style={{ margin: '0 4px 10px', fontSize: '0.75rem' }}>{sync.blocked.message}</div>
+          ) : (
+            sync.error && <div className="ps-alert" style={{ margin: '0 4px 10px', fontSize: '0.75rem' }}>{sync.error}</div>
+          )}
 
           {sync.conflicts.length > 0 && (
             <div className="ps-conflicts">
@@ -207,6 +215,17 @@ export function SyncIndicator() {
               </button>
             )}
             <span className="spacer" />
+            {sync.linked && (
+              <button
+                className="btn ghost sm"
+                onClick={() => {
+                  close()
+                  setPanel(true)
+                }}
+              >
+                <ListChecks size={13} /> Details
+              </button>
+            )}
             <button
               className="btn ghost sm"
               onClick={() => {
@@ -220,6 +239,7 @@ export function SyncIndicator() {
         </div>
       )}
     </Popover>
+    </>
   )
 }
 
