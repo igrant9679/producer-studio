@@ -2,7 +2,7 @@
 import type { ToolCheck, ToolHealth } from '@producer/core'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, RefreshCw, XCircle } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { announce } from '../../lib/announce'
 import { HttpError } from '../../lib/api'
 import { sysFetch } from '../system'
@@ -69,7 +69,72 @@ export function ToolHealthPanel() {
   )
 }
 
+/** What the desktop app's preload offers for its own settings (desktop apps from release 4 on). */
+export interface AppSettingsView {
+  keepRunning: boolean
+  updateCheck: boolean
+  crashReports: boolean
+  /** The app has a tray icon (some Linux desktops have none: closing the window then quits). */
+  tray: boolean
+}
+interface AppBridge {
+  settings(): Promise<AppSettingsView | null>
+  setSettings(patch: Partial<Pick<AppSettingsView, 'keepRunning' | 'updateCheck' | 'crashReports'>>): Promise<AppSettingsView | null>
+}
+export const appBridge = (): AppBridge | undefined => (typeof window !== 'undefined' ? (window as unknown as { producerDesktop?: { app?: AppBridge } }).producerDesktop?.app : undefined)
+
+function Toggle({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} className={clsx('ps-toggle', on && 'on')} onClick={() => onChange(!on)} disabled={disabled}>
+      <i />
+    </button>
+  )
+}
+
+/** The tray: keep running when the window is closed (D-2). */
+function RunningSettings({ view, onChange }: { view: AppSettingsView; onChange: (p: Partial<AppSettingsView>) => void }) {
+  return (
+    <div className="ps-set-row">
+      <div>
+        <strong>Keep running when the window is closed</strong>
+        <span>
+          {view.tray
+            ? 'Producer Studio stays in the tray (notification area), so the dictation shortcut and voices the cloud asks this computer for keep working. Quit it from the tray icon or File → Quit.'
+            : 'This desktop has no tray, so closing the window quits Producer Studio.'}
+        </span>
+      </div>
+      <Toggle on={view.keepRunning && view.tray} disabled={!view.tray} onChange={(v) => onChange({ keepRunning: v })} label="Keep running when the window is closed" />
+    </div>
+  )
+}
+
 /** The "This computer" section of Settings in the desktop app. */
 export function DesktopAppSettings() {
-  return <ToolHealthPanel />
+  const bridge = appBridge()
+  const [view, setView] = useState<AppSettingsView | null>()
+  const [error, setError] = useState<string>()
+  useEffect(() => {
+    if (!bridge) return
+    let alive = true
+    bridge.settings().then((v) => alive && setView(v), () => alive && setView(null))
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  async function change(p: Partial<AppSettingsView>) {
+    if (!bridge) return
+    setError(undefined)
+    const next = await bridge.setSettings(p).catch(() => null)
+    if (next) setView(next)
+    else setError('Producer Studio couldn’t save that setting.')
+  }
+  return (
+    <div>
+      {view && <RunningSettings view={view} onChange={(p) => void change(p)} />}
+      {error && <div className="ps-test bad" role="alert"><AlertTriangle size={14} /> {error}</div>}
+      <div style={{ height: view ? 16 : 0 }} />
+      <ToolHealthPanel />
+    </div>
+  )
 }

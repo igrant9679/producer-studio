@@ -4,7 +4,7 @@
 // the preload exposes a version, the platform and three validated functions; navigation never leaves the local origin.
 import fs from 'node:fs'
 import path from 'node:path'
-import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
+import { BrowserWindow, Menu, type MenuItemConstructorOptions, Tray, app, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron'
 import { isDev } from './paths'
 import { dataDirProblem, defaultDataDir, moveDataDir, moveProblem, writeSettings } from './datadir'
 import { setupDictation } from './dictation'
@@ -13,6 +13,8 @@ import { deviceKey, keystoreProblem, resetDeviceKey } from './keystore'
 import { RotatingLog } from './logs'
 import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, nativeThemeMode, openExternal, setLocalOrigin } from './security'
 import { ServerProcess, dataDirEnv, desktopPaths } from './server'
+import { type ShellSettings, readShellSettings, shellPatch, shellSettingsFile, writeShellSettings } from './shell-settings'
+import { TRAY_HINT, closeAction, trayMenu } from './tray'
 
 app.enableSandbox()
 app.setAppUserModelId('studio.producer.desktop')
@@ -32,6 +34,10 @@ if (!app.requestSingleInstanceLock()) {
   let moving = false
   /** The local session's token (also the ps_session cookie), for the main process's own calls to the engine. */
   let sessionToken = ''
+  // the shell's own settings (tray, updates, crash reports), apart from the engine's settings.json
+  const shellFile = shellSettingsFile(app.getPath('userData'))
+  let shellSettings = readShellSettings(shellFile)
+  let tray: Tray | undefined
   // window + taskbar icon (packaged: inside app.asar next to dist/; dev: apps/desktop/assets)
   const appIcon = [path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'), path.join(__dirname, '..', 'assets', 'icon.png')].find((p) => fs.existsSync(p))
 
@@ -88,11 +94,23 @@ if (!app.requestSingleInstanceLock()) {
     }
     w.webContents.on('did-navigate', onNav)
     w.webContents.on('did-navigate-in-page', onNav)
+    // "Keep running when the window is closed" (tray): the window hides, the engine, dictation and voice relay go on
+    w.on('close', (e) => {
+      if (closeAction({ keepRunning: shellSettings.keepRunning, quitting, hasTray: !!tray }) !== 'hide') return
+      e.preventDefault()
+      w.hide()
+      refreshTray()
+      if (!shellSettings.trayHintShown) {
+        if (process.platform === 'win32') tray?.displayBalloon({ title: 'Producer Studio', content: TRAY_HINT, iconType: 'info' })
+        setShell({ trayHintShown: true })
+      }
+    })
+    w.on('show', () => refreshTray())
     w.on('closed', () => {
       if (mainWin !== w) return
       mainWin = undefined
-      // the app has no tray: closing its window quits it, even when the dictation widget (a window of its own) is
-      // still around; otherwise the engine, VoiceStudio and the shortcut would keep running unseen
+      // closing the window quits (unless it was kept running in the tray above), even when the dictation widget (a
+      // window of its own) is still around; otherwise the engine, VoiceStudio and the shortcut would keep running unseen
       if (!quitting) app.quit()
     })
     void w.loadURL(`${origin}/`)
@@ -340,7 +358,7 @@ if (!app.requestSingleInstanceLock()) {
           { label: 'Move data folder…', click: () => void moveDataFolder() },
           { label: 'Open logs folder', click: () => void shell.openPath(server!.paths.logsDir) },
           { type: 'separator' },
-          { role: 'quit' },
+          { role: 'quit', label: 'Quit Producer Studio' },
         ],
       },
       { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
@@ -408,22 +426,95 @@ if (!app.requestSingleInstanceLock()) {
     preload: path.join(__dirname, 'preload.cjs'),
     secure: { ...SECURE_PREFS, additionalArguments: [`--ps-version=${app.getVersion()}`] },
     log: logLine,
+    onChange: () => refreshTray(),
   })
-  app.on('will-quit', () => dictation.dispose())
+  app.on('will-quit', () => {
+    dictation.dispose()
+    tray?.destroy()
+  })
 
   app.on('web-contents-created', (_e, wc) => hardenContents(wc))
 
-  app.on('second-instance', () => {
-    // launched again while running: show the window, or open one if it was closed (never "nothing happens")
+  /** Show the main window (from the tray, or a second launch), or open one if it was closed. */
+  function showMain() {
     if (!mainWin) {
       if (server?.running && !quitting) mainWin = createMain(server.origin)
       return
     }
     if (mainWin.isMinimized()) mainWin.restore()
+    mainWin.show()
     mainWin.focus()
+  }
+
+  function setShell(patch: Partial<ShellSettings>) {
+    try {
+      shellSettings = writeShellSettings(shellFile, patch)
+    } catch (err) {
+      logLine(`shell settings not saved: ${(err as Error).message}`)
+      shellSettings = { ...shellSettings, ...patch }
+    }
+    refreshTray()
+    return shellSettings
+  }
+
+  /** The tray's menu, rebuilt whenever what it shows changes (window shown or hidden, dictation, keep running). */
+  function refreshTray() {
+    if (!tray) return
+    const click: Record<string, () => void> = {
+      open: showMain,
+      dictate: () => dictation.toggle(),
+      settings: () => {
+        showMain()
+        if (server) void mainWin?.loadURL(`${server.origin}/settings#computer`)
+      },
+      keep: () => void setShell({ keepRunning: !shellSettings.keepRunning }),
+      quit: () => app.quit(),
+    }
+    const items = trayMenu({ windowShown: !!mainWin?.isVisible(), keepRunning: shellSettings.keepRunning, dictation: dictation.state() })
+    tray.setContextMenu(
+      Menu.buildFromTemplate(
+        items.map((i): MenuItemConstructorOptions =>
+          i.id === 'sep' ? { type: 'separator' } : i.id === 'keep' ? { label: i.label, type: 'checkbox', checked: i.checked, click: click.keep } : { label: i.label, enabled: i.enabled ?? true, click: click[i.id] },
+        ),
+      ),
+    )
+  }
+
+  function createTray() {
+    if (tray || !appIcon) return
+    try {
+      const img = nativeImage.createFromPath(appIcon)
+      tray = new Tray(process.platform === 'win32' ? img : img.resize({ width: 16, height: 16 }))
+      tray.setToolTip('Producer Studio')
+      // a click on the icon opens the window (Windows, most Linux desktops); the menu has the rest
+      tray.on('click', showMain)
+      refreshTray()
+    } catch (err) {
+      // some Linux desktops have no tray: closing the window then quits, as without the setting
+      tray = undefined
+      logLine(`no tray icon: ${(err as Error).message}`)
+    }
+  }
+
+  // ---- IPC: the desktop app's own settings (Settings → This computer) ----
+  const appSettingsView = () => ({ keepRunning: shellSettings.keepRunning, updateCheck: shellSettings.updateCheck, crashReports: shellSettings.crashReports, tray: !!tray })
+  ipcMain.handle('desktop:app-settings', (e) => (isLocal(e.senderFrame?.url ?? '') ? appSettingsView() : null))
+  ipcMain.handle('desktop:set-app-settings', (e, raw: unknown) => {
+    if (!isLocal(e.senderFrame?.url ?? '')) return null
+    const patch = shellPatch(raw)
+    if (!patch) return null
+    setShell(patch)
+    return appSettingsView()
+  })
+
+  app.on('second-instance', () => {
+    // launched again while running: show the window, or open one if it was closed (never "nothing happens")
+    showMain()
   })
 
   app.on('window-all-closed', () => app.quit())
+  // macOS: the Dock icon opens the window again
+  app.on('activate', () => showMain())
 
   app.on('before-quit', (e) => {
     quitting = true
@@ -443,6 +534,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!(await startServer())) return
     server!.on('crash', (code) => void onCrash(code))
     menu()
+    createTray()
     mainWin = createMain(server!.origin)
     mainWin.once('ready-to-show', () => void checkTools())
   })

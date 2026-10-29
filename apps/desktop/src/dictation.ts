@@ -22,6 +22,8 @@ export interface DictationDeps {
   preload: string
   secure: Electron.WebPreferences
   log: (msg: string) => void
+  /** The shortcut was turned on, off or changed (the tray shows it). */
+  onChange?: () => void
 }
 
 interface Config {
@@ -137,6 +139,12 @@ export function setupDictation(d: DictationDeps) {
   }
 
   function apply(next: Config): { ok: boolean; error?: string } {
+    const r = applyConfig(next)
+    d.onChange?.()
+    return r
+  }
+
+  function applyConfig(next: Config): { ok: boolean; error?: string } {
     cfg = next
     if (registered) {
       globalShortcut.unregister(registered)
@@ -190,6 +198,10 @@ export function setupDictation(d: DictationDeps) {
   })
 
   return {
+    /** Whether the shortcut is registered, and which (for the tray). */
+    state: () => ({ enabled: !!registered, shortcut: registered }),
+    /** Start or stop dictating, as the shortcut does (the tray's Dictate). */
+    toggle,
     dispose() {
       globalShortcut.unregisterAll()
       if (widget && !widget.isDestroyed()) widget.destroy()

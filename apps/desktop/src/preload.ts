@@ -16,6 +16,12 @@ const api = Object.freeze({
    * restarts. Resolves when done (ok false: cancelled or failed, with the reason).
    */
   moveDataFolder: (): Promise<{ ok: boolean; dataDir?: string; error?: string }> => ipcRenderer.invoke('desktop:move-data-folder'),
+  /** The desktop app's own settings (Settings → This computer). Resolves null when refused. */
+  app: Object.freeze({
+    settings: (): Promise<unknown> => ipcRenderer.invoke('desktop:app-settings'),
+    /** Change keepRunning / updateCheck / crashReports (booleans only; anything else is refused). */
+    setSettings: (patch: Record<string, boolean>): Promise<unknown> => ipcRenderer.invoke('desktop:set-app-settings', { ...patch }),
+  }),
   /** Make the native window frame and menus follow the app theme ('system' | 'dark' | 'light'). */
   setNativeTheme: (mode: string): Promise<boolean> => ipcRenderer.invoke('desktop:set-native-theme', String(mode)),
   /** System-wide dictation (global shortcut + floating widget + paste into the focused app). */
