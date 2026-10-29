@@ -59,7 +59,9 @@ nsis:
   uninstallerIcon: assets/icon.ico
   installerHeaderIcon: assets/icon.ico
   artifactName: Producer-Studio-Setup-${version}.exe
+  # the uninstaller asks (default No, never on update or /S) whether to remove VoiceStudio and the data (D-15)
   deleteAppDataOnUninstall: false
+  include: installer/uninstall.nsh
 # Linux (D-17): build on Linux (npm ci there installs that platform's ffmpeg, sharp and onnxruntime binaries):
 #   npm run dist -w @producer/desktop -- --linux
 linux:
