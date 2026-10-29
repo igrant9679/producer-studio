@@ -2,19 +2,19 @@
 // GET/PUT /:id/brand (the default kit, in workspaces.ts) stay as they were for desktops and older clients.
 import { Readable } from 'node:stream'
 import { Hono } from 'hono'
-import { and, count, eq } from 'drizzle-orm'
+import { and, count, eq, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import { BRAND_FONT_MAX_BYTES, DEFAULT_KIT_ID, FONT_MIME, MAX_EXTRA_KITS, cleanFamily, sniffFontFormat, type BrandKitDoc, type BrandKitList } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { brandFonts, brandKits, extraBrandKits } from '../db/schema'
-import { checkIfMatch, setEtag } from '../etag'
+import { changedMeanwhile, checkIfMatch, matchRequired, setEtag } from '../etag'
 import { HttpError, body, notFound, requireRole } from '../http'
 import { newId } from '../ids'
 import { loadAsset } from '../services/assets'
 import { checkKitDoc, defaultKitSummary, extraSummary, fontDto, listBrandFonts, listKits, loadExtraKit } from '../services/brand'
 import { logoPalette } from '../services/palette'
-import { BrandSchema, saveDefaultKit } from './workspaces'
+import { BrandSchema, saveDefaultKit, storedDefaultKit } from './workspaces'
 
 export const brandRoutes = new Hono<AppEnv>()
 
@@ -70,8 +70,9 @@ brandRoutes.put('/:id/brand-kits/:kitId', async (c) => {
   const kitId = c.req.param('kitId')
   const raw = (await body(c, BrandSchema)) as BrandKitDoc
   if (kitId === DEFAULT_KIT_ID) {
+    const stored = await storedDefaultKit(id)
     checkIfMatch(c, (await defaultKitSummary(id)).doc, 'The brand kit')
-    await saveDefaultKit(id, raw)
+    await saveDefaultKit(id, raw, matchRequired(c) ? { doc: stored } : undefined)
     const out = await defaultKitSummary(id)
     setEtag(c, out.doc)
     return c.json(out)
@@ -79,7 +80,10 @@ brandRoutes.put('/:id/brand-kits/:kitId', async (c) => {
   const cur = await loadExtraKit(id, kitId)
   checkIfMatch(c, cur.doc, 'The brand kit')
   const doc = await checkKitDoc(id, raw)
-  const [row] = await ctx().db.update(extraBrandKits).set({ doc, updatedAt: Date.now() }).where(eq(extraBrandKits.id, cur.id)).returning()
+  // with If-Match, one UPDATE that only lands while the kit is still the one just checked
+  const same = matchRequired(c) ? sql`${extraBrandKits.doc} = ${JSON.stringify(cur.doc)}::jsonb` : undefined
+  const [row] = await ctx().db.update(extraBrandKits).set({ doc, updatedAt: Date.now() }).where(and(eq(extraBrandKits.id, cur.id), same)).returning()
+  if (!row) throw same ? changedMeanwhile('The brand kit') : notFound('Brand kit not found')
   announce(id)
   const out = extraSummary(row)
   setEtag(c, out.doc)

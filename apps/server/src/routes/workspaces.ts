@@ -12,7 +12,7 @@ import { recordActivity } from '../services/activity'
 import { HttpError, body, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { newId, randomToken } from '../ids'
 import { jobsDeleted } from '../jobs/queue'
-import { checkIfMatch, etagOf, setEtag } from '../etag'
+import { changedMeanwhile, checkIfMatch, etagOf, matchRequired, setEtag } from '../etag'
 
 export async function createWorkspace(userId: string, name: string, personal = false): Promise<Workspace> {
   const id = newId('ws')
@@ -48,9 +48,15 @@ export async function listWorkspaces(userId: string): Promise<Workspace[]> {
 }
 
 /** Rename a workspace (owner). The change_seq trigger republishes it to desktop replicas. */
-export async function renameWorkspace(userId: string, id: string, name: string): Promise<Workspace> {
+/** `base` (an If-Match): rename only while the name is still that, in one UPDATE; otherwise 412. */
+export async function renameWorkspace(userId: string, id: string, name: string, base?: string): Promise<Workspace> {
   await requireRole(userId, id, 'owner')
-  await ctx().db.update(workspaces).set({ name }).where(eq(workspaces.id, id))
+  const done = await ctx()
+    .db.update(workspaces)
+    .set({ name })
+    .where(base === undefined ? eq(workspaces.id, id) : and(eq(workspaces.id, id), eq(workspaces.name, base)))
+    .returning({ id: workspaces.id })
+  if (!done.length && base !== undefined) throw changedMeanwhile('This space')
   const ws = (await listWorkspaces(userId)).find((w) => w.id === id)!
   ctx().bus.publish(id, 'workspace', { id, name, deleted: false }, { id, inline: { id, name, deleted: false } })
   return ws
@@ -111,15 +117,36 @@ export const BrandSchema = z.object({
   customFonts: z.array(z.string().max(60)).max(4).optional(),
 })
 
-/** Save the space's default kit (fonts: bundled or uploaded to the space, see services/brand.ts). */
-export async function saveDefaultKit(workspaceId: string, raw: BrandKitDoc): Promise<BrandKitDoc> {
+/** The stored default kit (null: none saved yet, the space shows defaultBrand()), for an If-Match base. */
+export async function storedDefaultKit(workspaceId: string): Promise<BrandKitDoc | null> {
+  return (await ctx().db.select({ doc: brandKits.doc }).from(brandKits).where(eq(brandKits.workspaceId, workspaceId)).limit(1))[0]?.doc ?? null
+}
+
+/**
+ * Save the space's default kit (fonts: bundled or uploaded to the space, see services/brand.ts). With `base` (an
+ * If-Match: the stored kit that was checked, or null for none yet) it saves only while that is still what's stored,
+ * in one statement; otherwise 412.
+ */
+export async function saveDefaultKit(workspaceId: string, raw: BrandKitDoc, base?: { doc: BrandKitDoc | null }): Promise<BrandKitDoc> {
   const { checkKitDoc } = await import('../services/brand')
   const doc = await checkKitDoc(workspaceId, raw)
   const now = Date.now()
-  await ctx()
-    .db.insert(brandKits)
-    .values({ workspaceId, doc, updatedAt: now })
-    .onConflictDoUpdate({ target: brandKits.workspaceId, set: { doc, updatedAt: now } })
+  const db = ctx().db
+  if (!base)
+    await db
+      .insert(brandKits)
+      .values({ workspaceId, doc, updatedAt: now })
+      .onConflictDoUpdate({ target: brandKits.workspaceId, set: { doc, updatedAt: now } })
+  else {
+    const saved = base.doc
+      ? await db
+          .update(brandKits)
+          .set({ doc, updatedAt: now })
+          .where(and(eq(brandKits.workspaceId, workspaceId), sql`${brandKits.doc} = ${JSON.stringify(base.doc)}::jsonb`))
+          .returning({ id: brandKits.workspaceId })
+      : await db.insert(brandKits).values({ workspaceId, doc, updatedAt: now }).onConflictDoNothing().returning({ id: brandKits.workspaceId })
+    if (!saved.length) throw changedMeanwhile('The brand kit')
+  }
   // open Brand kit pages and editors reload it
   const ev = { id: workspaceId, deleted: false, brand: true }
   ctx().bus.publish(workspaceId, 'workspace', ev, { id: workspaceId, inline: ev })
@@ -143,7 +170,7 @@ workspaceRoutes.patch('/:id', async (c) => {
   const b = await body(c, NameSchema)
   const cur = (await ctx().db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, c.req.param('id'))).limit(1))[0]
   if (cur) checkIfMatch(c, { name: cur.name }, 'This space')
-  const ws = await renameWorkspace(u.id, c.req.param('id'), b.name)
+  const ws = await renameWorkspace(u.id, c.req.param('id'), b.name, cur && matchRequired(c) ? cur.name : undefined)
   if (ws.etag) c.header('ETag', ws.etag)
   return c.json(ws)
 })
@@ -378,8 +405,9 @@ workspaceRoutes.put('/:id/brand', async (c) => {
   const id = c.req.param('id')
   await requireRole(u.id, id, 'editor')
   const raw = (await body(c, BrandSchema)) as BrandKitDoc
+  const stored = await storedDefaultKit(id)
   checkIfMatch(c, await getBrand(id), 'The brand kit')
-  const doc = await saveDefaultKit(id, raw)
+  const doc = await saveDefaultKit(id, raw, matchRequired(c) ? { doc: stored } : undefined)
   setEtag(c, doc)
   return c.json(doc)
 })

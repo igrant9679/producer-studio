@@ -42,6 +42,7 @@ import { usageRoutes } from './routes/usage'
 import { inviteRoutes, workspaceRoutes } from './routes/workspaces'
 import { desktopGuard, desktopRoutes } from './desktop'
 import { withActor } from './services/metering'
+import { presenceOf } from './services/presence'
 import { bodyLimitFor, cloudHeaders } from './security'
 import { serveStatic } from './static'
 
@@ -180,6 +181,10 @@ export function createApp() {
     if (event === 'asset') {
       const a = (await db.select().from(assets).where(eq(assets.id, id)).limit(1))[0]
       return a ? { workspaceId: a.workspaceId, data: assetRecord(a, { light: true }) } : null
+    }
+    if (event === 'presence') {
+      const ws = (await db.select({ ws: projects.workspaceId }).from(projects).where(eq(projects.id, id)).limit(1))[0]
+      return ws ? { workspaceId: ws.ws, data: await presenceOf(id) } : null
     }
     const p = (await db.select({ id: projects.id, ws: projects.workspaceId, version: projects.version }).from(projects).where(eq(projects.id, id)).limit(1))[0]
     return p ? { workspaceId: p.ws, data: { id: p.id, version: p.version } } : null

@@ -1,87 +1,90 @@
 // Who has a project open now (A-23). Each open editor tab says so every PRESENCE_BEAT_MS and says goodbye when it
-// closes; a tab that stops beating is gone after PRESENCE_TTL_MS. Kept in memory by the API process (the one that
-// serves the live-update streams), and every change in who is there goes out as a `presence` event on the space's
-// stream. Several API replicas would each know only their own visitors.
+// closes; a tab that stops beating is gone after PRESENCE_TTL_MS. Kept in Postgres (the presence table), so every API
+// process sees every visitor; every change in who is there goes out as a `presence` event on the space's stream, to
+// other processes too. Whichever process sweeps a tab that stopped beating tells the space.
+import { and, eq, gt, inArray, lte, sql } from 'drizzle-orm'
 import type { PresenceEntry, ProjectPresence, Role } from '@producer/core'
 import { PRESENCE_TTL_MS } from '@producer/core'
 import { ctx } from '../context'
+import { presenceRows } from '../db/schema'
+import { log } from '../log'
 
-interface Tab {
-  userId: string
-  name: string
-  color: string
-  role: Role
-  since: number
-  seen: number
-}
+type Row = typeof presenceRows.$inferSelect
 
-const rooms = new Map<string, { workspaceId: string; tabs: Map<string, Tab> }>()
 let sweeper: ReturnType<typeof setInterval> | undefined
 
-function people(tabs: Map<string, Tab>): PresenceEntry[] {
+function people(rows: Row[]): PresenceEntry[] {
   const byUser = new Map<string, PresenceEntry>()
-  for (const t of tabs.values()) {
+  for (const t of rows) {
     const cur = byUser.get(t.userId)
-    if (!cur) byUser.set(t.userId, { userId: t.userId, name: t.name, color: t.color, role: t.role, since: t.since })
+    if (!cur) byUser.set(t.userId, { userId: t.userId, name: t.name, color: t.color, role: t.role as Role, since: t.since })
     else cur.since = Math.min(cur.since, t.since)
   }
   return [...byUser.values()].sort((a, b) => a.since - b.since || a.userId.localeCompare(b.userId))
 }
 
-const signature = (tabs: Map<string, Tab>) => people(tabs).map((p) => `${p.userId}:${p.role}`).join(',')
+const signature = (rows: Row[]) => people(rows).map((p) => `${p.userId}:${p.role}`).join(',')
 
-export function presenceOf(projectId: string): ProjectPresence {
-  const room = rooms.get(projectId)
-  return { projectId, people: room ? people(room.tabs) : [] }
+async function liveRows(projectId: string, now = Date.now()): Promise<Row[]> {
+  return ctx()
+    .db.select()
+    .from(presenceRows)
+    .where(and(eq(presenceRows.projectId, projectId), gt(presenceRows.seen, now - PRESENCE_TTL_MS)))
 }
 
-function announce(projectId: string, workspaceId: string) {
-  // who is here now: not worth replaying to a stream that reconnects (it asks again)
-  ctx().bus.publish(workspaceId, 'presence', presenceOf(projectId), { replay: false })
+export async function presenceOf(projectId: string, now = Date.now()): Promise<ProjectPresence> {
+  return { projectId, people: people(await liveRows(projectId, now)) }
 }
 
-/** Drop tabs that stopped beating; tell the space when that changed who is there. */
-export function sweepPresence(now = Date.now()) {
-  for (const [projectId, room] of rooms) {
-    const before = signature(room.tabs)
-    for (const [k, t] of room.tabs) if (now - t.seen > PRESENCE_TTL_MS) room.tabs.delete(k)
-    if (signature(room.tabs) !== before) announce(projectId, room.workspaceId)
-    if (!room.tabs.size) rooms.delete(projectId)
+function announce(p: ProjectPresence, workspaceId: string) {
+  // who is here now: not worth replaying to a stream that reconnects (it asks again); small, so it travels inline
+  ctx().bus.publish(workspaceId, 'presence', p, { id: p.projectId, inline: p, replay: false })
+}
+
+/** Drop tabs that stopped beating (in any process); tell each space whose project that changed. */
+export async function sweepPresence(now = Date.now()) {
+  const gone = await ctx()
+    .db.delete(presenceRows)
+    .where(lte(presenceRows.seen, now - PRESENCE_TTL_MS))
+    .returning({ projectId: presenceRows.projectId, workspaceId: presenceRows.workspaceId })
+  const projects = new Map(gone.map((g) => [g.projectId, g.workspaceId]))
+  if (projects.size) {
+    const still = await ctx().db.select().from(presenceRows).where(inArray(presenceRows.projectId, [...projects.keys()]))
+    for (const [projectId, workspaceId] of projects) announce({ projectId, people: people(still.filter((r) => r.projectId === projectId && r.seen > now - PRESENCE_TTL_MS)) }, workspaceId)
   }
-  if (!rooms.size && sweeper) {
+  const [any] = await ctx().db.select({ p: presenceRows.projectId }).from(presenceRows).limit(1)
+  if (!any && sweeper) {
     clearInterval(sweeper)
     sweeper = undefined
   }
 }
 
 /** A tab's heartbeat (`open`) or goodbye. Returns who is there now. */
-export function beat(project: { id: string; workspaceId: string }, user: { id: string; name: string; avatarColor: string }, role: Role, client: string, open: boolean, now = Date.now()): ProjectPresence {
-  let room = rooms.get(project.id)
-  if (!room) {
-    if (!open) return presenceOf(project.id)
-    room = { workspaceId: project.workspaceId, tabs: new Map() }
-    rooms.set(project.id, room)
-  }
-  const before = signature(room.tabs)
-  // one person's tabs can't stand in for, or close, anyone else's
-  const key = `${user.id}:${client}`
+export async function beat(project: { id: string; workspaceId: string }, user: { id: string; name: string; avatarColor: string }, role: Role, client: string, open: boolean, now = Date.now()): Promise<ProjectPresence> {
+  const db = ctx().db
+  const before = signature(await liveRows(project.id, now))
+  // one person's tabs can't stand in for, or close, anyone else's: a tab is (project, person, client)
+  const tab = and(eq(presenceRows.projectId, project.id), eq(presenceRows.userId, user.id), eq(presenceRows.client, client))
   if (open) {
-    const t = room.tabs.get(key)
-    if (t) Object.assign(t, { seen: now, role, name: user.name, color: user.avatarColor })
-    else room.tabs.set(key, { userId: user.id, name: user.name, color: user.avatarColor, role, since: now, seen: now })
-  } else room.tabs.delete(key)
-  if (signature(room.tabs) !== before) announce(project.id, project.workspaceId)
-  if (!room.tabs.size) rooms.delete(project.id)
-  if (rooms.size && !sweeper) {
-    sweeper = setInterval(() => sweepPresence(), 10_000)
+    await db
+      .insert(presenceRows)
+      .values({ projectId: project.id, userId: user.id, client, workspaceId: project.workspaceId, name: user.name, color: user.avatarColor, role, since: now, seen: now })
+      // a tab back after it had timed out (not swept yet) starts a new visit
+      .onConflictDoUpdate({ target: [presenceRows.projectId, presenceRows.userId, presenceRows.client], set: { seen: now, role, name: user.name, color: user.avatarColor, since: sql`CASE WHEN ${presenceRows.seen} <= ${now - PRESENCE_TTL_MS} THEN ${now} ELSE ${presenceRows.since} END` } })
+  } else await db.delete(presenceRows).where(tab)
+  const rows = await liveRows(project.id, now)
+  const out = { projectId: project.id, people: people(rows) }
+  if (signature(rows) !== before) announce(out, project.workspaceId)
+  if (open && !sweeper) {
+    sweeper = setInterval(() => void sweepPresence().catch((err) => log.warn('presence sweep failed', { err })), 10_000)
     sweeper.unref?.()
   }
-  return presenceOf(project.id)
+  return out
 }
 
 /** Tests: forget everyone. */
-export function resetPresence() {
-  rooms.clear()
+export async function resetPresence() {
+  await ctx().db.delete(presenceRows)
   if (sweeper) clearInterval(sweeper)
   sweeper = undefined
 }
