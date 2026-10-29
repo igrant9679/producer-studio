@@ -39,6 +39,7 @@ import { SyncLock } from './lock'
 import { UploadBoard, inLanes, sendFile } from './uploads'
 import { LOW_DISK_BYTES, blockedBy, compareSides, freeBytes, projectDirty, sideSummary, syncItems } from './panel'
 import { prefetchAllMedia } from './media'
+import { keepOffline } from './offline'
 import { getSettings, onSettingsChange } from './settings'
 
 const LOOKBACK = 25
@@ -801,7 +802,10 @@ export class SyncEngine {
       this.retrying = false
       this.setState('idle')
       this.uploadInBackground(big)
-      if (getSettings().mediaSync === 'all' && !(this.diskFree != null && this.diskFree < LOW_DISK_BYTES)) void prefetchAllMedia()
+      const roomy = !(this.diskFree != null && this.diskFree < LOW_DISK_BYTES)
+      if (getSettings().mediaSync === 'all' && roomy) void prefetchAllMedia()
+      // projects kept available offline get any clip they gained
+      if (roomy) void keepOffline().catch((err) => log.warn('desktop: keeping projects offline failed', { err: String(err) }))
     } catch (err) {
       if (ac.signal.aborted) {
         // unlinked meanwhile: what was done stays; the unlink says the rest

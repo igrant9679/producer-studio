@@ -15,6 +15,7 @@ import { openSignInTerminal } from './claude-login'
 import { ensureDesktopTables } from './db'
 import { createLocalSession, ensureLocalUser, secretMatches } from './identity'
 import { fetchMissingMedia } from './media'
+import { offlineInfo, setOffline } from './offline'
 import { SettingsPatch, getSettings, saveSettings } from './settings'
 import { CloudError } from './cloud'
 import { syncEngine } from './sync'
@@ -188,6 +189,25 @@ desktopRoutes.get('/sync/items', async (c) => {
 desktopRoutes.get('/sync/conflicts/:projectId', async (c) => {
   requireUser(c)
   return c.json(await viaCloud(() => syncEngine.conflictPreview(c.req.param('projectId'))))
+})
+
+/** Projects kept available offline in a space, and its clips whose files are only in the cloud (D-9). */
+desktopRoutes.get('/sync/offline', async (c) => {
+  const u = requireUser(c)
+  const ws = c.req.query('workspaceId') ?? ''
+  await requireRole(u.id, ws, 'viewer')
+  return c.json(await offlineInfo(ws))
+})
+
+/** Keep a project available offline (its clips download now and stay current), or stop. */
+desktopRoutes.put('/sync/offline/:projectId', async (c) => {
+  requireUser(c)
+  const b = await body(c, z.object({ pinned: z.boolean() }))
+  const ws = await setOffline(c.req.param('projectId'), b.pinned).catch((err) => {
+    if ((err as { notFound?: boolean }).notFound) throw new HttpError(404, 'not_found', 'Project not found')
+    throw err
+  })
+  return c.json(await offlineInfo(ws))
 })
 
 /** The app saw its connection come back: sync now if sync waits offline (doesn't wait for the cycle). */

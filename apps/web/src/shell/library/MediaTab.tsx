@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, mediaUrl } from '../../lib/api'
 import { useSession } from '../../lib/session'
+import { CloudOnlyBadge, useOffline } from '../sync/offline'
 import { toast, toastError } from '../../lib/toast'
 import { InlineRename } from '../components/ProjectCard'
 import { filterAssets, ORIGIN_LABEL, projectFromClip, type AssetFilter, type LibraryView, type SortKey } from '../pages/libraryLogic'
@@ -103,6 +104,7 @@ export function MediaTab({ v, update }: { v: LibraryView; update: (p: Partial<Li
   const s = useSelection(order, workspaceId)
   const selecting = s.sel.size > 0
   const pending = uploadsIn(uploads, workspaceId).filter((u) => u.status === 'uploading')
+  const offline = useOffline(workspaceId)
   const byId = useMemo(() => new Map(list.map((a) => [a.asset.id, a])), [list])
   const selected = s.ids.map((id) => byId.get(id)!).filter(Boolean)
 
@@ -216,6 +218,7 @@ export function MediaTab({ v, update }: { v: LibraryView; update: (p: Partial<Li
           ) : null}
           {a.asset.duration ? <span className="ps-thumb-badge">{formatDuration(a.asset.duration)}</span> : null}
           <span className="ps-thumb-badge left">{ORIGIN_LABEL[a.origin] ?? a.origin}</span>
+          <CloudOnlyBadge o={offline} assetId={a.asset.id} />
         </Thumb>
         <div className="ps-pcard-meta">
           <div>

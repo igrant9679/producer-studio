@@ -23,3 +23,7 @@
   .ps-syncp-sides { grid-template-columns: 1fr; }
   .ps-syncp-row { flex-wrap: wrap; }
 }
+.ps-offline-badge, .ps-cloud-badge { position: absolute; z-index: 2; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--media-scrim); backdrop-filter: blur(4px); color: rgba(255, 255, 255, 0.85); }
+.ps-offline-badge { top: 8px; right: 34px; color: #3ddc97; }
+.ps-offline-badge[data-state='downloading'] { color: #ffc24d; }
+.ps-cloud-badge { top: 8px; right: 8px; }

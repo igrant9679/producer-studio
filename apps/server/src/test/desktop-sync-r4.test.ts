@@ -367,6 +367,46 @@ describe('the sync panel (D-1)', () => {
   }, 60_000)
 })
 
+describe('available offline (D-9)', () => {
+  async function cloudClip(name: string): Promise<string> {
+    const bytes = png(1_000)
+    const t = await A.http.json('POST', '/api/uploads', { workspaceId: A.workspaceId, filename: name, mime: 'image/png', size: bytes.length })
+    expect((await A.http.req('PUT', t.body.url, bytes, { 'content-type': 'image/png' })).status).toBe(200)
+    expect((await A.http.json('POST', `/api/assets/${t.body.assetId}/complete`)).status).toBe(200)
+    await until(async () => (await A.http.json('GET', `/api/assets/${t.body.assetId}`)).body.status === 'ready', 30_000)
+    return t.body.assetId
+  }
+  const off = async () => (await desk.json('GET', `/api/sync/offline?workspaceId=${A.workspaceId}`)).body as import('@producer/core').OfflineInfo
+
+  it('a project kept offline gets every clip it uses, which then open with no connection; other clips stay in the cloud', async () => {
+    const clip = await cloudClip('used.png')
+    const other = await cloudClip('not-used.png')
+    const proj = await cloudProject('Edit on the plane')
+    const cur = (await A.http.json('GET', `/api/projects/${proj}`)).body
+    const asset = (await A.http.json('GET', `/api/assets/${clip}`)).body.asset
+    expect((await A.http.json('PUT', `/api/projects/${proj}`, { project: { ...cur.project, assets: { [clip]: asset } }, baseVersion: cur.version })).status).toBe(200)
+    await sync()
+    expect((await off()).cloudOnly).toEqual(expect.arrayContaining([clip, other]))
+    expect((await off()).projects[proj]).toBeUndefined()
+
+    const pin = await desk.json('PUT', `/api/sync/offline/${proj}`, { pinned: true })
+    expect(pin.status).toBe(200)
+    expect(pin.body.projects[proj].pinned).toBe(true)
+    await until(async () => (await off()).projects[proj]?.missing === 0, 30_000)
+    const now = await off()
+    expect(now.cloudOnly).not.toContain(clip)
+    expect(now.cloudOnly).toContain(other)
+    // no connection: its file is on this computer
+    proxy.down = true
+    expect((await desk.req('GET', `/api/media/${clip}/source`)).status).toBe(200)
+    proxy.down = false
+    // stopped: no longer listed, what was downloaded stays
+    expect((await desk.json('PUT', `/api/sync/offline/${proj}`, { pinned: false })).body.projects[proj]).toBeUndefined()
+    expect((await off()).cloudOnly).not.toContain(clip)
+    expect((await desk.json('PUT', '/api/sync/offline/p_nope', { pinned: true })).status).toBe(404)
+  }, 120_000)
+})
+
 describe('the first-link preview (D-5)', () => {
   it('shows what would be merged and uploaded, changes nothing until confirmed, and links as chosen', async () => {
     expect((await desk.json('POST', '/api/sync/unlink')).status).toBe(200)
