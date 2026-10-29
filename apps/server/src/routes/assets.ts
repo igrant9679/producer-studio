@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { Readable } from 'node:stream'
-import { Hono } from 'hono'
+import { type Context, Hono } from 'hono'
 import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { EmptyTrashResult, TrashResult, UploadTicket } from '@producer/core'
@@ -17,7 +17,8 @@ import { waveformKey } from '../media/process'
 import { assertVariant, serveObject, type Variant } from '../media/serve'
 import { waveformBytes } from '../media/waveform'
 import { type AssetRow, assetDirs, assetPrefix, emitAsset, extFor, hashObject, kindFromMime, loadAsset, updateAsset, uploadMime } from '../services/assets'
-import { UploadTooLargeError } from '../storage'
+import { PartSizeError, UploadTooLargeError } from '../storage'
+import { dropSession, finishSession, MULTIPART_MAX_PARTS, openSession, partBytes, partUrls, planOf, sessionOf, SINGLE_PUT_MAX, uploadedParts } from '../services/uploads'
 import { abortUpload } from '../services/asset-recovery'
 import { assertProjectInWorkspace } from '../services/projects'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
@@ -41,6 +42,8 @@ uploadRoutes.post('/', async (c) => {
       /** Desktop replicas keep how the asset was made (generated voiceovers stay in Voice Studio's history). */
       origin: z.enum(['upload', 'tts', 'voicestudio', 'dub', 'ai', 'stock', 'freeze']).optional(),
       tts: z.object({ text: z.string().max(10000), voice: z.string().max(80), speed: z.number().min(0.5).max(2) }).optional(),
+      /** Send it in parts that can be resumed (P-5). */
+      multipart: z.boolean().optional(),
     }),
   )
   await requireRole(u.id, b.workspaceId, 'editor')
@@ -62,6 +65,9 @@ uploadRoutes.post('/', async (c) => {
   await assertStorageRoom(b.workspaceId, b.size - (retry?.size ?? 0))
   const mime = uploadMime(b.mime, b.filename)
   if (!mime) throw new HttpError(415, 'invalid', 'Only video, audio and image files can be uploaded')
+  // a bucket takes at most 5 GB in one PUT: anything bigger goes in parts
+  if (!b.multipart && ctx().storage.presignPut && b.size > SINGLE_PUT_MAX)
+    throw new HttpError(413, 'quota', 'Files over 5 GB have to be sent in parts, which this version of the app can’t do. Update the app and upload it again.')
   if (retry) {
     // same row and storage key; a fresh ticket (and a fresh clock for the abandoned-upload sweep)
     const [row] = await ctx()
@@ -70,7 +76,7 @@ uploadRoutes.post('/', async (c) => {
       .where(eq(assets.id, retry.id))
       .returning()
     emitAsset(row)
-    return c.json(await uploadTicket(row.id, row.sourceKey, row.mime, b.size))
+    return c.json(await uploadTicket(row, b.size, b.multipart))
   }
   const ext = extFor(b.filename, mime)
   const id = b.assetId ?? newId('as')
@@ -97,15 +103,68 @@ uploadRoutes.post('/', async (c) => {
     })
     .returning()
   emitAsset(row)
-  return c.json(await uploadTicket(id, key, mime, b.size))
+  return c.json(await uploadTicket(row, b.size, b.multipart))
 })
 
-async function uploadTicket(id: string, key: string, mime: string, size: number): Promise<UploadTicket> {
+/** Where the file goes: one signed PUT, or (`multipart`, P-5) a resumable upload in parts. */
+async function uploadTicket(row: AssetRow, size: number, multipart?: boolean): Promise<UploadTicket> {
   const storage = ctx().storage
+  const { id, sourceKey: key, mime } = row
+  if (multipart) {
+    const { session, done } = await openSession(row, size)
+    return { assetId: id, url: `/api/uploads/${id}/parts`, method: 'PUT', headers: {}, multipart: planOf(session, done) }
+  }
+  // sent in one piece this time: parts of an earlier try are no longer needed
+  const old = await sessionOf(id)
+  if (old) await dropSession(old)
   return storage.presignPut
     ? { assetId: id, url: await storage.presignPut(key, mime, { size }), method: 'PUT', headers: { 'content-type': mime } }
     : { assetId: id, url: `/api/uploads/${id}/data`, method: 'PUT', headers: { 'content-type': mime } }
 }
+
+/** A resumable upload's session, for an editor of its space, while the clip is still being uploaded. */
+async function openUpload(c: Context<AppEnv>) {
+  const u = requireUser(c)
+  const row = await loadAsset(c.req.param('assetId') ?? '')
+  await requireRole(u.id, row.workspaceId, 'editor')
+  const session = await sessionOf(row.id)
+  if (!session) throw new HttpError(409, 'conflict', 'This clip has no upload in parts under way. Start the upload again.')
+  if (row.status !== 'uploading') throw new HttpError(409, 'conflict', row.status === 'error' ? 'This upload was stopped. Choose the file again to carry on.' : 'This upload has already been completed')
+  return { row, session }
+}
+
+// Which parts of a resumable upload have arrived (a client carrying on after a drop or a reload).
+uploadRoutes.get('/:assetId/parts', async (c) => {
+  const { session } = await openUpload(c)
+  return c.json(planOf(session, await uploadedParts(session)))
+})
+
+// URLs for parts of a resumable upload: each takes exactly its part's bytes.
+uploadRoutes.post('/:assetId/parts', async (c) => {
+  const { session } = await openUpload(c)
+  const b = await body(c, z.object({ parts: z.array(z.number().int().min(1).max(MULTIPART_MAX_PARTS)).min(1).max(100) }))
+  return c.json({ parts: await partUrls(session, b.parts) })
+})
+
+// Local-storage target for one part: exactly its bytes, or nothing is kept.
+uploadRoutes.put('/:assetId/parts/:n', async (c) => {
+  const { session } = await openUpload(c)
+  const n = Number(c.req.param('n'))
+  const size = partBytes(session, n)
+  if (!size) throw invalid(`There is no part ${c.req.param('n')}`)
+  const storage = ctx().storage
+  if (!storage.putPart) throw new HttpError(409, 'conflict', 'Parts of this upload go straight to storage: ask for their URLs')
+  const raw = c.req.raw.body
+  if (!raw) throw invalid('Empty upload body')
+  try {
+    await storage.putPart(session.key, session.uploadId, n, Readable.fromWeb(raw as import('node:stream/web').ReadableStream), size)
+    return c.json({ ok: true, partNumber: n, size })
+  } catch (err) {
+    if (err instanceof UploadTooLargeError) throw new HttpError(413, 'quota', `Part ${n} is larger than the ${size} bytes it should be`)
+    if (err instanceof PartSizeError) throw new HttpError(400, 'invalid', `Part ${n} arrived cut short: send it again`)
+    throw err
+  }
+})
 
 // Local-storage upload target: stream the request body to disk with a size cap.
 uploadRoutes.put('/:assetId/data', async (c) => {
@@ -147,6 +206,9 @@ assetRoutes.post('/:id/complete', async (c) => {
   const row = await loadAsset(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'editor')
   if (row.status !== 'uploading' && row.status !== 'error') return c.json(assetRecord(row))
+  // a resumable upload: its parts become the file (refused, naming what's missing, until all have arrived)
+  const session = await sessionOf(row.id)
+  if (session) await finishSession(session)
   const st = await ctx().storage.stat(row.sourceKey)
   if (!st) throw new HttpError(409, 'conflict', 'Upload has not arrived yet — PUT the file to the ticket URL first')
   // the bucket only takes the signed length, but tickets from before that (or other storage) could carry more
@@ -182,6 +244,9 @@ assetRoutes.post('/:id/abort', async (c) => {
   const row = await loadAsset(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'editor')
   const b = await body(c, z.object({ reason: z.string().max(300).optional() }))
+  // a resumable upload stopped by the person (a dropped connection doesn't call this: it carries on later) loses its parts
+  const session = await sessionOf(row.id)
+  if (session) await dropSession(session)
   await abortUpload(row.id, b.reason ?? '')
   return c.json(assetRecord(await loadAsset(row.id)))
 })

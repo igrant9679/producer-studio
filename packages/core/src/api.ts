@@ -279,12 +279,37 @@ export interface UploadRequest {
   /** Client-generated id (desktop sync keeps ids identical across replicas). */
   assetId?: string
   sha256?: string
+  /** Send the file in parts that can be resumed (P-5); the answer then carries `multipart` and no single-PUT url. */
+  multipart?: boolean
 }
 
 export interface UploadTicket {
   assetId: string
   url: string
   method: 'PUT'
+  headers: Record<string, string>
+  /** A resumable upload (P-5): ask POST /api/uploads/:assetId/parts for part URLs, PUT each, then complete. */
+  multipart?: MultipartPlan
+}
+
+// Resumable uploads (P-5):
+// POST /api/uploads {..., multipart: true}           -> UploadTicket with `multipart` (resuming: send the same assetId)
+// GET  /api/uploads/:assetId/parts                   -> MultipartPlan (which parts have arrived)
+// POST /api/uploads/:assetId/parts {parts: number[]} -> {parts: UploadPartUrl[]} (each URL takes exactly `size` bytes)
+// POST /api/assets/:id/complete                      -> AssetRecord (joins the parts, then processing as usual)
+export interface MultipartPlan {
+  size: number
+  partSize: number
+  partCount: number
+  /** Part numbers (1-based) already in storage: a resumed upload sends only the others. */
+  done: number[]
+}
+
+export interface UploadPartUrl {
+  partNumber: number
+  url: string
+  /** Bytes of the file this part holds: [(partNumber - 1) * partSize, + size). */
+  size: number
   headers: Record<string, string>
 }
 

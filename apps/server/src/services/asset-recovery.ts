@@ -19,6 +19,7 @@ import { assets, jobs } from '../db/schema'
 import { log } from '../log'
 import { friendlyProcessingError } from '../media/process'
 import { emitAsset } from './assets'
+import { sweepUploadSessions } from './uploads'
 
 /** The PUT ticket is valid for an hour; give the browser another hour before calling it abandoned. */
 export const UPLOAD_ABANDONED_MS = 2 * 3600_000
@@ -89,6 +90,8 @@ export async function reconcileAssets(now = Date.now()): Promise<number> {
     .where(and(eq(assets.status, 'uploading'), lt(assets.updatedAt, now - UPLOAD_ABANDONED_MS)))
     .limit(200)
   for (const a of abandoned) if (await failAsset(a.id, ['uploading'], ASSET_ERRORS.uploadAbandoned)) n++
+  // resumable uploads nobody has carried on for a week: their parts leave storage (P-5)
+  await sweepUploadSessions(now).catch((err) => log.warn('upload session sweep failed', { err }))
 
   // a minute of grace covers the gap between the complete route marking a clip processing and enqueueing its job.
   // On a desktop, a clip synced down from the cloud is processed by the cloud (no job here ever will): its status

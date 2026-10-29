@@ -440,4 +440,18 @@ export const workspaceUsageSettings = pgTable('workspace_usage_settings', {
   updatedAt: ms('updated_at').notNull(),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings, authTokens }
+/**
+ * v17: a resumable multipart upload in progress (P-5): which storage upload holds the clip's parts, and how the file
+ * is cut into them. Kept until the upload completes or is given up on. Cloud-side only (never synced).
+ */
+export const uploadSessions = pgTable('upload_sessions', {
+  assetId: text('asset_id').primaryKey(),
+  key: text('key').notNull(),
+  uploadId: text('upload_id').notNull(),
+  partSize: doublePrecision('part_size').notNull(),
+  size: doublePrecision('size').notNull(),
+  createdAt: ms('created_at').notNull(),
+  updatedAt: ms('updated_at').notNull(),
+})
+
+export const schema = { uploadSessions, users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings, authTokens }

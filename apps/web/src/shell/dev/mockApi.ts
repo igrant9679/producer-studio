@@ -740,17 +740,42 @@ on('DELETE', '/api/projects/([^/]+)', (m) => {
   return json({ ok: true })
 })
 
+// resumable uploads in parts (P-5): which parts of each upload have arrived
+const MOCK_PART = 16 * 1024 * 1024
+const mockParts = new Map<string, Set<number>>()
+const mockPlan = (id: string, size: number) => ({ size, partSize: MOCK_PART, partCount: Math.max(1, Math.ceil(size / MOCK_PART)), done: [...(mockParts.get(id) ?? [])].sort((x, y) => x - y) })
 on('POST', '/api/uploads', async (_m, _q, b) => {
   await delay(150)
   const denied = editorOnly(String(b.workspaceId))
   if (denied) return denied
+  // the same upload again (a resume): its parts so far
+  const again = b.assetId ? assets.find((x) => x.asset.id === b.assetId) : undefined
+  if (again && again.status !== 'uploading') return fail(409, 'This asset already exists', 'conflict')
+  if (again && b.multipart) return json({ assetId: again.asset.id, url: `/api/uploads/${again.asset.id}/parts`, method: 'PUT', headers: {}, multipart: mockPlan(again.asset.id, Number(b.size)) })
   const mime = String(b.mime)
   const kind = mime.startsWith('audio') ? 'audio' : mime.startsWith('image') ? 'image' : 'video'
   const a = mkAsset(String(b.workspaceId), kind, String(b.filename), 'upload', { sizeBytes: Number(b.size), duration: kind === 'image' ? undefined : 45 + Math.round(Math.random() * 120) }, 0, seq)
   a.status = 'uploading'
   a.createdAt = Date.now()
   assets.unshift(a)
+  if (b.multipart) return json({ assetId: a.asset.id, url: `/api/uploads/${a.asset.id}/parts`, method: 'PUT', headers: {}, multipart: mockPlan(a.asset.id, Number(b.size)) })
   return json({ assetId: a.asset.id, url: `/api/__mock_upload/${a.asset.id}`, method: 'PUT', headers: {} })
+})
+const uploadingAsset = (id: string) => {
+  const a = assets.find((x) => x.asset.id === id)
+  if (!a) return fail(404, 'Asset not found', 'not_found')
+  return editorOnly(a.workspaceId) ?? (a.status === 'uploading' ? a : fail(409, 'This upload has already been completed', 'conflict'))
+}
+on('GET', '/api/uploads/([^/]+)/parts', (m) => {
+  const a = uploadingAsset(m[1])
+  return a instanceof Response ? a : json(mockPlan(a.asset.id, a.asset.sizeBytes ?? 0))
+})
+on('POST', '/api/uploads/([^/]+)/parts', (m, _q, b) => {
+  const a = uploadingAsset(m[1])
+  if (a instanceof Response) return a
+  const plan = mockPlan(a.asset.id, a.asset.sizeBytes ?? 0)
+  const parts = (b.parts as number[]).map((n) => ({ partNumber: n, url: `/api/__mock_upload/${a.asset.id}?part=${n}`, size: Math.min(plan.partSize, plan.size - (n - 1) * plan.partSize), headers: {} }))
+  return json({ parts })
 })
 on('POST', '/api/assets/([^/]+)/complete', (m) => {
   const a = assets.find((x) => x.asset.id === m[1])
@@ -1579,8 +1604,9 @@ function rewriteMedia(url: string): string {
         this.upload.onprogress?.call(this, new ProgressEvent('progress', { lengthComputable: true, loaded, total }))
         if (i < steps) setTimeout(tick, 120)
         else {
-          const id = this.mockUrl!.split('/').pop()!
+          const [id, part] = this.mockUrl!.split('/api/__mock_upload/')[1].split('?part=')
           const a = assets.find((x) => x.asset.id === id)
+          if (part) mockParts.set(id, (mockParts.get(id) ?? new Set()).add(Number(part)))
           if (a && body instanceof File) a.demo = body.type.startsWith('video') || body.type.startsWith('image') || body.type.startsWith('audio') ? URL.createObjectURL(body) : a.demo
           if (a && body instanceof File && body.type.startsWith('image')) a.demoThumb = a.demo
           this._status = 200

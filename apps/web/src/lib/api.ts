@@ -53,6 +53,8 @@ import type {
   Workspace,
   WriteRequest,
 } from '@producer/core'
+import type { MultipartPlan } from '@producer/core'
+import { MULTIPART_FROM_BYTES, rememberUpload, resumeKey, savedUpload, sendParts, UploadPausedError, xhrTransport } from './multipartUpload'
 
 export class HttpError extends Error {
   status: number
@@ -317,6 +319,8 @@ export const api = {
   },
   /** Upload a File: ticket -> PUT bytes -> complete. onProgress 0..1. */
   async upload(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
+    // big files go up in parts that survive a drop or a reload (P-5)
+    if (file.size >= MULTIPART_FROM_BYTES) return uploadResumable(workspaceId, file, onProgress)
     const ticket = await req<{ assetId: string; url: string; method: 'PUT'; headers: Record<string, string> }>('POST', '/uploads', {
       workspaceId,
       filename: file.name,
@@ -489,6 +493,41 @@ export function subscribeEvents(
 /** First wait before reopening a live-update stream the server closed; doubles up to the max. */
 export const LIVE_RETRY_MS = 2000
 export const LIVE_RETRY_MAX_MS = 60_000
+
+/**
+ * A big file in parts (P-5). The same file chosen again after a drop or a reload (this browser remembers it) carries on
+ * from the parts already in storage; an upload that stops part way keeps them and says so.
+ */
+async function uploadResumable(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
+  const key = resumeKey(workspaceId, file)
+  const ask = (assetId?: string) =>
+    req<UploadTicket>('POST', '/uploads', { workspaceId, filename: file.name, mime: file.type || 'application/octet-stream', size: file.size, multipart: true, ...(assetId ? { assetId } : {}) })
+  const saved = savedUpload(key)
+  let ticket: UploadTicket
+  try {
+    ticket = await ask(saved)
+  } catch (e) {
+    // that upload finished, or is no longer this space's: start a new one
+    if (!saved || !(e instanceof HttpError) || (e.status !== 409 && e.status !== 404)) throw e
+    rememberUpload(key, undefined)
+    ticket = await ask()
+  }
+  if (!ticket.multipart) throw new Error(`${file.name}: this server can't take uploads in parts`)
+  rememberUpload(key, ticket.assetId)
+  try {
+    await sendParts(file, ticket as UploadTicket & { multipart: MultipartPlan }, xhrTransport((m, p, b) => req(m, p, b)), { onProgress })
+  } catch (e) {
+    if (!(e instanceof UploadPausedError)) {
+      // refused for good: the parts go, and the clip says why
+      rememberUpload(key, undefined)
+      await req('POST', `/assets/${ticket.assetId}/abort`, { reason: e instanceof Error ? e.message : String(e) }).catch(() => undefined)
+    }
+    throw new Error(`${file.name}: upload failed — ${e instanceof Error ? e.message : String(e)}`)
+  }
+  const rec = await req<AssetRecord>('POST', `/assets/${ticket.assetId}/complete`)
+  rememberUpload(key, undefined)
+  return rec
+}
 
 /** Poll/await a job until it finishes (uses GET; SSE listeners update UI in parallel). */
 export async function waitForJob<R>(id: string, onUpdate?: (j: Job<R>) => void, intervalMs = 1000): Promise<Job<R>> {

@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 17
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -580,6 +580,25 @@ CREATE INDEX IF NOT EXISTS jobs_ws_status_idx ON jobs(workspace_id, status);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at double precision;
 `
 
+/**
+ * v17 — the media pipeline (P-5, P-21): resumable multipart uploads in progress (which storage upload holds a clip's
+ * parts), and an index for finding an identical file already processed in the same space (same sha256), so an upload
+ * of it reuses that clip's proxy, thumbnails and waveform instead of making them again.
+ */
+export const DDL_V17 = `
+CREATE TABLE IF NOT EXISTS upload_sessions (
+  asset_id text PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+  key text NOT NULL,
+  upload_id text NOT NULL,
+  part_size double precision NOT NULL,
+  size double precision NOT NULL,
+  created_at double precision NOT NULL,
+  updated_at double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS upload_sessions_updated_idx ON upload_sessions(updated_at);
+CREATE INDEX IF NOT EXISTS assets_ws_sha256_idx ON assets(workspace_id, sha256) WHERE sha256 IS NOT NULL;
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -599,4 +618,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [13, DDL_V13],
   [14, DDL_V14],
   [15, DDL_V15],
+  [17, DDL_V17],
 ]

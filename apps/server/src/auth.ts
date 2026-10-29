@@ -137,6 +137,9 @@ const DEVICE_ROUTES: Array<[string, RegExp]> = [
   ['GET|PUT|PATCH', /^\/api\/projects\/[^/]+$/],
   ['POST', /^\/api\/uploads$/],
   ['PUT', /^\/api\/uploads\/[^/]+\/data$/],
+  // resumable uploads in parts (P-5)
+  ['GET|POST', /^\/api\/uploads\/[^/]+\/parts$/],
+  ['PUT', /^\/api\/uploads\/[^/]+\/parts\/\d+$/],
   ['GET', /^\/api\/assets$/],
   ['GET|PATCH|DELETE', /^\/api\/assets\/[^/]+$/],
   ['POST', /^\/api\/assets\/[^/]+\/(complete|abort)$/],
