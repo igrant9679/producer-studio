@@ -7,6 +7,8 @@ import path from 'node:path'
 import { BrowserWindow, Menu, type MenuItemConstructorOptions, Tray, app, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron'
 import { isDev } from './paths'
 import { dataDirProblem, defaultDataDir, moveDataDir, moveProblem, writeSettings } from './datadir'
+import { backupDatabase, backupsDir, dbDir, listBackups, needsBackup } from './backup'
+import { readBuildInfo } from './build-info'
 import { setupDictation } from './dictation'
 import { fetchToolReport, toolsWarning } from './health'
 import { deviceKey, keystoreProblem, resetDeviceKey } from './keystore'
@@ -38,6 +40,11 @@ if (!app.requestSingleInstanceLock()) {
   const shellFile = shellSettingsFile(app.getPath('userData'))
   let shellSettings = readShellSettings(shellFile)
   let tray: Tray | undefined
+  /** What this build is (dist/build-info.json): schema version, signed, update feed. */
+  const build = readBuildInfo(__dirname, app.getVersion())
+  const startInfo = { version: app.getVersion(), ...(build.schemaVersion ? { schema: build.schemaVersion } : {}) }
+  /** The data folder whose database was checked for a backup this launch. */
+  let backupChecked = ''
   // window + taskbar icon (packaged: inside app.asar next to dist/; dev: apps/desktop/assets)
   const appIcon = [path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'), path.join(__dirname, '..', 'assets', 'icon.png')].find((p) => fs.existsSync(p))
 
@@ -210,16 +217,52 @@ if (!app.requestSingleInstanceLock()) {
     }
   }
 
+  /**
+   * Before the first start of a newer engine (the one that migrates the database), copy the database aside (D-10).
+   * A backup that can't be made is said, with the choice to go on without one. False when the person chose Quit.
+   */
+  async function backupBeforeStart(dataDir: string): Promise<boolean> {
+    if (backupChecked === dataDir) return true
+    backupChecked = dataDir
+    const last = shellSettings.lastStart
+    if (!needsBackup(last, startInfo, fs.existsSync(dbDir(dataDir)))) return true
+    try {
+      const b = backupDatabase(dataDir, { label: `from-${last?.version ?? 'earlier'}${last?.schema ? `-schema${last.schema}` : ''}` })
+      logLine(`database backed up before starting ${startInfo.version} (schema ${startInfo.schema ?? '?'}): ${b?.dir}`)
+      return true
+    } catch (err) {
+      logLine(`database backup failed: ${(err as Error).message}`)
+      const r = await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Producer Studio',
+        message: 'Producer Studio couldn’t back up its database before updating it.',
+        detail: `${(err as Error).message}\n\nThis version updates the database when it starts. You can go on without a backup, or quit, free some space on the drive and start again.`,
+        buttons: ['Quit', 'Continue without a backup'],
+        defaultId: 0,
+        cancelId: 0,
+      })
+      if (r.response === 0) {
+        quitting = true
+        app.quit()
+        return false
+      }
+      return true
+    }
+  }
+
   async function startServer(): Promise<boolean> {
     for (;;) {
       if (!(await checkDataDir())) return false
       server ??= new ServerProcess()
       server.refreshPaths()
+      if (!(await backupBeforeStart(server.paths.dataDir))) return false
       try {
         await server.start()
         setLocalOrigin(server.origin)
         await setSessionCookie()
         logLine(`server ready at ${server.origin}`)
+        // this database is now at this build's schema: the next backup comes before a newer one
+        setShell({ lastStart: startInfo })
         return true
       } catch (err) {
         logLine(`server failed to start: ${(err as Error).message}`)
@@ -497,7 +540,17 @@ if (!app.requestSingleInstanceLock()) {
   }
 
   // ---- IPC: the desktop app's own settings (Settings → This computer) ----
-  const appSettingsView = () => ({ keepRunning: shellSettings.keepRunning, updateCheck: shellSettings.updateCheck, crashReports: shellSettings.crashReports, tray: !!tray })
+  const appSettingsView = () => {
+    const dataDir = server?.paths.dataDir
+    return {
+      keepRunning: shellSettings.keepRunning,
+      updateCheck: shellSettings.updateCheck,
+      crashReports: shellSettings.crashReports,
+      tray: !!tray,
+      // database copies made before updates (D-10); the folder can be shown (it is inside the data folder)
+      backups: dataDir ? { folder: backupsDir(dataDir), items: listBackups(dataDir).map(({ name, at, bytes }) => ({ name, at, bytes })) } : undefined,
+    }
+  }
   ipcMain.handle('desktop:app-settings', (e) => (isLocal(e.senderFrame?.url ?? '') ? appSettingsView() : null))
   ipcMain.handle('desktop:set-app-settings', (e, raw: unknown) => {
     if (!isLocal(e.senderFrame?.url ?? '')) return null

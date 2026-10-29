@@ -50,6 +50,25 @@ describe('keep running in the tray (D-2)', () => {
     expect((await screen.findByRole('alert')).textContent).toMatch(/couldn’t save that setting/)
   })
 
+  it('lists the database backups, says how to restore one, and shows their folder (D-10)', async () => {
+    const showItemInFolder = vi.fn(async () => true)
+    bridge({ ...view, backups: { folder: 'C:\\data\\backups', items: [{ name: 'db-20261028T090507Z-from-0.6.1-schema15', at: Date.now() - 3_600_000, bytes: 52_428_800 }] } })
+    ;(window as unknown as { producerDesktop: Record<string, unknown> }).producerDesktop.showItemInFolder = showItemInFolder
+    render(<DesktopAppSettings />)
+    expect(await screen.findByText('Database backups')).toBeTruthy()
+    expect(screen.getByText(/1 kept · newest 1 h ago/)).toBeTruthy()
+    expect(screen.getByText(/copy the backup’s “pg” folder in its place/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Show backups' }))
+    expect(showItemInFolder).toHaveBeenCalledWith('C:\\data\\backups')
+  })
+
+  it('with no backup yet it says so and offers no folder', async () => {
+    bridge({ ...view, backups: { folder: 'C:\\data\\backups', items: [] } })
+    render(<DesktopAppSettings />)
+    expect(await screen.findByText(/None yet\./)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Show backups' })).toBeNull()
+  })
+
   it('an older desktop app without these settings shows only the tools', async () => {
     ;(window as { producerDesktop?: unknown }).producerDesktop = { version: '0.6.1', platform: 'win32' }
     render(<DesktopAppSettings />)

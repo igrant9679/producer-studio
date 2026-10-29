@@ -1,12 +1,14 @@
-// Settings → This computer (desktop app only): the bundled tools' health (D-13).
+// Settings → This computer (desktop app only): keep running in the tray (D-2), database backups (D-10) and the
+// bundled tools' health (D-13).
 import type { ToolCheck, ToolHealth } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, RefreshCw, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FolderOpen, RefreshCw, XCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { announce } from '../../lib/announce'
 import { HttpError } from '../../lib/api'
 import { sysFetch } from '../system'
 import { Spinner, useAsync } from '../ui'
+import { formatBytes, relativeTime } from '../util'
 
 export const toolsApi = {
   health: (refresh = false) => sysFetch<ToolHealth>('GET', `/tools/health${refresh ? '?refresh=1' : ''}`),
@@ -76,6 +78,8 @@ export interface AppSettingsView {
   crashReports: boolean
   /** The app has a tray icon (some Linux desktops have none: closing the window then quits). */
   tray: boolean
+  /** Database copies made before an update changed it (D-10), newest first. */
+  backups?: { folder: string; items: Array<{ name: string; at: number; bytes: number }> }
 }
 interface AppBridge {
   settings(): Promise<AppSettingsView | null>
@@ -108,6 +112,31 @@ function RunningSettings({ view, onChange }: { view: AppSettingsView; onChange: 
   )
 }
 
+/** Copies of the database made before an update changed it, and how to go back to one (D-10). */
+function BackupSettings({ backups }: { backups: NonNullable<AppSettingsView['backups']> }) {
+  const newest = backups.items[0]
+  const show = (window as unknown as { producerDesktop?: { showItemInFolder?: (p: string) => Promise<boolean> } }).producerDesktop?.showItemInFolder
+  return (
+    <div className="ps-set-row">
+      <div>
+        <strong>Database backups</strong>
+        <span>
+          {newest
+            ? `${backups.items.length} kept · newest ${relativeTime(newest.at)} (${formatBytes(newest.bytes)}). `
+            : 'None yet. '}
+          Before an update changes the database, a copy of it is kept (the newest 3; media isn’t copied). To go back to one, quit Producer Studio, rename the
+          data folder’s “pg” folder and copy the backup’s “pg” folder in its place.
+        </span>
+      </div>
+      {newest && show && (
+        <button className="btn sm" onClick={() => void show(backups.folder)}>
+          <FolderOpen size={13} /> Show backups
+        </button>
+      )}
+    </div>
+  )
+}
+
 /** The "This computer" section of Settings in the desktop app. */
 export function DesktopAppSettings() {
   const bridge = appBridge()
@@ -132,6 +161,7 @@ export function DesktopAppSettings() {
   return (
     <div>
       {view && <RunningSettings view={view} onChange={(p) => void change(p)} />}
+      {view?.backups && <BackupSettings backups={view.backups} />}
       {error && <div className="ps-test bad" role="alert"><AlertTriangle size={14} /> {error}</div>}
       <div style={{ height: view ? 16 : 0 }} />
       <ToolHealthPanel />
