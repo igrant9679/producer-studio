@@ -20,7 +20,7 @@ import { runAssistant } from '../ai/assistant'
 import { requireProvider } from '../ai/provider'
 import { ensureTranscript, synthesizeToAsset } from '../ai/speech'
 import { tts, validVoice } from '../ai/tts'
-import { whisperAvailable, whisperLanguage } from '../ai/whisper'
+import { transcriptionInfo, whisperAvailable, whisperLanguage } from '../ai/whisper'
 import { enqueueRelay } from '../services/voice'
 import { generationCapabilities } from '../ai/generate'
 import { type AssembleJobInput, MAX_AI_CLIPS, allowedVisualKinds, editedSinceAssembly, saveOnLatest, timelineFingerprint } from '../ai/produce'
@@ -42,6 +42,12 @@ aiRoutes.post('/transcribe', async (c) => {
   await assertQueueRoom(a.workspaceId)
   const j = await enqueue('ai.transcribe', b, { workspaceId: a.workspaceId, userId: u.id, projectId: a.projectId, message: `Transcribing ${a.name}` })
   return c.json(jobDto(j))
+})
+
+// What transcription here can do: the language picker's choices and the sentence saying which model is installed (P-20).
+aiRoutes.get('/transcription', (c) => {
+  requireUser(c)
+  return c.json(transcriptionInfo())
 })
 
 aiRoutes.post('/tts', async (c) => {

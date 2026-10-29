@@ -18,7 +18,7 @@ import { inlineContext } from '../jobs/worker'
 import * as proc from '../media/proc'
 import { processAsset } from '../media/process'
 import { createAssetFromFile, loadAsset } from '../services/assets'
-import { type Client, setup, signup } from './helpers'
+import { Client, setup, signup } from './helpers'
 
 let client: Client
 let workspaceId = ''
@@ -156,6 +156,27 @@ describe('transcription languages (PIP-31)', () => {
     const res = await client.json('POST', '/api/ai/transcribe', { assetId: row.id, language: 'fr' })
     expect(res.status).toBe(400)
     expect(res.body.error).toMatch(/only understands English/)
+  })
+
+  it('the app is told which model is installed and what it can hear, for the language picker (P-20)', async () => {
+    useModel('ggml-small.en.bin')
+    const en = (await client.json('GET', '/api/ai/transcription')).body
+    expect(en).toMatchObject({ available: true, model: 'ggml-small.en.bin', multilingual: false, detect: false, languages: [{ code: 'en', name: 'English' }] })
+    expect(en.summary).toMatch(/English only.*multilingual model/)
+    useModel('ggml-small.bin')
+    const multi = (await client.json('GET', '/api/ai/transcription')).body
+    expect(multi).toMatchObject({ model: 'ggml-small.bin', multilingual: true, detect: true })
+    expect(multi.languages[0]).toEqual({ code: 'en', name: 'English' })
+    expect(multi.languages).toEqual(expect.arrayContaining([{ code: 'fr', name: 'French' }, { code: 'ja', name: 'Japanese' }]))
+    expect(multi.languages.length).toBeGreaterThan(90)
+    expect(multi.summary).toMatch(/about 100 languages/)
+    // distil-whisper models only hear English, whatever their name says
+    useModel('ggml-distil-large-v3.bin')
+    expect((await client.json('GET', '/api/ai/transcription')).body.multilingual).toBe(false)
+    ctx().config.whisperModel = path.join(dir, 'missing.bin')
+    expect((await client.json('GET', '/api/ai/transcription')).body).toMatchObject({ available: false, summary: expect.stringMatching(/isn’t set up/) })
+    // signed-in people only
+    expect((await new Client((await setup()).app).json('GET', '/api/ai/transcription')).status).toBe(401)
   })
 
   it('whisper is told the language asked for, or to detect it, and the transcript says which it was', async () => {

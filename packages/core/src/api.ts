@@ -380,6 +380,8 @@ export interface Job<R = unknown> {
 
 // ---- AI ----
 // POST /api/ai/transcribe  {assetId, language?}                     -> Job<{assetId, transcript: Transcript}>
+//      language: a code from TranscriptionInfo.languages, or "auto" / nothing (detected on a multilingual model)
+// GET  /api/ai/transcription                                       -> TranscriptionInfo (the model, what it can hear)
 // POST /api/ai/tts         TtsRequest                              -> Job<{asset: AssetRecord, duration: number}>
 // GET  /api/ai/voices                                              -> Voice[]
 // GET  /api/ai/voices/:id/sample                                   -> audio/wav (cached sample line)
@@ -387,6 +389,21 @@ export interface Job<R = unknown> {
 // POST /api/ai/produce/script   ProduceScriptRequest               -> Job<{script: {scenes: ScriptScene[]}}>
 // POST /api/ai/produce/assemble {projectId, scenes: ScriptScene[]} -> Job<{version: number}>  (server writes the project)
 // POST /api/ai/assistant   AssistantRequest                        -> text/event-stream: `text` {delta}, `tool` {name, summary}, `done` AssistantResult
+/** What transcription on this server can do (P-20). */
+export interface TranscriptionInfo {
+  available: boolean
+  /** The speech model installed (its file name). */
+  model?: string
+  /** It hears languages other than English. */
+  multilingual: boolean
+  /** It can tell which language is spoken ("auto"). */
+  detect: boolean
+  /** Languages it can be asked for, English first. */
+  languages: Array<{ code: string; name: string }>
+  /** One sentence for people: what it can do, and what's needed for more. */
+  summary: string
+}
+
 export interface TtsRequest {
   workspaceId: string
   projectId?: string

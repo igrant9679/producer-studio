@@ -53,7 +53,7 @@ import type {
   Workspace,
   WriteRequest,
 } from '@producer/core'
-import type { MultipartPlan } from '@producer/core'
+import type { MultipartPlan, TranscriptionInfo } from '@producer/core'
 import { MULTIPART_FROM_BYTES, rememberUpload, resumeKey, savedUpload, sendParts, UploadPausedError, xhrTransport } from './multipartUpload'
 
 export class HttpError extends Error {
@@ -362,6 +362,8 @@ export const api = {
 
   // ai
   transcribe: (assetId: string, language?: string) => reqOnce<Job<{ assetId: string; transcript: Transcript }>>('POST', '/ai/transcribe', { assetId, language }),
+  /** What transcription on this server can do: its model, and the languages it can be asked for (P-20). */
+  transcription: () => req<TranscriptionInfo>('GET', '/ai/transcription'),
   tts: (body: TtsRequest) => reqOnce<Job<{ asset: AssetRecord; duration: number }>>('POST', '/ai/tts', body),
   voices: (workspaceId?: string) => req<Voice[]>('GET', `/ai/voices${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   voiceSampleUrl: (id: string) => `/api/ai/voices/${encodeURIComponent(id)}/sample`,

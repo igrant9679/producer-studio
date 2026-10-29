@@ -12,6 +12,7 @@ import { toast, toastError } from '../../lib/toast'
 import { viewOnlyTip } from '../../shell/ui'
 import { LOCKED_NOTE, captionsAtLeastOneFrame } from '../actions'
 import { Empty } from '../controls'
+import { TranscribeLanguage, transcribeLanguage } from './TranscribeLanguage'
 import { useEditor } from '../store'
 import './captions.css'
 
@@ -409,7 +410,7 @@ export function TranscriptPanel() {
     try {
       for (let i = 0; i < missingIds.length; i++) {
         setBusy(`Transcribing ${i + 1}/${missingIds.length}…`)
-        const job = await api.transcribe(missingIds[i])
+        const job = await api.transcribe(missingIds[i], transcribeLanguage())
         const done = await waitForJob<{ assetId: string; transcript: TranscriptT }>(job.id)
         // a media record, not an edit: undo never takes it away again
         if (done.result?.transcript) useEditor.getState().updateMedia({ id: missingIds[i], transcript: done.result.transcript })
@@ -541,6 +542,7 @@ export function TranscriptPanel() {
       <p className="ed-note" style={{ marginTop: 0 }}>
         {selection.length ? 'Editing the selected clip.' : 'Editing the main track.'} Click a word (or move with <span className="kbd">←</span> <span className="kbd">→</span>) to jump to it; drag or Shift to select, then <span className="kbd">Delete</span> cuts it from the video. Cut words stay struck through: select them and press <span className="kbd">R</span> to restore.
       </p>
+      {missingIds.length > 0 && !demo && <TranscribeLanguage disabled={!!busy} />}
       {missingIds.length > 0 && (
         <button className="btn sm" style={{ width: '100%', marginBottom: 10 }} onClick={transcribe} disabled={!!busy}>
           {busy ? <Loader2 size={13} className="spin" /> : <FileText size={13} />} {busy ?? `Transcribe ${missingIds.length} clip${missingIds.length > 1 ? 's' : ''}`}

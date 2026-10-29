@@ -966,6 +966,10 @@ on('POST', '/api/jobs/([^/]+)/cancel', (m) => {
 })
 
 const wsOfAsset = (id: string) => assets.find((a) => a.asset.id === id)?.workspaceId ?? 'ws_personal'
+// like production today: the English-only model (P-20)
+on('GET', '/api/ai/transcription', () =>
+  json({ available: true, model: 'ggml-small.en.bin', multilingual: false, detect: false, languages: [{ code: 'en', name: 'English' }], summary: 'The speech model (ggml-small.en.bin) understands English only: speech in another language comes out as English-sounding nonsense. A multilingual model (such as ggml-small.bin) is needed for other languages.' }),
+)
 on('POST', '/api/ai/transcribe', (_m, _q, b) => {
   const id = String(b.assetId)
   const j = startJob('ai.transcribe', wsOfAsset(id), 2800, {

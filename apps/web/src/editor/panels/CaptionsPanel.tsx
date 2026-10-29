@@ -38,6 +38,7 @@ import { captionsAtLeastOneFrame } from '../actions'
 import { Empty, NumberInput, Toggle } from '../controls'
 import { CaptionStyleEditor } from '../PropertiesPanel'
 import { useEditor } from '../store'
+import { transcribeLanguage } from './TranscribeLanguage'
 import './captions.css'
 
 const FILES = '.srt,.vtt,.ass,.ssa,.lrc,text/vtt,text/plain'
@@ -236,7 +237,7 @@ export function CaptionsPanel() {
         for (let i = 0; i < missing.length; i++) {
           const id = missing[i]
           setBusy(`Transcribing ${i + 1} of ${missing.length}…`)
-          const job = await api.transcribe(id)
+          const job = await api.transcribe(id, transcribeLanguage())
           const done = await waitForJob<{ assetId: string; transcript: Transcript }>(job.id, (j) => setBusy(`Transcribing ${i + 1} of ${missing.length}… ${j.progress > 0 ? Math.round(j.progress * 100) + '%' : ''}`))
           const tr = done.result?.transcript
           // a media record: it joins the project as it is now, outside undo

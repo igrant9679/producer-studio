@@ -1,7 +1,7 @@
 // Speech-to-text with the whisper.cpp CLI (word timings from the full JSON token offsets).
 import fs from 'node:fs'
 import path from 'node:path'
-import type { Transcript, TranscriptSegment } from '@producer/core'
+import type { Transcript, TranscriptSegment, TranscriptionInfo } from '@producer/core'
 import { ctx } from '../context'
 import { ffmpeg, runOk } from '../media/proc'
 import { probe } from '../media/process'
@@ -31,9 +31,32 @@ const WHISPER_LANGUAGES = new Set(
   'en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue'.split(' '),
 )
 
-/** English-only models (ggml-small.en.bin, ggml-base.en-q5_1.bin) hear every language as English: they ignore `-l`. */
+/**
+ * English-only models (ggml-small.en.bin, ggml-base.en-q5_1.bin, the distil-whisper ones) hear every language as
+ * English: they ignore `-l`.
+ */
 export function whisperMultilingual(model = ctx().config.whisperModel ?? ''): boolean {
-  return !/\.en(?:[._-]|$)/i.test(path.basename(model).replace(/\.bin$/i, ''))
+  const name = path.basename(model).replace(/\.bin$/i, '')
+  return !/\.en(?:[._-]|$)/i.test(name) && !/distil/i.test(name)
+}
+
+/**
+ * What transcription on this server can do (P-20), for the language picker and for saying so: the model installed,
+ * whether it hears more than English (and can tell which language is spoken), the languages it can be asked for.
+ */
+export function transcriptionInfo(): TranscriptionInfo {
+  const model = ctx().config.whisperModel
+  const available = whisperAvailable()
+  const multilingual = available && whisperMultilingual(model)
+  const codes = multilingual ? [...WHISPER_LANGUAGES] : ['en']
+  const languages = codes.map((code) => ({ code, name: languageName(code) })).sort((a, b) => (a.code === 'en' ? -1 : b.code === 'en' ? 1 : a.name.localeCompare(b.name)))
+  const file = model ? path.basename(model) : undefined
+  const summary = !available
+    ? 'Transcription isn’t set up on this server.'
+    : multilingual
+      ? `The speech model (${file}) understands about 100 languages and can tell which one is spoken.`
+      : `The speech model (${file}) understands English only: speech in another language comes out as English-sounding nonsense. A multilingual model (such as ggml-small.bin) is needed for other languages.`
+  return { available, ...(file ? { model: file } : {}), multilingual, detect: multilingual, languages, summary }
 }
 
 function languageName(code: string): string {
