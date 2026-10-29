@@ -135,6 +135,24 @@ describe('resumable uploads in parts (P-5)', () => {
     expect(await ctx().db.select().from(uploadSessions).where(eq(uploadSessions.assetId, old.body.assetId))).toEqual([])
   })
 
+  it('an upload left part way for hours says it can carry on, and does, with the parts already sent', async () => {
+    const r = await start(A.client)
+    const id = r.body.assetId
+    const [p1] = (await A.client.json<{ parts: UploadPartUrl[] }>('POST', `/api/uploads/${id}/parts`, { parts: [1] })).body.parts
+    await A.client.req('PUT', p1.url, bytes.subarray(0, MULTIPART_MIN_PART), p1.headers)
+    // three hours later the reconciler calls it stopped
+    await ctx().db.update(assets).set({ updatedAt: Date.now() - 3 * 3600_000 }).where(eq(assets.id, id))
+    await reconcileAssets()
+    const stopped = (await A.client.json('GET', `/api/assets/${id}`)).body
+    expect(stopped.status).toBe('error')
+    expect(stopped.error).toMatch(/stopped part way.*same file again/)
+    // the same file chosen again: the part is still there
+    const again = await start(A.client, { assetId: id })
+    expect(again.status).toBe(200)
+    expect(again.body.multipart.done).toEqual([1])
+    expect((await A.client.json('GET', `/api/assets/${id}`)).body.status).toBe('uploading')
+  })
+
   it('a client that sends in one piece still can', async () => {
     const r = await A.client.json<UploadTicket>('POST', '/api/uploads', { workspaceId: A.workspaceId, filename: 'small.mov', mime: 'video/quicktime', size: 1000 })
     expect(r.body.multipart).toBeUndefined()

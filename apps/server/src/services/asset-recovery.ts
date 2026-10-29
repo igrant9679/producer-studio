@@ -15,7 +15,7 @@
 // jobs/worker.ts); it then fails its clips with the reason.
 import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import { ctx } from '../context'
-import { assets, jobs } from '../db/schema'
+import { assets, jobs, uploadSessions } from '../db/schema'
 import { log } from '../log'
 import { friendlyProcessingError } from '../media/process'
 import { emitAsset } from './assets'
@@ -26,6 +26,7 @@ export const UPLOAD_ABANDONED_MS = 2 * 3600_000
 
 export const ASSET_ERRORS = {
   uploadAbandoned: "The upload didn't finish — the file never reached storage. Upload it again.",
+  uploadPaused: 'The upload stopped part way. Choose the same file again in the same browser within a week to carry on where it stopped.',
   workerGaveUp:
     "Processing kept stopping before it finished — the file may be too large, or in a format the server can't convert. Retry, or convert it to MP4 and upload it again.",
   cancelled: 'Processing was cancelled before it finished. Retry to process it again.',
@@ -89,7 +90,9 @@ export async function reconcileAssets(now = Date.now()): Promise<number> {
     .from(assets)
     .where(and(eq(assets.status, 'uploading'), lt(assets.updatedAt, now - UPLOAD_ABANDONED_MS)))
     .limit(200)
-  for (const a of abandoned) if (await failAsset(a.id, ['uploading'], ASSET_ERRORS.uploadAbandoned)) n++
+  // an upload in parts keeps what arrived (P-5): it can carry on, so the clip says how
+  const resumable = new Set(abandoned.length ? (await db.select({ id: uploadSessions.assetId }).from(uploadSessions).where(inArray(uploadSessions.assetId, abandoned.map((a) => a.id)))).map((r) => r.id) : [])
+  for (const a of abandoned) if (await failAsset(a.id, ['uploading'], resumable.has(a.id) ? ASSET_ERRORS.uploadPaused : ASSET_ERRORS.uploadAbandoned)) n++
   // resumable uploads nobody has carried on for a week: their parts leave storage (P-5)
   await sweepUploadSessions(now).catch((err) => log.warn('upload session sweep failed', { err }))
 
