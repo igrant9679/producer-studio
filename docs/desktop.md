@@ -46,15 +46,21 @@ commit (`resolve/<sha>`), never `main`. Chrome for Testing publishes no checksum
 version only. To move a pin, take the new sha256 from the GitHub release API (asset `digest`) or Hugging Face's
 `paths-info` API (`lfs.oid`) — the comment in `fetch-tools.mjs` has the calls; no large download is needed.
 
-## Code signing (hooks in place, unsigned today)
+## Code signing (ready, unsigned until the owner sets it up)
 
-electron-builder signs automatically when these are present in the environment:
+`npm run dist` reads how to sign from the environment (`scripts/release.mjs` → `releaseConfig()`, laid over
+`electron-builder.yml` by `scripts/dist.mjs`) and prints what it will do (`desktop build: …`):
 
-- `CSC_LINK` (path, https URL or base64 of a `.pfx`) + `CSC_KEY_PASSWORD` — or `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`.
-- Azure Trusted Signing: add `win.azureSignOptions` (endpoint, certificate profile, account) to `electron-builder.yml`
-  and provide `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`.
+| Set in the environment | Result |
+|---|---|
+| nothing | Unsigned, exactly as before (SmartScreen warns on first run). `build-info.json` says `signed: false`. |
+| **Azure Trusted Signing**: `AZURE_TRUSTED_SIGNING_ENDPOINT` (e.g. `https://weu.codesigning.azure.net`), `AZURE_TRUSTED_SIGNING_ACCOUNT` (the Trusted Signing account name), `AZURE_TRUSTED_SIGNING_PROFILE` (the certificate profile), and the Entra ID app that may sign: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Optional `AZURE_TRUSTED_SIGNING_PUBLISHER` (default `Producer Studio`): must match the certificate's subject exactly. | The app, its executables and the installer are signed through `Invoke-TrustedSigning` (electron-builder installs the PowerShell module on first use; Windows build machines only). A signing failure fails the build (`forceCodeSigning`), never an unsigned installer. Only some of these six set stops the build and names the missing ones. |
+| a `.pfx`: `CSC_LINK` (path, https URL or base64) + `CSC_KEY_PASSWORD`, or `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` | Signed with that certificate (electron-builder's own), also required to succeed. |
 
-Without them the build logs "signing" steps but produces unsigned binaries (SmartScreen will warn on first run).
+Owner setup for Azure Trusted Signing: a Trusted Signing account and a public-trust certificate profile (identity
+validation of the organisation), an Entra ID app registration with a client secret, given the "Trusted Signing
+Certificate Profile Signer" role on the profile. Put the six values in the CI secrets. The secrets never go into
+the build config; the signing module reads them from the environment.
 
 ## Security
 

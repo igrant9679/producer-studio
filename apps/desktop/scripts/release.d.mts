@@ -24,12 +24,33 @@ export interface Fuses {
 
 export const FUSES: Fuses
 
-export interface ReleaseConfig {
-  /** Merged over electron-builder.yml. */
-  config: { electronFuses: Fuses } & Record<string, unknown>
+export type Platform = 'win32' | 'linux' | 'darwin' | NodeJS.Platform
+
+export interface AzureSignOptions {
+  publisherName: string
+  endpoint: string
+  codeSigningAccountName: string
+  certificateProfileName: string
 }
 
-export function releaseConfig(): ReleaseConfig
+export interface ReleaseConfig {
+  /** Merged over electron-builder.yml. */
+  config: {
+    electronFuses: Fuses
+    win?: { azureSignOptions?: AzureSignOptions; forceCodeSigning?: boolean }
+    mac?: { notarize: boolean }
+  }
+  signed: boolean
+  notes: string[]
+  targets: string[]
+}
+
+export const AZURE_SIGNING: string[]
+export const AZURE_AUTH: string[]
+export function windowsSigning(env?: Record<string, string | undefined>): { mode: 'azure' | 'certificate' | 'none'; azureSignOptions?: AzureSignOptions; missing?: string[] }
+export function platformOf(args: string[], host: Platform): Platform
+export function targetsFor(platform: Platform, dir?: boolean): string[]
+export function releaseConfig(o?: { env?: Record<string, string | undefined>; platform?: Platform }): ReleaseConfig
 export function schemaVersionOf(migrateSource: string): number | undefined
 export function updateRepoOf(raw: unknown): string | undefined
 export function buildInfo(o: { version: string; migrateSource: string; env?: Record<string, string | undefined>; now?: number }): BuildInfo

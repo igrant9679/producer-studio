@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { FUSES, buildInfo, releaseConfig, schemaVersionOf, updateRepoOf } from '../../scripts/release.mjs'
+import { FUSES, buildInfo, releaseConfig, schemaVersionOf, updateRepoOf, windowsSigning } from '../../scripts/release.mjs'
 import { parseBuildInfo } from '../build-info'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -42,6 +42,49 @@ describe('Electron fuses (D-12)', () => {
         .filter((l) => !/^\s*(\/\/|\/?\*)/.test(l))
         .join('\n')
     for (const f of fs.readdirSync(src).filter((n) => n.endsWith('.ts'))) expect(code(f), f).not.toMatch(/NODE_OPTIONS|--inspect/)
+  })
+})
+
+describe('code signing from the environment (D-3)', () => {
+  const azure = {
+    AZURE_TRUSTED_SIGNING_ENDPOINT: 'https://weu.codesigning.azure.net',
+    AZURE_TRUSTED_SIGNING_ACCOUNT: 'producer',
+    AZURE_TRUSTED_SIGNING_PROFILE: 'public-trust',
+    AZURE_TENANT_ID: 't',
+    AZURE_CLIENT_ID: 'c',
+    AZURE_CLIENT_SECRET: 's',
+  }
+
+  it('with nothing set the build is unsigned, exactly as before, and says so', () => {
+    const r = releaseConfig({ env: {}, platform: 'win32' })
+    expect(r.signed).toBe(false)
+    expect(r.config).toEqual({ electronFuses: FUSES })
+    expect(r.notes.join(' ')).toMatch(/unsigned/)
+    expect(r.targets).toEqual(['nsis'])
+  })
+
+  it('Azure Trusted Signing, when its account and credentials are set, signs and fails the build rather than ship unsigned', () => {
+    const r = releaseConfig({ env: azure, platform: 'win32' })
+    expect(r.signed).toBe(true)
+    expect(r.config.win).toEqual({
+      azureSignOptions: { publisherName: 'Producer Studio', endpoint: 'https://weu.codesigning.azure.net', codeSigningAccountName: 'producer', certificateProfileName: 'public-trust' },
+      forceCodeSigning: true,
+    })
+    expect(releaseConfig({ env: { ...azure, AZURE_TRUSTED_SIGNING_PUBLISHER: 'Producer Studio Ltd' }, platform: 'win32' }).config.win?.azureSignOptions?.publisherName).toBe('Producer Studio Ltd')
+    // the secrets themselves never go into the config (the signing module reads them from the environment)
+    expect(JSON.stringify(r.config)).not.toContain('"s"')
+  })
+
+  it('half an Azure setup stops the build and names what is missing', () => {
+    const { AZURE_CLIENT_SECRET: _drop, ...partial } = azure
+    void _drop
+    expect(windowsSigning(partial)).toMatchObject({ mode: 'none', missing: ['AZURE_CLIENT_SECRET'] })
+    expect(() => releaseConfig({ env: partial, platform: 'win32' })).toThrow(/only partly set up: AZURE_CLIENT_SECRET is missing/)
+  })
+
+  it('a .pfx certificate (CSC_LINK) signs as electron-builder always did, now required to succeed', () => {
+    expect(windowsSigning({ CSC_LINK: 'cert.pfx' })).toEqual({ mode: 'certificate' })
+    expect(releaseConfig({ env: { WIN_CSC_LINK: 'x' }, platform: 'win32' })).toMatchObject({ signed: true, config: { win: { forceCodeSigning: true } } })
   })
 })
 

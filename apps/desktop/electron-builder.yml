@@ -41,8 +41,9 @@ win:
     - target: nsis
       arch: [x64]
   icon: assets/icon.ico
-  # Code signing: unsigned unless CSC_LINK (path/URL/base64 of a .pfx) and CSC_KEY_PASSWORD are set in the
-  # environment (or WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD). Azure Trusted Signing: add `azureSignOptions` here.
+  # Code signing: unsigned unless the environment says how (docs/desktop.md, "Code signing"). scripts/release.mjs adds
+  # `azureSignOptions` when the AZURE_TRUSTED_SIGNING_* account and AZURE_TENANT_ID / AZURE_CLIENT_ID /
+  # AZURE_CLIENT_SECRET are set; a .pfx in CSC_LINK + CSC_KEY_PASSWORD (or WIN_CSC_*) is electron-builder's own.
   signtoolOptions:
     publisherName: Producer Studio
     signingHashAlgorithms: [sha256]
