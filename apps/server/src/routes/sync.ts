@@ -19,6 +19,7 @@ import { whisperAvailable } from '../ai/whisper'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { checkCredentials } from './auth'
 import { audit } from '../services/audit'
+import { tombstoneHorizon } from '../services/retention'
 import { listWorkspaces } from './workspaces'
 import { voiceProfileDto } from './voice'
 import { storageHealth } from '../services/storage-health'
@@ -251,6 +252,11 @@ syncRoutes.get('/changes', async (c) => {
   const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? 100) || 100))
   const maxBytes = Math.min(64 * 1024 * 1024, Math.max(64 * 1024, Number(c.req.query('maxBytes') ?? PAGE_BYTES) || PAGE_BYTES))
   if (!Number.isFinite(since)) throw new HttpError(400, 'invalid', 'since must be a number')
+  // P-11: deletes older than the janitor's tombstone horizon are gone from the feed; a reader still behind it would
+  // never hear of them, so it must sync from the start (since=0) instead of resuming
+  const horizon = since > 0 ? await tombstoneHorizon() : 0
+  if (since > 0 && since < horizon)
+    throw new HttpError(409, 'conflict', 'This app last synced before old deletions were cleared from the server. It needs to sync everything again.', { reason: 'resync', horizon })
   return c.json(await changesSince(u.id, since, limit, maxBytes))
 })
 
