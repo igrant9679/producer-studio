@@ -5,7 +5,11 @@ import { describe, expect, it } from 'vitest'
 import { contentDisposition } from '../media/serve'
 import { friendlyProcessingError } from '../media/process'
 import { describeStorageError } from '../services/storage-health'
+import { STORAGE_RETRY } from '../storage/retry'
 import { S3Storage } from '../storage/s3'
+
+// an unreachable bucket is asked again (P-21): quickly here
+STORAGE_RETRY.baseMs = 1
 
 const sysErr = (code: string, message = `${code} something`) => Object.assign(new Error(message), { code })
 const s3Err = (name: string, status: number) => Object.assign(new Error(name), { name, $metadata: { httpStatusCode: status } })

@@ -23,6 +23,32 @@ export interface Storage {
   presignGet?(key: string, opts?: { expiresSec?: number; contentType?: string; disposition?: string }): Promise<string>
   /** Local only: absolute path of an object on disk. */
   localPath?(key: string): string
+  /** Copy an object inside storage (S3: on the bucket's side, no bytes through this server). */
+  copy(from: string, to: string, contentType?: string): Promise<void>
+  // resumable multipart uploads (P-5): parts of one object sent separately, in any order, then joined
+  createMultipart(key: string, contentType: string): Promise<string>
+  /** S3 only: a presigned PUT for one part; its length is signed, so the bucket refuses any other size. */
+  presignPart?(key: string, uploadId: string, partNumber: number, size: number, expiresSec?: number): Promise<string>
+  /** Local only: store one part (exactly `size` bytes, else UploadTooLargeError or PartSizeError). */
+  putPart?(key: string, uploadId: string, partNumber: number, body: Readable, size: number): Promise<{ size: number }>
+  /** The parts that have arrived, in order. */
+  listParts(key: string, uploadId: string): Promise<UploadedPart[]>
+  /** Join the parts into the object. */
+  completeMultipart(key: string, uploadId: string, parts: UploadedPart[]): Promise<void>
+  abortMultipart(key: string, uploadId: string): Promise<void>
+}
+
+export interface UploadedPart {
+  partNumber: number
+  size: number
+  etag: string
+}
+
+/** A part that isn't the size it was announced as (cut short, or longer). */
+export class PartSizeError extends Error {
+  constructor(public expected: number, public got: number) {
+    super(`This part should be ${expected} bytes but ${got} arrived`)
+  }
 }
 
 export class UploadTooLargeError extends Error {
