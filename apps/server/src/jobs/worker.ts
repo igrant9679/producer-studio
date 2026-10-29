@@ -205,7 +205,8 @@ async function afterJob(job: JobRow, outcome: JobOutcome, ms: number, peakRss: n
   const waitMs = job.startedAt != null ? Math.max(0, job.startedAt - job.createdAt) : null
   recordJobMetrics(job.kind, outcome, ms, waitMs)
   if (outcome === 'gone') return
-  await ctx().db.update(jobs).set({ waitMs, runMs: Math.round(ms), peakRss: Math.round(peakRss) }).where(eq(jobs.id, job.id))
+  // a job another worker took over gets that worker's numbers when it ends there
+  if (outcome !== 'lost') await ctx().db.update(jobs).set({ waitMs, runMs: Math.round(ms), peakRss: Math.round(peakRss) }).where(eq(jobs.id, job.id))
   // the machine time was spent either way; a deleted space has nothing left to charge
   await recordJobRun(job, ms)
 }
