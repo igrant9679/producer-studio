@@ -143,6 +143,12 @@ const DEVICE_ROUTES: Array<[string, RegExp]> = [
   ['GET|HEAD', /^\/api\/media\/[^/]+\/[^/]+$/],
   ['*', /^\/api\/voice\/(profiles|relay)(\/.*)?$/],
   ['GET', /^\/api\/events$/],
+  // an offline desktop asks whether the cloud answers again (desktop/sync.ts probe)
+  ['GET', /^\/api\/health(\/[a-z]+)?$/],
+  // a linked desktop shows a cloud project's comments and a cloud space's activity (desktop/collab.ts)
+  ['GET|POST', /^\/api\/projects\/[^/]+\/comments$/],
+  ['PATCH|DELETE', /^\/api\/comments\/[^/]+$/],
+  ['GET', /^\/api\/workspaces\/[^/]+\/activity$/],
 ]
 
 export function deviceMayUse(method: string, path: string): boolean {

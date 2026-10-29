@@ -40,6 +40,7 @@ import { UploadBoard, inLanes, sendFile } from './uploads'
 import { LOW_DISK_BYTES, blockedBy, compareSides, freeBytes, projectDirty, sideSummary, syncItems } from './panel'
 import { prefetchAllMedia } from './media'
 import { keepOffline } from './offline'
+import { stopFollowing } from './collab'
 import { getSettings, onSettingsChange } from './settings'
 
 const LOOKBACK = 25
@@ -275,6 +276,7 @@ export class SyncEngine {
     if (this.relayTimer) clearInterval(this.relayTimer)
     if (this.debounce) clearTimeout(this.debounce)
     if (this.probeTimer) clearTimeout(this.probeTimer)
+    stopFollowing()
     for (const u of this.unsubs) u()
     this.unsubs = []
   }
@@ -729,6 +731,7 @@ export class SyncEngine {
     const link = linkInfo()
     const c = cloud()
     if (link && c) await c.json('DELETE', `/api/devices/${encodeURIComponent(link.deviceId)}`, undefined, 10_000).catch(() => undefined)
+    stopFollowing()
     await clearLink()
     this.state = 'unlinked'
     this.error = undefined

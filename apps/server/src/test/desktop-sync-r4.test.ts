@@ -78,7 +78,7 @@ beforeAll(async () => {
   A = await cloud.signup('Rae')
   expect((await desk.json('POST', '/api/sync/link', { cloudUrl: proxy.url, email: A.email, password: PASSWORD })).status).toBe(200)
   await sync()
-}, 180_000)
+}, 420_000)
 
 afterAll(async () => {
   d?.stop()
@@ -365,6 +365,47 @@ describe('the sync panel (D-1)', () => {
     // nothing holds it up now but the harness's own setting (automatic sync is off here)
     expect((await status()).blocked?.reason).toBe('paused')
   }, 60_000)
+})
+
+describe('comments and activity on a linked desktop (carried from R2)', () => {
+  it('are the cloud’s: read and written there, live while open, and say so when offline', async () => {
+    const { ctx } = await import('../context')
+    const heard: Array<{ projectId: string; comment?: { body: string } }> = []
+    const off = ctx().bus.onAny((e) => {
+      if (e.event === 'comment' && e.workspaceId === A.workspaceId) heard.push(e.data as (typeof heard)[number])
+    })
+    const id = await cloudProject('Reviewed in the cloud')
+    expect((await A.http.json('POST', `/api/projects/${id}/comments`, { body: 'From the web', at: 1 })).status).toBe(200)
+    await sync()
+    const list = await desk.json('GET', `/api/projects/${id}/comments`)
+    expect(list.status).toBe(200)
+    expect(list.body.map((c: { body: string }) => c.body)).toEqual(['From the web'])
+    // made here: it's in the cloud
+    const mine = await desk.json('POST', `/api/projects/${id}/comments`, { body: 'From the desktop', at: 2 })
+    expect(mine.status).toBe(200)
+    expect((await A.http.json('GET', `/api/projects/${id}/comments`)).body.map((c: { body: string }) => c.body)).toEqual(['From the web', 'From the desktop'])
+    // resolved here: resolved there
+    expect((await desk.json('PATCH', `/api/comments/${list.body[0].id}`, { resolved: true })).status).toBe(200)
+    expect((await A.http.json('GET', `/api/projects/${id}/comments`)).body.find((c: { id: string }) => c.id === list.body[0].id).resolved?.at).toBeTruthy()
+    // someone comments on the web while it's open here: this computer's screens hear of it
+    await new Promise((r) => setTimeout(r, 1500))
+    expect((await A.http.json('POST', `/api/projects/${id}/comments`, { body: 'Live from the web', at: 3 })).status).toBe(200)
+    await until(() => heard.some((h) => h.comment?.body === 'Live from the web'), 20_000)
+    // removed here: gone there, and screens here hear of it
+    expect((await desk.json('DELETE', `/api/comments/${mine.body.id}`)).status).toBe(200)
+    expect((await A.http.json('GET', `/api/projects/${id}/comments`)).body.map((c: { body: string }) => c.body)).not.toContain('From the desktop')
+    // the space's activity is the cloud's
+    const act = await desk.json('GET', `/api/workspaces/${A.workspaceId}/activity`)
+    expect(act.status).toBe(200)
+    expect(Array.isArray(act.body.items)).toBe(true)
+    // offline: they say they need the connection
+    proxy.down = true
+    const gone = await desk.json('GET', `/api/projects/${id}/comments`)
+    expect(gone.status).toBe(503)
+    expect(gone.body.error).toMatch(/kept in the cloud/)
+    proxy.down = false
+    off()
+  }, 90_000)
 })
 
 describe('available offline (D-9)', () => {

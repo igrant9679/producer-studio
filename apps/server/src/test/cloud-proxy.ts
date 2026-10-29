@@ -43,6 +43,18 @@ export async function startProxy(target: string): Promise<CloudProxy> {
     } catch {
       return req.socket.destroy()
     }
+    // live updates stream through as they come
+    if ((up.headers.get('content-type') ?? '').includes('text/event-stream') && up.body) {
+      res.writeHead(up.status, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+      const reader = up.body.getReader()
+      req.socket.on('close', () => void reader.cancel().catch(() => undefined))
+      for (;;) {
+        const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }))
+        if (done || p.down) break
+        res.write(value)
+      }
+      return res.end()
+    }
     let buf: Buffer = Buffer.from(await up.arrayBuffer())
     const type = up.headers.get('content-type') ?? ''
     if (p.rewrite && type.includes('application/json') && buf.length) {
