@@ -3,11 +3,47 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { buildInfo, schemaVersionOf, updateRepoOf } from '../../scripts/release.mjs'
+import { FUSES, buildInfo, releaseConfig, schemaVersionOf, updateRepoOf } from '../../scripts/release.mjs'
 import { parseBuildInfo } from '../build-info'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const migrate = fs.readFileSync(path.resolve(here, '..', '..', '..', 'server', 'src', 'db', 'migrate.ts'), 'utf8')
+
+describe('Electron fuses (D-12)', () => {
+  it('turn off the Node-mode switches, load only the checked app.asar, and keep runAsNode for the engine’s children', () => {
+    const { config } = releaseConfig()
+    expect(config.electronFuses).toEqual({
+      runAsNode: true,
+      enableCookieEncryption: true,
+      enableNodeOptionsEnvironmentVariable: false,
+      enableNodeCliInspectArguments: false,
+      enableEmbeddedAsarIntegrityValidation: true,
+      onlyLoadAppFromAsar: true,
+      grantFileProtocolExtraPrivileges: false,
+    })
+    // a copy: a build can't change the constant
+    config.electronFuses.runAsNode = false
+    expect(FUSES.runAsNode).toBe(true)
+  })
+
+  it('the engine’s Node children that need runAsNode are still started with the app binary', () => {
+    // if these stop using process.execPath, runAsNode can be switched off too
+    const server = path.resolve(here, '..', '..', '..', 'server', 'src')
+    expect(fs.readFileSync(path.join(server, 'ai', 'tts.ts'), 'utf8')).toMatch(/spawn\(process\.execPath/)
+    expect(fs.readFileSync(path.join(server, 'ai', 'cli.ts'), 'utf8')).toMatch(/command: process\.execPath/)
+  })
+
+  it('the app makes no use of NODE_OPTIONS or --inspect that the fuses would break', () => {
+    const src = path.resolve(here, '..')
+    const code = (f: string) =>
+      fs
+        .readFileSync(path.join(src, f), 'utf8')
+        .split('\n')
+        .filter((l) => !/^\s*(\/\/|\/?\*)/.test(l))
+        .join('\n')
+    for (const f of fs.readdirSync(src).filter((n) => n.endsWith('.ts'))) expect(code(f), f).not.toMatch(/NODE_OPTIONS|--inspect/)
+  })
+})
 
 describe('build-info.json (D-10, D-4)', () => {
   it('records the schema the engine migrates to, read from the server’s migrations', () => {

@@ -1,5 +1,7 @@
 # electron-builder config for Producer Studio desktop (Windows NSIS first).
 # Build with: npm run dist -w @producer/desktop   (runs web build → main/preload build → stage → tools → builder)
+# scripts/dist.mjs runs electron-builder through its API and lays scripts/release.mjs's releaseConfig() over this file:
+# the Electron fuses (D-12) live there, so a plain `electron-builder` run would build without them.
 appId: studio.producer.desktop
 productName: Producer Studio
 copyright: Copyright © 2026 Producer Studio

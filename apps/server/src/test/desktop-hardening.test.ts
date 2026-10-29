@@ -38,6 +38,55 @@ describe('desktop launch secrets', () => {
   })
 })
 
+describe('the engine in a utility process (D-12)', () => {
+  it('inside Electron, children started with the app binary run as Node; outside, nothing is added', () => {
+    expect(childEnv({ PATH: 'p' }, {}, true)).toEqual({ PATH: 'p', ELECTRON_RUN_AS_NODE: '1' })
+    expect(childEnv({ PATH: 'p' }, {}, false)).toEqual({ PATH: 'p' })
+    // a caller that sets it keeps its value, and the secrets still go
+    expect(childEnv({ PATH: 'p', DESKTOP_SECRET: 's' }, { ELECTRON_RUN_AS_NODE: '0' }, true)).toEqual({ PATH: 'p', ELECTRON_RUN_AS_NODE: '0' })
+  })
+
+  it('the Claude CLI never gets it (it is not Electron), even from inside Electron', async () => {
+    const { cliEnv } = await import('../ai/cli/detect')
+    expect(cliEnv({ PATH: 'p', ELECTRON_RUN_AS_NODE: '1' }).ELECTRON_RUN_AS_NODE).toBeUndefined()
+  })
+
+  it('a stop message over the parent port shuts the server down cleanly', async () => {
+    // the server's entry point, run as a plain Node child with a stand-in parent port (what Electron gives a utility process)
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { spawn } = await import('node:child_process')
+    const { fileURLToPath, pathToFileURL } = await import('node:url')
+    const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-port-'))
+    const shim = path.join(dir, 'parent-port.mjs')
+    // process.parentPort that delivers {type:'stop'} once the server answers /api/health
+    fs.writeFileSync(
+      shim,
+      `import { EventEmitter } from 'node:events'
+const port = new EventEmitter()
+process.parentPort = port
+const t = setInterval(async () => {
+  try { if ((await fetch('http://127.0.0.1:' + process.env.PORT + '/api/health')).ok) { clearInterval(t); port.emit('message', { data: { type: 'stop' } }) } } catch {}
+}, 200)
+t.unref()
+`,
+    )
+    const { freePort } = await import('./desktop-harness')
+    const port = await freePort()
+    const child = spawn(process.execPath, ['--import', 'tsx', '--import', pathToFileURL(shim).href, 'src/index.ts'], {
+      cwd: serverDir,
+      env: { ...process.env, MODE: 'cloud', PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dir, PGLITE_DIR: 'memory://', LOG_SILENT: '1', AI_PROVIDER: 'none', DESKTOP_PARENT_PORT: '1', SAMPLE_PROJECT: '0', DESKTOP_SECRET: '' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    let err = ''
+    child.stderr!.on('data', (b) => (err += String(b)))
+    const code = await new Promise<number | null>((resolve) => child.on('exit', (c) => resolve(c)))
+    expect(code, err).toBe(0)
+  }, 240_000)
+})
+
 describe('VoiceStudio import sources', () => {
   it('accepts the output paths the Voice Studio pages send', () => {
     for (const s of [
