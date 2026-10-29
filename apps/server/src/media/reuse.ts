@@ -21,8 +21,15 @@ export async function processedTwin(row: Pick<AssetRow, 'id' | 'workspaceId' | '
     .where(and(eq(assets.workspaceId, row.workspaceId), eq(assets.sha256, row.sha256), eq(assets.status, 'ready'), ne(assets.id, row.id)))
     .orderBy(desc(assets.createdAt))
     .limit(5)
-  // made by today's processing, with the files that kind of clip has
-  return rows.find((r) => r.meta?.processing === PROCESSING_VERSION && (r.kind === 'image' ? !!r.thumbKey : r.kind === 'video' ? !!(r.proxyKey && r.thumbKey) : r.meta?.waveform?.length)) ?? null
+  // made by today's processing, with the files and the findings that kind of clip has
+  const complete = (r: AssetRow) => {
+    const m = r.meta ?? {}
+    if (m.processing !== PROCESSING_VERSION || m.hasAudio === undefined) return false
+    if (r.kind === 'image') return !!r.thumbKey && !!m.width
+    if (r.kind === 'video') return !!(r.proxyKey && r.thumbKey && m.duration && m.width)
+    return !!(m.duration && m.waveform?.length)
+  }
+  return rows.find(complete) ?? null
 }
 
 /** Give `row` copies of `twin`'s processed files and what processing found, and make it ready. */

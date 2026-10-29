@@ -14,6 +14,8 @@ import { encodeH264, h264Args, resetHardwareEncoder } from '../media/hwenc'
 import { imageDisplay, PROCESSING_VERSION, pickAudioStream, processAsset, proxyGop, proxySize, scaledImageSize } from '../media/process'
 import { variantTarget } from '../routes/assets'
 import { type AssetRow, createAssetFromFile } from '../services/assets'
+import { assets } from '../db/schema'
+import { eq } from 'drizzle-orm'
 import { setup, signup } from './helpers'
 
 const { ffmpeg, runOk } = proc
@@ -189,6 +191,18 @@ describe('identical uploads are not processed twice (P-21)', () => {
     // its own files: the first clip can go without taking them
     fs.rmSync(stored(first.proxyKey))
     expect(fs.existsSync(stored(second.proxyKey))).toBe(true)
+  })
+
+  it('a clip whose findings are incomplete (processed before, or changed since) is not copied from', async () => {
+    const clip = await make('partial.mp4', ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30', '-t', '1', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p'])
+    const first = await processFile(clip, 'video/mp4')
+    const { hasAudio: _gone, ...meta } = first.meta
+    await ctx().db.update(assets).set({ meta }).where(eq(assets.id, first.id))
+    const spy = vi.spyOn(proc, 'ffmpeg')
+    const second = await processFile(clip, 'video/mp4')
+    expect(spy).toHaveBeenCalled()
+    expect(second.meta.reusedFrom).toBeUndefined()
+    expect(second.meta.hasAudio).toBe(false)
   })
 
   it('another space processes its own copy', async () => {
