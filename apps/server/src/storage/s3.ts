@@ -143,6 +143,15 @@ export class S3Storage implements Storage {
     } while (token)
   }
 
+  async *list(prefix: string): AsyncIterable<{ key: string; size: number; mtimeMs: number }> {
+    let token: string | undefined
+    do {
+      const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ContinuationToken: token }))
+      for (const o of page.Contents ?? []) if (o.Key) yield { key: o.Key, size: Number(o.Size ?? 0), mtimeMs: o.LastModified ? o.LastModified.getTime() : 0 }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined
+    } while (token)
+  }
+
   presignPut(key: string, contentType: string, opts: { size?: number; expiresSec?: number } = {}) {
     // Content-Length is part of the signature, so the declared size is the only size the bucket will take
     // (otherwise a client could declare 1 byte, pass the upload limit, and PUT up to 5 GB).

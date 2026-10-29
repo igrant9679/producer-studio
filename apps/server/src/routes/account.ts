@@ -14,6 +14,7 @@ import { mailEnabled, sendMail } from '../mail'
 import { emailChangeMail, passwordChangedNotice } from '../mail/messages'
 import { checkTokenIpRate, deleteAccount, issueToken, pendingEmail, planAccountDelete } from '../services/account'
 import { AVATAR_COLORS, sendVerification } from './auth'
+import { audit } from '../services/audit'
 
 async function loadUser(id: string): Promise<UserRow> {
   const u = (await ctx().db.select().from(users).where(eq(users.id, id)).limit(1))[0]
@@ -64,6 +65,7 @@ accountRoutes.post('/password', async (c) => {
   // everyone else signed in as them is out; this browser stays in. App links stay (Sign out everywhere ends those).
   await endSessions(u.id, { except: c.get('sessionId') })
   void sendMail(passwordChangedNotice({ to: u.email, name: u.name }))
+  await audit(c, { kind: 'password.changed', actor: u, targetId: u.id, target: u.email })
   return c.json({ ok: true })
 })
 
@@ -83,6 +85,7 @@ accountRoutes.post('/email', async (c) => {
   if (taken) throw new HttpError(409, 'conflict', 'Another account already uses that address')
   if (!mailEnabled()) {
     await db.update(users).set({ email, emailVerifiedAt: null }).where(eq(users.id, u.id))
+    await audit(c, { kind: 'email.changed', actor: u, targetId: u.id, target: u.email, data: { from: u.email, to: email } })
     return c.json({ ok: true, email } satisfies EmailChangeResult)
   }
   await checkTokenIpRate(clientIp(c))
@@ -90,6 +93,7 @@ accountRoutes.post('/email', async (c) => {
   if (!token) throw new HttpError(429, 'quota', 'Too many confirmation mails this hour. Try again later.')
   const sent = await sendMail(emailChangeMail({ to: email, name: u.name, url: appUrl(c, `/verify/${token}`) }))
   if (!sent) throw new HttpError(502, 'server', 'The confirmation mail couldn’t be sent. Try again in a moment.')
+  await audit(c, { kind: 'email.change.requested', actor: u, targetId: u.id, target: u.email, data: { to: email } })
   return c.json({ ok: true, pending: email } satisfies EmailChangeResult)
 })
 
@@ -142,6 +146,7 @@ accountRoutes.delete('/sessions/:id', async (c) => {
     .returning({ id: sessions.id })
   if (!gone.length) throw notFound('That session already ended')
   ctx().bus.accessChanged(u.id)
+  await audit(c, { kind: 'session.revoked', targetId: u.id, target: u.email })
   return c.json({ ok: true })
 })
 
@@ -149,6 +154,7 @@ accountRoutes.delete('/sessions/:id', async (c) => {
 accountRoutes.post('/sign-out-everywhere', async (c) => {
   const u = requireUser(c)
   const n = await endSessions(u.id, { except: c.get('sessionId'), devices: true })
+  await audit(c, { kind: 'sessions.ended', targetId: u.id, target: u.email, data: n })
   return c.json({ ok: true, ...n })
 })
 
@@ -158,6 +164,8 @@ accountRoutes.delete('/', async (c) => {
   const b = await body(c, z.object({ password: z.string().max(200) }))
   await confirmPassword(u, b.password)
   await deleteAccount(u.id)
+  // the entry outlives the account: who it was is kept as their email
+  await audit(c, { kind: 'account.deleted', actor: { id: u.id, email: u.email }, targetId: u.id, target: u.email })
   deleteCookie(c, SESSION_COOKIE, { path: '/' })
   return c.json({ ok: true })
 })

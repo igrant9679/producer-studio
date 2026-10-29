@@ -207,7 +207,8 @@ describe('health (P-9)', () => {
     // and the worker's state is in the answer
     startWorker({ concurrency: 1, quickConcurrency: 0, heartbeatMs: 1000 })
     try {
-      expect((await (await t.app.request('/api/health')).json()).worker).toMatchObject({ ok: true, running: 0 })
+      // (on a shared database it may already have claimed someone else's queued job)
+      expect((await (await t.app.request('/api/health')).json()).worker).toMatchObject({ ok: true, running: expect.any(Number), loopAgeSec: expect.any(Number) })
     } finally {
       await stopWorker()
     }

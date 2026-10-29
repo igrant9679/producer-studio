@@ -8,6 +8,7 @@ import { ctx } from './context'
 import { devices, sessions, users } from './db/schema'
 import { HttpError, unauthorized } from './http'
 import { randomToken, sha256 } from './ids'
+import { type LimitRule, assertRoom, clearWindow, hit } from './limits'
 
 const scrypt = promisify(crypto.scrypt) as (pw: string, salt: Buffer, keylen: number, opts: crypto.ScryptOptions) => Promise<Buffer>
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }
@@ -36,6 +37,9 @@ const REFRESH_AFTER_MS = 24 * 3600 * 1000
 const SEEN_EVERY_MS = 5 * 60 * 1000
 
 export type UserRow = typeof users.$inferSelect
+
+/** What a disabled account is told (P-10): only after its password was right. */
+export const DISABLED_MESSAGE = 'This account has been disabled. Contact support to have it enabled again.'
 
 export interface AppEnv {
   Variables: {
@@ -86,7 +90,7 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
       .where(eq(devices.tokenHash, sha256(bearer)))
       .limit(1)
     const row = rows[0]
-    if (!row) throw new HttpError(401, 'unauthorized', 'Invalid or revoked device token')
+    if (!row || row.u.disabledAt) throw new HttpError(401, 'unauthorized', 'Invalid or revoked device token')
     // an app link syncs; managing the account, the space's people or anything else takes a signed-in browser
     if (!deviceMayUse(c.req.method, c.req.path)) throw new HttpError(403, 'forbidden', 'A linked desktop app can only sync. Sign in in the browser to do this.')
     const now = Date.now()
@@ -108,7 +112,8 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
       .limit(1)
     const row = rows[0]
     const now = Date.now()
-    if (row && row.s.expiresAt > now) {
+    // a disabled account's sessions end when it's disabled; one that slipped through counts as signed out
+    if (row && row.s.expiresAt > now && !row.u.disabledAt) {
       c.set('user', row.u)
       c.set('sessionId', id)
       const slide = row.s.expiresAt - now < SESSION_MS - REFRESH_AFTER_MS
@@ -179,43 +184,39 @@ export function requireUser(c: Context<AppEnv>): UserRow {
   return u
 }
 
-// ---- login rate limit (in memory): failures per IP + email, per email, and per IP ----
-const attempts = new Map<string, { fails: number; resetAt: number }>()
+// ---- sign-in rate limit: failures per IP + email, per email, and per IP, counted in Postgres (limits.ts) so every
+// API replica shares one count ----
 const WINDOW_MS = 15 * 60 * 1000
 /** One person mistyping (IP + email); one account sprayed from many addresses (email); one address spraying many accounts (IP). */
 const MAX_FAILS = { pair: 8, email: 30, ip: 50 }
+const pairKey = (ip: string, email: string) => `login:pair:${ip}|${email}`
 
-function loginKeys(ip: string, email: string) {
+function loginRules(ip: string, email: string): LimitRule[] {
+  const message = 'Too many sign-in attempts.'
   return [
-    { key: `pair|${ip}|${email}`, max: MAX_FAILS.pair },
-    { key: `email|${email}`, max: MAX_FAILS.email },
-    { key: `ip|${ip}`, max: MAX_FAILS.ip },
+    { key: pairKey(ip, email), limit: MAX_FAILS.pair, windowMs: WINDOW_MS, message },
+    { key: `login:email:${email}`, limit: MAX_FAILS.email, windowMs: WINDOW_MS, message },
+    { key: `login:ip:${ip}`, limit: MAX_FAILS.ip, windowMs: WINDOW_MS, message },
   ]
 }
 
-export function checkLoginRate(ip: string, email: string) {
-  const now = Date.now()
-  for (const { key, max } of loginKeys(ip, email)) {
-    const a = attempts.get(key)
-    if (a && a.resetAt > now && a.fails >= max) {
-      throw new HttpError(429, 'quota', `Too many sign-in attempts. Try again in ${Math.ceil((a.resetAt - now) / 60000)} minutes.`)
-    }
-  }
+/** 429 when this address, account or pair already failed too often (checked before the password, counting nothing). */
+export async function checkLoginRate(ip: string, email: string) {
+  await assertRoom(loginRules(ip, email))
 }
 
-export function recordLoginFailure(ip: string, email: string) {
-  const now = Date.now()
-  for (const { key } of loginKeys(ip, email)) {
-    const a = attempts.get(key)
-    if (!a || a.resetAt <= now) attempts.set(key, { fails: 1, resetAt: now + WINDOW_MS })
-    else a.fails++
+export async function recordLoginFailure(ip: string, email: string) {
+  try {
+    await hit(loginRules(ip, email))
+  } catch (err) {
+    // already full: the next attempt is refused by checkLoginRate either way
+    if (!(err instanceof HttpError && err.status === 429)) throw err
   }
-  if (attempts.size > 10_000) for (const [k, v] of attempts) if (v.resetAt <= now) attempts.delete(k)
 }
 
 /** A correct password clears this person's own counter; the per-email and per-IP ones run out on their own. */
-export function clearLoginFailures(ip: string, email: string) {
-  attempts.delete(`pair|${ip}|${email}`)
+export async function clearLoginFailures(ip: string, email: string) {
+  await clearWindow(pairKey(ip, email))
 }
 
 /**

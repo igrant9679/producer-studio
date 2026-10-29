@@ -7,6 +7,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { collabApi } from '../../lib/collabApi'
 import { currentWorkspace, useSession } from '../../lib/session'
+import { SpaceLogTabs } from '../components/SpaceLogTabs'
 import { EmptyState, Spinner, usePageTitle } from '../ui'
 import { relativeTime } from '../util'
 import './activity.css'
@@ -86,6 +87,7 @@ export default function ActivityPage() {
           <p>What happened in this space: projects made, renamed and exported, links shared, comments and member changes.</p>
         </div>
       </div>
+      <SpaceLogTabs />
       <div className="row ps-activity-filters" role="group" aria-label="Show">
         {FILTERS.map((f) => (
           <button key={f.id} type="button" className={`chip${filter === f.id ? ' active' : ''}`} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>

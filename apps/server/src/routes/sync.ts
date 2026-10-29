@@ -18,6 +18,7 @@ import { builtinProvider, invalidateBuiltin } from '../ai/resolve'
 import { whisperAvailable } from '../ai/whisper'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { checkCredentials } from './auth'
+import { audit } from '../services/audit'
 import { listWorkspaces } from './workspaces'
 import { voiceProfileDto } from './voice'
 import { storageHealth } from '../services/storage-health'
@@ -100,6 +101,7 @@ deviceRoutes.post('/', async (c) => {
   const token = `psd_${randomToken(32)}`
   const id = newId('dev')
   await ctx().db.insert(devices).values({ id, userId: user.id, name: b.name, tokenHash: sha256(token), createdAt: Date.now() })
+  await audit(c, { kind: 'device.created', actor: user, targetId: id, target: b.name, data: { name: b.name, via: c.get('user') ? 'session' : 'password' } })
   return c.json({ deviceId: id, token })
 })
 
@@ -114,6 +116,7 @@ deviceRoutes.delete('/:id', async (c) => {
   const rows = await ctx().db.delete(devices).where(and(eq(devices.id, c.req.param('id')), eq(devices.userId, u.id))).returning()
   if (!rows.length) throw notFound('Device not found')
   ctx().bus.accessChanged(u.id)
+  await audit(c, { kind: 'device.revoked', targetId: rows[0].id, target: rows[0].name, data: { name: rows[0].name } })
   return c.json({ ok: true })
 })
 

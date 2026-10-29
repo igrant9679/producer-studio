@@ -139,6 +139,22 @@ export async function cancelJob(id: string, error = 'Cancelled by user'): Promis
   return row
 }
 
+/**
+ * An operator runs a job again (P-10): a failed, cancelled or stuck running one goes back in the queue as it is (same
+ * id, same input), its attempts counted from zero. A worker still holding it drops it at its next heartbeat.
+ */
+export async function requeueJob(id: string, message = 'Requeued by an operator'): Promise<JobRow | null> {
+  const rows = await ctx()
+    .db.update(jobs)
+    .set({ status: 'queued', lockedBy: null, lockedAt: null, cancelRequested: false, progress: 0, attempts: 0, error: null, message, updatedAt: Date.now() })
+    .where(and(eq(jobs.id, id), sql`${jobs.status} IN ('error', 'cancelled', 'running')`, ne(jobs.kind, 'voice.relay')))
+    .returning()
+  if (!rows[0]) return null
+  emitJob(rows[0])
+  wakeWorkers()
+  return rows[0]
+}
+
 /** Clip deleted: its processing and transcription jobs (queued or running) stop; nothing is left to work on. */
 export async function cancelJobsOfAsset(assetId: string): Promise<void> {
   const open = await ctx()

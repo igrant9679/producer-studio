@@ -17,6 +17,8 @@ export interface Storage {
   stat(key: string): Promise<StatResult | null>
   delete(key: string): Promise<void>
   deletePrefix(prefix: string): Promise<void>
+  /** Every object under a prefix, in pages (the operator's orphaned-storage scan, P-10). */
+  list?(prefix: string): AsyncIterable<{ key: string } & StatResult>
   /** S3 only: presigned PUT URL. With `size`, the length is signed: the bucket refuses any other body size. */
   presignPut?(key: string, contentType: string, opts?: { size?: number; expiresSec?: number }): Promise<string>
   /** S3 only: presigned GET URL; `disposition` is a full Content-Disposition value (see media/serve.ts). */

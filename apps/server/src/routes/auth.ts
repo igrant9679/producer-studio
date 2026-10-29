@@ -4,6 +4,7 @@ import * as z from 'zod/v4'
 import type { MeResponse } from '@producer/core'
 import {
   type AppEnv,
+  DISABLED_MESSAGE,
   appUrl,
   checkLoginRate,
   clearLoginFailures,
@@ -23,6 +24,8 @@ import { HttpError, body } from '../http'
 import { newId } from '../ids'
 import { limitSignup } from '../limits'
 import { countSigninFailure } from '../metrics'
+import { audit } from '../services/audit'
+import { isOperator } from '../services/operator'
 import { mailEnabled, sendMail } from '../mail'
 import { emailChangedNotice, passwordChangedNotice, resetMail, verifyMail } from '../mail/messages'
 import { checkTokenIpRate, consumeToken, issueToken, peekToken } from '../services/account'
@@ -32,7 +35,7 @@ export const AVATAR_COLORS = ['#ff5a5f', '#35e0ff', '#ffb020', '#7c5cff', '#2ecc
 
 export async function meResponse(userId: string): Promise<MeResponse> {
   const u = (await ctx().db.select().from(users).where(eq(users.id, userId)).limit(1))[0]
-  return { user: userDto(u), workspaces: await listWorkspaces(userId) }
+  return { user: userDto(u), workspaces: await listWorkspaces(userId), ...(isOperator(u) ? { operator: true } : {}) }
 }
 
 /** Create a user and their personal workspace (also used by the seed script). */
@@ -61,6 +64,7 @@ authRoutes.post('/signup', async (c) => {
   await limitSignup(clientIp(c))
   const id = await createUser(b.email, b.password, b.name)
   await createSession(c, id)
+  await audit(c, { kind: 'signup', actor: { id, email: b.email.toLowerCase() }, targetId: id })
   await sendVerification(c, id)
   return c.json(await meResponse(id))
 })
@@ -90,6 +94,7 @@ authRoutes.post('/forgot', async (c) => {
   if (u) {
     const token = await issueToken(u.id, 'reset', u.email, ip)
     if (token) await sendMail(resetMail({ to: u.email, name: u.name, url: appUrl(c, `/reset/${token}`) }))
+    if (token) await audit(c, { kind: 'reset.requested', actor: null, targetId: u.id, target: u.email })
   } else {
     // spend about the same time as a real send, so timing doesn't tell
     await hashPassword(b.email)
@@ -109,11 +114,13 @@ authRoutes.post('/reset', async (c) => {
   const db = ctx().db
   const u = (await db.select().from(users).where(eq(users.id, row.userId)).limit(1))[0]
   if (!u) throw new HttpError(404, 'not_found', 'This account no longer exists')
+  if (u.disabledAt) throw new HttpError(403, 'forbidden', DISABLED_MESSAGE)
   // the link came through their inbox, so the address is theirs
   await db.update(users).set({ passwordHash: await hashPassword(b.password), emailVerifiedAt: u.emailVerifiedAt ?? Date.now() }).where(eq(users.id, u.id))
   await endSessions(u.id, { devices: true })
-  clearLoginFailures(clientIp(c), u.email)
+  await clearLoginFailures(clientIp(c), u.email)
   await createSession(c, u.id)
+  await audit(c, { kind: 'password.reset', actor: u, targetId: u.id, target: u.email })
   void sendMail(passwordChangedNotice({ to: u.email, name: u.name }))
   return c.json(await meResponse(u.id))
 })
@@ -134,24 +141,38 @@ authRoutes.post('/verify', async (c) => {
     if (taken && taken.id !== u.id) throw new HttpError(409, 'conflict', 'Another account already uses that address.')
     await db.update(users).set({ email: row.email, emailVerifiedAt: now }).where(eq(users.id, u.id))
     void sendMail(emailChangedNotice({ to: u.email, name: u.name, newEmail: row.email }))
+    await audit(c, { kind: 'email.changed', actor: { id: u.id, email: u.email }, targetId: u.id, target: u.email, data: { from: u.email, to: row.email } })
   }
   return c.json({ ok: true, email: row.email, purpose: row.purpose === 'verify' ? 'verify' : 'email' })
 })
 
-/** Verify email + password with the per-IP+email rate limit; returns the user or throws 401/429. */
-export async function checkCredentials(c: Context, emailIn: string, password: string) {
+/** Verify email + password with the per-IP+email rate limit; returns the user or throws 401/403/429. */
+export async function checkCredentials(c: Context<AppEnv>, emailIn: string, password: string) {
   const email = emailIn.trim().toLowerCase()
   const ip = clientIp(c)
-  checkLoginRate(ip, email)
+  try {
+    await checkLoginRate(ip, email)
+  } catch (err) {
+    countSigninFailure()
+    await audit(c, { kind: 'signin.failed', actor: null, target: email, data: { reason: 'limited' } })
+    throw err
+  }
   const u = (await ctx().db.select().from(users).where(eq(users.email, email)).limit(1))[0]
   // always run scrypt so response time doesn't reveal whether the account exists
   const ok = u ? await verifyPassword(password, u.passwordHash) : (await hashPassword(password), false)
   if (!u || !ok) {
-    recordLoginFailure(ip, email)
+    await recordLoginFailure(ip, email)
     countSigninFailure()
+    await audit(c, { kind: 'signin.failed', actor: null, target: email, targetId: u?.id ?? null, data: { reason: u ? 'password' : 'unknown' } })
     throw new HttpError(401, 'unauthorized', 'Email or password is incorrect')
   }
-  clearLoginFailures(ip, email)
+  // only after the right password, so nobody else learns that the account exists or was disabled
+  if (u.disabledAt) {
+    countSigninFailure()
+    await audit(c, { kind: 'signin.failed', actor: null, target: email, targetId: u.id, data: { reason: 'disabled' } })
+    throw new HttpError(403, 'forbidden', DISABLED_MESSAGE)
+  }
+  await clearLoginFailures(ip, email)
   return u
 }
 
@@ -159,6 +180,7 @@ authRoutes.post('/login', async (c) => {
   const b = await body(c, z.object({ email: z.string().trim().max(254), password: z.string().max(200) }))
   const u = await checkCredentials(c, b.email, b.password)
   await createSession(c, u.id)
+  await audit(c, { kind: 'signin.ok', actor: u })
   return c.json(await meResponse(u.id))
 })
 

@@ -5,3 +5,10 @@
 .ps-activity-icon { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface-2); color: var(--text-2); }
 .ps-activity-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ps-activity-item time { flex: none; color: var(--text-3); font-size: 0.75rem; }
+
+/* Activity | Audit (SpaceLogTabs.tsx), and the Audit page (AuditPage.tsx). */
+.ps-tab-links a { position: relative; height: calc(var(--h-control) + 6px); padding: 0 14px; color: var(--text-3); font-weight: 600; font-size: 0.875rem; display: inline-flex; align-items: center; text-decoration: none; }
+.ps-tab-links a:hover { color: var(--text); }
+.ps-tab-links a.on { color: var(--text); }
+.ps-tab-links a.on::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
+.ps-audit-meta { display: block; color: var(--text-3); font-size: 0.75rem; margin-top: 2px; overflow-wrap: anywhere; }

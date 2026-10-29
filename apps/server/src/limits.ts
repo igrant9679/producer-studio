@@ -69,6 +69,30 @@ export async function hit(rules: Rule[]) {
   }
 }
 
+/** Throw the 429 when any rule is already full, counting nothing (a sign-in is checked before its password is). */
+export async function assertRoom(rules: Rule[]) {
+  if (ctx().config.mode !== 'cloud') return
+  const live = rules.filter((r) => r.limit > 0)
+  if (!live.length) return
+  const now = Date.now()
+  const rows = await ctx()
+    .db.select()
+    .from(rateWindows)
+    .where(inArray(rateWindows.key, live.map((r) => r.key)))
+  for (const r of live) {
+    const w = rows.find((x) => x.key === r.key)
+    if (w && w.resetAt > now && w.n >= r.limit) throw new HttpError(429, 'quota', `${r.message} Try again in ${inWords(w.resetAt - now)}.`)
+  }
+}
+
+/** Forget a window's count (a correct password clears that person's own failures). */
+export async function clearWindow(key: string) {
+  if (ctx().config.mode !== 'cloud') return
+  await ctx().db.delete(rateWindows).where(eq(rateWindows.key, key))
+}
+
+export type { Rule as LimitRule }
+
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR

@@ -15,6 +15,8 @@ interface SessionState {
   user?: User
   workspaces: Workspace[]
   workspaceId?: string
+  /** P-10: the signed-in account is an operator (the Operator page is theirs). */
+  operator?: boolean
   /** Why the app is signed out, when it didn't start that way (for a note on the sign-in page). */
   signedOutReason?: 'expired' | 'elsewhere'
   load: () => Promise<void>
@@ -102,7 +104,7 @@ export const useSession = create<SessionState>((set, get) => {
   function adopt(me: MeResponse) {
     if (tabUser && tabUser !== me.user.id) resetUserState()
     tabUser = me.user.id
-    set({ status: 'ready', user: me.user, workspaces: me.workspaces, workspaceId: pickWorkspace(me.workspaces), signedOutReason: undefined })
+    set({ status: 'ready', user: me.user, workspaces: me.workspaces, workspaceId: pickWorkspace(me.workspaces), signedOutReason: undefined, operator: me.operator === true })
   }
   return {
     status: 'loading',
@@ -120,7 +122,7 @@ export const useSession = create<SessionState>((set, get) => {
           } catch (e) {
             const transient = !(e instanceof HttpError) || e.status >= 500
             if (!transient || attempt >= 4) {
-              set({ status: 'anon', user: undefined, workspaces: [] })
+              set({ status: 'anon', user: undefined, workspaces: [], operator: false })
               return
             }
             await new Promise((r) => setTimeout(r, 400 * 2 ** attempt))
@@ -144,7 +146,7 @@ export const useSession = create<SessionState>((set, get) => {
       await api.logout().catch(() => undefined)
       resetUserState()
       tabUser = undefined
-      set({ status: 'anon', user: undefined, workspaces: [], workspaceId: undefined, signedOutReason: undefined })
+      set({ status: 'anon', user: undefined, workspaces: [], workspaceId: undefined, signedOutReason: undefined, operator: false })
       announce('signed-out')
     },
     setWorkspace(id) {
@@ -188,7 +190,7 @@ export function confirmSignedOut(reason: 'expired' | 'elsewhere' = 'expired'): P
           resetUserState()
           tabUser = undefined
         }
-        useSession.setState({ status: 'anon', user: undefined, workspaces: [], workspaceId: undefined, signedOutReason: reason })
+        useSession.setState({ status: 'anon', user: undefined, workspaces: [], workspaceId: undefined, signedOutReason: reason, operator: false })
       },
     )
     .finally(() => {

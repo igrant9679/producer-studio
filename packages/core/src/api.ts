@@ -47,6 +47,8 @@ export interface Workspace {
 export interface MeResponse {
   user: User
   workspaces: Workspace[]
+  /** P-10: this account is an operator (OPERATOR_EMAILS): the Operator page is theirs. */
+  operator?: boolean
 }
 
 // ---- per-user appearance preferences ----

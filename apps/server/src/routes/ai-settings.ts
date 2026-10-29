@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono'
 import * as z from 'zod/v4'
 import type { AiKeyProvider, AiKeyTestResult, Role } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
+import { audit } from '../services/audit'
 import { ctx } from '../context'
 import { HttpError, body, invalid, requireRole } from '../http'
 import { checkKeyShape, testKey } from '../ai/keys'
@@ -102,6 +103,7 @@ aiSettingsRoutes.put('/keys/:provider', async (c) => {
   const { scope, canEdit } = await ownerOnly(c, b.workspaceId)
   const key = checkKeyShape(provider, b.key)
   await writeKey(scope, provider, key)
+  await audit(c, { kind: 'ai.key.set', workspaceId: b.workspaceId ?? null, target: provider, data: { provider, last4: key.slice(-4) } })
   const result = await testKey(provider, key)
   const doc = await recordTest(scope, provider, result)
   // first working key while the built-in provider isn't usable: make it the default so AI works right away
@@ -114,6 +116,7 @@ aiSettingsRoutes.delete('/keys/:provider', async (c) => {
   const provider = providerParam(c)
   const { scope, canEdit } = await ownerOnly(c, c.req.query('workspaceId') || undefined)
   await removeKey(scope, provider)
+  await audit(c, { kind: 'ai.key.removed', workspaceId: c.req.query('workspaceId') || null, target: provider, data: { provider } })
   const doc = await loadDoc(scope)
   if (doc.defaultProvider === provider) doc.defaultProvider = null
   for (const f of Object.keys(doc.perFeature) as Array<keyof AiSettingsDoc['perFeature']>) if (doc.perFeature[f] === provider) delete doc.perFeature[f]

@@ -3,6 +3,7 @@
 // Enable:   localStorage.psMock = '1'; location.reload()      (or open any page with ?psmock=1)
 // Disable:  delete localStorage.psMock; location.reload()      (or ?psmock=0)
 // Mode:     localStorage.psMockMode = 'desktop' | 'cloud'      (or ?psmockmode=desktop) — drives GET /api/system
+// Operator: localStorage.psMockOperator = '1'                  — the mock user gets the Operator page (P-10)
 //
 // Intercepts window.fetch for /api/*, replaces EventSource for /api/events, fakes the upload PUT (XHR), and
 // rewrites /api/media/* and voice-sample URLs on <img>/<video>/<audio> to the bundled /public/demo media.
@@ -29,6 +30,7 @@ import type {
 import { INVITE_TTL_MS, VOICES, createProject as coreCreateProject, normalizeTags, searchSnippet, searchWords, type SearchHit } from '@producer/core'
 import { registerR3cMocks } from './mockR3c'
 import { installAccountMocks, mockMail } from './mockAccount'
+import { isMockOperator, registerOpsMocks } from './mockOps'
 
 type Json = Record<string, unknown>
 
@@ -397,7 +399,7 @@ const on = (method: string, pattern: string, h: Handler) => routes.push([method,
 
 on('GET', '/api/auth/me', () => {
   const u = currentUser()
-  return u ? json({ user: u, workspaces }) : fail(401, 'Not signed in', 'unauthorized')
+  return u ? json({ user: u, workspaces, ...(isMockOperator() ? { operator: true } : {}) }) : fail(401, 'Not signed in', 'unauthorized')
 })
 on('POST', '/api/auth/login', async (_m, _q, b) => {
   await delay(350)
@@ -1502,6 +1504,9 @@ installAccountMocks({
   invites: mockInvites,
   devices,
 })
+
+// audit log and operator tools (R4-A)
+registerOpsMocks({ on, json, fail, currentUser, workspaces, users })
 
 // ---------------- media URL rewriting ----------------
 function rewriteMedia(url: string): string {

@@ -3,6 +3,7 @@ import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import { FONTS, INVITE_TTL_MS, type BrandKitDoc, type InviteInfo, type InviteStatus, type Member, type PendingInvite, type Role, type Workspace } from '@producer/core'
 import { type AppEnv, appUrl, requireUser } from '../auth'
+import { audit } from '../services/audit'
 import { mailEnabled, sendMail } from '../mail'
 import { inviteMail } from '../mail/messages'
 import { ctx } from '../context'
@@ -149,7 +150,10 @@ workspaceRoutes.patch('/:id', async (c) => {
 
 workspaceRoutes.delete('/:id', async (c) => {
   const u = requireUser(c)
-  await deleteWorkspace(u.id, c.req.param('id'))
+  const id = c.req.param('id')
+  const name = (await ctx().db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, id)).limit(1))[0]?.name
+  await deleteWorkspace(u.id, id)
+  await audit(c, { kind: 'workspace.deleted', workspaceId: id, targetId: id, target: name ?? id, data: { name } })
   return c.json({ ok: true })
 })
 
@@ -192,7 +196,10 @@ workspaceRoutes.patch('/:id/members/:userId', async (c) => {
     throw new HttpError(409, 'conflict', 'A space needs at least one owner. Make someone else an owner first.')
   await ctx().db.update(memberships).set({ role: b.role }).where(and(eq(memberships.workspaceId, id), eq(memberships.userId, target)))
   membersChanged(id)
-  if (current !== b.role) await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: b.role } })
+  if (current !== b.role) {
+    await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: b.role } })
+    await audit(c, { kind: 'member.role', workspaceId: id, targetId: target, target: await userEmail(target), data: { from: current, to: b.role } })
+  }
   return c.json({ ok: true, role: b.role })
 })
 
@@ -223,6 +230,7 @@ workspaceRoutes.delete('/:id/members/:userId', async (c) => {
   })
   membersChanged(id)
   await recordActivity(self ? { workspaceId: id, actorId: u.id, kind: 'member.left' } : { workspaceId: id, actorId: u.id, kind: 'member.removed', data: { member: await userName(target) } })
+  await audit(c, { kind: self ? 'member.left' : 'member.removed', workspaceId: id, targetId: target, target: email ?? target, data: { role: current } })
   return c.json({ ok: true })
 })
 
@@ -245,6 +253,7 @@ workspaceRoutes.post('/:id/members/:userId/transfer', async (c) => {
   })
   membersChanged(id)
   await recordActivity({ workspaceId: id, actorId: u.id, kind: 'member.role', data: { member: await userName(target), role: 'owner' } })
+  await audit(c, { kind: 'member.transfer', workspaceId: id, targetId: target, target: await userEmail(target), data: { to: 'owner', fromOwner: u.id } })
   return c.json({ ok: true })
 })
 
@@ -305,6 +314,7 @@ workspaceRoutes.post('/:id/invites', async (c) => {
   const expiresAt = now + INVITE_TTL_MS
   const [row] = await ctx().db.insert(invites).values({ token, workspaceId: id, email: b.email.toLowerCase(), role: b.role, createdBy: u.id, createdAt: now, expiresAt }).returning()
   const emailed = await mailInvite(c, row, u)
+  await audit(c, { kind: 'invite.created', workspaceId: id, target: row.email, data: { role: b.role, emailed } })
   return c.json({ ok: true, inviteUrl: inviteUrl(token), expiresAt, emailed })
 })
 
@@ -336,6 +346,7 @@ workspaceRoutes.post('/:id/invites/:token/resend', async (c) => {
   const [row] = await db.update(invites).set({ expiresAt: now + INVITE_TTL_MS }).where(eq(invites.token, inv.token)).returning()
   const emailed = await mailInvite(c, row, u)
   const fresh = (await db.select().from(invites).where(eq(invites.token, inv.token)).limit(1))[0] ?? row
+  await audit(c, { kind: 'invite.resent', workspaceId: id, target: inv.email, data: { role: inv.role, emailed } })
   return c.json({ ...pendingDto(fresh), emailed } satisfies PendingInvite)
 })
 
@@ -347,8 +358,9 @@ workspaceRoutes.delete('/:id/invites/:token', async (c) => {
     .db.update(invites)
     .set({ revokedAt: Date.now() })
     .where(and(eq(invites.token, c.req.param('token')), eq(invites.workspaceId, id), isNull(invites.acceptedAt)))
-    .returning({ token: invites.token })
+    .returning({ token: invites.token, email: invites.email, role: invites.role })
   if (!rows.length) throw notFound('Invite not found, or it was already used')
+  await audit(c, { kind: 'invite.withdrawn', workspaceId: id, target: rows[0].email, data: { role: rows[0].role } })
   return c.json({ ok: true })
 })
 
@@ -431,8 +443,10 @@ inviteRoutes.post('/:token/accept', async (c) => {
       await tx.update(memberships).set({ role: inv.role }).where(and(eq(memberships.workspaceId, inv.workspaceId), eq(memberships.userId, u.id)))
   })
   await recordActivity({ workspaceId: inv.workspaceId, actorId: u.id, kind: 'member.joined', data: { role: inv.role } })
+  await audit(c, { kind: 'invite.accepted', workspaceId: inv.workspaceId, targetId: u.id, target: inv.email, data: { role: inv.role, invitedBy: inv.createdBy } })
   const ws = (await listWorkspaces(u.id)).find((w) => w.id === inv.workspaceId)
   return c.json(ws)
 })
 
 const userName = async (id: string) => (await ctx().db.select({ name: users.name }).from(users).where(eq(users.id, id)).limit(1))[0]?.name ?? 'someone'
+const userEmail = async (id: string) => (await ctx().db.select({ email: users.email }).from(users).where(eq(users.id, id)).limit(1))[0]?.email ?? id

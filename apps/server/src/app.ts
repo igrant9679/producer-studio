@@ -14,6 +14,8 @@ import { log } from './log'
 import { countRequest, metricsRoute } from './metrics'
 import { requestId, requestIdOf, serverErrorMessage } from './request-id'
 import { healthRoutes } from './routes/health'
+import { spaceAuditRoutes } from './routes/audit'
+import { operatorRoutes } from './routes/operator'
 import { aiRoutes } from './routes/ai'
 import { voiceRoutes } from './routes/voice'
 import { aiSettingsRoutes } from './routes/ai-settings'
@@ -110,6 +112,7 @@ export function createApp() {
   app.route('/api/me', preferenceRoutes)
   app.route('/api/workspaces', workspaceShareRoutes)
   app.route('/api/workspaces', activityRoutes)
+  app.route('/api/workspaces', spaceAuditRoutes)
   app.route('/api/workspaces', brandRoutes)
   app.route('/api/workspaces', onboardingRoutes)
   app.route('/api/workspaces', voiceStudioRoutes)
@@ -142,6 +145,7 @@ export function createApp() {
   app.route('/api/system', systemRoutes)
   app.route('/api/devices', deviceRoutes)
   app.route('/api/sync', syncRoutes)
+  app.route('/api/operator', operatorRoutes)
 
   app.all('/api/*', (c) => c.json({ error: `No route for ${c.req.method} ${c.req.path}`, code: 'not_found', requestId: requestIdOf(c) }, 404))
 

@@ -134,4 +134,23 @@ describe('the dev mock API', () => {
     expect((await call('POST', '/api/workspaces/ws_team/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(403)
     expect((await call('POST', '/api/workspaces/ws_personal/invites', { email: 'kim@example.com', role: 'editor' })).status).toBe(200)
   })
+
+  it('keeps the audit log for owners and the operator routes for operators, like the server (R4-A)', async () => {
+    expect((await call('GET', '/api/workspaces/ws_personal/audit')).status).toBe(200)
+    expect((await call('GET', '/api/workspaces/ws_team/audit')).status).toBe(403)
+    expect((await call('GET', '/api/workspaces/ws_nope/audit')).status).toBe(404)
+    expect((await call('GET', '/api/operator/users')).status).toBe(404)
+    expect((await call('GET', '/api/auth/me')).body.operator).toBeUndefined()
+    localStorage.setItem('psMockOperator', '1')
+    try {
+      expect((await call('GET', '/api/auth/me')).body.operator).toBe(true)
+      expect((await call('GET', '/api/operator/users?q=alex')).body[0].email).toBe('alex@example.com')
+      const dry = (await call('POST', '/api/operator/storage/orphans', {})).body
+      expect(dry.dryRun).toBe(true)
+      expect((await call('POST', '/api/operator/storage/orphans', { scanId: dry.scanId })).body.removed).toBe(dry.count)
+      expect((await call('POST', '/api/operator/storage/orphans', { scanId: dry.scanId })).status).toBe(410)
+    } finally {
+      localStorage.removeItem('psMockOperator')
+    }
+  })
 })

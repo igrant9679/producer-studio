@@ -49,7 +49,7 @@ import { DESKTOP_DOWNLOAD_URL, useSyncPolling, useSystem } from './system'
 import { isActive, liveBus, uploadFiles, uploadsIn, useJobs, useUploads } from './stores'
 import { StorageBanner } from './StorageBanner'
 import { useJobNotices } from './jobNotices'
-import { CircleUser } from 'lucide-react'
+import { CircleUser, ShieldCheck } from 'lucide-react'
 import { GlobalSearch } from './palette/CommandPalette'
 import { QueueNote } from './components/QueueNote'
 import { Avatar, Logo, MenuList, Popover, Progress, SkipLink, Spinner, focusables, spaceColor, useClickOutside, useEditGate, useEscapeLayer, useFilePicker } from './ui'
@@ -368,6 +368,7 @@ function AvatarMenu({ openModal }: { openModal: (m: ModalKind) => void }) {
 export function Layout({ children }: { children: ReactNode }) {
   const workspaceId = useSession((s) => s.workspaceId)
   const currentWs = useSession((s) => s.workspaces.find((w) => w.id === s.workspaceId))
+  const operator = useSession((s) => s.operator === true)
   const [modal, setModal] = useState<ModalKind>()
   const [create, creating] = useCreateAndOpen()
   const loc = useLocation()
@@ -462,6 +463,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
         <div className="ps-nav-foot">
+          {operator && <NavItem to="/operator" icon={<ShieldCheck size={18} />} label="Operator" />}
           <NavItem to="/settings" icon={<Settings size={18} />} label="Settings" />
           <button className="ps-nav-link" onClick={() => setModal('help')} data-tip="Help & shortcuts" data-tip-side="right" aria-label="Help & shortcuts">
             <CircleHelp size={18} />
