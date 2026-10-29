@@ -204,4 +204,35 @@ describe('one lock for link, unlink, conflicts and cycles (D-11)', () => {
   }, 60_000)
 })
 
+describe('sync again as soon as the network comes back (D-8)', () => {
+  it('a cheap check while offline starts the sync when the cloud answers, not at the end of a long backoff', async () => {
+    const engine = d.engine as unknown as { backoffMs: number; probeMs: number }
+    engine.probeMs = 300
+    // already backed off a long way: the next wait would be 5 minutes
+    engine.backoffMs = 4 * 60_000
+    proxy.down = true
+    expect((await sync()).state).toBe('offline')
+    const before = (await desk.json<SyncStatus>('GET', '/api/sync/status')).body.lastSyncAt ?? 0
+    // a captive portal-ish wait: still down, the check keeps failing and nothing syncs
+    await new Promise((r) => setTimeout(r, 900))
+    expect((await desk.json<SyncStatus>('GET', '/api/sync/status')).body.state).toBe('offline')
+    const id = await cloudProject('Made while this computer was offline')
+    proxy.down = false
+    const t0 = Date.now()
+    await until(async () => (await desk.json<SyncStatus>('GET', '/api/sync/status')).body.state === 'idle' && (await localIds()).includes(id), 20_000)
+    expect(Date.now() - t0).toBeLessThan(20_000)
+    expect((await desk.json<SyncStatus>('GET', '/api/sync/status')).body.lastSyncAt).toBeGreaterThan(before)
+    engine.probeMs = 5_000
+  }, 60_000)
+
+  it('the app telling it the connection is back does the same', async () => {
+    proxy.down = true
+    expect((await sync()).state).toBe('offline')
+    proxy.down = false
+    const r = await desk.json<SyncStatus>('POST', '/api/sync/online')
+    expect(r.status).toBe(200)
+    await until(async () => (await desk.json<SyncStatus>('GET', '/api/sync/status')).body.state === 'idle', 20_000)
+  }, 60_000)
+})
+
 export type { Project }

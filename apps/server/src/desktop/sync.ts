@@ -49,6 +49,8 @@ const INTERVAL_MS = 60_000
 const AFTER_SAVE_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
 const RELAY_POLL_MS = 5_000
+/** While offline, a cheap request this often checks whether the cloud is back (D-8). */
+const PROBE_MS = 5_000
 const RELAY_BEAT_MS = 15_000
 
 type ProjectRow = typeof projects.$inferSelect
@@ -202,6 +204,9 @@ export class SyncEngine {
   readonly lock = new SyncLock()
   /** Ends the cycle under way (an unlink doesn't wait for a long upload). */
   private cycleAbort?: AbortController
+  /** While offline: how often to check whether the cloud answers again (a sync then starts at once, D-8). */
+  probeMs = PROBE_MS
+  private probeTimer?: NodeJS.Timeout
 
   async start() {
     const link = await loadLink()
@@ -234,6 +239,7 @@ export class SyncEngine {
     if (this.interval) clearInterval(this.interval)
     if (this.relayTimer) clearInterval(this.relayTimer)
     if (this.debounce) clearTimeout(this.debounce)
+    if (this.probeTimer) clearTimeout(this.probeTimer)
     for (const u of this.unsubs) u()
     this.unsubs = []
   }
@@ -245,6 +251,39 @@ export class SyncEngine {
     if (this.debounce) clearTimeout(this.debounce)
     this.debounce = setTimeout(() => void this.syncNow().catch(() => undefined), ms)
     this.debounce.unref?.()
+  }
+
+  // ---------------- back online (D-8) ----------------
+
+  private armProbe() {
+    if (this.probeTimer || this.stopped) return
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = undefined
+      void this.probe()
+    }, this.probeMs)
+    this.probeTimer.unref?.()
+  }
+
+  /** Offline: ask the cloud's health check (a Wi-Fi sign-in page doesn't count). It answers: sync now, not at the end of the backoff. */
+  private async probe() {
+    if (this.state !== 'offline' || this.stopped || !linkInfo()) return
+    const back = await cloud()
+      ?.json('GET', '/api/health', undefined, 5_000)
+      .then(
+        () => true,
+        (err) => !(err instanceof CloudError && err.offline),
+      )
+    if (!back || this.state !== 'offline') return this.armProbe()
+    log.info('desktop: the cloud answers again; syncing now')
+    this.networkBack()
+  }
+
+  /** The network is back (the cloud answered, or the app saw the connection return): sync now if sync was waiting. */
+  networkBack() {
+    if (this.state !== 'offline') return
+    this.backoffMs = 0
+    this.backoffUntil = 0
+    this.schedule(0)
   }
 
   // ---------------- one at a time (D-11) ----------------
@@ -602,6 +641,7 @@ export class SyncEngine {
         log.info('desktop: cloud offline, backing off', { ms: this.backoffMs })
         this.schedule(this.backoffMs)
         this.retrying = true
+        this.armProbe()
       } else if (err instanceof CloudError && err.status === 401) {
         this.setState('error', 'The cloud no longer accepts this computer’s device token (it may have been revoked). Unlink and link again.')
       } else {

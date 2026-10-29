@@ -178,6 +178,13 @@ desktopRoutes.post('/sync/now', async (c) => {
   return c.json(await syncEngine.syncNow())
 })
 
+/** The app saw its connection come back: sync now if sync waits offline (doesn't wait for the cycle). */
+desktopRoutes.post('/sync/online', async (c) => {
+  requireUser(c)
+  syncEngine.networkBack()
+  return c.json(await syncEngine.status())
+})
+
 desktopRoutes.post('/sync/link', async (c) => {
   requireUser(c)
   const b = await body(c, z.object({ cloudUrl: z.string().min(1).max(500), email: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }))

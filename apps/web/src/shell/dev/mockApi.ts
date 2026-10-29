@@ -1441,6 +1441,18 @@ on('POST', '/api/sync/now', desktopOnly(() => {
   }, 2200)
   return json(sync)
 }))
+on('POST', '/api/sync/online', desktopOnly(() => {
+  if (sync.state === 'offline') {
+    sync.state = 'syncing'
+    emitSync()
+    setTimeout(() => {
+      sync.state = 'idle'
+      sync.lastSyncAt = Date.now()
+      emitSync()
+    }, 1200)
+  }
+  return json(sync)
+}))
 on('POST', '/api/sync/link', desktopOnly(async (_m, _q, b) => {
   await delay(700)
   if (String(b.password).length < 8) return fail(401, 'Invalid email or password', 'unauthorized')

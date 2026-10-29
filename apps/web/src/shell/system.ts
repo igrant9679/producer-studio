@@ -3,7 +3,7 @@
 import type { AiKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, SyncFailure, SyncStatus, SystemInfo } from '@producer/core'
 import { useEffect } from 'react'
 import { create } from 'zustand'
-import { HttpError, noteStatus } from '../lib/api'
+import { HttpError, noteStatus, subscribeEvents } from '../lib/api'
 import { useSession } from '../lib/session'
 
 export async function sysFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -32,6 +32,8 @@ export const systemApi = {
   saveSettings: (p: Partial<DesktopSettings>) => sysFetch<DesktopSettings>('PUT', '/settings', p),
   syncStatus: () => sysFetch<SyncStatus>('GET', '/sync/status'),
   syncNow: () => sysFetch<SyncStatus>('POST', '/sync/now'),
+  /** The connection is back: sync now if sync was waiting for it (instead of at the end of its backoff). */
+  syncOnline: () => sysFetch<SyncStatus>('POST', '/sync/online'),
   link: (cloudUrl: string, email: string, password: string) => sysFetch<SyncStatus>('POST', '/sync/link', { cloudUrl, email, password }),
   unlink: () => sysFetch<SyncStatus>('POST', '/sync/unlink'),
   resolve: (projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both') => sysFetch<SyncStatus>('POST', `/projects/${encodeURIComponent(projectId)}/sync`, { mode }),
@@ -101,7 +103,11 @@ export const DESKTOP_DOWNLOAD_URL = 'https://github.com/igrant9679/producer-stud
 export const isDesktop = (info?: SystemInfo) => info?.mode === 'desktop'
 export const useIsDesktop = () => useSystem((s) => s.info?.mode === 'desktop')
 
-/** In desktop mode: poll sync status every 10 s and listen for SSE `sync` events. */
+/**
+ * In desktop mode: poll sync status every 10 s and follow `sync` live updates (the resumable stream: it reconnects,
+ * replays what it missed, and reloads the status when it can't). When the connection comes back while sync waits
+ * offline, sync starts at once.
+ */
 export function useSyncPolling(workspaceId: string | undefined) {
   const desktop = useIsDesktop()
   const setSync = useSystem((s) => s.setSync)
@@ -115,26 +121,20 @@ export function useSyncPolling(workspaceId: string | undefined) {
         .catch(() => undefined)
     void tick()
     const iv = setInterval(tick, 10_000)
-    // lib/subscribeEvents doesn't expose `sync` yet; desktop is local and single-user, so a second stream is cheap.
-    let es: EventSource | undefined
-    if (workspaceId && typeof EventSource !== 'undefined') {
-      try {
-        es = new EventSource(`/api/events?workspaceId=${encodeURIComponent(workspaceId)}`, { withCredentials: true })
-        es.addEventListener('sync', (e) => {
-          try {
-            setSync(JSON.parse((e as MessageEvent).data))
-          } catch {
-            /* ignore malformed */
-          }
-        })
-      } catch {
-        /* ignore */
-      }
+    const online = () => {
+      if (useSystem.getState().sync?.state !== 'offline') return
+      systemApi
+        .syncOnline()
+        .then((s) => alive && setSync(s))
+        .catch(() => undefined)
     }
+    window.addEventListener('online', online)
+    const unsubscribe = workspaceId && typeof EventSource !== 'undefined' ? subscribeEvents(workspaceId, { sync: (s) => alive && setSync(s), resync: () => void tick() }) : undefined
     return () => {
       alive = false
       clearInterval(iv)
-      es?.close()
+      window.removeEventListener('online', online)
+      unsubscribe?.()
     }
   }, [desktop, workspaceId, setSync])
 }
