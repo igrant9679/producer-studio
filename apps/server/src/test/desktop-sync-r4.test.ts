@@ -31,6 +31,30 @@ async function cloudDelete(id: string) {
   expect((await A.http.json('DELETE', `/api/projects/${id}`)).status).toBe(200)
 }
 
+async function until(ok: () => boolean | Promise<boolean>, ms = 20_000) {
+  const end = Date.now() + ms
+  while (!(await ok())) {
+    if (Date.now() > end) throw new Error('timed out waiting')
+    await new Promise((r) => setTimeout(r, 50))
+  }
+}
+
+/** Hold the next pulls at the proxy until the returned function is called. */
+function holdPulls(): () => void {
+  let release!: () => void
+  const held = new Promise<void>((r) => (release = r))
+  proxy.hold = (_m, path) => (path.startsWith('/api/sync/changes') ? held : undefined)
+  return () => {
+    proxy.hold = undefined
+    release()
+  }
+}
+
+async function editName(h: Http, id: string, name: string) {
+  const cur = (await h.json('GET', `/api/projects/${id}`)).body
+  expect((await h.json('PUT', `/api/projects/${id}`, { project: { ...cur.project, name }, baseVersion: cur.version })).status).toBe(200)
+}
+
 const localIds = async () => ((await desk.json('GET', `/api/projects?workspaceId=${A.workspaceId}`)).body.items as Array<{ id: string }>).map((p) => p.id)
 
 beforeAll(async () => {
@@ -135,6 +159,49 @@ describe('a space’s other brand kits and fonts (carried from R3)', () => {
     expect((await desk.json('GET', `/api/workspaces/${ws}/brand-kits`)).body.items.map((k: { id: string }) => k.id)).not.toContain(kitId)
     expect(((await desk.json<SyncStatus>('GET', '/api/sync/status')).body.failures ?? []).length).toBe(0)
   }, 120_000)
+})
+
+describe('one lock for link, unlink, conflicts and cycles (D-11)', () => {
+  it('a conflict choice made while a cycle runs waits for that cycle', async () => {
+    const id = await cloudProject('Both sides')
+    await sync()
+    await editName(desk, id, 'Named here')
+    await editName(A.http, id, 'Named there')
+    expect((await sync()).conflicts.map((c) => c.projectId)).toContain(id)
+
+    const release = holdPulls()
+    const cycle = desk.json('POST', '/api/sync/now')
+    await until(() => d.engine.lock.holder === 'sync')
+    let chosen = false
+    const choice = desk.json('POST', `/api/projects/${id}/sync`, { mode: 'keep-cloud' }).then((r) => ((chosen = true), r))
+    await until(() => d.engine.lock.waiting().includes('resolve'))
+    await new Promise((r) => setTimeout(r, 400))
+    expect(chosen).toBe(false)
+    release()
+    expect((await cycle).status).toBe(200)
+    expect((await choice).status).toBe(200)
+    expect((await desk.json('GET', `/api/projects/${id}`)).body.summary.name).toBe('Named there')
+    expect((await desk.json<SyncStatus>('GET', '/api/sync/status')).body.conflicts.map((c) => c.projectId)).not.toContain(id)
+  }, 60_000)
+
+  it('unlinking stops the cycle under way instead of waiting for it, and records no failures', async () => {
+    const release = holdPulls()
+    const cycle = desk.json('POST', '/api/sync/now')
+    await until(() => d.engine.lock.holder === 'sync')
+    const t0 = Date.now()
+    const un = await desk.json<SyncStatus>('POST', '/api/sync/unlink')
+    expect(un.status).toBe(200)
+    expect(un.body.linked).toBe(false)
+    expect(Date.now() - t0).toBeLessThan(15_000)
+    expect((await cycle).status).toBe(200)
+    release()
+    const st = (await desk.json<SyncStatus>('GET', '/api/sync/status')).body
+    expect(st.state).toBe('unlinked')
+    expect(st.failures ?? []).toEqual([])
+    // linked again for what follows
+    expect((await desk.json('POST', '/api/sync/link', { cloudUrl: proxy.url, email: A.email, password: PASSWORD })).status).toBe(200)
+    expect((await sync()).state).toBe('idle')
+  }, 60_000)
 })
 
 export type { Project }

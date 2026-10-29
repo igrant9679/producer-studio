@@ -43,6 +43,6 @@ export function linkInfo(): StoredLink | undefined {
 }
 
 /** Client for the linked cloud, or undefined when not linked (or the token can't be decrypted). */
-export function cloud(): CloudClient | undefined {
-  return current ? new CloudClient(current.link.cloudUrl, current.token) : undefined
+export function cloud(signal?: AbortSignal): CloudClient | undefined {
+  return current ? new CloudClient(current.link.cloudUrl, current.token, signal) : undefined
 }

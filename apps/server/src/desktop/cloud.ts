@@ -125,6 +125,8 @@ export class CloudClient {
   constructor(
     readonly baseUrl: string,
     private token?: string,
+    /** Ends every request this client makes (an unlink stops the cycle under way). */
+    readonly signal?: AbortSignal,
   ) {}
 
   url(p: string) {
@@ -149,7 +151,7 @@ export class CloudClient {
     }
     const streaming = !!body && typeof (body as ReadableStream).getReader === 'function'
     if (guard && streaming) body = guard.upload(body as ReadableStream<Uint8Array>)
-    const signals = [init.signal, init.timeoutMs ? AbortSignal.timeout(init.timeoutMs) : undefined, guard?.controller.signal].filter(Boolean) as AbortSignal[]
+    const signals = [init.signal, this.signal, init.timeoutMs ? AbortSignal.timeout(init.timeoutMs) : undefined, guard?.controller.signal].filter(Boolean) as AbortSignal[]
     let res: Response
     try {
       res = await fetch(this.url(p), {
@@ -162,7 +164,7 @@ export class CloudClient {
       } as RequestInit)
     } catch (err) {
       guard?.done()
-      if (init.signal?.aborted) throw err
+      if (init.signal?.aborted || this.signal?.aborted) throw err
       if (guard?.stalled) throw guard.error
       throw new CloudError(0, { error: `The cloud is unreachable (${(err as Error).message})` }, true)
     }

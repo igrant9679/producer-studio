@@ -24,7 +24,7 @@ import { Readable } from 'node:stream'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncFailure, type SyncProject, type SyncStatus, type Transcript, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
 import { ctx } from '../context'
-import { type AssetMeta, assets, brandKits, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
+import { type AssetMeta, assets, brandKits, comments, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
 import { HttpError } from '../http'
 import { log } from '../log'
 import { type AssetRow, assetDirs, assetPrefix, emitAsset, extFor, hashObject, uploadMime } from '../services/assets'
@@ -34,6 +34,7 @@ import { type FailureKind, addNotice, clearFailure, clearFailures, clearSync, de
 import { adoptCloudIdentity, localUserId } from './identity'
 import { applyFont, applyFontDelete, applyKit, applyKitDelete, dropUnseenBrand, pushBrandDelete, pushBrandExtras } from './brand-sync'
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
+import { SyncLock } from './lock'
 import { prefetchAllMedia } from './media'
 import { getSettings, onSettingsChange } from './settings'
 
@@ -197,6 +198,10 @@ export class SyncEngine {
   private pageBytes = PAGE_BYTES
   /** The pending cycle is a retry after going offline (not one asked for by a save or a person). */
   private retrying = false
+  /** Link, unlink, conflict resolution, cycles and space changes, one at a time (D-11). */
+  readonly lock = new SyncLock()
+  /** Ends the cycle under way (an unlink doesn't wait for a long upload). */
+  private cycleAbort?: AbortController
 
   async start() {
     const link = await loadLink()
@@ -242,6 +247,38 @@ export class SyncEngine {
     this.debounce.unref?.()
   }
 
+  // ---------------- one at a time (D-11) ----------------
+
+  link(cloudUrl: string, email: string, password: string): Promise<SyncStatus> {
+    return this.lock.run('link', () => this.linkLocked(cloudUrl, email, password))
+  }
+
+  /** Unlinking stops the cycle under way, then waits for its turn. */
+  unlink(): Promise<SyncStatus> {
+    this.cycleAbort?.abort(new Error('unlinked'))
+    return this.lock.run('unlink', () => this.unlinkLocked())
+  }
+
+  resolve(projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both'): Promise<SyncStatus> {
+    return this.lock.run('resolve', () => this.resolveLocked(projectId, mode))
+  }
+
+  applyNotice(id: string): Promise<SyncStatus> {
+    return this.lock.run('notice', () => this.applyNoticeLocked(id))
+  }
+
+  createWorkspace(name: string): Promise<Workspace | null> {
+    return this.lock.run('space', () => this.createWorkspaceLocked(name))
+  }
+
+  renameWorkspace(id: string, name: string): Promise<Workspace | null> {
+    return this.lock.run('space', () => this.renameWorkspaceLocked(id, name))
+  }
+
+  deleteWorkspace(id: string): Promise<boolean> {
+    return this.lock.run('space', () => this.deleteWorkspaceLocked(id))
+  }
+
   // ---------------- status ----------------
 
   async status(): Promise<SyncStatus> {
@@ -272,7 +309,7 @@ export class SyncEngine {
   }
 
   /** Take the one thing a notice offers (bring back a brand kit set aside at link time), then drop the notice. */
-  async applyNotice(id: string): Promise<SyncStatus> {
+  private async applyNoticeLocked(id: string): Promise<SyncStatus> {
     const n = (await listNotices()).find((x) => x.id === id)
     if (!n) throw new HttpError(404, 'not_found', 'That notice is gone')
     if (n.data?.kind !== 'brand') throw new HttpError(400, 'invalid', 'This notice has nothing to apply')
@@ -324,6 +361,8 @@ export class SyncEngine {
       if (f) await this.resolved(kind, id)
     } catch (err) {
       if (err instanceof CloudError && (err.offline || err.status === 401)) throw err
+      // stopped by an unlink: not this item's failure
+      if (this.cycleAbort?.signal.aborted) throw err
       const message = err instanceof Error ? err.message : String(err)
       this.failures.set(key, await recordFailure(kind, id, name, message))
       log.warn('desktop: item failed to sync', { kind, id, err: message })
@@ -390,7 +429,7 @@ export class SyncEngine {
 
   // ---------------- link / unlink ----------------
 
-  async link(cloudUrlIn: string, email: string, password: string): Promise<SyncStatus> {
+  private async linkLocked(cloudUrlIn: string, email: string, password: string): Promise<SyncStatus> {
     if (linkInfo()) throw new HttpError(409, 'conflict', `Already linked to ${linkInfo()!.account}. Unlink first.`)
     let cloudUrl: string
     try {
@@ -486,7 +525,7 @@ export class SyncEngine {
     return Object.values((await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}).flatMap((p) => p.workspaces)
   }
 
-  async unlink(): Promise<SyncStatus> {
+  private async unlinkLocked(): Promise<SyncStatus> {
     const link = linkInfo()
     const c = cloud()
     if (link && c) await c.json('DELETE', `/api/devices/${encodeURIComponent(link.deviceId)}`, undefined, 10_000).catch(() => undefined)
@@ -511,12 +550,12 @@ export class SyncEngine {
       await this.running
       return this.status()
     }
-    this.running = (async () => {
+    this.running = this.lock.run('sync', async () => {
       do {
         this.rerun = false
         await this.cycle()
-      } while (this.rerun && !this.stopped)
-    })().finally(() => {
+      } while (this.rerun && !this.stopped && linkInfo())
+    }).finally(() => {
       this.running = undefined
     })
     await this.running
@@ -524,18 +563,24 @@ export class SyncEngine {
   }
 
   private async cycle() {
-    const c = cloud()
+    const ac = new AbortController()
+    const c = cloud(ac.signal)
     if (!c) return
+    this.cycleAbort = ac
     this.setState('syncing', undefined)
+    const step = () => ac.signal.throwIfAborted()
     try {
       this.failures = await failureMap()
       await this.pushDeletes(c)
+      step()
       await this.pull(c)
+      step()
       await pushBrandExtras(c, new Set((await kvGet<string[]>('cloudWorkspaces')) ?? []), (kind, id, name, fn) => this.item(kind, id, name, fn), (kind, id) => this.resolved(kind, id))
       await this.pushAssets(c)
       await this.pushProjects(c)
       await this.pushBrandKits(c)
       await this.pushVoiceProfiles(c)
+      step()
       await this.pruneFailures()
       this.lastSyncAt = Date.now()
       await kvSet('lastSyncAt', this.lastSyncAt)
@@ -547,7 +592,10 @@ export class SyncEngine {
       this.setState('idle')
       if (getSettings().mediaSync === 'all') void prefetchAllMedia()
     } catch (err) {
-      if (err instanceof CloudError && err.offline) {
+      if (ac.signal.aborted) {
+        // unlinked meanwhile: what was done stays; the unlink says the rest
+        log.info('desktop: sync cycle stopped', { reason: String(ac.signal.reason) })
+      } else if (err instanceof CloudError && err.offline) {
         this.backoffMs = Math.min(MAX_BACKOFF_MS, Math.max(5000, this.backoffMs * 2))
         this.backoffUntil = Date.now() + this.backoffMs
         this.setState('offline', undefined)
@@ -560,6 +608,8 @@ export class SyncEngine {
         log.warn('desktop: sync failed', { err })
         this.setState('error', err instanceof Error ? err.message : String(err))
       }
+    } finally {
+      if (this.cycleAbort === ac) this.cycleAbort = undefined
     }
   }
 
@@ -632,7 +682,7 @@ export class SyncEngine {
   }
 
   /** Create a workspace while linked: in the cloud first (the cloud assigns the id), then mirrored locally. */
-  async createWorkspace(name: string): Promise<Workspace | null> {
+  private async createWorkspaceLocked(name: string): Promise<Workspace | null> {
     const c = cloud()
     if (!c) return null
     const w = await c.json<Workspace>('POST', '/api/workspaces', { name })
@@ -646,7 +696,7 @@ export class SyncEngine {
   }
 
   /** Rename while linked: in the cloud first, then mirrored. Null when unlinked or local-only (caller renames locally). */
-  async renameWorkspace(id: string, name: string): Promise<Workspace | null> {
+  private async renameWorkspaceLocked(id: string, name: string): Promise<Workspace | null> {
     const c = cloud()
     if (!c || !(await this.isCloudWorkspace(id))) return null
     const w = await c.json<Workspace>('PATCH', `/api/workspaces/${encodeURIComponent(id)}`, { name })
@@ -656,7 +706,7 @@ export class SyncEngine {
   }
 
   /** Delete while linked: in the cloud first, then here. False when unlinked or local-only (caller deletes locally). */
-  async deleteWorkspace(id: string): Promise<boolean> {
+  private async deleteWorkspaceLocked(id: string): Promise<boolean> {
     const c = cloud()
     if (!c || !(await this.isCloudWorkspace(id))) return false
     await c.json('DELETE', `/api/workspaces/${encodeURIComponent(id)}`).catch((e) => {
@@ -1026,7 +1076,11 @@ export class SyncEngine {
     if (!local) return
     // edited here since: keep it; with no sync row it is pushed again as a new cloud project
     if (isDirty(local, s)) return
-    await ctx().db.delete(projects).where(eq(projects.id, id))
+    // review comments made here have no FK: they go with the project, as in the cloud
+    await ctx().db.transaction(async (tx) => {
+      await tx.delete(comments).where(eq(comments.projectId, id))
+      await tx.delete(projects).where(eq(projects.id, id))
+    })
   }
 
   // ---------------- push ----------------
@@ -1454,7 +1508,7 @@ export class SyncEngine {
 
   // ---------------- conflicts ----------------
 
-  async resolve(projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both'): Promise<SyncStatus> {
+  private async resolveLocked(projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both'): Promise<SyncStatus> {
     const c = cloud()
     if (!c) throw new HttpError(409, 'conflict', 'This computer is not linked to a cloud account')
     const local = (await ctx().db.select().from(projects).where(eq(projects.id, projectId)).limit(1))[0]
