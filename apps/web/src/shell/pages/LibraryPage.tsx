@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, HttpError } from '../../lib/api'
 import { useSession } from '../../lib/session'
+import { OfflineBadge, offlineMenuItem, useOffline } from '../sync/offline'
 import { toast, toastError } from '../../lib/toast'
 import { projectPath } from '../actions'
 import { InlineRename, KindPill, ProjectCard, ProjectThumb } from '../components/ProjectCard'
@@ -55,6 +56,7 @@ function ProjectsTab({ trash, v, update }: { trash: boolean; v: LibraryView; upd
   const navigate = useNavigate()
   const workspaceId = useSession((s) => s.workspaceId)
   const me = useSession((s) => s.user?.id)
+  const offline = useOffline(workspaceId)
   const [renaming, setRenaming] = useState<string>()
   const [confirm, setConfirm] = useState<{ ids: string[] }>()
   const [exportFirst, setExportFirst] = useState<ProjectSummary>()
@@ -232,6 +234,7 @@ function ProjectsTab({ trash, v, update }: { trash: boolean; v: LibraryView; upd
       { label: 'Tags…', icon: <Tags size={15} />, ...w, onClick: () => setTagging([p]) },
       { label: 'Copy or move to a space…', icon: <Copy size={15} />, ...w, onClick: () => setMoving([p]) },
       { label: 'Select', icon: <CheckSquare size={15} />, onClick: () => s.toggle(p.id) },
+      ...offlineMenuItem(offline, p),
       { sep: true, label: '' },
       { label: 'Move to trash', icon: <Trash2 size={15} />, danger: true, ...w, onClick: () => trashIds([p.id]) },
     ]
@@ -330,7 +333,14 @@ function ProjectsTab({ trash, v, update }: { trash: boolean; v: LibraryView; upd
                 onRename={rename(p)}
                 onRenameCancel={() => setRenaming(undefined)}
                 sub={trash ? `Trashed · edited ${relativeTime(p.updatedAt)}` : undefined}
-                overlay={desktop && !trash ? <SyncBadge state={projectSyncBadge(p.id, sync)} /> : undefined}
+                overlay={
+                  desktop && !trash ? (
+                    <>
+                      <SyncBadge state={projectSyncBadge(p.id, sync)} />
+                      <OfflineBadge o={offline} projectId={p.id} />
+                    </>
+                  ) : undefined
+                }
               />
             )}
           />

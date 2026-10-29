@@ -15,6 +15,8 @@ import { openSignInTerminal } from './claude-login'
 import { ensureDesktopTables } from './db'
 import { createLocalSession, ensureLocalUser, secretMatches } from './identity'
 import { fetchMissingMedia } from './media'
+import { desktopCollabRoutes } from './collab'
+import { offlineInfo, setOffline } from './offline'
 import { SettingsPatch, getSettings, saveSettings } from './settings'
 import { CloudError } from './cloud'
 import { syncEngine } from './sync'
@@ -123,6 +125,8 @@ export const desktopGuard: MiddlewareHandler<AppEnv> = async (c, next) => {
 export const desktopRoutes = new Hono<AppEnv>()
 
 desktopRoutes.route('/voicestudio', voiceStudioRoutes)
+// while linked, a cloud project's comments and a cloud space's activity are the cloud's
+desktopRoutes.route('/', desktopCollabRoutes)
 
 // one local user: no sign-ups on the desktop
 desktopRoutes.post('/auth/signup', () => {
@@ -178,10 +182,66 @@ desktopRoutes.post('/sync/now', async (c) => {
   return c.json(await syncEngine.syncNow())
 })
 
+/** Everything still to sync: waiting, uploading, failed or skipped, with reasons and sizes (the sync panel). */
+desktopRoutes.get('/sync/items', async (c) => {
+  requireUser(c)
+  return c.json(await syncEngine.items())
+})
+
+/** A conflicted project: this computer's copy against the cloud's. */
+desktopRoutes.get('/sync/conflicts/:projectId', async (c) => {
+  requireUser(c)
+  return c.json(await viaCloud(() => syncEngine.conflictPreview(c.req.param('projectId'))))
+})
+
+/** Projects kept available offline in a space, and its clips whose files are only in the cloud (D-9). */
+desktopRoutes.get('/sync/offline', async (c) => {
+  const u = requireUser(c)
+  const ws = c.req.query('workspaceId') ?? ''
+  await requireRole(u.id, ws, 'viewer')
+  return c.json(await offlineInfo(ws))
+})
+
+/** Keep a project available offline (its clips download now and stay current), or stop. */
+desktopRoutes.put('/sync/offline/:projectId', async (c) => {
+  requireUser(c)
+  const b = await body(c, z.object({ pinned: z.boolean() }))
+  const ws = await setOffline(c.req.param('projectId'), b.pinned).catch((err) => {
+    if ((err as { notFound?: boolean }).notFound) throw new HttpError(404, 'not_found', 'Project not found')
+    throw err
+  })
+  return c.json(await offlineInfo(ws))
+})
+
+/** The app saw its connection come back: sync now if sync waits offline (doesn't wait for the cycle). */
+desktopRoutes.post('/sync/online', async (c) => {
+  requireUser(c)
+  syncEngine.networkBack()
+  return c.json(await syncEngine.status())
+})
+
+const Credentials = z.object({ cloudUrl: z.string().min(1).max(500), email: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) })
+const Choice = z.discriminatedUnion('action', [z.object({ action: z.literal('merge'), into: z.string().min(1).max(80) }), z.object({ action: z.literal('new') }), z.object({ action: z.literal('local') })])
+
+/** Link straight away ({cloudUrl, email, password}), or as previewed ({previewId, choices}: one per local space). */
 desktopRoutes.post('/sync/link', async (c) => {
   requireUser(c)
-  const b = await body(c, z.object({ cloudUrl: z.string().min(1).max(500), email: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }))
+  const b = await body(c, z.union([Credentials, z.object({ previewId: z.string().min(1).max(80), choices: z.record(z.string().max(80), Choice).default({}) })]))
+  if ('previewId' in b) return c.json(await syncEngine.linkPreviewed(b.previewId, b.choices))
   return c.json(await syncEngine.link(b.cloudUrl, b.email, b.password))
+})
+
+/** What linking would merge and upload, a choice per space, before anything changes (D-5). */
+desktopRoutes.post('/sync/link/preview', async (c) => {
+  requireUser(c)
+  const b = await body(c, Credentials)
+  return c.json(await syncEngine.previewLink(b.cloudUrl, b.email, b.password))
+})
+
+desktopRoutes.post('/sync/link/cancel', async (c) => {
+  requireUser(c)
+  const b = await body(c, z.object({ previewId: z.string().min(1).max(80) }))
+  return c.json({ ok: await syncEngine.cancelPreview(b.previewId) })
 })
 
 desktopRoutes.post('/sync/unlink', async (c) => {
@@ -189,7 +249,7 @@ desktopRoutes.post('/sync/unlink', async (c) => {
   return c.json(await syncEngine.unlink())
 })
 
-const FAILURE_KINDS = ['project', 'asset', 'brand', 'voice', 'project-delete', 'asset-delete', 'voice-delete'] as const
+const FAILURE_KINDS = ['project', 'asset', 'brand', 'voice', 'kit', 'font', 'project-delete', 'asset-delete', 'voice-delete', 'kit-delete', 'font-delete'] as const
 
 /** An item that keeps failing to sync: try it again now, or skip it (it stays on this computer). */
 desktopRoutes.post('/sync/failures/:kind/:id', async (c) => {

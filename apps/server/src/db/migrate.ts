@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 18
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -580,6 +580,59 @@ CREATE INDEX IF NOT EXISTS jobs_ws_status_idx ON jobs(workspace_id, status);
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS started_at double precision;
 `
 
+/**
+ * v18 — a sync feed that can forget (R4-C). Deleting tombstones (compaction) raises the feed's horizon: a replica whose
+ * cursor is below it may have missed deletes and does a full resync. A space's other brand kits and its font files
+ * now sync to desktops (change_seq, tombstones 'brand_kit' / 'brand_font', republished to a member who joins).
+ */
+export const DDL_V18 = `
+CREATE TABLE IF NOT EXISTS sync_horizon (
+  id integer PRIMARY KEY,
+  seq bigint NOT NULL,
+  updated_at double precision NOT NULL
+);
+CREATE OR REPLACE FUNCTION ps_tombstones_compacted() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  top bigint;
+BEGIN
+  SELECT max(change_seq) INTO top FROM gone;
+  IF top IS NOT NULL THEN
+    INSERT INTO sync_horizon (id, seq, updated_at) VALUES (1, top, extract(epoch from clock_timestamp()) * 1000)
+    ON CONFLICT (id) DO UPDATE SET seq = GREATEST(sync_horizon.seq, EXCLUDED.seq), updated_at = EXCLUDED.updated_at;
+  END IF;
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS tombstones_compacted ON tombstones;
+CREATE TRIGGER tombstones_compacted AFTER DELETE ON tombstones REFERENCING OLD TABLE AS gone FOR EACH STATEMENT EXECUTE FUNCTION ps_tombstones_compacted();
+CREATE INDEX IF NOT EXISTS tombstones_deleted_idx ON tombstones(deleted_at);
+
+ALTER TABLE extra_brand_kits ADD COLUMN IF NOT EXISTS change_seq bigint;
+ALTER TABLE brand_fonts ADD COLUMN IF NOT EXISTS change_seq bigint;
+DROP TRIGGER IF EXISTS extra_brand_kits_change_seq ON extra_brand_kits;
+CREATE TRIGGER extra_brand_kits_change_seq BEFORE INSERT OR UPDATE ON extra_brand_kits FOR EACH ROW EXECUTE FUNCTION ps_bump_change_seq();
+DROP TRIGGER IF EXISTS brand_fonts_change_seq ON brand_fonts;
+CREATE TRIGGER brand_fonts_change_seq BEFORE INSERT OR UPDATE ON brand_fonts FOR EACH ROW EXECUTE FUNCTION ps_bump_change_seq();
+DROP TRIGGER IF EXISTS extra_brand_kits_tombstone ON extra_brand_kits;
+CREATE TRIGGER extra_brand_kits_tombstone AFTER DELETE ON extra_brand_kits FOR EACH ROW EXECUTE FUNCTION ps_tombstone('brand_kit');
+DROP TRIGGER IF EXISTS brand_fonts_tombstone ON brand_fonts;
+CREATE TRIGGER brand_fonts_tombstone AFTER DELETE ON brand_fonts FOR EACH ROW EXECUTE FUNCTION ps_tombstone('brand_font');
+UPDATE extra_brand_kits SET change_seq = 0 WHERE change_seq IS NULL;
+UPDATE brand_fonts SET change_seq = 0 WHERE change_seq IS NULL;
+CREATE INDEX IF NOT EXISTS extra_brand_kits_seq_idx ON extra_brand_kits(workspace_id, change_seq);
+CREATE INDEX IF NOT EXISTS brand_fonts_seq_idx ON brand_fonts(workspace_id, change_seq);
+
+CREATE OR REPLACE FUNCTION ps_membership_joined() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE projects SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  UPDATE assets SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  UPDATE brand_kits SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  UPDATE voice_profiles SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  UPDATE extra_brand_kits SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  UPDATE brand_fonts SET change_seq = 0 WHERE workspace_id = NEW.workspace_id;
+  RETURN NEW;
+END $$;
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -599,4 +652,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [13, DDL_V13],
   [14, DDL_V14],
   [15, DDL_V15],
+  [18, DDL_V18],
 ]

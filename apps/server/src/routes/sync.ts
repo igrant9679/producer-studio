@@ -1,14 +1,15 @@
 // System info (public), device tokens, and the cloud change feed used by desktop replicas.
 import fs from 'node:fs'
+import { Readable } from 'node:stream'
 import { createRequire } from 'node:module'
 import { Hono } from 'hono'
-import { and, asc, desc, eq, gt, inArray, isNotNull, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
-import type { Device, SyncChanges, SystemInfo } from '@producer/core'
+import { BRAND_FONT_MAX_BYTES, FONT_MIME, MAX_EXTRA_KITS, cleanFamily, sniffFontFormat, type BrandKitDoc, type Device, type SyncChanges, type SystemInfo } from '@producer/core'
 import { type AppEnv, DEVICE_IDLE_MS, requireUser } from '../auth'
 import { ctx } from '../context'
 import { CHANGE_LOCK_NS } from '../db/migrate'
-import { assets, brandKits, devices, memberships, projects, tombstones, voiceProfiles, workspaces } from '../db/schema'
+import { assets, brandFonts, brandKits, comments, devices, extraBrandKits, memberships, projects, tombstones, voiceProfiles, workspaces } from '../db/schema'
 import { assetRecord, projectSummary } from '../dto'
 import { HttpError, body, memberRole, notFound, requireRole, unauthorized } from '../http'
 import { newId, randomToken, sha256 } from '../ids'
@@ -18,10 +19,12 @@ import { builtinProvider, invalidateBuiltin } from '../ai/resolve'
 import { whisperAvailable } from '../ai/whisper'
 import { hydrateAssets, loadProjectRow } from '../services/projects'
 import { checkCredentials } from './auth'
-import { listWorkspaces } from './workspaces'
+import { BrandSchema, listWorkspaces } from './workspaces'
 import { voiceProfileDto } from './voice'
 import { storageHealth } from '../services/storage-health'
 import { mailEnabled } from '../mail'
+import { checkKitDoc, fontDto, listKits } from '../services/brand'
+import { syncHorizon } from '../services/tombstones'
 
 const require = createRequire(import.meta.url)
 
@@ -128,6 +131,8 @@ type Change =
   | { seq: number; kind: 'tombstone'; row: typeof tombstones.$inferSelect }
   | { seq: number; kind: 'left'; id: string }
   | { seq: number; kind: 'voice'; row: typeof voiceProfiles.$inferSelect }
+  | { seq: number; kind: 'kit'; row: typeof extraBrandKits.$inferSelect }
+  | { seq: number; kind: 'font'; row: typeof brandFonts.$inferSelect }
 
 async function rows<T>(q: ReturnType<typeof sql>): Promise<T[]> {
   const r = (await ctx().db.execute(q)) as unknown
@@ -155,6 +160,8 @@ export const PAGE_BYTES = 4 * 1024 * 1024
 export async function changesSince(userId: string, since: number, limit: number, maxBytes = PAGE_BYTES): Promise<SyncChanges> {
   const db = ctx().db
   const horizon = await changeHorizon()
+  // deletes up to the compaction horizon may be gone: a reader that stopped below it pulls everything again
+  const resync = since > 0 && since < (await syncHorizon())
   const safeFrom = (cursor: number) => Math.max(since, Math.min(cursor, horizon))
   const mine = await db.select({ ws: memberships.workspaceId, seq: memberships.changeSeq }).from(memberships).where(eq(memberships.userId, userId))
   const wsIds = mine.map((m) => m.ws)
@@ -171,26 +178,30 @@ export async function changesSince(userId: string, since: number, limit: number,
   if (!wsIds.length) {
     const page = left.slice(0, limit)
     const cursor = page.length ? page[page.length - 1].seq : since
-    return { cursor, safe: safeFrom(cursor), workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws), voiceProfiles: [] }, more: left.length > limit }
+    return { cursor, safe: safeFrom(cursor), workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], extraBrandKits: [], brandFonts: [], deleted: { projects: [], assets: [], workspaces: page.map((l) => l.ws), voiceProfiles: [], brandKits: [], brandFonts: [] }, more: left.length > limit, ...(resync ? { resync } : {}) }
   }
-  const [p, a, b, t, w, v] = await Promise.all([
+  const [p, a, b, t, w, v, k, f] = await Promise.all([
     db.select().from(projects).where(and(inArray(projects.workspaceId, wsIds), gt(projects.changeSeq, since))).orderBy(asc(projects.changeSeq)).limit(n),
     db.select().from(assets).where(and(inArray(assets.workspaceId, wsIds), gt(assets.changeSeq, since))).orderBy(asc(assets.changeSeq)).limit(n),
     db.select().from(brandKits).where(and(inArray(brandKits.workspaceId, wsIds), gt(brandKits.changeSeq, since))).orderBy(asc(brandKits.changeSeq)).limit(n),
-    db.select().from(tombstones).where(and(inArray(tombstones.workspaceId, wsIds), inArray(tombstones.kind, ['project', 'asset', 'voice_profile']), gt(tombstones.changeSeq, since))).orderBy(asc(tombstones.changeSeq)).limit(n),
+    db.select().from(tombstones).where(and(inArray(tombstones.workspaceId, wsIds), inArray(tombstones.kind, ['project', 'asset', 'voice_profile', 'brand_kit', 'brand_font']), gt(tombstones.changeSeq, since))).orderBy(asc(tombstones.changeSeq)).limit(n),
     db.select({ id: workspaces.id, seq: workspaces.changeSeq }).from(workspaces).where(and(inArray(workspaces.id, wsIds), gt(workspaces.changeSeq, since))),
     db.select().from(voiceProfiles).where(and(inArray(voiceProfiles.workspaceId, wsIds), gt(voiceProfiles.changeSeq, since))).orderBy(asc(voiceProfiles.changeSeq)).limit(n),
+    db.select().from(extraBrandKits).where(and(inArray(extraBrandKits.workspaceId, wsIds), gt(extraBrandKits.changeSeq, since))).orderBy(asc(extraBrandKits.changeSeq)).limit(n),
+    db.select().from(brandFonts).where(and(inArray(brandFonts.workspaceId, wsIds), gt(brandFonts.changeSeq, since))).orderBy(asc(brandFonts.changeSeq)).limit(n),
   ])
   // a deleted id that exists again (a replica kept its edited copy and created it anew): its old tombstone is void,
   // or delivering it again would delete the copy that came back
   const back = new Set<string>()
   const ofKind = (k: string) => [...new Set(t.filter((r) => r.kind === k).map((r) => r.id))]
-  const [bp, ba, bv] = await Promise.all([
+  const [bp, ba, bv, bk, bf] = await Promise.all([
     ofKind('project').length ? db.select({ id: projects.id }).from(projects).where(and(inArray(projects.id, ofKind('project')), inArray(projects.workspaceId, wsIds))) : [],
     ofKind('asset').length ? db.select({ id: assets.id }).from(assets).where(and(inArray(assets.id, ofKind('asset')), inArray(assets.workspaceId, wsIds))) : [],
     ofKind('voice_profile').length ? db.select({ id: voiceProfiles.id }).from(voiceProfiles).where(and(inArray(voiceProfiles.id, ofKind('voice_profile')), inArray(voiceProfiles.workspaceId, wsIds))) : [],
+    ofKind('brand_kit').length ? db.select({ id: extraBrandKits.id }).from(extraBrandKits).where(and(inArray(extraBrandKits.id, ofKind('brand_kit')), inArray(extraBrandKits.workspaceId, wsIds))) : [],
+    ofKind('brand_font').length ? db.select({ id: brandFonts.id }).from(brandFonts).where(and(inArray(brandFonts.id, ofKind('brand_font')), inArray(brandFonts.workspaceId, wsIds))) : [],
   ])
-  for (const [kind, rows] of [['project', bp], ['asset', ba], ['voice_profile', bv]] as const) for (const r of rows) back.add(`${kind}:${r.id}`)
+  for (const [kind, rows] of [['project', bp], ['asset', ba], ['voice_profile', bv], ['brand_kit', bk], ['brand_font', bf]] as const) for (const r of rows) back.add(`${kind}:${r.id}`)
   const all: Change[] = [
     ...p.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'project' as const, row })),
     ...a.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'asset' as const, row })),
@@ -200,8 +211,10 @@ export async function changesSince(userId: string, since: number, limit: number,
     ...mine.filter((m) => (m.seq ?? 0) > since).map((m) => ({ seq: m.seq ?? 0, kind: 'workspace' as const, id: m.ws })),
     ...left.map((l) => ({ seq: l.seq, kind: 'left' as const, id: l.ws })),
     ...v.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'voice' as const, row })),
+    ...k.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'kit' as const, row })),
+    ...f.map((row) => ({ seq: row.changeSeq ?? 0, kind: 'font' as const, row })),
   ].sort((x, y) => x.seq - y.seq)
-  const out: SyncChanges = { cursor: since, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [] }, more: false }
+  const out: SyncChanges = { cursor: since, workspaces: [], projects: [], assets: [], brandKits: [], voiceProfiles: [], extraBrandKits: [], brandFonts: [], deleted: { projects: [], assets: [], workspaces: [], voiceProfiles: [], brandKits: [], brandFonts: [] }, more: false, ...(resync ? { resync } : {}) }
   const wsChanged = new Set<string>()
   // a page ends at `limit` changes or about `maxBytes` of JSON (at least one change), so big documents come a few at
   // a time on a slow link instead of one page that never finishes
@@ -226,9 +239,16 @@ export async function changesSince(userId: string, since: number, limit: number,
       if (ch.row.kind === 'project') out.deleted.projects.push(ch.row.id)
       else if (ch.row.kind === 'asset') out.deleted.assets.push(ch.row.id)
       else if (ch.row.kind === 'voice_profile') out.deleted.voiceProfiles!.push(ch.row.id)
+      else if (ch.row.kind === 'brand_kit') out.deleted.brandKits!.push(ch.row.id)
+      else if (ch.row.kind === 'brand_font') out.deleted.brandFonts!.push(ch.row.id)
     } else if (ch.kind === 'voice') {
       out.voiceProfiles!.push({ ...voiceProfileDto(ch.row), vsProfileId: undefined, changeSeq: ch.seq })
       size(out.voiceProfiles![out.voiceProfiles!.length - 1])
+    } else if (ch.kind === 'kit') {
+      out.extraBrandKits!.push({ id: ch.row.id, workspaceId: ch.row.workspaceId, doc: ch.row.doc, updatedAt: ch.row.updatedAt, changeSeq: ch.seq })
+      size(ch.row.doc)
+    } else if (ch.kind === 'font') {
+      out.brandFonts!.push({ ...fontDto(ch.row), workspaceId: ch.row.workspaceId, changeSeq: ch.seq })
     } else if (ch.kind === 'left') out.deleted.workspaces!.push(ch.id)
     else wsChanged.add(ch.id)
   }
@@ -264,7 +284,12 @@ syncRoutes.post('/projects/:id/delete', async (c) => {
   await requireRole(u.id, row.workspaceId, 'editor')
   const conds = [eq(projects.id, id), eq(projects.version, b.baseVersion)]
   if (b.trashed) conds.push(isNotNull(projects.trashedAt))
-  const gone = await ctx().db.delete(projects).where(and(...conds)).returning({ id: projects.id })
+  // review comments have no FK: they go with the project, as for a delete on the web
+  const gone = await ctx().db.transaction(async (tx) => {
+    const g = await tx.delete(projects).where(and(...conds)).returning({ id: projects.id })
+    if (g.length) await tx.delete(comments).where(eq(comments.projectId, id))
+    return g
+  })
   if (gone.length) {
     // open screens drop it, as for a delete on the web
     const ev = { id, version: row.version, deleted: true }
@@ -277,5 +302,107 @@ syncRoutes.post('/projects/:id/delete', async (c) => {
     reason: edited ? 'edited' : 'restored',
     version: cur.version,
     trashed: cur.trashedAt != null,
+  })
+})
+
+// ---- a space's other brand kits and font files, pushed by desktops with their own ids ----
+
+/** Open Brand kit pages and editors reload the space's kits. */
+function announceBrand(workspaceId: string) {
+  const ev = { id: workspaceId, deleted: false, brand: true }
+  ctx().bus.publish(workspaceId, 'workspace', ev, { id: workspaceId, inline: ev })
+}
+
+syncRoutes.put('/brand-kits/:kitId', async (c) => {
+  const u = requireUser(c)
+  const kitId = c.req.param('kitId')
+  const b = await body(c, z.object({ workspaceId: z.string().min(1).max(80), doc: BrandSchema }))
+  await requireRole(u.id, b.workspaceId, 'editor')
+  const db = ctx().db
+  const cur = (await db.select().from(extraBrandKits).where(eq(extraBrandKits.id, kitId)).limit(1))[0]
+  if (cur && cur.workspaceId !== b.workspaceId) throw new HttpError(409, 'conflict', 'A brand kit with this id belongs to another space')
+  const doc = await checkKitDoc(b.workspaceId, b.doc as BrandKitDoc)
+  const now = Date.now()
+  if (cur) await db.update(extraBrandKits).set({ doc, updatedAt: now }).where(eq(extraBrandKits.id, kitId))
+  else {
+    const n = (await db.select({ n: count() }).from(extraBrandKits).where(eq(extraBrandKits.workspaceId, b.workspaceId)))[0]?.n ?? 0
+    if (Number(n) >= MAX_EXTRA_KITS) throw new HttpError(409, 'quota', `A space keeps at most ${MAX_EXTRA_KITS + 1} brand kits. Delete one first.`)
+    await db.insert(extraBrandKits).values({ id: kitId, workspaceId: b.workspaceId, doc, createdBy: u.id, createdAt: now, updatedAt: now })
+  }
+  announceBrand(b.workspaceId)
+  return c.json({ ok: true, updatedAt: now })
+})
+
+syncRoutes.post('/brand-kits/:kitId/delete', async (c) => {
+  const u = requireUser(c)
+  const row = (await ctx().db.select().from(extraBrandKits).where(eq(extraBrandKits.id, c.req.param('kitId'))).limit(1))[0]
+  if (!row) throw notFound('Brand kit not found')
+  await requireRole(u.id, row.workspaceId, 'editor')
+  await ctx().db.delete(extraBrandKits).where(eq(extraBrandKits.id, row.id))
+  announceBrand(row.workspaceId)
+  return c.json({ ok: true })
+})
+
+async function loadFontRow(fontId: string) {
+  const row = (await ctx().db.select().from(brandFonts).where(eq(brandFonts.id, fontId)).limit(1))[0]
+  if (!row) throw notFound('Font not found')
+  return row
+}
+
+syncRoutes.put('/brand-fonts/:fontId', async (c) => {
+  const u = requireUser(c)
+  const fontId = c.req.param('fontId')
+  if (!/^[\w-]{1,80}$/.test(fontId)) throw new HttpError(400, 'invalid', 'Invalid font id')
+  const ws = c.req.query('workspaceId') ?? ''
+  await requireRole(u.id, ws, 'editor')
+  const cur = (await ctx().db.select().from(brandFonts).where(eq(brandFonts.id, fontId)).limit(1))[0]
+  if (cur) {
+    if (cur.workspaceId !== ws) throw new HttpError(409, 'conflict', 'A font with this id belongs to another space')
+    return c.json(fontDto(cur))
+  }
+  const family = cleanFamily(c.req.query('family') ?? '')
+  if (!family) throw new HttpError(400, 'invalid', 'Name the font family (letters, digits and spaces)')
+  const weight = Math.round(Number(c.req.query('weight') ?? 400) / 100) * 100
+  if (!(weight >= 100 && weight <= 900)) throw new HttpError(400, 'invalid', 'weight: a number from 100 to 900')
+  const italic = c.req.query('italic') === '1' || c.req.query('italic') === 'true'
+  if (Number(c.req.header('content-length') ?? 0) > BRAND_FONT_MAX_BYTES) throw new HttpError(413, 'quota', 'A font file can be at most 5 MB')
+  const buf = Buffer.from(await c.req.arrayBuffer())
+  if (!buf.length) throw new HttpError(400, 'invalid', 'Send the font file as the request body')
+  if (buf.length > BRAND_FONT_MAX_BYTES) throw new HttpError(413, 'quota', 'A font file can be at most 5 MB')
+  const format = sniffFontFormat(buf)
+  if (!format) throw new HttpError(415, 'invalid', 'That isn’t a font file: upload a WOFF2, WOFF, TTF or OTF')
+  const key = `ws/${ws}/brand-fonts/${fontId}.${format}`
+  await ctx().storage.put(key, buf, { contentType: FONT_MIME[format] })
+  const [row] = await ctx()
+    .db.insert(brandFonts)
+    .values({ id: fontId, workspaceId: ws, family, format, weight, italic, storageKey: key, sizeBytes: buf.length, createdBy: u.id, createdAt: Date.now() })
+    .returning()
+  announceBrand(ws)
+  return c.json(fontDto(row))
+})
+
+syncRoutes.post('/brand-fonts/:fontId/delete', async (c) => {
+  const u = requireUser(c)
+  const row = await loadFontRow(c.req.param('fontId'))
+  await requireRole(u.id, row.workspaceId, 'editor')
+  // a kit still using the family keeps it only while another file of that family is left
+  const others = (await ctx().db.select({ id: brandFonts.id, family: brandFonts.family }).from(brandFonts).where(eq(brandFonts.workspaceId, row.workspaceId))).filter((f) => f.family === row.family && f.id !== row.id)
+  if (!others.length) {
+    const users = (await listKits(row.workspaceId)).filter((k) => k.doc.fonts.headline === row.family || k.doc.fonts.body === row.family)
+    if (users.length) throw new HttpError(409, 'conflict', `“${row.family}” is used by ${users.map((k) => `“${k.doc.name}”`).join(', ')}. Pick another font there first.`)
+  }
+  await ctx().db.delete(brandFonts).where(eq(brandFonts.id, row.id))
+  await ctx().storage.delete(row.storageKey).catch(() => undefined)
+  announceBrand(row.workspaceId)
+  return c.json({ ok: true })
+})
+
+syncRoutes.get('/brand-fonts/:fontId/file', async (c) => {
+  const u = requireUser(c)
+  const row = await loadFontRow(c.req.param('fontId'))
+  await requireRole(u.id, row.workspaceId, 'viewer')
+  const stream = await ctx().storage.getStream(row.storageKey)
+  return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+    headers: { 'Content-Type': FONT_MIME[row.format as keyof typeof FONT_MIME] ?? 'application/octet-stream', 'Content-Length': String(row.sizeBytes) },
   })
 })

@@ -1,6 +1,7 @@
 // HTTP API contract shared by apps/web and apps/server. All routes are under /api, JSON bodies,
 // cookie auth (httpOnly `ps_session`). Errors: non-2xx with `ApiError` body.
 import type { Asset, Project, ProducerMeta, ScriptScene, Transcript } from './types'
+import type { SyncBlock, SyncFont, SyncKit, SyncUpload } from './sync'
 
 export interface ApiError {
   error: string
@@ -725,11 +726,15 @@ export interface SyncStatus {
   /** What sync did to keep someone's work safe (a delete undone, spaces set aside, work recovered). Optional. */
   notices?: SyncNotice[]
   error?: string
+  /** Why sync can't carry on right now (signed out, offline, storage, a conflict). Optional: older desktops omit it. */
+  blocked?: SyncBlock
+  /** Clip files going up now, with bytes sent. Optional. */
+  uploads?: SyncUpload[]
 }
 
 /** One item the desktop couldn't push. It is retried on its own schedule; Skip keeps it on this computer only. */
 export interface SyncFailure {
-  kind: 'project' | 'asset' | 'brand' | 'voice' | 'project-delete' | 'asset-delete' | 'voice-delete'
+  kind: 'project' | 'asset' | 'brand' | 'voice' | 'kit' | 'font' | 'project-delete' | 'asset-delete' | 'voice-delete' | 'kit-delete' | 'font-delete'
   id: string
   name: string
   /** The cloud's (or this computer's) reason, for a person. */
@@ -799,7 +804,15 @@ export interface SyncChanges {
   /** VoiceStudio voice profiles (metadata only; `local` is always false here). Optional: older clouds omit it. */
   voiceProfiles?: Array<VoiceProfile & { changeSeq: number }>
   /** `workspaces`: spaces the user no longer belongs to (deleted, or membership removed). Optional: older clouds omit it. */
-  deleted: { projects: string[]; assets: string[]; workspaces?: string[]; voiceProfiles?: string[] }
+  deleted: { projects: string[]; assets: string[]; workspaces?: string[]; voiceProfiles?: string[]; brandKits?: string[]; brandFonts?: string[] }
+  /** A space's other brand kits and its font files. Optional: older clouds omit them. */
+  extraBrandKits?: SyncKit[]
+  brandFonts?: SyncFont[]
+  /**
+   * Deletes older than `since` were compacted away: this reader may have missed some, so it pulls everything again
+   * from 0 and drops what the cloud no longer has. Optional: older clouds never compact.
+   */
+  resync?: boolean
   /** True when more changes remain after `cursor` (page again). */
   more: boolean
   /**

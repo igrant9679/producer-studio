@@ -22,18 +22,25 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type SyncChanges, type SyncFailure, type SyncProject, type SyncStatus, type Transcript, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
+import { uid, type AssetRecord, type BrandKitDoc, type MeResponse, type Project, type ProjectDocResponse, type LinkChoice, type LinkPreview, type LinkPreviewSpace, type SyncChanges, type SyncConflictPreview, type SystemInfo, type SyncFailure, type SyncProject, type SyncStatus, type Transcript, type UploadTicket, type VoiceProfile, type Workspace } from '@producer/core'
 import { ctx } from '../context'
-import { type AssetMeta, assets, brandKits, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
+import { type AssetMeta, assets, brandKits, comments, exportsTable, jobs, memberships, projects, voiceProfiles, workspaces } from '../db/schema'
 import { HttpError } from '../http'
+import { newId } from '../ids'
 import { log } from '../log'
 import { type AssetRow, assetDirs, assetPrefix, emitAsset, extFor, hashObject, uploadMime } from '../services/assets'
 import { derived, hydrateAssets, insertProject } from '../services/projects'
 import { CloudClient, CloudError, normalizeCloudUrl } from './cloud'
 import { type FailureKind, addNotice, clearFailure, clearFailures, clearSync, deleteSync, failureKey, failureMap, kvGet, kvSet, listNotices, putSync, rawQuery, recordFailure, removeNotice, setFailure, syncRow, syncRows, type SyncRow } from './db'
 import { adoptCloudIdentity, localUserId } from './identity'
+import { applyFont, applyFontDelete, applyKit, applyKitDelete, dropUnseenBrand, pushBrandDelete, pushBrandExtras } from './brand-sync'
 import { clearLink, cloud, linkInfo, loadLink, saveLink } from './link'
+import { SyncLock } from './lock'
+import { UploadBoard, inLanes, sendFile } from './uploads'
+import { LOW_DISK_BYTES, blockedBy, compareSides, freeBytes, projectDirty, sideSummary, syncItems } from './panel'
 import { prefetchAllMedia } from './media'
+import { keepOffline } from './offline'
+import { stopFollowing } from './collab'
 import { getSettings, onSettingsChange } from './settings'
 
 const LOOKBACK = 25
@@ -47,6 +54,12 @@ const INTERVAL_MS = 60_000
 const AFTER_SAVE_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
 const RELAY_POLL_MS = 5_000
+/** Clips up to this size go up before projects; bigger ones after them, in the background (D-7). */
+const SMALL_UPLOAD_BYTES = 16 * 1024 * 1024
+/** Files going up at once. */
+const UPLOAD_LANES = 3
+/** While offline, a cheap request this often checks whether the cloud is back (D-8). */
+const PROBE_MS = 5_000
 const RELAY_BEAT_MS = 15_000
 
 type ProjectRow = typeof projects.$inferSelect
@@ -65,6 +78,46 @@ interface ParkedAccount {
   cursor: number
   /** Where pushing this computer's deletes had got to (deletes in its spaces made since are pushed when it's back). */
   tombCursor?: number
+}
+
+/** What a full resync pulled, to tell what the cloud no longer has. */
+export class Seen {
+  workspaces?: Set<string>
+  projects = new Set<string>()
+  assets = new Set<string>()
+  voices = new Set<string>()
+  kits = new Set<string>()
+  fonts = new Set<string>()
+  add(ch: SyncChanges) {
+    for (const p of ch.projects) this.projects.add(p.project.id)
+    for (const a of ch.assets) this.assets.add(a.asset.id)
+    for (const v of ch.voiceProfiles ?? []) this.voices.add(v.id)
+    for (const k of ch.extraBrandKits ?? []) this.kits.add(k.id)
+    for (const f of ch.brandFonts ?? []) this.fonts.add(f.id)
+  }
+}
+
+type LinkDevice = { deviceId: string; token: string }
+
+/** A link previewed and not yet made: its device token waits here (memory only) until used, cancelled or lapsed. */
+interface PendingLink {
+  cloudUrl: string
+  dev: LinkDevice
+  me: MeResponse
+  expiresAt: number
+  timer: NodeJS.Timeout
+}
+
+const PREVIEW_MS = 10 * 60_000
+
+/** Every choice names a space this account can add to. */
+function validateChoices(choices: Record<string, LinkChoice>, cloudList: Workspace[]) {
+  for (const c of Object.values(choices)) {
+    if (c.action !== 'merge') continue
+    const into = cloudList.find((w) => w.id === c.into)
+    if (!into) throw new HttpError(400, 'invalid', 'Pick one of your cloud spaces to merge into')
+    if (into.role === 'viewer') throw new HttpError(403, 'forbidden', `You can only view “${into.name}” in the cloud, so nothing can be merged into it`)
+  }
 }
 
 const accountKey = (cloudUrl: string, cloudUserId: string) => `${cloudUrl}|${cloudUserId}`
@@ -135,15 +188,12 @@ interface VoiceFields {
 const voiceFields = (v: { name: string; language?: string | null; gender?: string | null; description?: string | null }): VoiceFields => ({ name: v.name, language: v.language ?? null, gender: v.gender ?? null, description: v.description ?? null })
 
 /** What a failed delete is called in the sync menu (the item itself is gone from this computer). */
-const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted here', voice: 'A voice deleted here' } as const
+const DELETED_NAME = { project: 'A project deleted here', asset: 'A clip deleted here', voice: 'A voice deleted here', kit: 'A brand kit deleted here', font: 'A font deleted here' } as const
 
-function isDirty(p: Pick<ProjectRow, 'version' | 'trashedAt' | 'isTemplate'>, s: SyncRow | undefined): boolean {
-  if (!s || s.cloudVersion == null) return true
-  if (s.localVersion !== p.version) return true
-  if (s.cloudTrashed != null && s.cloudTrashed !== (p.trashedAt != null)) return true
-  if (s.cloudTemplate != null && s.cloudTemplate !== p.isTemplate) return true
-  return false
-}
+/** Tombstone kinds (as the triggers write them) to the sync engine's kinds. */
+const TOMB_KIND: Record<string, keyof typeof DELETED_NAME> = { project: 'project', asset: 'asset', voice_profile: 'voice', brand_kit: 'kit', brand_font: 'font' }
+
+const isDirty = projectDirty
 
 export class SyncEngine {
   private state: SyncStatus['state'] = 'unlinked'
@@ -176,6 +226,23 @@ export class SyncEngine {
   private pageBytes = PAGE_BYTES
   /** The pending cycle is a retry after going offline (not one asked for by a save or a person). */
   private retrying = false
+  /** Link, unlink, conflict resolution, cycles and space changes, one at a time (D-11). */
+  readonly lock = new SyncLock()
+  /** Ends the cycle under way (an unlink doesn't wait for a long upload). */
+  private cycleAbort?: AbortController
+  /** While offline: how often to check whether the cloud answers again (a sync then starts at once, D-8). */
+  probeMs = PROBE_MS
+  private probeTimer?: NodeJS.Timeout
+  /** Clips at most this big go up before projects (D-7). */
+  smallUploadBytes = SMALL_UPLOAD_BYTES
+  /** Clip files going up, or queued for a lane. */
+  readonly uploads = new UploadBoard(() => void this.emit())
+  /** Ends the background uploads (an unlink). */
+  private uploadAbort = new AbortController()
+  /** What blocks sync, seen in the last cycle (D-1). */
+  private signedOut = false
+  private cloudStorage?: string
+  private diskFree?: number
 
   async start() {
     const link = await loadLink()
@@ -184,7 +251,9 @@ export class SyncEngine {
     this.lastSyncAt = (await kvGet<number>('lastSyncAt')) ?? undefined
     this.unsubs.push(
       ctx().bus.onAny((e) => {
-        if (this.quiet || (e.event !== 'project' && e.event !== 'asset')) return
+        // a save of a project, a clip or a brand kit
+        const brand = e.event === 'workspace' && !!(e.data as { brand?: boolean } | undefined)?.brand
+        if (this.quiet || (e.event !== 'project' && e.event !== 'asset' && !brand)) return
         if (getSettings().autoSync) this.schedule(AFTER_SAVE_MS)
       }),
       onSettingsChange((s, prev) => {
@@ -206,6 +275,8 @@ export class SyncEngine {
     if (this.interval) clearInterval(this.interval)
     if (this.relayTimer) clearInterval(this.relayTimer)
     if (this.debounce) clearTimeout(this.debounce)
+    if (this.probeTimer) clearTimeout(this.probeTimer)
+    stopFollowing()
     for (const u of this.unsubs) u()
     this.unsubs = []
   }
@@ -219,6 +290,160 @@ export class SyncEngine {
     this.debounce.unref?.()
   }
 
+  // ---------------- back online (D-8) ----------------
+
+  private armProbe() {
+    if (this.probeTimer || this.stopped) return
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = undefined
+      void this.probe()
+    }, this.probeMs)
+    this.probeTimer.unref?.()
+  }
+
+  /** Offline: ask the cloud's health check (a Wi-Fi sign-in page doesn't count). It answers: sync now, not at the end of the backoff. */
+  private async probe() {
+    if (this.state !== 'offline' || this.stopped || !linkInfo()) return
+    const back = await cloud()
+      ?.json('GET', '/api/health', undefined, 5_000)
+      .then(
+        () => true,
+        (err) => !(err instanceof CloudError && err.offline),
+      )
+    if (!back || this.state !== 'offline') return this.armProbe()
+    log.info('desktop: the cloud answers again; syncing now')
+    this.networkBack()
+  }
+
+  /** The network is back (the cloud answered, or the app saw the connection return): sync now if sync was waiting. */
+  networkBack() {
+    if (this.state !== 'offline') return
+    this.backoffMs = 0
+    this.backoffUntil = 0
+    this.schedule(0)
+  }
+
+  // ---------------- first-link preview (D-5) ----------------
+
+  private previews = new Map<string, PendingLink>()
+
+  /**
+   * What linking this account would do, before anything changes here: each of this computer's spaces (its projects,
+   * clips and the bytes that would go up) and where it would go, the account's cloud spaces, and another account's
+   * spaces that would be set aside. The device link made for it lapses after 10 minutes unless used.
+   */
+  async previewLink(cloudUrlIn: string, email: string, password: string): Promise<LinkPreview> {
+    const { cloudUrl, dev, me } = await this.obtainDevice(cloudUrlIn, email, password)
+    const db = ctx().db
+    const last = await kvGet<LastLink>('lastLink')
+    const same = !!last && last.cloudUrl === cloudUrl && last.cloudUserId === me.user.id
+    const mirrored = (await kvGet<string[]>('cloudWorkspaces')) ?? []
+    const parked = (await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}
+    const resumed = parked[accountKey(cloudUrl, me.user.id)]?.workspaces ?? []
+    // what stays out of it: recovered spaces, other accounts' set aside here, and (switching account) the last one's
+    const away = new Set([...((await kvGet<string[]>('localOnlySpaces')) ?? []), ...Object.entries(parked).filter(([k]) => k !== accountKey(cloudUrl, me.user.id)).flatMap(([, p]) => p.workspaces), ...(last && !same ? mirrored : [])])
+    const cloudIds = new Set(me.workspaces.map((w) => w.id))
+    const personal = me.workspaces.find((w) => w.personal) ?? me.workspaces[0]
+    const me0 = await localUserId()
+    const local = await db
+      .select({ id: workspaces.id, name: workspaces.name, personal: workspaces.personal })
+      .from(workspaces)
+      .innerJoin(memberships, eq(memberships.workspaceId, workspaces.id))
+      .where(eq(memberships.userId, me0))
+    const [pr, ar] = await Promise.all([syncRows('project'), syncRows('asset')])
+    const spaces: LinkPreviewSpace[] = []
+    for (const w of local) {
+      if (away.has(w.id)) continue
+      const synced = cloudIds.has(w.id) || resumed.includes(w.id)
+      const projs = await db.select({ id: projects.id, version: projects.version, trashedAt: projects.trashedAt, isTemplate: projects.isTemplate }).from(projects).where(eq(projects.workspaceId, w.id))
+      const clips = (await db.select({ id: assets.id, size: assets.size, origin: assets.origin, trashedAt: assets.trashedAt }).from(assets).where(eq(assets.workspaceId, w.id))).filter((a) => a.origin !== 'render' && a.trashedAt == null)
+      const goingUp = clips.filter((a) => !(synced && (ar.get(a.id)?.uploaded || ar.get(a.id)?.remote)))
+      const voices = (await db.select({ id: voiceProfiles.id }).from(voiceProfiles).where(eq(voiceProfiles.workspaceId, w.id))).length
+      spaces.push({
+        id: w.id,
+        name: w.name,
+        personal: w.personal,
+        projects: synced ? projs.filter((p) => isDirty(p, pr.get(p.id))).length : projs.length,
+        clips: goingUp.length,
+        uploadBytes: goingUp.reduce((n, a) => n + a.size, 0),
+        voices,
+        suggested: w.personal && personal ? { action: 'merge', into: personal.id } : { action: 'new' },
+        ...(synced ? { synced: true } : {}),
+      })
+    }
+    const id = newId('lp')
+    const expiresAt = Date.now() + PREVIEW_MS
+    const timer = setTimeout(() => void this.cancelPreview(id), PREVIEW_MS)
+    timer.unref?.()
+    this.previews.set(id, { cloudUrl, dev, me, expiresAt, timer })
+    const setAside = last && !same && mirrored.length ? { account: last.account, spaces: (await db.select({ name: workspaces.name }).from(workspaces).where(inArray(workspaces.id, mirrored))).map((w) => w.name) } : undefined
+    return {
+      previewId: id,
+      account: me.user.email,
+      cloudUrl,
+      expiresAt,
+      spaces,
+      cloudSpaces: me.workspaces.map((w) => ({ id: w.id, name: w.name, personal: w.personal, role: w.role })),
+      ...(setAside?.spaces.length ? { setAside } : {}),
+    }
+  }
+
+  /** Link as previewed, each local space as chosen (what isn't named goes as suggested). */
+  linkPreviewed(previewId: string, choices: Record<string, LinkChoice>): Promise<SyncStatus> {
+    return this.lock.run('link', async () => {
+      const p = this.previews.get(previewId)
+      if (!p || p.expiresAt < Date.now()) throw new HttpError(410, 'not_found', 'That link preview has lapsed. Sign in again to see what linking would do.')
+      const out = await this.completeLink(p.cloudUrl, p.dev, p.me, choices)
+      clearTimeout(p.timer)
+      this.previews.delete(previewId)
+      return out
+    })
+  }
+
+  /** Not linking after all: the device link made for the preview is removed from the cloud. */
+  async cancelPreview(previewId: string): Promise<boolean> {
+    const p = this.previews.get(previewId)
+    if (!p) return false
+    this.previews.delete(previewId)
+    clearTimeout(p.timer)
+    await new CloudClient(p.cloudUrl, p.dev.token).json('DELETE', `/api/devices/${encodeURIComponent(p.dev.deviceId)}`, undefined, 10_000).catch(() => undefined)
+    return true
+  }
+
+  // ---------------- one at a time (D-11) ----------------
+
+  link(cloudUrl: string, email: string, password: string): Promise<SyncStatus> {
+    return this.lock.run('link', () => this.linkLocked(cloudUrl, email, password))
+  }
+
+  /** Unlinking stops the cycle under way, then waits for its turn. */
+  unlink(): Promise<SyncStatus> {
+    this.cycleAbort?.abort(new Error('unlinked'))
+    this.uploadAbort.abort(new Error('unlinked'))
+    this.uploadAbort = new AbortController()
+    return this.lock.run('unlink', () => this.unlinkLocked())
+  }
+
+  resolve(projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both'): Promise<SyncStatus> {
+    return this.lock.run('resolve', () => this.resolveLocked(projectId, mode))
+  }
+
+  applyNotice(id: string): Promise<SyncStatus> {
+    return this.lock.run('notice', () => this.applyNoticeLocked(id))
+  }
+
+  createWorkspace(name: string): Promise<Workspace | null> {
+    return this.lock.run('space', () => this.createWorkspaceLocked(name))
+  }
+
+  renameWorkspace(id: string, name: string): Promise<Workspace | null> {
+    return this.lock.run('space', () => this.renameWorkspaceLocked(id, name))
+  }
+
+  deleteWorkspace(id: string): Promise<boolean> {
+    return this.lock.run('space', () => this.deleteWorkspaceLocked(id))
+  }
+
   // ---------------- status ----------------
 
   async status(): Promise<SyncStatus> {
@@ -228,6 +453,8 @@ export class SyncEngine {
     const conflicted = [...rows.values()].filter((r) => r.conflictVersion != null)
     const names = conflicted.length ? await ctx().db.select({ id: projects.id, name: projects.name, version: projects.version }).from(projects).where(inArray(projects.id, conflicted.map((c) => c.id))) : []
     const failures = await failureMap()
+    const conflicts = names.map((n) => ({ projectId: n.id, name: n.name, localVersion: n.version, cloudVersion: conflicted.find((c) => c.id === n.id)!.conflictVersion! }))
+    const blocked = blockedBy({ linked: true, state: this.state, conflicts }, { signedOut: this.signedOut, credentials: !cloud(), autoSync: getSettings().autoSync, diskFree: this.diskFree, cloudStorage: this.cloudStorage })
     return {
       linked: true,
       cloudUrl: link.cloudUrl,
@@ -235,11 +462,33 @@ export class SyncEngine {
       state: this.state,
       lastSyncAt: this.lastSyncAt,
       pending: await this.pendingCount(rows, failures),
-      conflicts: names.map((n) => ({ projectId: n.id, name: n.name, localVersion: n.version, cloudVersion: conflicted.find((c) => c.id === n.id)!.conflictVersion! })),
+      conflicts,
       failures: [...failures.values()],
+      uploads: this.uploads.list(),
       notices: (await listNotices()).map(({ data: _data, ...n }) => n),
       ...(this.error ? { error: this.error } : {}),
+      ...(blocked ? { blocked } : {}),
     }
+  }
+
+  /** Everything still to sync, for the sync panel (D-1). */
+  async items() {
+    return syncItems(await failureMap(), new Set(this.uploads.list().map((u) => u.id)))
+  }
+
+  /** This computer's copy of a conflicted project against the cloud's, to choose between them (D-1). */
+  async conflictPreview(projectId: string): Promise<SyncConflictPreview> {
+    const local = (await ctx().db.select().from(projects).where(eq(projects.id, projectId)).limit(1))[0]
+    if (!local) throw new HttpError(404, 'not_found', 'Project not found')
+    const c = cloud()
+    if (!c) throw new HttpError(409, 'conflict', 'This computer is not linked to a cloud account')
+    const remote = await c.json<ProjectDocResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}`).catch((err) => {
+      if (err instanceof CloudError && err.status === 404) return null
+      throw err
+    })
+    const l = sideSummary(local.doc, { version: local.version, updatedAt: local.updatedAt, trashed: local.trashedAt != null })
+    const r = remote ? sideSummary(remote.project, { version: remote.version, updatedAt: remote.summary.updatedAt, trashed: remote.summary.trashed }) : null
+    return { projectId, local: l, cloud: r, changes: compareSides(local.doc, remote?.project ?? null, l, r) }
   }
 
   async dismissNotice(id: string): Promise<SyncStatus> {
@@ -249,7 +498,7 @@ export class SyncEngine {
   }
 
   /** Take the one thing a notice offers (bring back a brand kit set aside at link time), then drop the notice. */
-  async applyNotice(id: string): Promise<SyncStatus> {
+  private async applyNoticeLocked(id: string): Promise<SyncStatus> {
     const n = (await listNotices()).find((x) => x.id === id)
     if (!n) throw new HttpError(404, 'not_found', 'That notice is gone')
     if (n.data?.kind !== 'brand') throw new HttpError(400, 'invalid', 'This notice has nothing to apply')
@@ -301,6 +550,8 @@ export class SyncEngine {
       if (f) await this.resolved(kind, id)
     } catch (err) {
       if (err instanceof CloudError && (err.offline || err.status === 401)) throw err
+      // stopped by an unlink: not this item's failure
+      if (this.cycleAbort?.signal.aborted) throw err
       const message = err instanceof Error ? err.message : String(err)
       this.failures.set(key, await recordFailure(kind, id, name, message))
       log.warn('desktop: item failed to sync', { kind, id, err: message })
@@ -321,6 +572,8 @@ export class SyncEngine {
         (f.kind = 'asset' AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.id = f.id)) OR
         (f.kind = 'voice' AND NOT EXISTS (SELECT 1 FROM voice_profiles v WHERE v.id = f.id)) OR
         (f.kind = 'brand' AND NOT EXISTS (SELECT 1 FROM brand_kits b WHERE b.workspace_id = f.id)) OR
+        (f.kind = 'kit' AND NOT EXISTS (SELECT 1 FROM extra_brand_kits k WHERE k.id = f.id)) OR
+        (f.kind = 'font' AND NOT EXISTS (SELECT 1 FROM brand_fonts b WHERE b.id = f.id)) OR
         (f.kind LIKE '%-delete' AND NOT EXISTS (SELECT 1 FROM desktop_sync s WHERE s.id = f.id AND s.kind = split_part(f.kind, '-', 1)))`)
   }
 
@@ -365,7 +618,13 @@ export class SyncEngine {
 
   // ---------------- link / unlink ----------------
 
-  async link(cloudUrlIn: string, email: string, password: string): Promise<SyncStatus> {
+  private async linkLocked(cloudUrlIn: string, email: string, password: string): Promise<SyncStatus> {
+    const { cloudUrl, dev, me } = await this.obtainDevice(cloudUrlIn, email, password)
+    return this.completeLink(cloudUrl, dev, me)
+  }
+
+  /** Credentials → a device token, and who it belongs to (nothing on this computer changes yet). */
+  private async obtainDevice(cloudUrlIn: string, email: string, password: string): Promise<{ cloudUrl: string; dev: LinkDevice; me: MeResponse }> {
     if (linkInfo()) throw new HttpError(409, 'conflict', `Already linked to ${linkInfo()!.account}. Unlink first.`)
     let cloudUrl: string
     try {
@@ -374,7 +633,7 @@ export class SyncEngine {
       throw new HttpError(400, 'invalid', (err as Error).message)
     }
     const anon = new CloudClient(cloudUrl)
-    let dev: { deviceId: string; token: string }
+    let dev: LinkDevice
     try {
       dev = await anon.json('POST', '/api/devices', { name: `Producer Studio desktop · ${os.hostname()}`.slice(0, 100), email, password })
     } catch (err) {
@@ -384,8 +643,15 @@ export class SyncEngine {
       if (err instanceof CloudError && err.status === 404) throw new HttpError(502, 'server', `${cloudUrl} doesn’t look like a Producer Studio cloud (no device API).`)
       throw err
     }
+    const me = await new CloudClient(cloudUrl, dev.token).json<MeResponse>('GET', '/api/auth/me')
+    return { cloudUrl, dev, me }
+  }
+
+  /** Link with a device token already made (directly, or for a preview); this computer's spaces go as `choices` say. */
+  private async completeLink(cloudUrl: string, dev: LinkDevice, me: MeResponse, choices?: Record<string, LinkChoice>): Promise<SyncStatus> {
+    if (linkInfo()) throw new HttpError(409, 'conflict', `Already linked to ${linkInfo()!.account}. Unlink first.`)
+    if (choices) validateChoices(choices, me.workspaces)
     const c = new CloudClient(cloudUrl, dev.token)
-    const me = await c.json<MeResponse>('GET', '/api/auth/me')
     const last = await kvGet<LastLink>('lastLink')
     if (!last) {
       // the first link: nothing we know about sync state applies
@@ -401,7 +667,7 @@ export class SyncEngine {
     const resumed = await this.resumeAccount(cloudUrl, me.user.id)
     await adoptCloudIdentity(me.user)
     await this.mirrorWorkspaces(me.workspaces)
-    await this.mergeLocalWorkspaces(c, me.workspaces)
+    await this.mergeLocalWorkspaces(c, me.workspaces, choices)
     // the same account again: deletes made here while unlinked are pushed. A first link has nothing in the cloud to
     // delete; an account linked again after another carries on from where its deletes stopped.
     if (!last || last.cloudUrl !== cloudUrl || last.cloudUserId !== me.user.id) {
@@ -461,10 +727,11 @@ export class SyncEngine {
     return Object.values((await kvGet<Record<string, ParkedAccount>>('parkedAccounts')) ?? {}).flatMap((p) => p.workspaces)
   }
 
-  async unlink(): Promise<SyncStatus> {
+  private async unlinkLocked(): Promise<SyncStatus> {
     const link = linkInfo()
     const c = cloud()
     if (link && c) await c.json('DELETE', `/api/devices/${encodeURIComponent(link.deviceId)}`, undefined, 10_000).catch(() => undefined)
+    stopFollowing()
     await clearLink()
     this.state = 'unlinked'
     this.error = undefined
@@ -486,12 +753,12 @@ export class SyncEngine {
       await this.running
       return this.status()
     }
-    this.running = (async () => {
+    this.running = this.lock.run('sync', async () => {
       do {
         this.rerun = false
         await this.cycle()
-      } while (this.rerun && !this.stopped)
-    })().finally(() => {
+      } while (this.rerun && !this.stopped && linkInfo())
+    }).finally(() => {
       this.running = undefined
     })
     await this.running
@@ -499,42 +766,78 @@ export class SyncEngine {
   }
 
   private async cycle() {
-    const c = cloud()
+    const ac = new AbortController()
+    const c = cloud(ac.signal)
     if (!c) return
+    this.cycleAbort = ac
     this.setState('syncing', undefined)
+    const step = () => ac.signal.throwIfAborted()
     try {
       this.failures = await failureMap()
+      // what could hold sync up: this computer's free space, the cloud's storage (clips wait while it's failing)
+      this.diskFree = await freeBytes(ctx().config.dataDir)
+      const sys = await c.json<SystemInfo>('GET', '/api/system').catch((err) => {
+        if (err instanceof CloudError && (err.offline || err.status === 401)) throw err
+        return undefined
+      })
+      this.cloudStorage = sys?.storage?.status === 'error' ? (sys.storage.error ?? 'storage check failed') : undefined
       await this.pushDeletes(c)
+      step()
       await this.pull(c)
-      await this.pushAssets(c)
+      step()
+      await pushBrandExtras(c, new Set((await kvGet<string[]>('cloudWorkspaces')) ?? []), (kind, id, name, fn) => this.item(kind, id, name, fn), (kind, id) => this.resolved(kind, id))
+      // small clips first, then projects, so one big file never holds up the rest; big files go up after, in the
+      // background, a few at a time (the cloud already lists them as uploading)
+      const big = await this.pushAssets(c)
+      step()
       await this.pushProjects(c)
       await this.pushBrandKits(c)
       await this.pushVoiceProfiles(c)
+      step()
       await this.pruneFailures()
       this.lastSyncAt = Date.now()
       await kvSet('lastSyncAt', this.lastSyncAt)
       this.backoffMs = 0
       this.backoffUntil = 0
+      this.signedOut = false
       // a retry scheduled while offline has nothing left to do: it would otherwise run later, unasked (sync is off)
       if (this.retrying && this.debounce) clearTimeout(this.debounce)
       this.retrying = false
       this.setState('idle')
-      if (getSettings().mediaSync === 'all') void prefetchAllMedia()
+      this.uploadInBackground(big)
+      const roomy = !(this.diskFree != null && this.diskFree < LOW_DISK_BYTES)
+      if (getSettings().mediaSync === 'all' && roomy) void prefetchAllMedia()
+      // projects kept available offline get any clip they gained
+      if (roomy) void keepOffline().catch((err) => log.warn('desktop: keeping projects offline failed', { err: String(err) }))
     } catch (err) {
-      if (err instanceof CloudError && err.offline) {
+      if (ac.signal.aborted) {
+        // unlinked meanwhile: what was done stays; the unlink says the rest
+        log.info('desktop: sync cycle stopped', { reason: String(ac.signal.reason) })
+      } else if (err instanceof CloudError && err.offline) {
         this.backoffMs = Math.min(MAX_BACKOFF_MS, Math.max(5000, this.backoffMs * 2))
         this.backoffUntil = Date.now() + this.backoffMs
-        this.setState('offline', undefined)
-        log.info('desktop: cloud offline, backing off', { ms: this.backoffMs })
-        this.schedule(this.backoffMs)
-        this.retrying = true
+        this.wentOffline()
       } else if (err instanceof CloudError && err.status === 401) {
+        this.signedOut = true
         this.setState('error', 'The cloud no longer accepts this computer’s device token (it may have been revoked). Unlink and link again.')
       } else {
         log.warn('desktop: sync failed', { err })
         this.setState('error', err instanceof Error ? err.message : String(err))
       }
+    } finally {
+      if (this.cycleAbort === ac) this.cycleAbort = undefined
     }
+  }
+
+  /** The cloud stopped answering: wait (doubling, at most 5 minutes) and check meanwhile whether it's back. */
+  private wentOffline() {
+    this.backoffMs = Math.min(MAX_BACKOFF_MS, Math.max(5000, this.backoffMs * 2))
+    this.backoffUntil = Date.now() + this.backoffMs
+    this.setState('offline', undefined)
+    log.info('desktop: cloud offline, backing off', { ms: this.backoffMs })
+    this.schedule(this.backoffMs)
+    this.retrying = true
+    this.armProbe()
   }
 
   // ---------------- workspaces ----------------
@@ -564,7 +867,7 @@ export class SyncEngine {
     const kit = (await db.select().from(brandKits).where(eq(brandKits.workspaceId, from)).limit(1))[0]
     const target = (await db.select().from(brandKits).where(eq(brandKits.workspaceId, to)).limit(1))[0]
     await db.transaction(async (tx) => {
-      for (const t of ['projects', 'assets', 'jobs', 'exports', 'voice_profiles']) await tx.execute(sql.raw(`UPDATE ${t} SET workspace_id = '${to.replace(/'/g, "''")}' WHERE workspace_id = '${from.replace(/'/g, "''")}'`))
+      for (const t of ['projects', 'assets', 'jobs', 'exports', 'voice_profiles', 'extra_brand_kits', 'brand_fonts']) await tx.execute(sql.raw(`UPDATE ${t} SET workspace_id = '${to.replace(/'/g, "''")}' WHERE workspace_id = '${from.replace(/'/g, "''")}'`))
       if (kit && !target) await tx.execute(sql`UPDATE brand_kits SET workspace_id = ${to} WHERE workspace_id = ${from}`)
       await tx.execute(sql`DELETE FROM brand_kits WHERE workspace_id = ${from}`)
       await tx.execute(sql`DELETE FROM memberships WHERE workspace_id = ${from}`)
@@ -584,7 +887,7 @@ export class SyncEngine {
     })
   }
 
-  private async mergeLocalWorkspaces(c: CloudClient, cloudList: Workspace[]) {
+  private async mergeLocalWorkspaces(c: CloudClient, cloudList: Workspace[], choices: Record<string, LinkChoice> = {}) {
     const me = await localUserId()
     // the account's own spaces, and spaces that stay on this computer: recovered ones and another account's
     const skip = new Set([...cloudList.map((w) => w.id), ...((await kvGet<string[]>('localOnlySpaces')) ?? []), ...(await this.parkedSpaces())])
@@ -596,7 +899,13 @@ export class SyncEngine {
       .where(eq(memberships.userId, me))
     for (const w of local) {
       if (skip.has(w.id)) continue
-      if (w.personal && personal) await this.rehomeWorkspace(w.id, personal.id)
+      const choice = choices[w.id]
+      if (choice?.action === 'local') {
+        // stays on this computer, never synced (the cloud's personal space is the personal one now)
+        await ctx().db.update(workspaces).set({ personal: false }).where(eq(workspaces.id, w.id))
+        await kvSet('localOnlySpaces', [...((await kvGet<string[]>('localOnlySpaces')) ?? []), w.id])
+      } else if (choice?.action === 'merge') await this.rehomeWorkspace(w.id, choice.into)
+      else if (!choice && w.personal && personal) await this.rehomeWorkspace(w.id, personal.id)
       else {
         const created = await c.json<Workspace>('POST', '/api/workspaces', { name: w.name })
         await this.mirrorWorkspaces([created])
@@ -606,7 +915,7 @@ export class SyncEngine {
   }
 
   /** Create a workspace while linked: in the cloud first (the cloud assigns the id), then mirrored locally. */
-  async createWorkspace(name: string): Promise<Workspace | null> {
+  private async createWorkspaceLocked(name: string): Promise<Workspace | null> {
     const c = cloud()
     if (!c) return null
     const w = await c.json<Workspace>('POST', '/api/workspaces', { name })
@@ -620,7 +929,7 @@ export class SyncEngine {
   }
 
   /** Rename while linked: in the cloud first, then mirrored. Null when unlinked or local-only (caller renames locally). */
-  async renameWorkspace(id: string, name: string): Promise<Workspace | null> {
+  private async renameWorkspaceLocked(id: string, name: string): Promise<Workspace | null> {
     const c = cloud()
     if (!c || !(await this.isCloudWorkspace(id))) return null
     const w = await c.json<Workspace>('PATCH', `/api/workspaces/${encodeURIComponent(id)}`, { name })
@@ -630,7 +939,7 @@ export class SyncEngine {
   }
 
   /** Delete while linked: in the cloud first, then here. False when unlinked or local-only (caller deletes locally). */
-  async deleteWorkspace(id: string): Promise<boolean> {
+  private async deleteWorkspaceLocked(id: string): Promise<boolean> {
     const c = cloud()
     if (!c || !(await this.isCloudWorkspace(id))) return false
     await c.json('DELETE', `/api/workspaces/${encodeURIComponent(id)}`).catch((e) => {
@@ -722,10 +1031,14 @@ export class SyncEngine {
 
   // ---------------- pull ----------------
 
-  private async pull(c: CloudClient) {
-    let cursor = (await kvGet<number>('cursor')) ?? 0
+  private async pull(c: CloudClient): Promise<void> {
+    // a full resync (deletes this computer hadn't pulled were compacted away in the cloud) starts from nothing and, once
+    // every page is in, drops what the cloud no longer has; cut short, it starts over next time
+    const full = !!(await kvGet<boolean>('fullResync'))
+    const seen = full ? new Seen() : undefined
+    let cursor = full ? 0 : ((await kvGet<number>('cursor')) ?? 0)
     // a cloud that reports `safe` never lets the cursor pass a change still being written; older ones get a lookback
-    let since = Math.max(0, cursor - ((await kvGet<boolean>('safeCursor')) ? 0 : LOOKBACK))
+    let since = full ? 0 : Math.max(0, cursor - ((await kvGet<boolean>('safeCursor')) ? 0 : LOOKBACK))
     // where the next pull starts: below the first change the cloud said may still be committing
     let hold: number | undefined
     for (;;) {
@@ -738,6 +1051,13 @@ export class SyncEngine {
         throw err
       }
       this.pageBytes = Math.min(PAGE_BYTES, this.pageBytes * 2)
+      if (ch.resync && !seen) {
+        await kvSet('fullResync', true)
+        log.info('desktop: the cloud compacted deletes past this computer’s cursor; pulling everything again', { since })
+        return this.pull(c)
+      }
+      if (seen && since === 0) seen.workspaces = new Set(ch.workspaces.map((w) => w.id))
+      seen?.add(ch)
       if (ch.workspaces.length) await this.mirrorWorkspaces(ch.workspaces)
       const known = new Set((await ctx().db.select({ id: workspaces.id }).from(workspaces)).map((w) => w.id))
       const missingWs = [...ch.projects.map((p) => p.summary.workspaceId), ...ch.assets.map((a) => a.workspaceId)].filter((w) => !known.has(w))
@@ -749,6 +1069,11 @@ export class SyncEngine {
       for (const id of ch.deleted.projects) await this.applyProjectDelete(id)
       for (const v of ch.voiceProfiles ?? []) await this.applyVoiceProfile(v)
       for (const id of ch.deleted.voiceProfiles ?? []) await this.applyVoiceProfileDelete(id)
+      const quietly = (fn: () => void) => this.quietly(fn)
+      for (const f of ch.brandFonts ?? []) await applyFont(c, f, quietly)
+      for (const k of ch.extraBrandKits ?? []) await applyKit(k, quietly)
+      for (const id of ch.deleted.brandKits ?? []) await applyKitDelete(id, quietly)
+      for (const id of ch.deleted.brandFonts ?? []) await applyFontDelete(id, quietly)
       for (const id of ch.deleted.workspaces ?? []) await this.applyWorkspaceDelete(id)
       cursor = Math.max(cursor, ch.cursor)
       if (ch.safe != null) {
@@ -761,6 +1086,33 @@ export class SyncEngine {
       if (!ch.more || ch.cursor <= since) break
       since = ch.cursor
     }
+    if (seen) {
+      await this.dropUnseen(seen)
+      await kvSet('fullResync', false)
+    }
+  }
+
+  /**
+   * After a full pull: what this computer had from the cloud and the cloud no longer has was deleted there (its
+   * tombstone compacted away). It goes here as the feed's delete would: a project edited here is kept and pushed anew.
+   */
+  private async dropUnseen(seen: Seen) {
+    const db = ctx().db
+    const cloudWs = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
+    if (seen.workspaces) for (const id of cloudWs) if (!seen.workspaces.has(id)) await this.applyWorkspaceDelete(id)
+    const live = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
+    const [pr, ar, vr] = await Promise.all([syncRows('project'), syncRows('asset'), syncRows('voice')])
+    for (const p of await db.select({ id: projects.id, ws: projects.workspaceId }).from(projects)) {
+      if (live.has(p.ws) && pr.get(p.id)?.cloudVersion != null && !seen.projects.has(p.id)) await this.applyProjectDelete(p.id)
+    }
+    for (const a of await db.select({ id: assets.id, ws: assets.workspaceId }).from(assets)) {
+      const s = ar.get(a.id)
+      if (live.has(a.ws) && (s?.remote || s?.uploaded) && !seen.assets.has(a.id)) await this.applyAssetDelete(a.id)
+    }
+    for (const v of await db.select({ id: voiceProfiles.id, ws: voiceProfiles.workspaceId }).from(voiceProfiles)) {
+      if (live.has(v.ws) && vr.get(v.id)?.cloudVersion != null && !seen.voices.has(v.id)) await this.applyVoiceProfileDelete(v.id)
+    }
+    await dropUnseenBrand(live, seen, (fn) => this.quietly(fn))
   }
 
   private async applyAsset(rec: AssetRecord & { sha256?: string; changeSeq: number }) {
@@ -957,7 +1309,11 @@ export class SyncEngine {
     if (!local) return
     // edited here since: keep it; with no sync row it is pushed again as a new cloud project
     if (isDirty(local, s)) return
-    await ctx().db.delete(projects).where(eq(projects.id, id))
+    // review comments made here have no FK: they go with the project, as in the cloud
+    await ctx().db.transaction(async (tx) => {
+      await tx.delete(comments).where(eq(comments.projectId, id))
+      await tx.delete(projects).where(eq(projects.id, id))
+    })
   }
 
   // ---------------- push ----------------
@@ -969,8 +1325,8 @@ export class SyncEngine {
     for (const t of rows) {
       // membership tombstones (local workspace merges/deletes) aren't pushed, nor deletes in spaces this account
       // doesn't sync (another account's, set aside here: the cloud copy simply stays)
-      const kind = t.kind === 'voice_profile' ? 'voice' : t.kind
-      if ((kind === 'project' || kind === 'asset' || kind === 'voice') && cloudWs.has(t.ws)) await this.item(`${kind}-delete`, t.id, DELETED_NAME[kind], () => this.pushDelete(c, kind, t.id))
+      const kind = TOMB_KIND[t.kind]
+      if (kind && cloudWs.has(t.ws)) await this.item(`${kind}-delete`, t.id, DELETED_NAME[kind], () => this.pushDelete(c, kind, t.id))
       cursor = Number(t.seq)
       await kvSet('tombCursor', cursor)
     }
@@ -982,7 +1338,8 @@ export class SyncEngine {
     }
   }
 
-  private async pushDelete(c: CloudClient, kind: 'project' | 'asset' | 'voice', id: string) {
+  private async pushDelete(c: CloudClient, kind: keyof typeof DELETED_NAME, id: string) {
+    if (kind === 'kit' || kind === 'font') return pushBrandDelete(c, kind, id)
     const s = await syncRow(kind, id)
     if (kind === 'project' && s?.cloudVersion != null) return this.pushProjectDelete(c, id, s)
     if (kind === 'voice') {
@@ -1030,10 +1387,12 @@ export class SyncEngine {
     }
   }
 
-  private async pushAssets(c: CloudClient) {
+  /** Sends what changed of clips already in the cloud, and the small new ones; returns the big new ones (D-7). */
+  private async pushAssets(c: CloudClient): Promise<AssetRow[]> {
     const cloudWs = new Set((await kvGet<string[]>('cloudWorkspaces')) ?? [])
     const rows = await syncRows('asset')
     const local = await ctx().db.select().from(assets)
+    const todo: AssetRow[] = []
     for (const a of local) {
       const s = rows.get(a.id)
       if (!cloudWs.has(a.workspaceId)) continue
@@ -1048,8 +1407,49 @@ export class SyncEngine {
       }
       // a clip put in the trash here before it was ever sent up stays here (emptying the trash removes it)
       if (a.origin === 'render' || a.status === 'uploading' || a.trashedAt != null) continue
-      await this.item('asset', a.id, a.name, () => this.pushAsset(c, a))
+      // already going up in the background
+      if (this.uploads.has(a.id) || !this.due(this.failures.get(failureKey('asset', a.id)))) continue
+      todo.push(a)
     }
+    // the cloud's storage is failing: clips wait (projects and the rest still go)
+    if (this.cloudStorage) return []
+    todo.sort((x, y) => x.size - y.size)
+    const small = todo.filter((a) => a.size <= this.smallUploadBytes)
+    await inLanes(small, UPLOAD_LANES, (a) => this.item('asset', a.id, a.name, () => this.pushAsset(c, a)))
+    const big = todo.filter((a) => a.size > this.smallUploadBytes)
+    // the cloud lists them now (as uploading), before the projects that use them arrive
+    for (const a of big) await this.item('asset', a.id, a.name, () => this.pushAsset(c, a, { registerOnly: true }))
+    return big
+  }
+
+  /**
+   * Big clips go up after the cycle, outside the sync lock, so a conflict choice or the next cycle never waits for
+   * them. A dropped connection stops the lanes (that file starts again when the cloud is back); an unlink ends them.
+   */
+  private uploadInBackground(list: AssetRow[]) {
+    const fresh = list.filter((a) => !this.uploads.has(a.id))
+    if (!fresh.length) return
+    for (const a of fresh) this.uploads.queue(a.id, a.name, a.size)
+    const ac = this.uploadAbort
+    const c = cloud(ac.signal)
+    if (!c) return
+    void inLanes(fresh, UPLOAD_LANES, async (a) => {
+      ac.signal.throwIfAborted()
+      // still waiting, and still here: it may have been deleted, uploaded or skipped since it was queued
+      const row = (await ctx().db.select().from(assets).where(eq(assets.id, a.id)).limit(1))[0]
+      if (!row || (await syncRow('asset', a.id))?.uploaded) return this.uploads.done(a.id)
+      await this.item('asset', a.id, a.name, () => this.pushAsset(c, row, { finish: (fn) => this.lock.run('upload', fn) }))
+      this.uploads.done(a.id)
+    })
+      .catch((err) => {
+        if (ac.signal.aborted) return
+        if (err instanceof CloudError && err.offline) this.wentOffline()
+        else if (err instanceof CloudError && err.status === 401) this.setState('error', 'The cloud no longer accepts this computer’s device token (it may have been revoked). Unlink and link again.')
+      })
+      .finally(() => {
+        for (const a of fresh) this.uploads.done(a.id)
+        void this.emit()
+      })
   }
 
   /** A clip's name or transcript changed here since it last matched the cloud's: send what changed. */
@@ -1065,7 +1465,11 @@ export class SyncEngine {
     await putSync('asset', a.id, { base: { ...here } })
   }
 
-  private async pushAsset(c: CloudClient, a: typeof assets.$inferSelect) {
+  /**
+   * One clip's file. `registerOnly`: just let the cloud know it's coming (its ticket makes the cloud's record).
+   * `finish`: how the bookkeeping after the bytes runs (under the sync lock, for background uploads).
+   */
+  private async pushAsset(c: CloudClient, a: typeof assets.$inferSelect, o: { registerOnly?: boolean; finish?: (fn: () => Promise<void>) => Promise<void> } = {}) {
     if (!(await ctx().storage.stat(a.sourceKey))) return
     let sha = a.sha256
     if (!sha) {
@@ -1092,22 +1496,19 @@ export class SyncEngine {
       }
       throw err
     }
-    const body = Readable.toWeb(fs.createReadStream(file)) as unknown as ReadableStream
-    const put = await c.request('PUT', ticket.url, { body, headers: { ...ticket.headers, 'content-length': String(bytes) }, idleTimeoutMs: IDLE_MS })
-    if (!put.ok) {
-      const text = await put.text().catch(() => '')
-      let parsed: { error?: string } | undefined
-      try {
-        parsed = JSON.parse(text)
-      } catch {
-        /* not json */
-      }
-      throw new CloudError(put.status, { error: `Upload of ${a.name} failed: ${parsed?.error ?? (text.slice(0, 200) || put.statusText)}` })
+    if (o.registerOnly) return
+    this.uploads.start(a.id, a.name, bytes)
+    try {
+      await sendFile({ client: c, ticket, file, bytes, name: a.name, onProgress: (sent) => this.uploads.progress(a.id, sent), idleMs: IDLE_MS })
+    } finally {
+      this.uploads.done(a.id)
     }
-    await put.body?.cancel().catch(() => undefined)
-    const done = await c.json<AssetRecord | undefined>('POST', `/api/assets/${encodeURIComponent(a.id)}/complete`)
-    // what the cloud has now: a name it shortened, no transcript yet (one made here goes up next)
-    await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...clipFields(done?.asset?.name ?? a.name, done?.asset?.transcript) } })
+    const finish = o.finish ?? ((fn: () => Promise<void>) => fn())
+    await finish(async () => {
+      const done = await c.json<AssetRecord | undefined>('POST', `/api/assets/${encodeURIComponent(a.id)}/complete`)
+      // what the cloud has now: a name it shortened, no transcript yet (one made here goes up next)
+      await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...clipFields(done?.asset?.name ?? a.name, done?.asset?.transcript) } })
+    })
     log.info('desktop: uploaded asset', { assetId: a.id, bytes })
   }
 
@@ -1384,7 +1785,7 @@ export class SyncEngine {
 
   // ---------------- conflicts ----------------
 
-  async resolve(projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both'): Promise<SyncStatus> {
+  private async resolveLocked(projectId: string, mode: 'keep-local' | 'keep-cloud' | 'keep-both'): Promise<SyncStatus> {
     const c = cloud()
     if (!c) throw new HttpError(409, 'conflict', 'This computer is not linked to a cloud account')
     const local = (await ctx().db.select().from(projects).where(eq(projects.id, projectId)).limit(1))[0]

@@ -1,7 +1,7 @@
 import type { AiSettings, Device, DesktopSettings } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, Download, FolderOpen, HardDrive, Info, Laptop, Link2, LogIn, Mic, Paintbrush, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { AlertTriangle, CheckCircle2, Cloud, CloudOff, Cpu, Download, FolderOpen, HardDrive, Info, Laptop, LogIn, Mic, Paintbrush, RefreshCw, Save, Sparkles, Unlink, User } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { HttpError } from '../../lib/api'
 import { scrollBehavior } from '../../lib/appearance'
@@ -12,10 +12,9 @@ import { aiLabel, aiLabelHasModel, DESKTOP_DOWNLOAD_URL, sysFetch, systemApi, us
 import { AiProviders } from './AiProviders'
 import { DictationSettings } from '../voicestudio/Dictation'
 import { AppearanceSettings } from './AppearanceSettings'
+import { LinkForm } from '../sync/LinkFlow'
 import { Avatar, EmptyState, Spinner, useAsync, usePageTitle } from '../ui'
 import { relativeTime } from '../util'
-
-const DEFAULT_CLOUD_URL = 'https://producerstudio.app'
 
 /** Narrow bridge exposed by the Electron preload (desktop app only). */
 interface ProducerDesktopBridge {
@@ -61,54 +60,6 @@ function errText(e: unknown): string {
 }
 
 // ---------------- desktop: account & sync ----------------
-function LinkForm() {
-  const setSync = useSystem((s) => s.setSync)
-  const [cloudUrl, setCloudUrl] = useState(DEFAULT_CLOUD_URL)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string>()
-  async function submit(e: FormEvent) {
-    e.preventDefault()
-    if (!/^https?:\/\/.+/.test(cloudUrl.trim())) return setErr('Enter the full cloud URL, starting with https://')
-    if (!email.trim() || !password) return setErr('Enter your cloud email and password')
-    setBusy(true)
-    setErr(undefined)
-    try {
-      setSync(await systemApi.link(cloudUrl.trim().replace(/\/+$/, ''), email.trim(), password))
-      setPassword('')
-      // linking adopts the cloud account and its workspaces: reload the signed-in user
-      await useSession.getState().load()
-      toast('Linked — syncing your projects')
-    } catch (e2) {
-      setErr(errText(e2))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <form onSubmit={submit} className="ps-set-form" aria-label="Link a cloud account">
-      <p className="muted" style={{ margin: '0 0 14px', fontSize: '0.8125rem' }}>Sign in with your Producer Studio cloud account. Your password is exchanged for a device token and isn’t stored on this computer.</p>
-      <div className="ps-set-grid">
-        <div className="ps-field" style={{ gridColumn: '1 / -1' }}>
-          <label className="label" htmlFor="sync-url">Cloud URL</label>
-          <input id="sync-url" className="input" value={cloudUrl} onChange={(e) => setCloudUrl(e.target.value)} spellCheck={false} />
-        </div>
-        <div className="ps-field">
-          <label className="label" htmlFor="sync-email">Email</label>
-          <input id="sync-email" className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
-        </div>
-        <div className="ps-field">
-          <label className="label" htmlFor="sync-pw">Password</label>
-          <input id="sync-pw" className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </div>
-      </div>
-      {err && <div className="ps-alert" role="alert" style={{ marginBottom: 12 }}>{err}</div>}
-      <button className="btn primary" disabled={busy}>{busy ? <Spinner /> : <Link2 size={15} />} Link account</button>
-    </form>
-  )
-}
-
 function DesktopAccount({ settings, onSettings }: { settings?: DesktopSettings; onSettings: (p: Partial<DesktopSettings>) => Promise<void> }) {
   const sync = useSystem((s) => s.sync)
   const setSync = useSystem((s) => s.setSync)

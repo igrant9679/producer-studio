@@ -1,0 +1,29 @@
+/* The desktop's sync panel (D-1) and first-link preview (D-5). */
+.ps-syncp section { margin-top: 14px; }
+.ps-syncp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ps-syncp-item { padding: 9px 10px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--border); }
+.ps-syncp-row { display: flex; align-items: center; gap: 8px; }
+.ps-syncp-name { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.ps-syncp-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; }
+.ps-syncp-name > span { font-size: 0.75rem; color: var(--text-3); overflow-wrap: anywhere; }
+.ps-syncp-item .ps-progress { margin-top: 6px; }
+.ps-syncp-state.failed { color: var(--danger); }
+.ps-syncp-state.skipped { color: var(--text-3); }
+.ps-syncp-state.uploading { color: var(--accent); }
+.ps-syncp-compare { margin-top: 8px; }
+.ps-syncp-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ps-syncp-side { padding: 8px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-1, var(--bg-1)); font-size: 0.75rem; }
+.ps-syncp-side dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin: 6px 0 0; }
+.ps-syncp-side dt { color: var(--text-3); }
+.ps-syncp-side dd { margin: 0; overflow-wrap: anywhere; }
+.ps-syncp-changes { margin: 8px 0 0; padding-left: 18px; font-size: 0.75rem; }
+.ps-linkp-space { display: grid; gap: 6px; }
+.ps-linkp-space select { max-width: 100%; }
+@media (max-width: 520px) {
+  .ps-syncp-sides { grid-template-columns: 1fr; }
+  .ps-syncp-row { flex-wrap: wrap; }
+}
+.ps-offline-badge, .ps-cloud-badge { position: absolute; z-index: 2; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--media-scrim); backdrop-filter: blur(4px); color: rgba(255, 255, 255, 0.85); }
+.ps-offline-badge { top: 8px; right: 34px; color: #3ddc97; }
+.ps-offline-badge[data-state='downloading'] { color: #ffc24d; }
+.ps-cloud-badge { top: 8px; right: 8px; }

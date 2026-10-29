@@ -363,7 +363,7 @@ export const idempotencyKeys = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.key] })],
 )
 
-/** v14: a space's brand kits besides its default (brand_kits). Not synced. */
+/** v14: a space's brand kits besides its default (brand_kits). Synced to desktops since v18. */
 export const extraBrandKits = pgTable('extra_brand_kits', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
@@ -371,9 +371,10 @@ export const extraBrandKits = pgTable('extra_brand_kits', {
   createdBy: text('created_by'),
   createdAt: ms('created_at').notNull(),
   updatedAt: ms('updated_at').notNull(),
+  changeSeq: seq(),
 })
 
-/** v14: font files uploaded to a space for its brand kits (stored under ws/<id>/brand-fonts/). Not synced. */
+/** v14: font files uploaded to a space for its brand kits (stored under ws/<id>/brand-fonts/). Synced since v18. */
 export const brandFonts = pgTable('brand_fonts', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
@@ -385,6 +386,14 @@ export const brandFonts = pgTable('brand_fonts', {
   sizeBytes: integer('size_bytes').notNull(),
   createdBy: text('created_by'),
   createdAt: ms('created_at').notNull(),
+  changeSeq: seq(),
+})
+
+/** v18: the sync feed's compaction horizon (row 1): tombstones up to this change number may have been deleted. */
+export const syncHorizon = pgTable('sync_horizon', {
+  id: integer('id').primaryKey(),
+  seq: bigint('seq', { mode: 'number' }).notNull(),
+  updatedAt: ms('updated_at').notNull(),
 })
 
 /** v14: a space's own settings (the pronunciation dictionary, its sample project). Not synced. */
@@ -440,4 +449,4 @@ export const workspaceUsageSettings = pgTable('workspace_usage_settings', {
   updatedAt: ms('updated_at').notNull(),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings, authTokens }
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings, authTokens, syncHorizon }
