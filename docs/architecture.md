@@ -80,6 +80,30 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   again. Caption tracks follow transcript cuts and restores. `project.fillerWords` is the transcript's filler list;
   speaker labels live on the clip's transcript segments (`speaker`), saved with `PATCH /api/assets/:id`.
 
+## Media pipeline (phase 5 R4-B; migration v17)
+- **Resumable uploads (P-5)**: `POST /api/uploads {…, multipart: true}` answers with a plan (`services/uploads.ts`:
+  parts of 16 MB or more, whole MB, at most 10,000); `POST /api/uploads/:assetId/parts {parts}` presigns each part with
+  its length signed (S3 UploadPart) or names `PUT /api/uploads/:assetId/parts/:n` (local: exactly that many bytes);
+  `GET …/parts` lists what arrived; `POST /api/assets/:id/complete` joins them (ETags read from storage via ListParts)
+  and processing runs as before. `upload_sessions` remembers which storage upload holds a clip's parts: the same asset
+  id resumes. Dropped on abort, on completion, or after a week idle (the asset reconciler). Clients: the browser's
+  `apps/web/src/lib/multipartUpload.ts` (files ≥ 32 MB; the upload id kept per file in localStorage) and, for Node
+  callers such as the desktop sync engine, `apps/server/src/storage/multipart-client.ts` `uploadInParts`.
+- **Storage** (`storage/`): every call goes through `withRetry` (`storage/retry.ts`): passing errors (reset, 5xx,
+  SlowDown, EBUSY) are tried again 4 times with backoff, a timeout once; the S3 SDK's own retries are off. `copy` copies
+  inside storage (S3 CopyObject, in 1 GB parts above 5 GB). Copying a clip to another space is the `asset.copy` job.
+- **Processing** (`media/process.ts`, `PROCESSING_VERSION` 2): proxies ≤ 720p (1080p for a 4K source), ≤ 60 fps, a
+  keyframe every half second, tagged with the source's colour matrix (`media/colour.ts`), on the machine's video
+  hardware when there is some (`media/hwenc.ts`, `HW_ENCODE`). The first stereo track is the sound used; pictures get a
+  display copy when browsers don't draw them, they're stored sideways, or they're huge. An upload with the same sha256
+  as a clip of the space processed by this version reuses its files (`media/reuse.ts`).
+- **Export sources** (`render/sources.ts`): HyperFrames draws video from JPEG frames, read as BT.601 whatever the file
+  says, so a source in another matrix (BT.709) is converted to BT.601 values first; a source the edit uses less than
+  60% of (and at least a minute long) is cut to the windows used (on S3 read in place from a signed URL), and the
+  clips' in-points are moved to match. HyperFrames' frame cache lives on the data volume (`RENDER_CACHE_DIR`).
+- **Transcription** (`ai/whisper.ts`): `GET /api/ai/transcription` says which model is installed, whether it hears
+  more than English and can detect the language, and which languages it can be asked for; the editor's picker uses it.
+
 ## Library: trash, exports, search, copies (migration v13; contract in `packages/core/src/library.ts`)
 - **Media trash** (`assets.trashed_at`, `services/library.ts`, `routes/assets.ts`): `DELETE /api/assets/:id` only
   trashes (projects keep playing the clip); `GET /api/assets?trashed=1` is the trash, `POST .../restore` takes one

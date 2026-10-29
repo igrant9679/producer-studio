@@ -12,6 +12,8 @@ export interface FakeS3 {
   /** Answer the next `n` requests (matching `match`, default any) with 503 SlowDown. */
   failNext(n: number, match?: (method: string, url: URL) => boolean): void
   requests: Array<{ method: string; path: string; query: string }>
+  /** Object bytes sent in GET answers so far. */
+  readonly bytesOut: number
   close(): Promise<void>
 }
 
@@ -22,6 +24,7 @@ export async function startFakeS3(bucket = 'b'): Promise<FakeS3> {
   const objects = new Map<string, { body: Buffer; type?: string }>()
   const uploads = new Map<string, { key: string; parts: Map<number, Buffer> }>()
   const requests: FakeS3['requests'] = []
+  let bytesOut = 0
   let failing: Array<(m: string, u: URL) => boolean> = []
   const server = http.createServer(async (req, res) => {
     const chunks: Buffer[] = []
@@ -137,9 +140,11 @@ export async function startFakeS3(bucket = 'b'): Promise<FakeS3> {
         const start = Number(m[1])
         const end = m[2] ? Math.min(Number(m[2]), obj.body.length - 1) : obj.body.length - 1
         res.writeHead(206, { 'content-length': String(end - start + 1), 'content-range': `bytes ${start}-${end}/${obj.body.length}` })
+        bytesOut += end - start + 1
         return res.end(obj.body.subarray(start, end + 1))
       }
       res.writeHead(200, { 'content-length': String(obj.body.length), 'content-type': obj.type ?? 'application/octet-stream' })
+      bytesOut += obj.body.length
       return res.end(obj.body)
     }
     return error(405, 'MethodNotAllowed')
@@ -151,6 +156,9 @@ export async function startFakeS3(bucket = 'b'): Promise<FakeS3> {
     objects,
     uploads,
     requests,
+    get bytesOut() {
+      return bytesOut
+    },
     failNext(n, match = () => true) {
       for (let i = 0; i < n; i++) failing.push(match)
     },
