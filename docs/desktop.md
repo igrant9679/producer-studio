@@ -143,6 +143,35 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
   after a fixed total time, so a 64 MB project save or a big page finishes however long it takes; a stalled transfer is
   "offline", never an empty answer. Change-feed pages end at about `maxBytes` of JSON (4 MB by default; at least one
   change), and the desktop halves that after a page that didn't arrive, growing back as pages do.
+- **Tombstones can be compacted (schema v18).** `services/tombstones.ts compactTombstones(days)` deletes old tombstones
+  (on a desktop never one its own push hasn't sent); deleting any raises the feed's horizon (`sync_horizon`, a
+  trigger). A desktop whose cursor is below it gets `resync: true`, pulls everything again from 0 and drops what the
+  cloud no longer has; a project edited here is kept and pushed again as new. Older desktops still get their pages.
+- **One lock.** Link, unlink, a conflict choice, a notice's offer, space changes through the cloud and every cycle run
+  one at a time (`desktop/lock.ts`). Unlinking stops the cycle under way instead of waiting for it.
+- **Back online at once.** While offline, the desktop asks the cloud's `/api/health` every 5 s (a Wi-Fi sign-in page
+  doesn't count) and syncs as soon as it answers; the app's `online` event (`POST /api/sync/online`) does the same.
+- **Uploads.** Small clips (up to 16 MB) go first, then projects; bigger files are announced to the cloud (listed as
+  uploading) and go up after the cycle, three at a time, outside the lock, with bytes in `SyncStatus.uploads`. A file
+  cut short starts again from its first byte; `desktop/uploads.ts setFileSender` is where a resumable protocol
+  plugs in.
+- **The sync panel** (sync menu → Details): why sync is held up (`SyncStatus.blocked`: signed out, offline,
+  credentials, cloud storage failing, low disk, a conflict, automatic sync off), uploads with bytes, each conflict
+  side by side (`GET /api/sync/conflicts/:id`), and everything still to sync (`GET /api/sync/items`) with Retry and Skip.
+- **First link.** Settings → Account shows what linking would do before anything changes
+  (`POST /api/sync/link/preview`): each space here with its projects, clips and bytes to upload, where it goes (merge
+  into one of your cloud spaces, create it in the cloud, or keep it on this computer only), and another account's
+  spaces that would be set aside. `POST /api/sync/link {previewId, choices}` links as chosen; the preview's device
+  link lapses after 10 minutes unless used, and Cancel removes it.
+- **Available offline.** A project's menu → Keep available offline downloads every clip it uses (original, proxy,
+  thumbnail, filmstrip, waveform) and keeps them current after each sync; the library badges it, and badges clips
+  whose files are only in the cloud (`GET/PUT /api/sync/offline`). Stopping keeps what was downloaded.
+- **Brand kits and fonts.** A space's other brand kits and its font files sync both ways (font files are fetched as
+  they arrive). The space's own settings (pronunciations, sample project) and each member's settings (favourite voices,
+  Voice Studio draft, onboarding) stay in the cloud; the media trash follows the cloud's for clips from the cloud.
+- **Comments and activity** aren't copied to the desktop. For a project or space in the cloud, the desktop reads and
+  writes them in the cloud and passes on the cloud's live `comment` updates while they're open; offline they say they
+  need the connection (nothing is queued). Unlinked, comments stay on this computer as before.
 - **An item that keeps failing never blocks the rest.** Any push error other than "offline" or "signed out" (too
   large, a role change, an id taken elsewhere, a server error) is recorded for that one item in
   `desktop_sync_failures` and the cycle carries on. The item is retried on its own backoff (1, 2, 4 … min, at most
@@ -155,5 +184,6 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
 - Moving the data folder on macOS/Linux also moves VoiceStudio (it lives inside the data folder there), whose Python
   environment may need reinstalling afterwards. On Windows VoiceStudio has its own folder in Local AppData.
 - Brand-kit conflicts are last-writer-wins (local edits since the last sync win until pushed).
-- Assets are uploaded in one request per file (no resumable/multipart upload for very large sources yet).
+- Assets are uploaded in one request per file: a big file cut short starts again from its first byte (the resumable
+  multipart protocol plugs in at `desktop/uploads.ts`).
 - The Kokoro model is the quantized ONNX only; whisper is `small.en` (English).

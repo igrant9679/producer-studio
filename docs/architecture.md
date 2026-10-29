@@ -244,7 +244,8 @@ and comment.
   in are deleted with it).
 - **App links** (device tokens) reach only the sync engine's routes (`DEVICE_ROUTES` in `auth.ts`): auth/me, sync,
   devices, workspaces (list, create, rename, delete, brand), projects, uploads, assets, media, voice profiles and
-  relay, events. Anything else answers 403. They stop working after 90 days unused (`Device.expiresAt`).
+  relay, events, and a cloud project's comments and a cloud space's activity (a linked desktop shows the cloud's).
+  Anything else answers 403. They stop working after 90 days unused (`Device.expiresAt`).
 - **Job notices** (A-8): `emitJob` calls `services/notify.ts` once per job end; it emails the person who started a
   long job (exports, Producer AI, transcription, voiceover, smart tools; at least a minute; not draft previews) when
   they turned job emails on. In the browser, `shell/jobNotices.ts` and `editor/exportJobs.ts` toast with Open (and
@@ -311,7 +312,8 @@ and comment.
   of the project's saved versions (`doc->'ai'`), newest first, one per change. A scene's `narrator` (voice, speed)
   overrides the brief's for that scene, and `renarrate: [sceneIds]` on assemble makes fresh takes of those scenes while
   the others reuse theirs; `brief.brandKitId` picks the kit.
-- None of the v14 tables sync to desktops: a desktop sees the default kit only.
+- None of the v14 tables synced to desktops at first; since v18 `extra_brand_kits` and `brand_fonts` do (the space and
+  member settings stay in the cloud).
 
 ## Two products, one codebase
 
@@ -336,6 +338,11 @@ and comment.
 - **Push**: local writes are journaled (outbox). Assets: `POST /api/uploads {assetId, sha256}` → PUT bytes (skip on 409 exists) → complete. Projects: `PUT /api/projects/:id {baseVersion}`; new local projects `POST /api/projects {id}`.
 - **Conflicts**: a 409 on push (both sides edited since the last sync) marks the project conflicted; the user picks Keep local (force-push over the cloud version), Keep cloud, or Keep both (local becomes "(conflicted copy)" with a new id). Assets are immutable, so they never conflict.
 - Runs on launch, every 60 s while online, and immediately after local saves (debounced); state is surfaced in the top bar (`/api/sync/status`, SSE `sync`).
+- Release 4 (R4-C): the feed can compact tombstones safely (`services/tombstones.ts`, `sync_horizon`, `resync`), a
+  space's other brand kits and fonts sync (`/api/sync/brand-kits/:id`, `/api/sync/brand-fonts/:id`), and the desktop
+  engine gained one lock (`desktop/lock.ts`), background uploads (`desktop/uploads.ts`), a sync panel
+  (`desktop/panel.ts`), a first-link preview, "Available offline" (`desktop/offline.ts`) and the cloud's comments
+  and activity (`desktop/collab.ts`). See docs/desktop.md, "Sync behaviour".
 - The web editor reloads silently when an SSE `project` event arrives for the open project with no unsaved edits; otherwise it merges them onto the new version, and shows the conflict banner only when both changed the same thing.
 
 ### Desktop hardening (lessons from the Producer 0.1.x review)
