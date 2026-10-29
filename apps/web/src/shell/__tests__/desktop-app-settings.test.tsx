@@ -2,6 +2,7 @@
 // crash reports join them).
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { announced } from '../../lib/announce'
 import { DesktopAppSettings, type AppSettingsView } from '../pages/DesktopAppSettings'
 
 const view: AppSettingsView = { keepRunning: false, updateCheck: true, crashReports: false, tray: true }
@@ -70,6 +71,56 @@ describe('keep running in the tray (D-2)', () => {
   })
 
   it('an older desktop app without these settings shows only the tools', async () => {
+    ;(window as { producerDesktop?: unknown }).producerDesktop = { version: '0.6.1', platform: 'win32' }
+    render(<DesktopAppSettings />)
+    expect(await screen.findByRole('list', { name: 'Bundled tools' })).toBeTruthy()
+    expect(screen.queryByRole('switch')).toBeNull()
+  })
+})
+
+describe('looking for new versions (D-4)', () => {
+  const updates = { offered: true, version: '0.7.0', state: { status: 'idle' as const } }
+
+  it('on an unsigned build the switch is off and says why', async () => {
+    bridge({ ...view, updates: { offered: false, reason: 'Update checks come with signed builds, and this one isn’t signed.', version: '0.7.0', state: { status: 'idle' } } })
+    render(<DesktopAppSettings />)
+    const sw = await screen.findByRole('switch', { name: 'Look for new versions' })
+    expect((sw as HTMLButtonElement).disabled).toBe(true)
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText(/this one isn’t signed/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Check now/ })).toBeNull()
+  })
+
+  it('Check now finds a newer version, announces it, and Download opens its page', async () => {
+    const openExternal = vi.fn(async () => true)
+    const checkForUpdates = vi.fn(async () => ({ status: 'available', checkedAt: 1, skipped: false, update: { version: '0.8.0', url: 'https://github.com/o/r/releases/tag/v0.8.0' } }))
+    bridge({ ...view, updates }, { checkForUpdates })
+    ;(window as unknown as { producerDesktop: Record<string, unknown> }).producerDesktop.openExternal = openExternal
+    render(<DesktopAppSettings />)
+    expect((await screen.findByRole('switch', { name: 'Look for new versions' })).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByText(/newer version than 0\.7\.0 exists/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Check now/ }))
+    expect(await screen.findByText(/Producer Studio 0\.8\.0 is available/)).toBeTruthy()
+    await waitFor(() => expect(announced()).toBe('Producer Studio 0.8.0 is available'))
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }))
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/releases/tag/v0.8.0')
+  })
+
+  it('up to date, or a feed that fails, is said plainly; turning it off is saved', async () => {
+    const checkForUpdates = vi.fn().mockResolvedValueOnce({ status: 'current', checkedAt: 1, latest: '0.7.0' }).mockResolvedValueOnce({ status: 'error', checkedAt: 2, error: 'No release has been published yet.' })
+    bridge({ ...view, updates }, { checkForUpdates })
+    render(<DesktopAppSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Check now/ }))
+    expect(await screen.findByText(/You have the latest version \(0\.7\.0\)/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Check now/ }))
+    expect(await screen.findByText('No release has been published yet.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('switch', { name: 'Look for new versions' }))
+    await waitFor(() => expect(setSettings).toHaveBeenCalledWith({ updateCheck: false }))
+  })
+})
+
+describe('older desktop apps', () => {
+  it('without these settings show only the tools', async () => {
     ;(window as { producerDesktop?: unknown }).producerDesktop = { version: '0.6.1', platform: 'win32' }
     render(<DesktopAppSettings />)
     expect(await screen.findByRole('list', { name: 'Bundled tools' })).toBeTruthy()

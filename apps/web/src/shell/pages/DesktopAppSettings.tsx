@@ -1,8 +1,8 @@
-// Settings → This computer (desktop app only): keep running in the tray (D-2), database backups (D-10) and the
-// bundled tools' health (D-13).
+// Settings → This computer (desktop app only): keep running in the tray (D-2), update checks (D-4), database
+// backups (D-10) and the bundled tools' health (D-13).
 import type { ToolCheck, ToolHealth } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, FolderOpen, RefreshCw, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ExternalLink, FolderOpen, RefreshCw, XCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { announce } from '../../lib/announce'
 import { HttpError } from '../../lib/api'
@@ -80,10 +80,20 @@ export interface AppSettingsView {
   tray: boolean
   /** Database copies made before an update changed it (D-10), newest first. */
   backups?: { folder: string; items: Array<{ name: string; at: number; bytes: number }> }
+  /** Update checks (D-4): offered on signed builds with a release feed. */
+  updates?: { offered: boolean; reason?: string; version: string; state: UpdateState }
 }
+
+export type UpdateState =
+  | { status: 'idle' }
+  | { status: 'current'; checkedAt: number; latest: string }
+  | { status: 'available'; checkedAt: number; update: { version: string; url: string; name?: string }; skipped: boolean }
+  | { status: 'error'; checkedAt: number; error: string }
+
 interface AppBridge {
   settings(): Promise<AppSettingsView | null>
   setSettings(patch: Partial<Pick<AppSettingsView, 'keepRunning' | 'updateCheck' | 'crashReports'>>): Promise<AppSettingsView | null>
+  checkForUpdates?(): Promise<UpdateState | null>
 }
 export const appBridge = (): AppBridge | undefined => (typeof window !== 'undefined' ? (window as unknown as { producerDesktop?: { app?: AppBridge } }).producerDesktop?.app : undefined)
 
@@ -108,6 +118,65 @@ function RunningSettings({ view, onChange }: { view: AppSettingsView; onChange: 
         </span>
       </div>
       <Toggle on={view.keepRunning && view.tray} disabled={!view.tray} onChange={(v) => onChange({ keepRunning: v })} label="Keep running when the window is closed" />
+    </div>
+  )
+}
+
+const openExternal = (url: string) => (window as unknown as { producerDesktop?: { openExternal?: (u: string) => Promise<boolean> } }).producerDesktop?.openExternal?.(url)
+
+/** Look for new versions (D-4): only on signed builds with a release feed; it tells and links, never installs. */
+function UpdateSettings({ updates, on, onChange, check }: { updates: NonNullable<AppSettingsView['updates']>; on: boolean; onChange: (v: boolean) => void; check?: () => Promise<UpdateState | null> }) {
+  const [state, setState] = useState<UpdateState>(updates.state)
+  const [checking, setChecking] = useState(false)
+  async function now() {
+    if (!check) return
+    setChecking(true)
+    try {
+      const s = await check()
+      if (s) {
+        setState(s)
+        announce(s.status === 'available' ? `Producer Studio ${s.update.version} is available` : s.status === 'current' ? 'Producer Studio is up to date' : s.status === 'error' ? `Couldn’t check for updates: ${s.error}` : '')
+      }
+    } finally {
+      setChecking(false)
+    }
+  }
+  return (
+    <div className="ps-set-row">
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <strong>Look for new versions</strong>
+        <span>
+          {updates.offered
+            ? `At start and once a day, Producer Studio asks its release page whether a newer version than ${updates.version} exists, and tells you. Nothing is downloaded or installed by itself.`
+            : updates.reason}
+        </span>
+        {updates.offered && state.status !== 'idle' && (
+          <div className={clsx('ps-test', state.status === 'error' ? 'bad' : 'ok')} role="status" style={{ marginTop: 8 }}>
+            {state.status === 'available' ? (
+              <>
+                <CheckCircle2 size={14} /> Producer Studio {state.update.version} is available{state.skipped ? ' (you chose to skip it)' : ''}.{' '}
+                <button className="btn sm primary" onClick={() => void openExternal(state.update.url)}>
+                  <ExternalLink size={13} /> Download
+                </button>
+              </>
+            ) : state.status === 'current' ? (
+              <>
+                <CheckCircle2 size={14} /> You have the latest version ({state.latest}).
+              </>
+            ) : (
+              <>
+                <AlertTriangle size={14} /> {state.error}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      {updates.offered && check && (
+        <button className="btn sm" onClick={() => void now()} disabled={checking}>
+          {checking ? <Spinner size={13} /> : <RefreshCw size={13} />} Check now
+        </button>
+      )}
+      <Toggle on={updates.offered && on} disabled={!updates.offered} onChange={onChange} label="Look for new versions" />
     </div>
   )
 }
@@ -161,6 +230,7 @@ export function DesktopAppSettings() {
   return (
     <div>
       {view && <RunningSettings view={view} onChange={(p) => void change(p)} />}
+      {view?.updates && <UpdateSettings updates={view.updates} on={view.updateCheck} onChange={(v) => void change({ updateCheck: v })} check={bridge?.checkForUpdates ? () => bridge.checkForUpdates!() : undefined} />}
       {view?.backups && <BackupSettings backups={view.backups} />}
       {error && <div className="ps-test bad" role="alert"><AlertTriangle size={14} /> {error}</div>}
       <div style={{ height: view ? 16 : 0 }} />

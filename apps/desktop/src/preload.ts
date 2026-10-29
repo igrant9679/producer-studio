@@ -21,6 +21,8 @@ const api = Object.freeze({
     settings: (): Promise<unknown> => ipcRenderer.invoke('desktop:app-settings'),
     /** Change keepRunning / updateCheck / crashReports (booleans only; anything else is refused). */
     setSettings: (patch: Record<string, boolean>): Promise<unknown> => ipcRenderer.invoke('desktop:set-app-settings', { ...patch }),
+    /** Ask the release feed now (signed builds); resolves the update state. Nothing is downloaded. */
+    checkForUpdates: (): Promise<unknown> => ipcRenderer.invoke('desktop:check-updates'),
   }),
   /** Make the native window frame and menus follow the app theme ('system' | 'dark' | 'light'). */
   setNativeTheme: (mode: string): Promise<boolean> => ipcRenderer.invoke('desktop:set-native-theme', String(mode)),

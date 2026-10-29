@@ -17,6 +17,7 @@ import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, na
 import { ServerProcess, dataDirEnv, desktopPaths } from './server'
 import { type ShellSettings, readShellSettings, shellPatch, shellSettingsFile, writeShellSettings } from './shell-settings'
 import { TRAY_HINT, closeAction, trayMenu } from './tray'
+import { UPDATE_FIRST_CHECK_MS, UPDATE_INTERVAL_MS, type UpdateState, checkForUpdate, updatesOffered } from './updates'
 
 app.enableSandbox()
 app.setAppUserModelId('studio.producer.desktop')
@@ -415,6 +416,7 @@ if (!app.requestSingleInstanceLock()) {
           { label: 'Check Claude sign-in', click: go('/settings#ai') },
           { label: 'Cloud sync', click: go('/settings#account') },
           { type: 'separator' },
+          ...(updatesOffered(build).offered ? [{ label: 'Check for updates…', click: () => void runUpdateCheck('menu') } as MenuItemConstructorOptions] : []),
           { label: 'About Producer Studio', click: () => void about() },
         ],
       },
@@ -540,13 +542,65 @@ if (!app.requestSingleInstanceLock()) {
   }
 
   // ---- IPC: the desktop app's own settings (Settings → This computer) ----
+  // ---- update check (D-4): signed builds with a release feed, behind the setting; it only tells and links ----
+  let updateState: UpdateState = { status: 'idle' }
+  let updateTimer: NodeJS.Timeout | undefined
+
+  /**
+   * Ask the release feed. 'auto' (at start and daily, setting on) offers a new version once with Download / Later /
+   * Skip this version; 'menu' (Help → Check for updates…) always answers; 'settings' just returns the state.
+   */
+  async function runUpdateCheck(how: 'auto' | 'menu' | 'settings'): Promise<UpdateState> {
+    if (!updatesOffered(build).offered || !build.updateRepo) return updateState
+    if (how === 'auto' && !shellSettings.updateCheck) return updateState
+    updateState = await checkForUpdate({ repo: build.updateRepo, current: app.getVersion(), skippedVersion: shellSettings.skippedVersion })
+    logLine(`update check: ${updateState.status}${updateState.status === 'available' ? ` ${updateState.update.version}` : updateState.status === 'error' ? ` (${updateState.error})` : ''}`)
+    if (how === 'settings') return updateState
+    if (updateState.status === 'available' && (how === 'menu' || !updateState.skipped)) {
+      const u = updateState.update
+      const r = await messageBox({
+        type: 'info',
+        title: 'Producer Studio',
+        message: `Producer Studio ${u.version} is available.`,
+        detail: `You have ${app.getVersion()}. Download opens its release page, where the installer is.`,
+        buttons: ['Download', 'Later', 'Skip this version'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      if (r.response === 0) openExternal(u.url)
+      if (r.response === 2) setShell({ skippedVersion: u.version })
+    } else if (how === 'menu')
+      await messageBox({
+        type: updateState.status === 'error' ? 'warning' : 'info',
+        title: 'Producer Studio',
+        message: updateState.status === 'current' ? 'Producer Studio is up to date.' : 'Producer Studio couldn’t check for updates.',
+        detail: updateState.status === 'current' ? `You have ${app.getVersion()}, the latest version.` : updateState.status === 'error' ? updateState.error : '',
+        buttons: ['OK'],
+      })
+    return updateState
+  }
+
+  function scheduleUpdateChecks() {
+    if (updateTimer || !updatesOffered(build).offered) return
+    updateTimer = setTimeout(function tick() {
+      void runUpdateCheck('auto')
+      updateTimer = setTimeout(tick, UPDATE_INTERVAL_MS)
+      updateTimer.unref()
+    }, UPDATE_FIRST_CHECK_MS)
+    updateTimer.unref()
+  }
+
+  ipcMain.handle('desktop:check-updates', async (e) => (isLocal(e.senderFrame?.url ?? '') ? { ...(await runUpdateCheck('settings')) } : null))
+
   const appSettingsView = () => {
     const dataDir = server?.paths.dataDir
+    const offer = updatesOffered(build)
     return {
       keepRunning: shellSettings.keepRunning,
       updateCheck: shellSettings.updateCheck,
       crashReports: shellSettings.crashReports,
       tray: !!tray,
+      updates: { offered: offer.offered, ...(offer.reason ? { reason: offer.reason } : {}), version: app.getVersion(), state: updateState },
       // database copies made before updates (D-10); the folder can be shown (it is inside the data folder)
       backups: dataDir ? { folder: backupsDir(dataDir), items: listBackups(dataDir).map(({ name, at, bytes }) => ({ name, at, bytes })) } : undefined,
     }
@@ -588,6 +642,7 @@ if (!app.requestSingleInstanceLock()) {
     server!.on('crash', (code) => void onCrash(code))
     menu()
     createTray()
+    scheduleUpdateChecks()
     mainWin = createMain(server!.origin)
     mainWin.once('ready-to-show', () => void checkTools())
   })

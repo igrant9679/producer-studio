@@ -65,6 +65,19 @@ validation of the organisation), an Entra ID app registration with a client secr
 Certificate Profile Signer" role on the profile. Put the six values in the CI secrets. The secrets never go into
 the build config; the signing module reads them from the environment.
 
+## Updates (mechanism ready, off until builds are signed)
+
+electron-updater isn't a dependency and Electron's built-in autoUpdater doesn't drive NSIS installs, so the app checks
+a GitHub Releases feed itself (`src/updates.ts`): `GET https://api.github.com/repos/<owner>/<repo>/releases/latest`
+at start (after 30 s) and once a day, compares the tag with its version and, for a newer one, says so with
+**Download** (opens that release's page on github.com, the only kind of link it accepts), **Later** and **Skip this
+version**. It never downloads or installs anything itself. Help → Check for updates… and Settings → This computer →
+Check now ask at any time; the setting "Look for new versions" (on by default) turns the automatic checks off.
+
+It is offered only when the build says so in `build-info.json`: `signed: true` (signing configured, see above) and
+`updateRepo`, set at build time with `PS_UPDATE_REPO=<owner>/<repo>`. Unsigned builds show the setting greyed out with
+the reason. Owner items: signing, and publishing each release (tag `v<version>`, the installer attached) to that repo.
+
 ## Security
 
 - Renderer: `sandbox: true` (also `app.enableSandbox()`), `contextIsolation`, no `nodeIntegration`, `webSecurity`,
