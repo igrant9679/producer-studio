@@ -3,12 +3,14 @@
 // the same web UI the cloud serves, from http://127.0.0.1:<port>. Renderers are sandboxed with context isolation;
 // the preload exposes a version, the platform and three validated functions; navigation never leaves the local origin.
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { BrowserWindow, Menu, type MenuItemConstructorOptions, Tray, app, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron'
+import { BrowserWindow, Menu, type MenuItemConstructorOptions, Tray, app, clipboard, crashReporter, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron'
 import { isDev } from './paths'
 import { dataDirProblem, defaultDataDir, moveDataDir, moveProblem, writeSettings } from './datadir'
 import { backupDatabase, backupsDir, dbDir, listBackups, needsBackup } from './backup'
 import { readBuildInfo } from './build-info'
+import { crashReporterOptions, diagnosticsText, listCrashDumps, tailLog } from './diagnostics'
 import { setupDictation } from './dictation'
 import { fetchToolReport, toolsWarning } from './health'
 import { deviceKey, keystoreProblem, resetDeviceKey } from './keystore'
@@ -52,6 +54,50 @@ if (!app.requestSingleInstanceLock()) {
   // rotated by size while the app runs, not only at launch
   const mainLog = new RotatingLog(path.join(app.getPath('userData'), 'logs', 'main.log'))
   const logLine = (msg: string) => mainLog.write(`${new Date().toISOString()} ${msg}\n`)
+
+  // opt-in crash reports (D-14): Electron's minidumps kept on this computer only, never uploaded; started before ready
+  const crashOptions = crashReporterOptions(shellSettings.crashReports)
+  if (crashOptions) crashReporter.start(crashOptions)
+  // which part of the app went away, and why, always goes to the log
+  app.on('render-process-gone', (_e, wc, d) => logLine(`renderer gone (${d.reason}, exit ${d.exitCode}): ${wc.getURL()}`))
+  app.on('child-process-gone', (_e, d) => logLine(`${d.type} process gone (${d.reason}, exit ${d.exitCode})${d.name ? `: ${d.name}` : ''}`))
+
+  /** Copy diagnostics (D-14): versions, paths, tool check, settings, crash reports and log tails, secrets taken out. */
+  async function copyDiagnostics(): Promise<{ ok: boolean; chars?: number; error?: string }> {
+    try {
+      const logsDir = path.join(app.getPath('userData'), 'logs')
+      const tools = server && sessionToken ? await fetchToolReport(server.origin, sessionToken) : undefined
+      const text = diagnosticsText({
+        now: Date.now(),
+        app: {
+          version: app.getVersion(),
+          build: build.builtAt,
+          signed: build.signed,
+          schema: build.schemaVersion,
+          electron: process.versions.electron,
+          chromium: process.versions.chrome,
+          node: process.versions.node,
+          platform: `${process.platform} ${process.arch}`,
+          os: os.release(),
+          packaged: app.isPackaged,
+          engine: server ? `${server.host === 'utility' ? 'utility process' : 'child process'}, ${server.running ? 'running' : 'stopped'}` : 'not started',
+        },
+        paths: { userData: app.getPath('userData'), dataDir: server?.paths.dataDir, logs: logsDir, crashDumps: app.getPath('crashDumps') },
+        settings: { keepRunning: shellSettings.keepRunning, updateCheck: shellSettings.updateCheck, crashReports: shellSettings.crashReports, crashReportsActive: !!crashOptions, tray: !!tray, lastStart: shellSettings.lastStart },
+        tools,
+        crashes: listCrashDumps(app.getPath('crashDumps')),
+        logs: [
+          { name: 'main.log', lines: tailLog(path.join(logsDir, 'main.log'), 150) },
+          { name: 'server.log', lines: tailLog(path.join(logsDir, 'server.log'), 200) },
+        ],
+      })
+      clipboard.writeText(text)
+      logLine(`diagnostics copied (${text.length} characters)`)
+      return { ok: true, chars: text.length }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  }
 
   function createSplash() {
     const w = new BrowserWindow({
@@ -417,6 +463,13 @@ if (!app.requestSingleInstanceLock()) {
           { label: 'Cloud sync', click: go('/settings#account') },
           { type: 'separator' },
           ...(updatesOffered(build).offered ? [{ label: 'Check for updates…', click: () => void runUpdateCheck('menu') } as MenuItemConstructorOptions] : []),
+          {
+            label: 'Copy diagnostics',
+            click: () =>
+              void copyDiagnostics().then((r) =>
+                messageBox({ type: r.ok ? 'info' : 'warning', title: 'Producer Studio', message: r.ok ? 'Diagnostics copied.' : 'Couldn’t copy the diagnostics.', detail: r.ok ? 'Paste them into your support request. Keys, tokens and email addresses are taken out.' : (r.error ?? ''), buttons: ['OK'] }),
+              ),
+          },
           { label: 'About Producer Studio', click: () => void about() },
         ],
       },
@@ -603,8 +656,11 @@ if (!app.requestSingleInstanceLock()) {
       updates: { offered: offer.offered, ...(offer.reason ? { reason: offer.reason } : {}), version: app.getVersion(), state: updateState },
       // database copies made before updates (D-10); the folder can be shown (it is inside the data folder)
       backups: dataDir ? { folder: backupsDir(dataDir), items: listBackups(dataDir).map(({ name, at, bytes }) => ({ name, at, bytes })) } : undefined,
+      // crash reports (D-14): being kept this launch, and how many are on this computer
+      crash: { active: !!crashOptions, count: listCrashDumps(app.getPath('crashDumps')).length },
     }
   }
+  ipcMain.handle('desktop:copy-diagnostics', (e) => (isLocal(e.senderFrame?.url ?? '') ? copyDiagnostics() : null))
   ipcMain.handle('desktop:app-settings', (e) => (isLocal(e.senderFrame?.url ?? '') ? appSettingsView() : null))
   ipcMain.handle('desktop:set-app-settings', (e, raw: unknown) => {
     if (!isLocal(e.senderFrame?.url ?? '')) return null

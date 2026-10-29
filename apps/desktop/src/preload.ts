@@ -23,6 +23,8 @@ const api = Object.freeze({
     setSettings: (patch: Record<string, boolean>): Promise<unknown> => ipcRenderer.invoke('desktop:set-app-settings', { ...patch }),
     /** Ask the release feed now (signed builds); resolves the update state. Nothing is downloaded. */
     checkForUpdates: (): Promise<unknown> => ipcRenderer.invoke('desktop:check-updates'),
+    /** Put diagnostics (versions, paths, tool check, log tails; secrets taken out) on the clipboard. */
+    copyDiagnostics: (): Promise<unknown> => ipcRenderer.invoke('desktop:copy-diagnostics'),
   }),
   /** Make the native window frame and menus follow the app theme ('system' | 'dark' | 'light'). */
   setNativeTheme: (mode: string): Promise<boolean> => ipcRenderer.invoke('desktop:set-native-theme', String(mode)),

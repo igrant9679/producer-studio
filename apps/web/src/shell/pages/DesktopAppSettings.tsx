@@ -1,5 +1,5 @@
 // Settings → This computer (desktop app only): keep running in the tray (D-2), update checks (D-4), database
-// backups (D-10) and the bundled tools' health (D-13).
+// backups (D-10), crash reports and Copy diagnostics (D-14, DesktopDiagnostics.tsx) and the bundled tools' health (D-13).
 import type { ToolCheck, ToolHealth } from '@producer/core'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, ExternalLink, FolderOpen, RefreshCw, XCircle } from 'lucide-react'
@@ -9,6 +9,7 @@ import { HttpError } from '../../lib/api'
 import { sysFetch } from '../system'
 import { Spinner, useAsync } from '../ui'
 import { formatBytes, relativeTime } from '../util'
+import { type CrashView, CrashSettings } from './DesktopDiagnostics'
 
 export const toolsApi = {
   health: (refresh = false) => sysFetch<ToolHealth>('GET', `/tools/health${refresh ? '?refresh=1' : ''}`),
@@ -82,6 +83,8 @@ export interface AppSettingsView {
   backups?: { folder: string; items: Array<{ name: string; at: number; bytes: number }> }
   /** Update checks (D-4): offered on signed builds with a release feed. */
   updates?: { offered: boolean; reason?: string; version: string; state: UpdateState }
+  /** Crash reports (D-14): being kept this launch, and how many there are. */
+  crash?: CrashView
 }
 
 export type UpdateState =
@@ -232,6 +235,7 @@ export function DesktopAppSettings() {
       {view && <RunningSettings view={view} onChange={(p) => void change(p)} />}
       {view?.updates && <UpdateSettings updates={view.updates} on={view.updateCheck} onChange={(v) => void change({ updateCheck: v })} check={bridge?.checkForUpdates ? () => bridge.checkForUpdates!() : undefined} />}
       {view?.backups && <BackupSettings backups={view.backups} />}
+      {view && <CrashSettings on={view.crashReports} crash={view.crash} onChange={(v) => void change({ crashReports: v })} />}
       {error && <div className="ps-test bad" role="alert"><AlertTriangle size={14} /> {error}</div>}
       <div style={{ height: view ? 16 : 0 }} />
       <ToolHealthPanel />
