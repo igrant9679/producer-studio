@@ -702,6 +702,27 @@ export interface SystemInfo {
   mail?: boolean
 }
 
+// GET /api/tools/health[?refresh=1] -> ToolHealth   (desktop, the local session; checked at start, cached 5 minutes)
+/** One bundled tool the desktop engine needs, checked at start (D-13). */
+export interface ToolCheck {
+  id: 'ffmpeg' | 'ffprobe' | 'whisper' | 'kokoro' | 'renderer'
+  name: string
+  /** What it's for, in plain words ("Exports and clean-up tools"). */
+  needed: string
+  /** ok: works; warn: works with a catch (downloads on first use); error: what it's for won't work. */
+  status: 'ok' | 'warn' | 'error'
+  /** What was found ("ffmpeg 7.0.2"), or what is wrong and what to do. */
+  detail: string
+  path?: string
+}
+
+export interface ToolHealth {
+  checkedAt: number
+  /** No tool is in error. */
+  ok: boolean
+  tools: ToolCheck[]
+}
+
 /** Result of the server's storage self-check: write, read back and delete a small object. */
 export interface StorageHealth {
   status: 'unknown' | 'ok' | 'error'

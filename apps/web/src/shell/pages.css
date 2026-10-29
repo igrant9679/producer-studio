@@ -382,3 +382,14 @@
 .ps-cli-mark { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); white-space: nowrap; }
 .ps-cli-mark[data-on] { color: var(--green); }
 .ps-cli-req { font: 600 0.625rem/1 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--amber); margin-left: 6px; }
+/* Settings → This computer (desktop): bundled tools */
+.ps-tools { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ps-tool { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-2); }
+.ps-tool > svg { flex: none; margin-top: 2px; color: var(--green); }
+.ps-tool.warn > svg { color: var(--amber); }
+.ps-tool.error { border-color: var(--danger-line); }
+.ps-tool.error > svg { color: var(--danger); }
+.ps-tool strong { font-size: 0.8438rem; }
+.ps-tool-state { font-size: 0.75rem; color: var(--text-3); }
+.ps-tool-need, .ps-tool-detail { display: block; font-size: 0.75rem; color: var(--text-3); overflow-wrap: anywhere; }
+.ps-tool-detail { color: var(--text-2); }

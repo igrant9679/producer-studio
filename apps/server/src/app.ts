@@ -29,6 +29,7 @@ import { exportRoutes, projectExportRoutes, shareRoutes, workspaceShareRoutes } 
 import { searchRoutes, spaceExportRoutes } from './routes/library'
 import { activityRoutes, commentRoutes, projectCollabRoutes } from './routes/collab'
 import { deviceRoutes, syncRoutes, systemRoutes } from './routes/sync'
+import { toolRoutes } from './routes/tools'
 import { brandRoutes } from './routes/brand'
 import { onboardingRoutes } from './routes/onboarding'
 import { voiceStudioRoutes } from './routes/voiceStudio'
@@ -157,6 +158,7 @@ export function createApp() {
   app.route('/api/system', systemRoutes)
   app.route('/api/devices', deviceRoutes)
   app.route('/api/sync', syncRoutes)
+  app.route('/api/tools', toolRoutes)
 
   app.all('/api/*', (c) => c.json({ error: `No route for ${c.req.method} ${c.req.path}`, code: 'not_found' }, 404))
 

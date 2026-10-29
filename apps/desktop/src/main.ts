@@ -8,6 +8,7 @@ import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, dialog, ipcM
 import { isDev } from './paths'
 import { dataDirProblem, defaultDataDir, moveDataDir, moveProblem, writeSettings } from './datadir'
 import { setupDictation } from './dictation'
+import { fetchToolReport, toolsWarning } from './health'
 import { deviceKey, keystoreProblem, resetDeviceKey } from './keystore'
 import { RotatingLog } from './logs'
 import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, nativeThemeMode, openExternal, setLocalOrigin } from './security'
@@ -29,6 +30,8 @@ if (!app.requestSingleInstanceLock()) {
   let restarting = false
   /** The data folder is being moved: the engine is stopped on purpose. */
   let moving = false
+  /** The local session's token (also the ps_session cookie), for the main process's own calls to the engine. */
+  let sessionToken = ''
   // window + taskbar icon (packaged: inside app.asar next to dist/; dev: apps/desktop/assets)
   const appIcon = [path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'), path.join(__dirname, '..', 'assets', 'icon.png')].find((p) => fs.existsSync(p))
 
@@ -100,6 +103,7 @@ if (!app.requestSingleInstanceLock()) {
 
   async function setSessionCookie() {
     const s = await server!.session()
+    sessionToken = s.token
     await session.defaultSession.cookies.set({ url: server!.origin, name: 'ps_session', value: s.token, httpOnly: true, secure: false, sameSite: 'lax', expirationDate: Math.floor(s.expiresAt / 1000) })
   }
 
@@ -357,6 +361,17 @@ if (!app.requestSingleInstanceLock()) {
     Menu.setApplicationMenu(Menu.buildFromTemplate(template))
   }
 
+  /** Once per launch: a bundled tool that's missing or broken is named, with what it's for and what to do (D-13). */
+  async function checkTools() {
+    if (!server || !sessionToken) return
+    const report = await fetchToolReport(server.origin, sessionToken)
+    if (report) logLine(`tools: ${report.tools.map((t) => `${t.id}=${t.status}`).join(' ')}`)
+    const w = toolsWarning(report)
+    if (!w) return
+    const r = await messageBox({ type: 'warning', title: 'Producer Studio', message: w.message, detail: w.detail, buttons: ['Open Settings', 'Continue'], defaultId: 0, cancelId: 1 })
+    if (r.response === 0) void mainWin?.loadURL(`${server.origin}/settings#computer`)
+  }
+
   // ---- IPC: one validated handler per preload function, only for our own local pages ----
   ipcMain.handle('desktop:open-external', (e, url: unknown) => {
     if (!isLocal(e.senderFrame?.url ?? '')) return false
@@ -429,5 +444,6 @@ if (!app.requestSingleInstanceLock()) {
     server!.on('crash', (code) => void onCrash(code))
     menu()
     mainWin = createMain(server!.origin)
+    mainWin.once('ready-to-show', () => void checkTools())
   })
 }
