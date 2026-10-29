@@ -7,7 +7,7 @@ import type { EmptyTrashResult, TrashResult, UploadTicket } from '@producer/core
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
-import { assetEditable, assetRecord } from '../dto'
+import { assetEditable, assetRecord, jobDto } from '../dto'
 import { checkIfMatch } from '../etag'
 import { HttpError, body, invalid, requireRole } from '../http'
 import { newId } from '../ids'
@@ -22,7 +22,7 @@ import { dropSession, finishSession, MULTIPART_MAX_PARTS, openSession, partBytes
 import { abortUpload } from '../services/asset-recovery'
 import { assertProjectInWorkspace } from '../services/projects'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
-import { assetUsage, copyAssetTo, removeAssets, setAssetTrashed, trashedAssets } from '../services/library'
+import { assetUsage, removeAssets, setAssetTrashed, trashedAssets } from '../services/library'
 
 export const uploadRoutes = new Hono<AppEnv>()
 
@@ -336,7 +336,10 @@ assetRoutes.get('/:id/usage', async (c) => {
   return c.json(await assetUsage(row.id, row.workspaceId))
 })
 
-/** A ready clip copied (or moved: the original goes in the trash) into another space the person edits. */
+/**
+ * A ready clip copied (or moved: the original goes in the trash) into another space the person edits. A job
+ * (asset.copy), so a big file never holds the request: the answer is the job, its result the new clip.
+ */
 assetRoutes.post('/:id/copy', async (c) => {
   const u = requireUser(c)
   const row = await loadAsset(c.req.param('id'))
@@ -344,9 +347,10 @@ assetRoutes.post('/:id/copy', async (c) => {
   const b = await body(c, z.object({ workspaceId: z.string().min(1), move: z.boolean().optional() }))
   await requireRole(u.id, b.workspaceId, 'editor')
   if (b.workspaceId === row.workspaceId) throw invalid('Pick another space to copy it to')
-  const copy = await copyAssetTo(row, b.workspaceId, u.id)
-  if (b.move) await setAssetTrashed(row, true)
-  return c.json(assetRecord(copy, { light: true }))
+  if (row.status !== 'ready') throw new HttpError(409, 'conflict', `“${row.name}” is still ${row.status === 'error' ? 'failed' : 'processing'}: only finished clips can be copied`)
+  await assertStorageRoom(b.workspaceId, row.size)
+  const j = await enqueue('asset.copy', { assetId: row.id, workspaceId: b.workspaceId, move: !!b.move }, { workspaceId: row.workspaceId, userId: u.id, projectId: null, message: `${b.move ? 'Moving' : 'Copying'} ${row.name}` })
+  return c.json(jobDto(j))
 })
 
 /**

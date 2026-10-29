@@ -301,7 +301,13 @@ export const api = {
   assetUsage: (id: string) => req<AssetUsage>('GET', `/assets/${id}/usage`),
   /** Remove trashed clips for good: all of the space's, or only `ids`. */
   emptyTrash: (workspaceId: string, ids?: string[]) => req<EmptyTrashResult>('POST', '/assets/trash/empty', { workspaceId, ids }),
-  copyAsset: (id: string, body: CopyAssetRequest) => req<AssetRecord>('POST', `/assets/${id}/copy`, body),
+  /** A job on the server (a big file takes a while); resolves with the copy once it's made. */
+  async copyAsset(id: string, body: CopyAssetRequest): Promise<AssetRecord> {
+    const job = await reqOnce<Job<{ asset: AssetRecord }>>('POST', `/assets/${id}/copy`, body)
+    const done = job.status === 'done' ? job : await waitForJob<{ asset: AssetRecord }>(job.id)
+    if (done.status !== 'done' || !done.result) throw new Error(done.error || 'The clip couldn’t be copied')
+    return done.result.asset
+  },
   /** A new file for a clip, kept under its id (every project using it follows). onProgress 0..1. */
   async replaceAsset(id: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
     const ticket = await req<UploadTicket>('POST', `/assets/${id}/replace`, { filename: file.name, mime: file.type || 'application/octet-stream', size: file.size })

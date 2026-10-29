@@ -40,8 +40,8 @@ export interface CopyProjectRequest {
   move?: boolean
 }
 
-// POST /api/assets/:id/copy {workspaceId, move?} -> AssetRecord  (editor in both: the clip's files copied there; `move`
-//      also puts this one in the trash)
+// POST /api/assets/:id/copy {workspaceId, move?} -> Job<{asset: AssetRecord}> (asset.copy; editor in both: the clip's
+//      files copied there; `move` also puts this one in the trash once the copy is made)
 export type CopyAssetRequest = CopyProjectRequest
 
 // ---- exports (A-19, P-23) ----

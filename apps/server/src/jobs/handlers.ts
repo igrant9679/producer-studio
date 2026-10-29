@@ -10,6 +10,7 @@ import { makeSmoothCopy } from '../media/smooth'
 import { assetRecord } from '../dto'
 import { exportRender } from '../render/export'
 import { failAsset, reopenAsset } from '../services/asset-recovery'
+import { copyAssetJob } from '../services/library'
 import { limitMessage, registerHandler, stopReason } from './worker'
 
 let done = false
@@ -49,4 +50,5 @@ export function registerHandlers() {
   registerHandler('media.denoise', denoiseClip)
   registerHandler('media.bgremove', removeBackground)
   registerHandler('media.smooth', makeSmoothCopy)
+  registerHandler('asset.copy', copyAssetJob)
 }

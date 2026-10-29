@@ -3,7 +3,10 @@
 // (A-11), copying and moving projects and clips between spaces (A-13) and project tags (A-12).
 import { beforeAll, describe, expect, it } from 'vitest'
 import { createProject, type Project } from '@producer/core'
-import { Client, setup, signup, type TestEnv } from './helpers'
+import { eq } from 'drizzle-orm'
+import { inlineContext } from '../jobs/worker'
+import { copyAssetJob } from '../services/library'
+import { Client, claimJob, setup, signup, type TestEnv } from './helpers'
 
 let t: TestEnv
 beforeAll(async () => {
@@ -337,11 +340,27 @@ describe('copying and moving between spaces (A-13)', () => {
     const A = await signup(t.app)
     const team = (await A.client.json('POST', '/api/workspaces', { name: 'Team' })).body.id as string
     const clip = await readyClip(A.workspaceId)
-    const r = await A.client.json('POST', `/api/assets/${clip}/copy`, { workspaceId: team, move: true })
-    expect(r.status).toBe(200)
-    expect(r.body.workspaceId).toBe(team)
-    expect((await A.client.json('GET', `/api/assets?workspaceId=${team}`)).body.items.map((a: any) => a.asset.id)).toEqual([r.body.asset.id])
+    // a job (a big file never holds the request); the original goes to the trash once the copy is there
+    const job = await A.client.json('POST', `/api/assets/${clip}/copy`, { workspaceId: team, move: true })
+    expect(job.status).toBe(200)
+    expect(job.body).toMatchObject({ kind: 'asset.copy', status: 'queued' })
+    expect((await A.client.json('GET', `/api/assets?workspaceId=${A.workspaceId}&trashed=1`)).body.items).toEqual([])
+    const r = await copyAssetJob(inlineContext(await claimJob(job.body.id)))
+    expect(r.asset.workspaceId).toBe(team)
+    expect((await A.client.json('GET', `/api/assets?workspaceId=${team}`)).body.items.map((a: any) => a.asset.id)).toEqual([r.asset.asset.id])
     expect((await A.client.json('GET', `/api/assets?workspaceId=${A.workspaceId}&trashed=1`)).body.items.map((a: any) => a.asset.id)).toEqual([clip])
+    expect(await exists(`ws/${team}/assets/${r.asset.asset.id}/source.mp4`)).toBe(true)
+  })
+
+  it('a clip still processing, or a space the person only views, is refused before any job starts', async () => {
+    const { A, wsId, M } = await teamWith('viewer')
+    const mine = (await M.client.json('GET', '/api/workspaces')).body.find((w: any) => w.personal).id
+    const clip = await readyClip(mine)
+    expect((await M.client.json('POST', `/api/assets/${clip}/copy`, { workspaceId: wsId })).status).toBe(403)
+    const busy = await readyClip(A.workspaceId)
+    const { assets } = await schema()
+    await (await ctx()).db.update(assets).set({ status: 'processing' }).where(eq(assets.id, busy))
+    expect((await A.client.json('POST', `/api/assets/${busy}/copy`, { workspaceId: wsId })).status).toBe(409)
   })
 })
 

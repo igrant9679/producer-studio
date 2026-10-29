@@ -81,7 +81,9 @@ describe('the dev mock API', () => {
     // a delete only trashes; viewers can't
     const client = (await call('GET', '/api/assets?workspaceId=ws_client')).body as Array<{ asset: { id: string } }>
     if (client[0]) expect((await call('DELETE', `/api/assets/${client[0].asset.id}`)).status).toBe(403)
-    const id = (await call('POST', '/api/assets/as_rec2/copy', { workspaceId: 'ws_team' })).body.asset.id as string
+    // a job, as on the server; the copy is in the other space's library
+    expect((await call('POST', '/api/assets/as_rec2/copy', { workspaceId: 'ws_team' })).body).toMatchObject({ kind: 'asset.copy' })
+    const id = (await call('GET', '/api/assets?workspaceId=ws_team')).body[0].asset.id as string
     expect((await call('GET', '/api/assets?workspaceId=ws_team')).body).toHaveLength(team.length + 1)
     expect((await call('DELETE', `/api/assets/${id}`)).body).toMatchObject({ ok: true, usedIn: 0 })
     expect((await call('GET', '/api/assets?workspaceId=ws_team&trashed=1')).body.map((a: { asset: { id: string } }) => a.asset.id)).toEqual([id])

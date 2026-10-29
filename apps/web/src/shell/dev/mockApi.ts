@@ -845,11 +845,13 @@ on('POST', '/api/assets/([^/]+)/copy', (m, _q, b) => {
   if (!a) return fail(404, 'Asset not found', 'not_found')
   const denied = editorOnly(a.workspaceId) ?? editorOnly(String(b.workspaceId))
   if (denied) return denied
+  // a job, like the server's: the copy appears when it's done
   const copy: MockAsset = { ...structuredClone(a), workspaceId: String(b.workspaceId), createdAt: Date.now() }
   copy.asset.id = nid('as')
   assets.unshift(copy)
   if (b.move) a.trashedAt = Date.now()
-  return json(pub(copy))
+  const j = startJob('asset.copy', a.workspaceId, 600, { message: `Copying ${a.asset.name}`, onDone: () => ({ asset: pub(copy) }) })
+  return json(publicJob(j))
 })
 on('POST', '/api/assets/([^/]+)/replace', (m, _q, b) => {
   const a = assets.find((x) => x.asset.id === m[1])
