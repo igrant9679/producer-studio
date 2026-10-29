@@ -11,6 +11,16 @@ import { ffmpeg, ffmpegProgress, runOk } from './proc'
 import { describeStorageError } from '../services/storage-health'
 import { isStorageError } from '../storage/errors'
 import { WAVEFORM_RATE, inlineWaveform, waveformBytes } from './waveform'
+import { colourTagArgs, isBt601, videoMatrix } from './colour'
+import { encodeH264, h264Args } from './hwenc'
+import { processedTwin, reuseProcessing } from './reuse'
+
+/**
+ * Bumped when processing makes different files from the same upload (v2: proxies tagged with their colour matrix,
+ * 1080p for 4K, half-second keyframes). An identical upload reuses an earlier clip's files only when they were made
+ * by this version (P-21).
+ */
+export const PROCESSING_VERSION = 2
 
 /** Where a clip's full waveform is stored (when its record carries a shortened one). */
 export const waveformKey = (row: Pick<AssetRow, 'workspaceId' | 'id'>) => `${assetPrefix(row.workspaceId, row.id)}/waveform.bin`
@@ -33,6 +43,15 @@ export interface ProbeResult {
   hdr?: 'pq' | 'hlg'
   /** The picture has transparency (a VP9 WebM with alpha, ProRes 4444, PNG frames): its proxy keeps it. */
   alpha?: boolean
+  /** The picture's colour matrix, range and primaries as tagged (absent: untagged; see media/colour.ts). */
+  colorSpace?: string
+  colorRange?: string
+  /** What wrote the file (an ffmpeg-made file says "Lavf…"). */
+  encoder?: string
+  /** Channels of the chosen sound. */
+  channels?: number
+  /** The file's first sound track (a browser plays that one). */
+  firstAudioStream?: number
 }
 
 interface FfStream {
@@ -43,6 +62,9 @@ interface FfStream {
   width?: number
   height?: number
   color_transfer?: string
+  color_space?: string
+  color_range?: string
+  channels?: number
   r_frame_rate?: string
   avg_frame_rate?: string
   duration?: string
@@ -63,16 +85,19 @@ function rate(s?: string): number | undefined {
 
 export async function probe(file: string, signal?: AbortSignal): Promise<ProbeResult> {
   const r = await runOk(ctx().config.ffprobePath, ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file], { signal }, 'ffprobe')
-  const j = JSON.parse(r.stdout) as { streams?: FfStream[]; format?: { format_name?: string; duration?: string } }
+  const j = JSON.parse(r.stdout) as { streams?: FfStream[]; format?: { format_name?: string; duration?: string; tags?: Record<string, string> } }
   const streams = j.streams ?? []
   const v = streams.find((s) => s.codec_type === 'video' && !s.disposition?.attached_pic)
-  const a = streams.find((s) => s.codec_type === 'audio')
+  const a = pickAudioStream(streams)
   const formatName = j.format?.format_name ?? ''
   const dur = Number(j.format?.duration ?? v?.duration ?? a?.duration)
   const duration = Number.isFinite(dur) && dur > 0 ? Math.round(dur * 1000) / 1000 : undefined
   let kind: ProbeResult['kind']
   if (v) {
-    const still = IMAGE_CODECS.has(v.codec_name ?? '') && (!duration || Number(v.nb_frames ?? 1) <= 1 || /image2|_pipe/.test(formatName))
+    // a HEIC or AVIF photo is one HEVC or AV1 picture in a MP4-like file
+    const still =
+      (IMAGE_CODECS.has(v.codec_name ?? '') && (!duration || Number(v.nb_frames ?? 1) <= 1 || /image2|_pipe/.test(formatName))) ||
+      (/^(hevc|av1)$/.test(v.codec_name ?? '') && Number(v.nb_frames ?? 0) === 1 && !a)
     kind = still ? 'image' : 'video'
   } else if (a) kind = 'audio'
   else throw new Error('No audio or video streams found in this file')
@@ -87,6 +112,8 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
   const hdr = v?.color_transfer === 'smpte2084' ? 'pq' : v?.color_transfer === 'arib-std-b67' ? 'hlg' : undefined
   // VP9 keeps its alpha in a side stream the header tags; other codecs say so in the pixel format
   const alpha = kind === 'video' && (/^(yuva|rgba|argb|bgra|abgr|gbrap|ya)/.test(v?.pix_fmt ?? '') || /^1$/.test(v?.tags?.alpha_mode ?? v?.tags?.ALPHA_MODE ?? ''))
+  const tag = (x?: string) => (x && x !== 'unknown' && x !== 'reserved' && x !== 'unspecified' ? x : undefined)
+  const encoder = j.format?.tags?.encoder ?? j.format?.tags?.ENCODER ?? v?.tags?.encoder
   return {
     kind,
     duration: kind === 'image' ? undefined : duration,
@@ -101,7 +128,51 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
     ...(orientation && orientation > 1 ? { orientation } : {}),
     ...(hdr ? { hdr } : {}),
     ...(alpha ? { alpha } : {}),
+    ...(kind === 'video' && tag(v?.color_space) ? { colorSpace: tag(v?.color_space) } : {}),
+    ...(kind === 'video' && tag(v?.color_range) ? { colorRange: tag(v?.color_range) } : {}),
+    ...(encoder ? { encoder } : {}),
+    ...(a?.channels ? { channels: a.channels } : {}),
+    firstAudioStream: streams.find((s) => s.codec_type === 'audio')?.index,
   }
+}
+
+/** Images up to this many pixels on the long side, and in all, are drawn as they are (P-19). */
+export const IMAGE_MAX_SIDE = 7680
+export const IMAGE_MAX_PIXELS = 40_000_000
+
+/** The size a huge image's display copy is scaled to: within both limits, even, the shape kept. */
+export function scaledImageSize(w: number, h: number): { width: number; height: number } {
+  const s = Math.min(1, IMAGE_MAX_SIDE / Math.max(w, h, 1), Math.sqrt(IMAGE_MAX_PIXELS / Math.max(1, w * h)))
+  return { width: even(w * s), height: even(h * s) }
+}
+
+/**
+ * Whether a picture needs a display copy, and which (P-19): one browsers don't draw (TIFF, HEIC: PNG, keeping
+ * alpha), a photo stored sideways with an orientation tag (so no renderer has to obey it), or a huge one (scaled).
+ * JPEG sources stay JPEG; null when the file is drawn as it is.
+ */
+export function imageDisplay(info: Pick<ProbeResult, 'codec' | 'orientation' | 'width' | 'height'>, mime = ''): { format: 'png' | 'jpg'; scale?: string } | null {
+  const w = info.width ?? 0
+  const h = info.height ?? 0
+  const huge = Math.max(w, h) > IMAGE_MAX_SIDE || w * h > IMAGE_MAX_PIXELS
+  const drawn = BROWSER_IMAGES.has(info.codec ?? '') || (info.codec === 'av1' && /avif/.test(mime))
+  if (drawn && !huge && !(info.orientation && info.orientation > 1)) return null
+  const size = huge ? scaledImageSize(w, h) : undefined
+  // the orientation filters run first, so the size here is the upright one
+  return { format: info.codec === 'mjpeg' ? 'jpg' : 'png', ...(size ? { scale: `scale=${size.width}:${size.height}:flags=lanczos` } : {}) }
+}
+
+/** Sound codecs ffmpeg can't decode here or that carry no programme sound (a camera's timecode or data track). */
+const UNPLAYABLE_AUDIO = new Set(['none', 'unknown', 'bin_data', 'timed_id3'])
+
+/**
+ * The sound to use (P-19): the first stereo (or wider) track ffmpeg can decode, else the first it can decode. A
+ * recorder that puts a mono microphone first and the stereo mix second, or a camera's silent first track, then gives
+ * the mix, not the mic alone.
+ */
+export function pickAudioStream<T extends Pick<FfStream, 'codec_type' | 'codec_name' | 'channels'>>(streams: T[]): T | undefined {
+  const audio = streams.filter((s) => s.codec_type === 'audio' && !UNPLAYABLE_AUDIO.has(s.codec_name ?? 'unknown'))
+  return audio.find((s) => (s.channels ?? 0) >= 2) ?? audio[0] ?? streams.find((s) => s.codec_type === 'audio')
 }
 
 let toneMapping: Promise<boolean> | undefined
@@ -244,12 +315,13 @@ const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
  * An edit proxy that keeps transparency (a background-removed copy): VP9 with alpha in WebM, which browsers play and
  * the export reads. A VP9 source is decoded with libvpx, the only decoder that reads its alpha.
  */
-export function alphaProxyArgs(src: string, out: string, o: { vmap: string[]; amap?: string[]; codec?: string; w: number; h: number; fps?: number; gop: string }): string[] {
+export function alphaProxyArgs(src: string, out: string, o: { vmap: string[]; amap?: string[]; codec?: string; w: number; h: number; fps?: number; gop: string; tags?: string[] }): string[] {
   return [
     ...(o.codec === 'vp9' ? ['-c:v', 'libvpx-vp9'] : []),
     '-i', src,
     ...o.vmap, ...(o.amap ?? []),
     '-vf', `${o.fps ? `fps=${o.fps},` : ''}scale=${o.w}:${o.h},format=yuva420p`,
+    ...(o.tags ?? []),
     '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-b:v', '0', '-crf', '36', '-deadline', 'realtime', '-cpu-used', '8', '-row-mt', '1', '-g', o.gop, '-auto-alt-ref', '0',
     ...(o.amap ? ['-c:a', 'libopus', '-b:a', '96k', '-ac', '2'] : ['-an']),
     out,
@@ -292,11 +364,20 @@ async function quickFilmstrip(src: string, out: string, opts: { frames: number; 
   await ffmpeg([...inputs, '-filter_complex', graph, '-map', '[strip]', '-frames:v', '1', '-q:v', '5', out], { signal: opts.signal })
 }
 
-/** Target proxy size: short side ≤ 720, even dimensions. */
+/**
+ * Target proxy size, even dimensions: short side ≤ 720, or ≤ 1080 for a 4K source (P-17: detail for reframing and
+ * keying; a 4K file itself is too heavy to scrub).
+ */
 export function proxySize(w: number, h: number): { w: number; h: number } {
   const short = Math.min(w, h)
-  const s = short > 720 ? 720 / short : 1
+  const cap = short >= 2000 ? 1080 : 720
+  const s = short > cap ? cap / short : 1
   return { w: even(w * s), h: even(h * s) }
+}
+
+/** Frames between the proxy's keyframes (P-17): half a second, so a scrub decodes at most that much to land. */
+export function proxyGop(fps?: number): number {
+  return Math.max(1, Math.round(Math.min(fps ?? 30, PROXY_MAX_FPS) / 2))
 }
 
 /** Decode audio to mono 8 kHz s16le; returns ~50 peaks/s (0..1) and silence ranges. `onProgress` gets the seconds
@@ -385,11 +466,19 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       if (row.sha256 && row.sha256 !== actual) throw new Error("The uploaded file doesn't match the one that was sent (its fingerprint differs): the upload was cut short or altered. Upload it again.")
       if (!row.sha256) row = await updateAsset(row.id, { sha256: actual })
     }
+    // the same file already processed in this space (P-21): its proxy, thumbnails and waveform are copied, not made again
+    const twin = await processedTwin(row)
+    if (twin) {
+      jc.progress(0.5, 'Reusing an identical clip')
+      row = await reuseProcessing(row, twin)
+      jc.progress(1, 'Ready')
+      return row
+    }
     const info = await probe(src, jc.signal)
     jc.check()
     // only what processing finds: updateAsset merges it into the clip's metadata (a transcript or voice text saved
     // while this runs stays)
-    const meta: AssetMeta = { duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasAudio: info.hasAudio, codec: info.codec }
+    const meta: AssetMeta = { duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasAudio: info.hasAudio, codec: info.codec, processing: PROCESSING_VERSION }
     const keys: Partial<AssetRow> = {}
     const put = async (file: string, name: string, mime: string) => {
       const key = `${prefix}/${name}`
@@ -416,13 +505,18 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       const H = info.height ?? 720
       // iPhone HDR is tone-mapped wherever it becomes an 8-bit picture: thumbnail, filmstrip, proxy
       const sdr = (await sdrFilters(info)).map((f) => `,${f}`).join('')
+      // the matrix the pixels were made in: the proxy says so, so the browser reads the colours the export does
+      const colour = videoMatrix(info)
+      if (!sdr) meta.colorMatrix = colour.matrix
+      // stills are JPEGs (read as BT.601): a BT.709 picture goes through RGB to get there
+      const still = !sdr && !isBt601(colour.matrix) ? `,scale=in_color_matrix=${colour.matrix === 'bt709' ? 'bt709' : 'bt601'}:in_range=${info.colorRange === 'pc' ? 'pc' : 'tv'},format=rgb24` : ''
       // the picture probe chose, never cover art (ffmpeg's own pick is the largest picture, often the cover)
       const vmap = ['-map', `0:${info.videoStream ?? 'v:0'}`]
       const amap = ['-map', `0:${info.audioStream ?? 'a:0'}`]
       // the thumbnail first, saved on the clip at once, so the library shows something while the rest runs
       jc.progress(0.05, 'Thumbnail')
       const thumb = path.join(work, 'thumb.jpg')
-      await ffmpeg(['-ss', String(Math.min(1, dur * 0.1)), '-i', src, ...vmap, '-frames:v', '1', '-vf', `scale=-2:360${sdr}`, '-q:v', '4', thumb], { signal: jc.signal })
+      await ffmpeg(['-ss', String(Math.min(1, dur * 0.1)), '-i', src, ...vmap, '-frames:v', '1', '-vf', `scale=-2:360${sdr}${still}`, '-q:v', '4', thumb], { signal: jc.signal })
       keys.thumbKey = await put(thumb, 'thumb.jpg', 'image/jpeg')
       row = await updateAsset(row.id, { thumbKey: keys.thumbKey, meta, kind: 'video' })
       jc.check()
@@ -431,13 +525,13 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       const fh = 160
       const fw = even((W / H) * fh)
       const strip = path.join(work, 'filmstrip.jpg')
-      await quickFilmstrip(src, strip, { frames, duration: dur, stream: info.videoStream, vf: `scale=${fw}:${fh}`, after: sdr, signal: jc.signal }).catch((err) => {
+      await quickFilmstrip(src, strip, { frames, duration: dur, stream: info.videoStream, vf: `scale=${fw}:${fh}`, after: `${sdr}${still}`, signal: jc.signal }).catch((err) => {
         if (jc.signal.aborted) throw err
         log.warn('quick filmstrip failed; decoding the whole clip', { assetId, err })
       })
       if (!fs.existsSync(strip)) {
         const fpsExpr = dur > 0 ? `${frames}/${Math.max(0.5, dur).toFixed(3)}` : '1'
-        await ffmpeg(['-i', src, ...vmap, '-vf', `fps=${fpsExpr},scale=${fw}:${fh}${sdr},tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', strip], { signal: jc.signal })
+        await ffmpeg(['-i', src, ...vmap, '-vf', `fps=${fpsExpr},scale=${fw}:${fh}${sdr}${still},tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', strip], { signal: jc.signal })
       }
       keys.filmstripKey = await put(strip, 'filmstrip.jpg', 'image/jpeg')
       meta.filmstrip = { frames, frameWidth: fw, frameHeight: fh }
@@ -463,24 +557,27 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       const proxy = path.join(work, info.alpha ? 'proxy.webm' : 'proxy.mp4')
       // slow-motion footage (120/240 fps) is shown at 60: the clip's own rate stays in its metadata for the export
       const fast = (info.fps ?? 30) > PROXY_MAX_FPS
-      const gop = String(Math.max(1, Math.round(Math.min(info.fps ?? 30, PROXY_MAX_FPS))))
-      await ffmpegProgress(
-        info.alpha
-          ? alphaProxyArgs(src, proxy, { vmap, amap: info.hasAudio ? amap : undefined, codec: info.codec, w, h, fps: fast ? PROXY_MAX_FPS : undefined, gop })
-          : [
-          '-i', src,
-          ...vmap, ...(info.hasAudio ? amap : []),
-          '-vf', `${fast ? `fps=${PROXY_MAX_FPS},` : ''}scale=${w}:${h}${sdr},format=yuv420p`,
-          ...(sdr ? ['-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709'] : []),
-          '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-g', gop, '-keyint_min', gop,
-          ...(info.hasAudio ? ['-c:a', 'aac', '-b:a', '128k', '-ac', '2'] : ['-an']),
-          '-movflags', '+faststart',
-          proxy,
-        ],
-        dur,
-        (f) => jc.progress(0.25 + f * 0.72, 'Building edit proxy'),
-        { signal: jc.signal },
-      )
+      const gop = proxyGop(info.fps)
+      const tags = sdr ? colourTagArgs('bt709') : colourTagArgs(colour.matrix)
+      const encode = (args: string[]) => ffmpegProgress(args, dur, (f) => jc.progress(0.25 + f * 0.72, 'Building edit proxy'), { signal: jc.signal })
+      if (info.alpha) await encode(alphaProxyArgs(src, proxy, { vmap, amap: info.hasAudio ? amap : undefined, codec: info.codec, w, h, fps: fast ? PROXY_MAX_FPS : undefined, gop: String(gop), tags }))
+      else
+        // on this machine's video hardware when it has some (P-18), else libx264
+        meta.proxyEncoder =
+          (await encodeH264(
+            (enc) => [
+              '-i', src,
+              ...vmap, ...(info.hasAudio ? amap : []),
+              '-vf', `${fast ? `fps=${PROXY_MAX_FPS},` : ''}scale=${w}:${h}${sdr},format=yuv420p`,
+              ...tags,
+              ...h264Args(enc, { crf: 26, gop }),
+              ...(info.hasAudio ? ['-c:a', 'aac', '-b:a', '128k', '-ac', '2'] : ['-an']),
+              '-movflags', '+faststart',
+              proxy,
+            ],
+            encode,
+            jc.signal,
+          )) ?? 'libx264'
       keys.proxyKey = info.alpha ? await put(proxy, 'proxy.webm', 'video/webm') : await put(proxy, 'proxy.mp4', 'video/mp4')
       // the proxy's own header always has a length
       if (!meta.duration) meta.duration = (await probe(proxy, jc.signal).catch(() => undefined))?.duration
@@ -490,8 +587,9 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       await keepWaveform(a.waveform)
       meta.silences = a.silences
       if (!meta.duration) meta.duration = Math.round((a.waveform.length / WAVEFORM_RATE) * 1000) / 1000
-      if (!browserPlaysAudio(info)) {
-        // AIFF, WMA, AMR…: the server reads them, browsers don't. The editor plays this AAC copy (the audio variant)
+      if (!browserPlaysAudio(info) || info.audioStream !== info.firstAudioStream) {
+        // AIFF, WMA, AMR…: the server reads them, browsers don't; a file whose sound to use isn't its first track (a
+        // browser plays the first). The editor plays this AAC copy (the audio variant)
         jc.progress(0.95, 'Converting audio')
         const m4a = path.join(work, 'audio.m4a')
         await ffmpeg(['-i', src, '-map', `0:${info.audioStream ?? 'a:0'}`, '-vn', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', m4a], { signal: jc.signal })
@@ -505,12 +603,16 @@ export async function processAsset(assetId: string, jc: Pick<JobContext, 'signal
       const vf = [...upright, "scale='min(640,iw)':-2"].join(',')
       await ffmpeg(['-noautorotate', '-i', src, '-frames:v', '1', '-vf', vf, '-q:v', '4', thumb], { signal: jc.signal })
       keys.thumbKey = await put(thumb, 'thumb.jpg', 'image/jpeg')
-      if (!BROWSER_IMAGES.has(info.codec ?? '')) {
-        // TIFF and the like: a PNG copy (upright, alpha kept) is what the editor and the export draw
+      const display = imageDisplay(info, row.mime)
+      if (display) {
+        // what the editor and the export draw (P-19): upright pixels with no orientation tag to obey, a format every
+        // browser draws (TIFF, HEIC), at a size a browser can hold (a 100-megapixel scan is scaled down)
         jc.progress(0.6, 'Converting image')
-        const png = path.join(work, 'display.png')
-        await ffmpeg(['-noautorotate', '-i', src, '-frames:v', '1', ...(upright.length ? ['-vf', upright.join(',')] : []), png], { signal: jc.signal })
-        keys.proxyKey = await put(png, 'display.png', 'image/png')
+        const out = path.join(work, `display.${display.format}`)
+        const vf = [...upright, ...(display.scale ? [display.scale] : [])]
+        await ffmpeg(['-noautorotate', '-i', src, '-frames:v', '1', ...(vf.length ? ['-vf', vf.join(',')] : []), ...(display.format === 'jpg' ? ['-q:v', '2'] : []), out], { signal: jc.signal })
+        keys.proxyKey = await put(out, `display.${display.format}`, display.format === 'jpg' ? 'image/jpeg' : 'image/png')
+        if (display.scale) meta.displaySize = scaledImageSize(info.width ?? 0, info.height ?? 0)
       }
     }
     jc.check()

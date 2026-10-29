@@ -64,6 +64,10 @@ export interface Config {
   bgRemovalCmd?: string
   /** An RNNoise model file (.rnnn) for ffmpeg's arnndn voice denoiser; unset = afftdn only. */
   denoiseModel?: string
+  /** Hardware video encoding for proxies and export sources (P-18): auto (probed at first use), off, or an encoder name. */
+  hwEncode: string
+  /** Where the renderer keeps the frames it extracted, between exports (on the data volume, not the container's disk). */
+  renderCacheDir: string
   /** Outgoing mail through Resend's HTTP API (Railway blocks SMTP). Unset = no mail: the app shows links instead. */
   mail?: { resendApiKey: string; from: string }
   /** Abuse brakes and quotas (cloud). Counted in Postgres, so they hold across replicas; 0 turns one off. */
@@ -203,6 +207,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pexelsApiKey: env.PEXELS_API_KEY?.trim() || undefined,
     bgRemovalCmd: env.BG_REMOVAL_CMD?.trim() || undefined,
     denoiseModel: env.DENOISE_MODEL?.trim() || undefined,
+    hwEncode: env.HW_ENCODE?.trim() || 'auto',
+    renderCacheDir: env.RENDER_CACHE_DIR?.trim() || path.join(dataDir, 'cache', 'render-frames'),
     // both are needed (Resend only sends from a verified domain); the desktop app never sends mail
     mail: mode === 'cloud' && env.RESEND_API_KEY?.trim() && env.MAIL_FROM?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim(), from: env.MAIL_FROM.trim() } : undefined,
     limits: {

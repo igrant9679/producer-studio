@@ -129,6 +129,16 @@ export interface AssetMeta {
   derivedFrom?: { assetId: string; tool: string; offset: number; settings?: Record<string, unknown> }
   /** A new file being uploaded to replace this one (A-14): where it goes, until replace/complete swaps it in. */
   replacing?: { key: string; mime: string; name: string; size: number; sha256?: string; startedAt: number }
+  /** Which version of processing made the clip's files (media/process.ts PROCESSING_VERSION; P-21 reuses only these). */
+  processing?: number
+  /** The colour matrix the video's pixels are in (its tag, or worked out: media/colour.ts); the proxy carries it. */
+  colorMatrix?: string
+  /** The encoder that made the proxy (libx264, or the machine's video hardware: P-18). */
+  proxyEncoder?: string
+  /** An identical upload whose processed files this clip copied (P-21). */
+  reusedFrom?: string
+  /** A huge picture's display copy is this size (P-19); width/height stay the original's. */
+  displaySize?: { width: number; height: number }
 }
 
 export const assets = pgTable('assets', {
