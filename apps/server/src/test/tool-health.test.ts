@@ -43,6 +43,13 @@ describe('bundled tool check (D-13)', () => {
     expect(wrong.t.ffprobe).toMatchObject({ status: 'error', detail: expect.stringMatching(/didn’t answer as ffprobe does/) })
   })
 
+  it('ffmpeg that is only slow to answer (a first run being scanned) is a warning, not a reason to reinstall', async () => {
+    const slow = await by(deps({ run: async (bin) => (bin === cfg.ffmpegPath ? { code: -1, out: '', error: 'timeout' } : { code: 0, out: 'ffprobe version 7' }) }))
+    expect(slow.t.ffmpeg).toMatchObject({ status: 'warn', detail: expect.stringMatching(/Didn’t answer within 60 s\. The first start after installing/) })
+    expect(slow.t.ffmpeg.detail).not.toMatch(/Reinstall/)
+    expect(slow.h.ok).toBe(true)
+  })
+
   it('a missing or cut-off speech model is an error; an absent voice model or browser only a warning', async () => {
     const noModel = await by(deps({ exists: (p) => p !== cfg.whisperModel }))
     expect(noModel.t.whisper).toMatchObject({ status: 'error', detail: expect.stringMatching(/speech model is missing/) })

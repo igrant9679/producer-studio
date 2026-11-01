@@ -16,7 +16,7 @@ export interface ToolDeps {
   exists(p: string): boolean
   /** Size in bytes, or -1. */
   size(p: string): number
-  /** Run `bin args` (a few seconds at most): exit code and output, or the start error. */
+  /** Run `bin args` (RUN_LIMIT_MS at most): exit code and output, or the start error (`'timeout'` when it ran out). */
   run(bin: string, args: string[]): Promise<{ code: number; out: string; error?: string }>
   resolvable(mod: string): boolean
   readdir(dir: string): string[]
@@ -33,8 +33,9 @@ export const realToolDeps = (): ToolDeps => ({
   },
   run: (bin, args) =>
     new Promise((resolve) => {
-      execFile(bin, args, { windowsHide: true, timeout: 10_000, env: childEnv(), maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-        const e = err as (NodeJS.ErrnoException & { code?: unknown }) | null
+      execFile(bin, args, { windowsHide: true, timeout: RUN_LIMIT_MS, env: childEnv(), maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+        const e = err as (NodeJS.ErrnoException & { code?: unknown; killed?: boolean }) | null
+        if (e?.killed) return resolve({ code: -1, out: '', error: 'timeout' })
         if (e && typeof e.code === 'string') return resolve({ code: -1, out: '', error: e.code === 'ENOENT' ? 'not found' : e.message })
         resolve({ code: e ? (typeof e.code === 'number' ? e.code : -1) : 0, out: `${stdout ?? ''}\n${stderr ?? ''}` })
       })
@@ -56,6 +57,13 @@ export const realToolDeps = (): ToolDeps => ({
   },
 })
 
+/**
+ * How long `-version` may take. Warm, ffmpeg answers in a fraction of a second; the first run of a freshly installed copy
+ * took 7.4 s on its own here (Windows scans an 82 MB unsigned binary before it runs), and longer at start-up with the
+ * engine and ffprobe starting beside it, which a 10 s limit turned into a "reinstall" dialog on a good install.
+ */
+export const RUN_LIMIT_MS = 60_000
+
 type ToolConfig = Pick<Config, 'ffmpegPath' | 'ffprobePath' | 'whisperCli' | 'whisperModel' | 'kokoroCache' | 'chromePath'>
 
 const REINSTALL = 'Reinstall Producer Studio to put it back.'
@@ -65,6 +73,8 @@ async function runs(id: 'ffmpeg' | 'ffprobe', bin: string, d: ToolDeps): Promise
   // a bare name is looked up on PATH; a path must exist
   if (path.isAbsolute(bin) && !d.exists(bin)) return { ...base, status: 'error', detail: `Not found at ${bin}. ${REINSTALL}` }
   const r = await d.run(bin, ['-version'])
+  // slow is not broken: say so in Settings (a warning), not in the start-up dialog that says to reinstall
+  if (r.error === 'timeout') return { ...base, status: 'warn', detail: `Didn’t answer within ${RUN_LIMIT_MS / 1000} s. The first start after installing can be slow while Windows checks the new files; Settings → This computer can check again.` }
   if (r.error) return { ...base, status: 'error', detail: r.error === 'not found' ? `Not found (${bin}). ${REINSTALL}` : `Couldn’t start: ${r.error}. ${REINSTALL}` }
   const version = r.out.match(/(?:ffmpeg|ffprobe) version (\S+)/)?.[1]
   if (r.code !== 0 || !version) return { ...base, status: 'error', detail: `Started but didn’t answer as ${base.name} does (exit code ${r.code}). ${REINSTALL}` }

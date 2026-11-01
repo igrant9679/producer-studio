@@ -38,7 +38,13 @@ Producer Studio.exe (main)  ── utilityProcess.fork ──▶  engine (utilit
   with the app binary; switching it off needs them moved to utility processes too (the MCP server is started by the
   Claude CLI, so it would need a separate Node). With `NODE_OPTIONS` off, the renderer's `--use-system-ca` (only used
   when HyperFrames downloads its own browser) has no effect; packaged builds ship that browser. Check a real build with
-  `npx @electron/fuses read --app "release/win-unpacked/Producer Studio.exe"`.
+  `npx @electron/fuses read --app "release/win-unpacked/Producer Studio.exe"`. With no extra `file://` privileges a
+  `file://` load of a path inside `app.asar` fails (`ERR_FILE_NOT_FOUND`), so the splash is read by the main process and
+  shown as a `data:` URL (`src/splash.ts`); anything else the main process shows itself must do the same.
+- **Start-up wait.** The splash waits for `/api/health` while the engine is running (`src/boot-wait.ts`): after 20 s it
+  says the start is slow and why, and it gives up after 5 minutes, stopping the engine first so Try again doesn't start a
+  second one on the same database. The first start after installing is the slow one: Windows scans the engine's files
+  as they load (a fresh copy of the unpacked build took 2 min from launch to listening on this machine, ~30 s once scanned).
 - Quit asks the engine to stop (a stop message to the utility process, or its stdin closed; graceful PGlite shutdown),
   waits 12 s, then `taskkill /T /F` sweeps the tree.
 - A server crash shows **Restart / Open logs / Quit**. "Sign out" in the web UI just opens a fresh local session.
@@ -71,7 +77,9 @@ its own keys), changed from Settings → This computer through the preload's `pr
   tokens, keys, cookies, passwords and email addresses taken out (`src/diagnostics.ts` `redact`).
 - **Bundled tools (D-13).** At start the engine checks ffmpeg and ffprobe (run), whisper and its model, the Kokoro
   model and the renderer (`GET /api/tools/health`, `services/tool-health.ts`); a broken one gets a dialog naming it,
-  what it's for and the fix. Settings lists them all with Check again.
+  what it's for and the fix. Settings lists them all with Check again. `-version` gets 60 s: a freshly installed ffmpeg
+  took 7.4 s for its first answer (0.2 s after), and a run that only times out is a warning in Settings, not the
+  "reinstall" dialog.
 
 ## Bundled tools and how CI gets them
 

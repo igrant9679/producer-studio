@@ -97,7 +97,15 @@ async function whisper() {
     // the CLI zip is small: fetched and checked every run, so the binaries always come out of the pinned release
     const zip = path.join(os.tmpdir(), 'whisper-bin-x64.zip')
     await fetchVerified(WHISPER_ZIP, zip)
-    execFileSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -Force '${zip}' '${out}'`])
+    // the zip also holds the release's demos and tests (bench, stream, talk-llama, wchess…): keep the CLI and its
+    // libraries only, next to the model, as a local build does
+    const unzipped = path.join(os.tmpdir(), 'whisper-bin-x64')
+    fs.rmSync(unzipped, { recursive: true, force: true })
+    execFileSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -Force '${zip}' '${unzipped}'`])
+    const bin = exists(path.join(unzipped, 'Release', exe)) ? path.join(unzipped, 'Release') : unzipped
+    fs.rmSync(path.join(out, 'Release'), { recursive: true, force: true })
+    for (const f of fs.readdirSync(bin)) if (f === exe || /\.dll$/i.test(f)) fs.copyFileSync(path.join(bin, f), path.join(out, f))
+    fs.rmSync(unzipped, { recursive: true, force: true })
     if (await cachedOk(model, WHISPER_MODEL.sha256)) return 'ok (model cached)'
     await fetchVerified(WHISPER_MODEL, model)
     return 'ok'

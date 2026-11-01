@@ -17,6 +17,7 @@ import { deviceKey, keystoreProblem, resetDeviceKey } from './keystore'
 import { RotatingLog } from './logs'
 import { SECURE_PREFS, hardenContents, hardenSession, insideDataDir, isLocal, nativeThemeMode, openExternal, setLocalOrigin } from './security'
 import { ServerProcess, dataDirEnv, desktopPaths } from './server'
+import { SLOW_NOTE, splashUrl } from './splash'
 import { type ShellSettings, readShellSettings, shellPatch, shellSettingsFile, writeShellSettings } from './shell-settings'
 import { TRAY_HINT, closeAction, trayMenu } from './tray'
 import { UPDATE_FIRST_CHECK_MS, UPDATE_INTERVAL_MS, type UpdateState, checkForUpdate, updatesOffered } from './updates'
@@ -32,6 +33,9 @@ if (!app.requestSingleInstanceLock()) {
   let server: ServerProcess | undefined
   let mainWin: BrowserWindow | undefined
   let splash: BrowserWindow | undefined
+  // read once from the asar (see splash.ts for why it isn't loaded as a file)
+  let splashHtml: string | undefined
+  const splashPage = (note?: string) => splashUrl((splashHtml ??= fs.readFileSync(path.join(__dirname, 'splash.html'), 'utf8')), note)
   let quitting = false
   let serverStopped = false
   let restarting = false
@@ -115,7 +119,7 @@ if (!app.requestSingleInstanceLock()) {
       webPreferences: { ...SECURE_PREFS },
     })
     w.once('ready-to-show', () => w.show())
-    void w.loadFile(path.join(__dirname, 'splash.html'))
+    void w.loadURL(splashPage())
     return w
   }
 
@@ -304,7 +308,7 @@ if (!app.requestSingleInstanceLock()) {
       server.refreshPaths()
       if (!(await backupBeforeStart(server.paths.dataDir))) return false
       try {
-        await server.start()
+        await server.start({ onSlow: () => void splash?.loadURL(splashPage(SLOW_NOTE)) })
         setLocalOrigin(server.origin)
         await setSessionCookie()
         logLine(`server ready at ${server.origin}`)
@@ -414,7 +418,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       logLine(`moving the data folder: ${from} -> ${to}`)
       await server.stop()
-      await mainWin?.loadFile(path.join(__dirname, 'splash.html'))
+      await mainWin?.loadURL(splashPage('Moving your data folder…'))
       const r = await moveDataDir(server.paths.settingsFile, from, to, (done, total) => mainWin?.setProgressBar(total ? done / total : 2))
       removedOld = r.removedOld
       logLine(`data folder moved${removedOld ? '' : ` (the old folder couldn’t be removed: ${from})`}`)

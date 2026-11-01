@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { app, utilityProcess } from 'electron'
+import { waitForEngine } from './boot-wait'
 import { resolveDataDir } from './datadir'
 import { type EngineHost, STOP_MESSAGE, engineEnv, engineHost, utilityLaunch } from './engine-host'
 import { deviceKey } from './keystore'
@@ -111,7 +112,8 @@ export class ServerProcess extends EventEmitter {
     return child as unknown as EngineChild
   }
 
-  async start(): Promise<void> {
+  /** `onSlow`: the start is taking long (a first start after installing), so the splash can say why. */
+  async start(opts: { onSlow?: () => void } = {}): Promise<void> {
     this.stopping = false
     this.port = await freePort(this.port || undefined)
     // PS_DESKTOP_SECRET: fixed secret for UI automation/tests in dev builds only; packaged builds always use a random
@@ -150,33 +152,38 @@ export class ServerProcess extends EventEmitter {
     })
     this.starting = true
     try {
-      await this.waitHealthy(child)
+      await waitForEngine(
+        {
+          exitCode: () => child.exitCode,
+          probe: async () => {
+            try {
+              return (await fetch(`${this.origin}/api/health`, { signal: AbortSignal.timeout(2000) })).ok
+            } catch {
+              return false // still booting
+            }
+          },
+          sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+          now: () => Date.now(),
+          onSlow: opts.onSlow,
+        },
+        path.join(this.paths.logsDir, 'server.log'),
+      )
     } catch (err) {
       // a utility process that couldn't run the engine: start it the way dev does, once per launch
       if (this.host === 'utility' && child.exitCode !== null) {
         this.log.write(`=== the utility process didn't start the engine (${(err as Error).message}); starting it as a child process ===\n`)
         this.host = 'child'
-        return this.start()
+        return this.start(opts)
+      }
+      // still running but never answered: stop it, or "Try again" would start a second engine on the same database
+      if (child.exitCode === null) {
+        this.stopping = true
+        await stopGracefully(child, STOP_GRACE_MS)
       }
       throw err
     } finally {
       this.starting = false
     }
-  }
-
-  private async waitHealthy(child: EngineChild, timeoutMs = 90_000) {
-    const t0 = Date.now()
-    while (Date.now() - t0 < timeoutMs) {
-      if (child.exitCode !== null) throw new Error(`The local server exited during startup (code ${child.exitCode}). See ${path.join(this.paths.logsDir, 'server.log')}`)
-      try {
-        const r = await fetch(`${this.origin}/api/health`, { signal: AbortSignal.timeout(2000) })
-        if (r.ok) return
-      } catch {
-        /* still booting */
-      }
-      await new Promise((r) => setTimeout(r, 250))
-    }
-    throw new Error('The local server did not start in time')
   }
 
   /** A session token for the local user (becomes the ps_session cookie). */
