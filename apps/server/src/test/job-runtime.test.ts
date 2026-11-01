@@ -5,6 +5,7 @@ import path from 'node:path'
 import { and, eq } from 'drizzle-orm'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { ctx } from '../context'
+import { assetRecord, jobDto } from '../dto'
 import { type AssetMeta, assets, jobs, usageDaily } from '../db/schema'
 import { enqueue, getJob, type JobRow, recoverJob } from '../jobs/queue'
 import { CancelledError, type Handler, registerHandler, runningJobIds, startWorker, stopWorker } from '../jobs/worker'
@@ -172,6 +173,15 @@ describe('job errors people see (PIP-33 / QA-13)', () => {
       expect(shown).not.toHaveProperty('errorDetail')
       expect((await getJob(j.id))!.errorDetail).toContain(message)
     }
+    // a job or clip that failed before these rules still holds the tool's output: it is cleaned when it is read
+    const legacy = String.raw`ffprobe failed (exit 1): [mov,mp4,m4a,3gp,3g2,mj2 @ 0000027f4312d380] moov atom not found | C:\Users\Admin\producer-studio\apps\server\.data\storage\ws\x\source.mov: Invalid data found when processing input`
+    const done = await enqueue('ai.transcribe', { assetId: await clip('ready') }, meta())
+    await ended(done.id)
+    expect(jobDto({ ...(await getJob(done.id))!, error: legacy }).error).toBe('The transcription failed. The file is damaged or in a format the server can’t read.')
+    const asset = await clip('ready')
+    await ctx().db.update(assets).set({ status: 'error', error: legacy }).where(eq(assets.id, asset))
+    expect(assetRecord((await assetRow(asset))!).error).toMatch(/^This file is incomplete or damaged: its video index/)
+    expect(jobDto({ ...(await getJob(done.id))!, error: `ENOENT: no such file or directory, open '/data/tmp/x/y.wav'` }).error).not.toMatch(/data|tmp/)
     // processing errors read like the clip's
     const { publicJobError } = await import('../jobs/errors')
     expect(publicJobError('asset.process', new Error(raw[0]))).toMatch(/isn't a video, audio or image format/)

@@ -3,6 +3,7 @@ import { transcriptRev, type Asset, type AssetRecord, type AssetStatus, type Exp
 import type { AssetMeta, assets, exportsTable, jobs, projects, users } from './db/schema'
 import { WAVEFORM_RATE, inlineWaveform } from './media/waveform'
 import { etagOf } from './etag'
+import { shownAssetError, shownJobError } from './jobs/errors'
 
 export const mediaPath = (assetId: string, variant: 'source' | 'proxy' | 'thumb' | 'filmstrip' | 'audio' | 'waveform') => `/api/media/${encodeURIComponent(assetId)}/${variant}`
 
@@ -80,7 +81,7 @@ export function assetRecord(a: typeof assets.$inferSelect, opts: { light?: boole
     asset: doc,
     workspaceId: a.workspaceId,
     status: a.status as AssetStatus,
-    error: a.error ?? undefined,
+    error: a.error ? shownAssetError(a.error) : undefined,
     origin: a.origin,
     createdAt: a.createdAt,
     etag: etagOf(assetEditable(a)),
@@ -109,7 +110,7 @@ export function jobDto(j: typeof jobs.$inferSelect): Job {
     workspaceId: j.workspaceId,
     ...(j.kind === 'asset.process' && typeof (j.input as { assetId?: unknown })?.assetId === 'string' ? { assetId: (j.input as { assetId: string }).assetId } : {}),
     result: j.result ?? undefined,
-    error: j.error ?? undefined,
+    error: j.error ? shownJobError(j.kind, j.error) : undefined,
     ...(j.startedAt != null ? { startedAt: j.startedAt } : {}),
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,

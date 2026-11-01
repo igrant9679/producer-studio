@@ -65,6 +65,19 @@ export function publicJobError(kind: string, err: unknown): string {
   return (msg || 'Something went wrong while running this job.').slice(0, 500)
 }
 
+/**
+ * A stored job error as people see it. Jobs that failed before these rules (9c00d17, R4-A) still hold the tool's own
+ * output and server paths, so the same rules apply when they are read.
+ */
+export function shownJobError(kind: string, stored: string): string {
+  return isToolOutput(stored) ? publicJobError(kind, new Error(stored)) : scrubPaths(stored)
+}
+
+/** A stored clip error as people see it: the processing sentence for a tool's output, never a server path. */
+export function shownAssetError(stored: string): string {
+  return isToolOutput(stored) ? friendlyProcessingError(new Error(stored)) : scrubPaths(stored)
+}
+
 /** The raw error for operators (the job's error_detail): the message and, when there is one, the stack. */
 export function rawJobError(err: unknown): string {
   if (err instanceof Error) return (err.stack && err.stack.includes(err.message) ? err.stack : `${err.message}\n${err.stack ?? ''}`).slice(0, 8000)
