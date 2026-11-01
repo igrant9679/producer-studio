@@ -36,7 +36,7 @@ import { sysFetch, useIsDesktop, useSystem } from '../system'
 import { Modal, Popover, Progress, RadioCards, Spinner, Thumb, useAsync, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes, formatDuration, formatTime, ssGet } from '../util'
 import { DIAGRAM_INFO, VISUAL_KIND_INFO, defaultVisual, diagramFromText, diagramToText, withPrompt } from './sceneVisuals'
-import { takeProducerHandoff } from './handoff'
+import { handoffSource, takeProducerHandoff } from './handoff'
 import {
   briefTitleFromPrompt,
   canAdvance,
@@ -58,6 +58,7 @@ import {
   STEPS,
   stepFromSearch,
   storageKey,
+  type WizardAsset,
   TONES,
   unsavedDraft,
   updateScene,
@@ -115,31 +116,33 @@ function Stepper({ s, onJump }: { s: WizardState; onJump: (id: StepId) => void }
 }
 
 // ---------------- ① upload ----------------
-function LibraryPicker({ workspaceId, onClose, onPick }: { workspaceId: string; onClose: () => void; onPick: (recs: AssetRecord[]) => void }) {
-  const { data, loading, error, reload } = useAsync(() => api.assets(workspaceId, 'video'), [workspaceId])
+function LibraryPicker({ workspaceId, media, onClose, onPick }: { workspaceId: string; media?: boolean; onClose: () => void; onPick: (recs: AssetRecord[]) => void }) {
+  // recordings are videos; a video made from an idea can also use images
+  const { data, loading, error, reload } = useAsync(() => api.assets(workspaceId, media ? undefined : 'video'), [workspaceId, media])
   const [sel, setSel] = useState<Set<string>>(new Set())
-  const list = (data ?? []).filter((a) => a.asset.kind === 'video' && a.status !== 'error')
+  const list = (data ?? []).filter((a) => (a.asset.kind === 'video' || (media && a.asset.kind === 'image')) && a.status !== 'error')
+  const noun = media ? `clip${sel.size === 1 ? '' : 's'} and image${sel.size === 1 ? '' : 's'}` : `recording${sel.size === 1 ? '' : 's'}`
   return (
     <Modal
       title="Choose from your library"
-      subtitle="Pick recordings you've already uploaded to this space."
+      subtitle={media ? 'Pick clips and images you’ve already uploaded to this space.' : "Pick recordings you've already uploaded to this space."}
       onClose={onClose}
       width={760}
       footer={
         <>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!sel.size} onClick={() => onPick(list.filter((a) => sel.has(a.asset.id)))}>Add {sel.size || ''} recording{sel.size === 1 ? '' : 's'}</button>
+          <button className="btn primary" disabled={!sel.size} onClick={() => onPick(list.filter((a) => sel.has(a.asset.id)))}>Add {sel.size || ''} {media && sel.size === 1 ? (list.find((a) => sel.has(a.asset.id))?.asset.kind === 'image' ? 'image' : 'clip') : noun}</button>
         </>
       }
     >
       {error ? (
-        <div className="ps-alert" role="alert">Couldn’t load this space’s videos. <button className="btn sm" onClick={reload}>Retry</button></div>
+        <div className="ps-alert" role="alert">Couldn’t load this space’s {media ? 'media' : 'videos'}. <button className="btn sm" onClick={reload}>Retry</button></div>
       ) : loading ? (
         <div className="ps-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
           {Array.from({ length: 6 }, (_, i) => <div key={i} className="skeleton" style={{ aspectRatio: '16/9' }} />)}
         </div>
       ) : !list.length ? (
-        <div className="muted" style={{ padding: 30, textAlign: 'center' }}>No videos in this space yet — upload one instead.</div>
+        <div className="muted" style={{ padding: 30, textAlign: 'center' }}>{media ? 'No clips or images in this space yet — upload some instead.' : 'No videos in this space yet — upload one instead.'}</div>
       ) : (
         <div className="ps-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 14 }}>
           {list.map((a) => {
@@ -168,6 +171,86 @@ function LibraryPicker({ workspaceId, onClose, onPick }: { workspaceId: string; 
         </div>
       )}
     </Modal>
+  )
+}
+
+/** The files added to this video: progress while they upload and process, then ready (or why not). */
+function WizardFiles({ s, locked }: { s: WizardState; locked: boolean }) {
+  if (!s.assets.length) return null
+  return (
+    <div className="ps-files">
+      {s.assets.map((a) => (
+        <div key={a.localId} className={clsx('ps-file', a.status)}>
+          <div className="ps-file-thumb">
+            {a.assetId && a.status === 'ready' ? <Thumb src={mediaUrl(a.assetId, 'thumb')} seed={a.assetId} /> : <FileVideo size={20} />}
+          </div>
+          <div className="ps-file-meta">
+            <strong title={a.name}>{a.name}</strong>
+            <span>
+              {a.status === 'uploading' && `Uploading · ${Math.round(a.progress * 100)}%`}
+              {a.status === 'processing' && 'Processing — building preview & audio'}
+              {a.status === 'ready' && [a.duration ? formatDuration(a.duration) : null, a.size ? formatBytes(a.size) : null, s.transcribed.includes(a.assetId ?? '') ? 'Transcribed' : 'Ready'].filter(Boolean).join(' · ')}
+              {a.status === 'error' && <span style={{ color: 'var(--danger)' }}>{a.error ?? 'Failed'}</span>}
+            </span>
+            {(a.status === 'uploading' || a.status === 'processing') && <Progress value={a.status === 'processing' ? -1 : a.progress} />}
+          </div>
+          {a.status === 'ready' ? <CheckCircle2 size={18} style={{ color: 'var(--green)' }} /> : a.status === 'error' ? <AlertTriangle size={18} style={{ color: 'var(--danger)' }} /> : <Spinner />}
+          <button className="btn ghost sm icon" disabled={locked && a.status === 'ready'} title={locked ? 'Already used in the script' : 'Remove'} aria-label={`Remove ${a.name}`} onClick={() => removeWizardAsset(a.localId)}>
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const isMediaFile = (f: File) => f.type.startsWith('video/') || f.type.startsWith('image/')
+
+/** Your own clips and images for a video made from an idea: optional, and the writer builds scenes around them. */
+function YourMedia({ s, workspaceId }: { s: WizardState; workspaceId: string }) {
+  const [drag, setDrag] = useState(false)
+  const [lib, setLib] = useState(false)
+  const pick = useFilePicker('video/*,image/*', true, (files) => void uploadToWizard(workspaceId, files.filter(isMediaFile)))
+  const maxUpload = useSystem((st) => st.info?.limits?.uploadBytes)
+  return (
+    <>
+      <span className="label" style={{ marginTop: 18 }}>Your clips and images <span className="muted" style={{ fontWeight: 400 }}>· optional</span></span>
+      <div
+        className={clsx('ps-drop ps-drop-compact', drag && 'over')}
+        onDragOver={(e) => {
+          e.preventDefault()
+          setDrag(true)
+        }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDrag(false)
+          const files = Array.from(e.dataTransfer.files).filter(isMediaFile)
+          if (files.length) void uploadToWizard(workspaceId, files)
+        }}
+      >
+        <span>
+          Photos, product shots, b-roll or short clips. Producer builds scenes around them and fills the rest with the visuals ticked below.
+          {maxUpload ? ` Up to ${formatBytes(maxUpload).replace('.0 ', ' ')} each.` : ''}
+        </span>
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn" onClick={pick}><Upload size={15} /> Add files</button>
+          <button className="btn" onClick={() => setLib(true)}><Library size={15} /> From library</button>
+        </div>
+      </div>
+      <WizardFiles s={s} locked={s.scenes.length > 0} />
+      {lib && (
+        <LibraryPicker
+          media
+          workspaceId={workspaceId}
+          onClose={() => setLib(false)}
+          onPick={(recs) => {
+            addLibraryAssets(recs, workspaceId)
+            setLib(false)
+          }}
+        />
+      )}
+    </>
   )
 }
 
@@ -207,31 +290,7 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
         </div>
       </div>
 
-      {s.assets.length > 0 && (
-        <div className="ps-files">
-          {s.assets.map((a) => (
-            <div key={a.localId} className={clsx('ps-file', a.status)}>
-              <div className="ps-file-thumb">
-                {a.assetId && a.status === 'ready' ? <Thumb src={mediaUrl(a.assetId, 'thumb')} seed={a.assetId} /> : <FileVideo size={20} />}
-              </div>
-              <div className="ps-file-meta">
-                <strong title={a.name}>{a.name}</strong>
-                <span>
-                  {a.status === 'uploading' && `Uploading · ${Math.round(a.progress * 100)}%`}
-                  {a.status === 'processing' && 'Processing — building preview & audio'}
-                  {a.status === 'ready' && [a.duration ? formatDuration(a.duration) : null, a.size ? formatBytes(a.size) : null, s.transcribed.includes(a.assetId ?? '') ? 'Transcribed' : 'Ready'].filter(Boolean).join(' · ')}
-                  {a.status === 'error' && <span style={{ color: 'var(--danger)' }}>{a.error ?? 'Failed'}</span>}
-                </span>
-                {(a.status === 'uploading' || a.status === 'processing') && <Progress value={a.status === 'processing' ? -1 : a.progress} />}
-              </div>
-              {a.status === 'ready' ? <CheckCircle2 size={18} style={{ color: 'var(--green)' }} /> : a.status === 'error' ? <AlertTriangle size={18} style={{ color: 'var(--danger)' }} /> : <Spinner />}
-              <button className="btn ghost sm icon" disabled={locked && a.status === 'ready'} title={locked ? 'Already used in the script' : 'Remove'} aria-label={`Remove ${a.name}`} onClick={() => removeWizardAsset(a.localId)}>
-                <X size={14} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      <WizardFiles s={s} locked={locked} />
       {lib && (
         <LibraryPicker
           workspaceId={workspaceId}
@@ -272,7 +331,7 @@ function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
     <>
       <div className="ps-wz-intro">
         <h2>Describe your video</h2>
-        <p>A topic, an outline or a finished script. Producer plans the scenes, writes the narration and makes every visual — no recording needed.</p>
+        <p>A topic, an outline or a finished script. Producer plans the scenes, writes the narration and animates it — with your own clips and images if you add some. No recording needed.</p>
       </div>
       <label className="label" htmlFor="ps-idea">The idea</label>
       <textarea
@@ -293,7 +352,8 @@ function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
           </button>
         ))}
       </div>
-      <span className="label" style={{ marginTop: 18 }}>Visuals Producer may use</span>
+      <YourMedia s={s} workspaceId={workspaceId} />
+      <span className="label" style={{ marginTop: 18 }}>{readyAssetIds(s).length ? 'Visuals for the other scenes' : 'Visuals Producer may use'}</span>
       <div className="ps-kinds">
         {ALL_KINDS.map((k) => {
           const st = kindStatus(k, caps.data)
@@ -330,12 +390,12 @@ function StartStep({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
         <button role="radio" aria-checked={!idea} className={clsx('ps-source-opt', !idea && 'on')} disabled={locked && idea} onClick={() => choose('recordings')}>
           <FileVideo size={22} />
           <strong>From recordings</strong>
-          <span>Upload screen captures, demos or footage. Producer writes the script around your best moments.</span>
+          <span>Screen captures, demos or talking heads. Producer transcribes them and writes the script around your best moments.</span>
         </button>
         <button role="radio" aria-checked={idea} className={clsx('ps-source-opt', idea && 'on')} disabled={locked && !idea} onClick={() => choose('idea')}>
           <Lightbulb size={22} />
-          <strong>From an idea</strong>
-          <span>Describe it or paste a script. Producer makes the visuals: animated text, diagrams, images and footage.</span>
+          <strong>From an idea, clips or images</strong>
+          <span>Describe it or paste a script. Producer animates it with text and diagrams, your own clips and photos, and AI images or stock footage.</span>
         </button>
       </div>
       {idea ? <IdeaPanel s={s} workspaceId={workspaceId} /> : <UploadStep s={s} workspaceId={workspaceId} />}
@@ -598,7 +658,7 @@ function RewriteButton({ scene, brief, workspaceId, onText, onBusy }: { scene: S
 }
 
 /** What fills the screen in a scene made from an idea: the kind, and what it shows (points, diagram, prompt, search). */
-function VisualEditor({ scene, kinds, caps, onChange }: { scene: ScriptScene; kinds: Array<Exclude<VisualKind, 'footage'>>; caps?: ProduceCapabilities; onChange: (v: SceneVisual) => void }) {
+function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptScene; kinds: Array<Exclude<VisualKind, 'footage'>>; caps?: ProduceCapabilities; media: WizardAsset[]; onChange: (v: SceneVisual) => void }) {
   const v = scene.visual as Exclude<SceneVisual, { kind: 'footage' }>
   // raw text while typing (blank lines, half-written bars); the scene keeps what parses
   const [text, setText] = useState(() => (v.kind === 'motion' ? (v.points ?? []).join('\n') : v.kind === 'diagram' ? diagramToText(v.diagram) : ''))
@@ -606,7 +666,7 @@ function VisualEditor({ scene, kinds, caps, onChange }: { scene: ScriptScene; ki
   const [err, setErr] = useState<string>()
   const options = kinds.includes(v.kind) ? kinds : [...kinds, v.kind]
   const setKind = (k: Exclude<VisualKind, 'footage'>) => {
-    const nv = defaultVisual(k, scene)
+    const nv = defaultVisual(k, scene, media.map((a) => a.assetId!))
     setErr(undefined)
     if (nv.kind === 'diagram') {
       setDiagType(nv.diagram.type)
@@ -619,7 +679,8 @@ function VisualEditor({ scene, kinds, caps, onChange }: { scene: ScriptScene; ki
     setErr(r.error)
     if (r.diagram) onChange({ kind: 'diagram', diagram: r.diagram })
   }
-  const made = 'assetId' in v && v.assetId
+  // something made at assembly (your own media isn't made, it's chosen)
+  const made = v.kind !== 'media' && 'assetId' in v && v.assetId
   return (
     <div className="ps-visual">
       <div className="ps-visual-head">
@@ -686,6 +747,7 @@ function VisualEditor({ scene, kinds, caps, onChange }: { scene: ScriptScene; ki
           onChange={(e) => onChange(withPrompt(v, e.target.value))}
         />
       )}
+      {v.kind === 'media' && <MediaChoice v={v} media={media} onChange={onChange} />}
       {v.kind === 'stock' && <input className="input" aria-label="Stock footage search" placeholder="A short, concrete search, e.g. team meeting whiteboard" value={v.query} onChange={(e) => onChange(withPrompt(v, e.target.value))} />}
       {made && (
         <div className="ps-visual-made">
@@ -702,6 +764,43 @@ function VisualEditor({ scene, kinds, caps, onChange }: { scene: ScriptScene; ki
         </div>
       )}
       {v.kind === 'aiVideo' && caps?.video && !made && <div className="muted ps-visual-hint">Made at assembly: a few minutes, billed per second to your {caps.video.provider === 'openai' ? 'OpenAI' : 'Google'} account.</div>}
+    </div>
+  )
+}
+
+/** Which of your clips or images a scene shows, and where a clip starts. */
+function MediaChoice({ v, media, onChange }: { v: Extract<SceneVisual, { kind: 'media' }>; media: WizardAsset[]; onChange: (v: SceneVisual) => void }) {
+  const cur = media.find((a) => a.assetId === v.assetId)
+  const clip = !!cur?.duration
+  return (
+    <div className="ps-visual-made ps-media-choice">
+      <Thumb src={mediaUrl(v.assetId, 'thumb')} seed={v.assetId} className="ps-win-thumb" />
+      <select className="input" aria-label="Which clip or image" value={v.assetId} onChange={(e) => onChange({ kind: 'media', assetId: e.target.value })}>
+        {!cur && <option value={v.assetId}>A clip or image no longer added</option>}
+        {media.map((a) => (
+          <option key={a.assetId} value={a.assetId}>{a.name}{a.duration ? ` · ${formatDuration(a.duration)}` : ''}</option>
+        ))}
+      </select>
+      {clip && (
+        <label className="row" style={{ gap: 6, whiteSpace: 'nowrap' }}>
+          <span className="muted">Start at</span>
+          <input
+            className="input"
+            type="number"
+            min={0}
+            max={Math.max(0, Math.floor((cur.duration ?? 0) - 0.5))}
+            step={0.5}
+            style={{ width: 80 }}
+            aria-label="Start the clip at (seconds)"
+            value={v.start ?? 0}
+            onChange={(e) => {
+              const n = Number(e.target.value)
+              onChange({ kind: 'media', assetId: v.assetId, ...(Number.isFinite(n) && n > 0 ? { start: n } : {}) })
+            }}
+          />
+          <span className="muted">s</span>
+        </label>
+      )}
     </div>
   )
 }
@@ -764,7 +863,7 @@ function SceneCard({ scene, index, total, s, kinds, caps, voices, onChange, onMo
           {!visualScene && <span className={footSecs && secs > footSecs + 1 ? 'warn' : ''}>{formatDuration(footSecs)} of footage{footSecs && secs > footSecs + 1 ? ' — narration runs longer; footage will be held/extended' : ''}</span>}
         </div>
         {visualScene ? (
-          <VisualEditor key={`${scene.id}-${scene.visual!.kind}`} scene={scene} kinds={kinds} caps={caps} onChange={(visual) => onChange({ visual })} />
+          <VisualEditor key={`${scene.id}-${scene.visual!.kind}`} scene={scene} kinds={kinds} caps={caps} media={s.assets.filter((a) => a.status === 'ready' && a.assetId)} onChange={(visual) => onChange({ visual })} />
         ) : (
         <div className="ps-footage">
           {scene.footage.map((f, i) => (
@@ -852,7 +951,7 @@ function ReviewStep({ s, onRewrite, onRenarrate }: { s: WizardState; onRewrite: 
   const idea = isIdea(s)
   const workspaceId = s.workspaceId
   const caps = useAsync(() => (idea && workspaceId ? api.produceCapabilities(workspaceId) : Promise.resolve(undefined)), [idea, workspaceId])
-  const kinds = ALL_KINDS.filter((k) => kindStatus(k, caps.data).available)
+  const kinds: Array<Exclude<VisualKind, 'footage'>> = [...ALL_KINDS.filter((k) => kindStatus(k, caps.data).available), ...(idea && readyAssetIds(s).length ? (['media'] as const) : [])]
   const totalWords = s.scenes.reduce((t, sc) => t + sceneWords(sc.narration), 0)
   const totalSecs = s.scenes.reduce((t, sc) => t + Math.max(narrationSeconds(sc.narration), sc.footage.reduce((a, f) => a + Math.max(0, f.end - f.start), 0)), 0)
   return (
@@ -1104,7 +1203,7 @@ function AiUnavailable({ ai, workspaceId }: { ai: SystemInfo['ai']; workspaceId:
         <strong>Producer AI can’t write a script here yet: no AI is set up{ws && !desktop ? ` for ${ws.name}` : ''}.</strong> {ai.detail}
         <div style={{ marginTop: 4 }}>
           {owner
-            ? 'Add an AI key in Settings → AI. Recordings and the brief you add meanwhile are kept.'
+            ? 'Add an AI key in Settings → AI. Everything you add here meanwhile is kept.'
             : `Only an owner of ${ws?.name ?? 'this space'} can set up AI: ask them to add a key in Settings → AI.`}
         </div>
       </div>
@@ -1202,15 +1301,21 @@ export default function ProducerWizard() {
       return
     }
     const h = takeProducerHandoff()
-    if (h) {
-      replace(initialState({ prompt: h.prompt, aspect: h.aspect }))
+    if (h && (h.prompt || h.files.length)) {
+      const fresh = initialState({ prompt: h.prompt, aspect: h.aspect })
+      replace(handoffSource(h) === 'idea' ? { ...fresh, brief: { ...fresh.brief, source: 'idea', idea: h.prompt } } : fresh)
       const here = useSession.getState().workspaceId
       if (h.files.length && here) void uploadToWizard(here, h.files)
       return
     }
-    if (!cur.projectId && (cur.assets.length || cur.brief.title)) return // in-memory draft
+    // a quick start names only where the video comes from: a draft keeps everything else, and one with a script its source
+    const startOn = (st: WizardState): WizardState => (h?.source && !st.scenes.length && !st.projectId ? { ...st, brief: { ...st.brief, source: h.source } } : st)
+    if (!cur.projectId && (cur.assets.length || cur.brief.title)) {
+      if (h?.source) replace(startOn(cur))
+      return // in-memory draft
+    }
     const draft = ssGet<WizardState>(storageKey())
-    replace(draft && draft.brief ? sanitizeForResume(draft) : initialState())
+    replace(startOn(draft && draft.brief ? sanitizeForResume(draft) : initialState()))
     resumeProcessingAssets()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])

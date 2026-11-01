@@ -2,7 +2,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { createProject, evaluate, itemEnd, projectDuration, type Asset, type Project, type ScriptScene } from '@producer/core'
 import { buildProducerTimeline, syntheticTranscript } from '../ai/produce'
-import { type IdeaScriptOutput, VisualSchema, normalizeIdeaScript } from '../ai/scenes'
+import { type IdeaMedia, type IdeaScriptOutput, VisualSchema, buildIdeaPrompt, normalizeIdeaScript } from '../ai/scenes'
 import { diagramItems, revealTimes, type SceneFrame } from '../ai/scene-layout'
 import { type Palette, getLook, lookPalette } from '../services/looks'
 import { setup } from './helpers'
@@ -14,7 +14,7 @@ beforeAll(async () => {
 })
 
 type FlatVisual = IdeaScriptOutput['scenes'][number]['visual']
-const blank: FlatVisual = { kind: 'motion', points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '' }
+const blank: FlatVisual = { kind: 'motion', points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '' }
 const scene = (visual: Partial<FlatVisual>, narration = 'We plan, then build, then ship it.') => ({ id: 'x', title: 'T', headline: 'Head', narration, visual: { ...blank, ...visual } })
 
 describe("the writer's scenes", () => {
@@ -46,10 +46,46 @@ describe("the writer's scenes", () => {
     for (const s of scenes) expect(VisualSchema.safeParse(s.visual).success).toBe(true)
   })
 
+  it('turns a scene showing your own media into that clip or image, and an unknown one into animated text', () => {
+    const media: IdeaMedia[] = [
+      { ref: 'm1', assetId: 'as_beach', kind: 'video', name: 'beach.mp4', duration: 12 },
+      { ref: 'm2', assetId: 'as_team', kind: 'image', name: 'team.jpg' },
+    ]
+    const out: IdeaScriptOutput = { message: 'm', scenes: [scene({ kind: 'media', mediaId: 'M2' }), scene({ kind: 'media', mediaId: 'm1' }), scene({ kind: 'media', mediaId: 'm9' })] }
+    const scenes = normalizeIdeaScript(out, ['motion', 'media'], media)
+    expect(scenes.map((s) => s.visual)).toEqual([
+      { kind: 'media', assetId: 'as_team' },
+      { kind: 'media', assetId: 'as_beach' },
+      { kind: 'motion', points: ['Head'] },
+    ])
+    // with no media offered, a media scene can't be drawn
+    expect(normalizeIdeaScript(out, ['motion'], media)[0].visual?.kind).toBe('motion')
+  })
+
+  it('lists your media for the writer only when there is some', () => {
+    const brief = { title: 'Trip', audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, source: 'idea' as const, idea: 'Our team trip' }
+    const media: IdeaMedia[] = [
+      { ref: 'm1', assetId: 'as_beach', kind: 'video', name: 'beach "day".mp4', duration: 12.4, speech: 'Welcome   to the beach' },
+      { ref: 'm2', assetId: 'as_team', kind: 'image', name: 'team.jpg' },
+    ]
+    const withMedia = buildIdeaPrompt({ brief, kinds: ['motion', 'media'], rules: '', example: '', media })
+    expect(withMedia).toContain('YOUR MEDIA')
+    expect(withMedia).toContain(`- m1 · video clip, 12 s · "beach 'day'.mp4" · says: "Welcome to the beach"`)
+    expect(withMedia).toContain('- m2 · image · "team.jpg"')
+    expect(withMedia).toContain('- media:')
+    const without = buildIdeaPrompt({ brief, kinds: ['motion', 'media'], rules: '', example: '' })
+    expect(without).not.toContain('YOUR MEDIA')
+    expect(without).not.toContain('- media:')
+    expect(without).toContain('There are no recordings')
+  })
+
   it('refuses visuals the API must not store', () => {
     expect(VisualSchema.safeParse({ kind: 'diagram', diagram: { type: 'steps', items: Array(9).fill('x') } }).success).toBe(false)
     expect(VisualSchema.safeParse({ kind: 'stock', query: 'city', credit: { author: 'A', url: 'javascript:alert(1)' } }).success).toBe(false)
     expect(VisualSchema.safeParse({ kind: 'teleport' }).success).toBe(false)
+    expect(VisualSchema.safeParse({ kind: 'media' }).success).toBe(false)
+    expect(VisualSchema.safeParse({ kind: 'media', assetId: 'as_1', start: -2 }).success).toBe(false)
+    expect(VisualSchema.safeParse({ kind: 'media', assetId: 'as_1', start: 2, end: 6 }).success).toBe(true)
   })
 })
 
@@ -137,6 +173,37 @@ describe('timeline from an idea', () => {
       ['s04', clip],
     ]),
     })
+  })
+
+  it('puts your own image (with a slow pan) and your own clip (from the part chosen, filling the frame) on the main track', () => {
+    const photo: Asset = { id: 'as_photo', kind: 'image', name: 'team.jpg', src: '', width: 1200, height: 900 }
+    const beach: Asset = { id: 'as_beach', kind: 'video', name: 'beach.mp4', src: '', duration: 20, width: 1920, height: 1080, hasAudio: true }
+    const own: ScriptScene[] = [
+      { id: 's01', title: 'Team', headline: 'Our team', narration: 'This is our team.', footage: [], visual: { kind: 'media', assetId: 'as_photo' } },
+      { id: 's02', title: 'Beach', headline: 'The beach', narration: 'And this is where we went.', footage: [], visual: { kind: 'media', assetId: 'as_beach', start: 5 } },
+      { id: 's03', title: 'Gone', headline: 'Gone', narration: 'A clip that was deleted.', footage: [], visual: { kind: 'media', assetId: 'as_missing' } },
+    ]
+    const q = buildProducerTimeline({
+      project: createProject({ id: 'p_own', name: 'Own' }),
+      brief: { title: 'Own', audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9', source: 'idea' },
+      scenes: own,
+      footage: new Map([
+        ['as_photo', photo],
+        ['as_beach', beach],
+      ]),
+      voices: new Map(own.map((s) => [s.id, voice(`as_vo_${s.id}`, s.narration)])),
+    })
+    const main = q.tracks.find((t) => t.main)!
+    const img = main.items.find((i) => i.type === 'image')!
+    expect(img).toMatchObject({ assetId: 'as_photo', fit: 'cover' })
+    expect((img as { effects: Array<{ type: string }> }).effects.map((e) => e.type)).toContain('kenBurns')
+    const vid = main.items.filter((i) => i.type === 'video')
+    expect(vid[0]).toMatchObject({ assetId: 'as_beach', fit: 'cover', in: 5, muted: true })
+    expect(q.assets.as_photo).toBeDefined()
+    expect(q.assets.as_beach).toBeDefined()
+    // one that isn't in the space any more becomes a card, never a broken item
+    expect(main.items.some((i) => (i as { assetId?: string }).assetId === 'as_missing')).toBe(false)
+    expect(main.items.some((i) => i.name === 's03 · card')).toBe(true)
   })
 
   it('puts the still (with a slow pan) and the stock clip (filling the frame) on the main track', () => {

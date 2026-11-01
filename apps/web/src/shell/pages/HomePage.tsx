@@ -1,5 +1,5 @@
 import type { ProjectSummary } from '@producer/core'
-import { ArrowRight, ArrowUpRight, AudioLines, Captions, Clapperboard, FileText, FolderOpen, LayoutTemplate, Paperclip, Plus, Sparkles, Video, X } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, AudioLines, Captions, Clapperboard, FileText, FolderOpen, ImageIcon, LayoutTemplate, Lightbulb, Paperclip, Plus, Sparkles, Video, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
@@ -30,7 +30,8 @@ export const GREEN = { glow: 'var(--green-soft)', iconBg: 'var(--green-soft)', i
 export const VIOLET = { glow: 'var(--violet-soft)', iconBg: 'var(--violet-soft)', iconFg: 'var(--violet)' }
 
 const ASPECTS = ['16:9', '9:16', '1:1'] as const
-const IDEAS = ['A 90-second product tour from my screen recording', 'A vertical teaser for our new feature', 'An onboarding walkthrough for new customers']
+const IDEAS = ['A 60-second animated explainer of how our product works', 'A vertical teaser built from our product photos', 'A 90-second product tour from my screen recording']
+const attachable = (f: File) => f.type.startsWith('video/') || f.type.startsWith('image/')
 
 export function useRecentProjects(limit = 8) {
   const workspaceId = useSession((s) => s.workspaceId)
@@ -52,11 +53,16 @@ export default function HomePage() {
   const [create, creating] = useCreateAndOpen()
   const gate = useEditGate()
   const recent = useRecentProjects(8)
-  const pick = useFilePicker('video/*', true, (f) => setFiles((cur) => [...cur, ...f]))
+  const pick = useFilePicker('video/*,image/*', true, (f) => setFiles((cur) => [...cur, ...f.filter(attachable)]))
 
   function makeIt() {
     if (!gate.canEdit) return
     setProducerHandoff({ prompt: prompt.trim(), aspect, files })
+    navigate('/producer/new')
+  }
+  /** Producer AI starting on one source, with nothing typed yet. */
+  const startFrom = (source: 'recordings' | 'idea') => () => {
+    setProducerHandoff({ prompt: '', aspect, files: [], source })
     navigate('/producer/new')
   }
 
@@ -79,13 +85,13 @@ export default function HomePage() {
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault()
-            const f = Array.from(e.dataTransfer.files).filter((x) => x.type.startsWith('video/'))
+            const f = Array.from(e.dataTransfer.files).filter(attachable)
             if (f.length && gate.canEdit) setFiles((cur) => [...cur, ...f])
           }}
         >
           <textarea
             className="ps-prompt-input"
-            placeholder="Describe the video — e.g. “Turn my screen recording into a 2-minute product tour for new customers”. Attach recordings with +"
+            placeholder="Describe the video — an animated explainer, a teaser from your photos, a product tour from a screen recording. Attach clips, images or recordings with +"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             rows={3}
@@ -98,7 +104,7 @@ export default function HomePage() {
             <div className="ps-attach-list">
               {files.map((f, i) => (
                 <span key={i} className="ps-attach">
-                  <Video size={13} />
+                  {f.type.startsWith('image/') ? <ImageIcon size={13} /> : <Video size={13} />}
                   <span className="ps-attach-name">{f.name}</span>
                   <span className="muted">{formatBytes(f.size)}</span>
                   <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles((cur) => cur.filter((_, j) => j !== i))}>
@@ -109,7 +115,7 @@ export default function HomePage() {
             </div>
           )}
           <div className="ps-prompt-bar">
-            <button type="button" className="btn icon ps-prompt-plus" onClick={pick} aria-label="Attach recordings" title="Attach screen recordings or videos">
+            <button type="button" className="btn icon ps-prompt-plus" onClick={pick} aria-label="Attach clips, images or recordings" title="Attach clips, images or screen recordings">
               <Plus size={18} />
             </button>
             <div className="ps-seg" role="radiogroup" aria-label="Aspect ratio">
@@ -145,7 +151,8 @@ export default function HomePage() {
         </div>
         <div className="ps-grid ps-quick">
           <QuickCard icon={<Clapperboard size={20} />} title="Video Editor" body="Start a blank multi-track timeline in any aspect ratio." onClick={() => setAspectModal(true)} lockedTip={gate.tip} />
-          <QuickCard icon={<Sparkles size={20} />} title="Producer AI from a recording" body="Upload a capture; get a scripted, narrated, branded cut." onClick={() => navigate('/producer/new')} lockedTip={gate.tip} {...VIOLET} />
+          <QuickCard icon={<Lightbulb size={20} />} title="Animated video from an idea" body="Describe it or paste a script; add your own clips and photos if you like. No recording needed." onClick={startFrom('idea')} lockedTip={gate.tip} {...VIOLET} />
+          <QuickCard icon={<Sparkles size={20} />} title="Producer AI from a recording" body="Upload a capture; get a scripted, narrated, branded cut." onClick={startFrom('recordings')} lockedTip={gate.tip} {...VIOLET} />
           <QuickCard icon={<Captions size={20} />} title="Auto captions" body="Transcribe speech into styled, word-timed captions." onClick={tool('captions', 'Auto captions')} lockedTip={gate.tip} {...CYAN} />
           <QuickCard icon={<FileText size={20} />} title="Transcript editing" body="Edit the video by deleting words from its transcript." onClick={tool('transcript', 'Transcript edit')} lockedTip={gate.tip} {...AMBER} />
           <QuickCard icon={<AudioLines size={20} />} title="Voiceover" body="Type a script and generate natural narration." onClick={() => navigate('/voice')} {...GREEN} />
@@ -175,10 +182,11 @@ export default function HomePage() {
           <EmptyState
             icon={<FolderOpen size={24} />}
             title="No projects yet"
-            body="Describe a video above, or start from a recording and let Producer AI do the first cut for you."
+            body="Describe a video above — from an idea, your own clips and photos, or a recording — and let Producer AI do the first cut for you."
             action={
               <div className="row">
-                <button className="btn primary" {...gate.props} onClick={() => navigate('/producer/new')}><Sparkles size={15} /> New from recording</button>
+                <button className="btn primary" {...gate.props} onClick={startFrom('idea')}><Lightbulb size={15} /> New from an idea</button>
+                <button className="btn" {...gate.props} onClick={startFrom('recordings')}><Sparkles size={15} /> From a recording</button>
                 <button className="btn" {...gate.props} onClick={() => setAspectModal(true)}>Blank project</button>
               </div>
             }

@@ -180,6 +180,10 @@ export function canAdvance(s: WizardState, step: StepId = s.step): { ok: boolean
       if (isIdea(s)) {
         const idea = (s.brief.idea ?? '').trim()
         if (idea.length > PRODUCE_LIMITS.ideaChars) return { ok: false, reason: `Shorten the idea to ${PRODUCE_LIMITS.ideaChars.toLocaleString('en')} characters` }
+        // your own clips and images are optional, but the writer needs them ready to look at
+        if (s.assets.some((a) => a.status === 'uploading' || a.status === 'processing')) return { ok: false, reason: 'Waiting for your clips and images to finish processing' }
+        const over = readyAssetIds(s).length - PRODUCE_LIMITS.recordings
+        if (over > 0) return { ok: false, reason: `A video can use at most ${PRODUCE_LIMITS.recordings} of your clips and images: remove ${over}` }
         return idea.length >= 10 ? { ok: true } : { ok: false, reason: 'Describe the video in a sentence or more' }
       }
       if (s.assets.some((a) => a.status === 'uploading' || a.status === 'processing')) return { ok: false, reason: 'Waiting for uploads to finish processing' }
@@ -283,6 +287,7 @@ export function stateFromProject(res: ProjectDocResponse): WizardState {
   const scenes = ai.script?.scenes ?? []
   const ids = new Set<string>()
   for (const sc of scenes) for (const f of sc.footage) ids.add(f.assetId)
+  for (const sc of scenes) if (sc.visual?.kind === 'media') ids.add(sc.visual.assetId)
   for (const a of Object.values(project.assets ?? {})) if (a.kind === 'video' && !ids.size) ids.add(a.id)
   const assets: WizardAsset[] = [...ids].map((id) => {
     const a = project.assets?.[id]

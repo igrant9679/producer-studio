@@ -44,7 +44,7 @@ import { houseRules } from './rules'
 import { ensureTranscript, synthesizeToAsset, transcribeAsset } from './speech'
 import { whisperAvailable } from './whisper'
 import { downloadStock, generateImage, generateVideo, generationCapabilities, searchStock } from './generate'
-import { IDEA_SYSTEM, IdeaScriptSchema, VISUAL_KINDS, buildIdeaPrompt, normalizeIdeaScript } from './scenes'
+import { IDEA_SYSTEM, type IdeaMedia, IdeaScriptSchema, VISUAL_KINDS, buildIdeaPrompt, normalizeIdeaScript } from './scenes'
 import { type Placed, type SceneFrame, diagramItems, motionItems, slotIndex } from './scene-layout'
 
 export type Brief = NonNullable<ProducerMeta['brief']>
@@ -221,17 +221,58 @@ export async function allowedVisualKinds(workspaceId: string, requested?: Visual
   return VISUAL_KINDS.filter((k) => want.has(k) && (k === 'image' ? !!caps.image : k === 'aiVideo' ? !!caps.video : k === 'stock' ? caps.stock : true))
 }
 
-/** Idea mode (no recordings): the writer plans every scene and picks the visual that explains it. */
-async function produceIdeaScript(jc: JobContext, input: { projectId: string; brief: Brief }): Promise<{ script: { scenes: ScriptScene[]; message?: string } }> {
+/**
+ * What the writer sees of the person's own clips and images: the image itself, or three frames across a clip. One
+ * that can't be read is still listed, just without a picture.
+ */
+async function mediaPicture(row: AssetRow, work: string, signal: AbortSignal): Promise<string | null> {
+  const src = await localSource(row, work, row.proxyKey ?? row.sourceKey)
+  const out = path.join(work, `media-${row.id}.jpg`)
+  if (row.kind === 'image') await ffmpeg(['-i', src, '-vf', 'scale=512:-2', '-frames:v', '1', '-q:v', '5', out], { signal })
+  else {
+    const dur = row.meta?.duration ?? 0
+    if (dur <= 0) return null
+    const step = Math.max(0.5, dur / 3)
+    await ffmpeg(['-ss', String(round(step / 2, 2)), '-i', src, '-vf', `fps=1/${round(step, 3)},scale=320:-2,tile=3x1:padding=4:color=black`, '-frames:v', '1', '-q:v', '5', out], { signal })
+  }
+  return fs.readFileSync(out).toString('base64')
+}
+
+/**
+ * Idea mode: the writer plans every scene and picks the visual that explains it. Clips and images the person added
+ * (`assetIds`) are offered as `media` scenes, with their pictures, so a video can be made from them with no recording.
+ */
+async function produceIdeaScript(jc: JobContext, input: { projectId: string; brief: Brief; assetIds?: string[] }): Promise<{ script: { scenes: ScriptScene[]; message?: string } }> {
   const provider = await requireProvider(jc.job.workspaceId, 'script')
   const row = await loadProjectRow(input.projectId)
   const kinds = await allowedVisualKinds(row.workspaceId, input.brief.visualKinds)
+  const rows = (await workspaceAssets(row.workspaceId, input.assetIds ?? [])).filter((r) => r.status === 'ready' && (r.kind === 'video' || r.kind === 'image'))
+  const media: IdeaMedia[] = rows.map((r, i) => {
+    const speech = r.meta?.transcript?.segments.map((sg) => sg.text).join(' ').trim()
+    return { ref: `m${i + 1}`, assetId: r.id, kind: r.kind as 'video' | 'image', name: r.name, duration: r.meta?.duration, ...(speech ? { speech } : {}) }
+  })
+  if (media.length) kinds.push('media')
+  const images: Array<{ label: string; mediaType: 'image/jpeg'; data: string }> = []
+  const work = tmpDir('idea-media')
+  try {
+    for (let i = 0; i < rows.length; i++) {
+      jc.progress(0.05 + (i / rows.length) * 0.1, `Looking at ${rows[i].name}`)
+      const data = await mediaPicture(rows[i], work, jc.signal).catch((err) => {
+        log.warn('idea media picture failed', { assetId: rows[i].id, err })
+        return null
+      })
+      if (data) images.push({ label: `${media[i].ref} (${media[i].kind === 'image' ? 'image' : 'three frames across the clip'}):`, mediaType: 'image/jpeg', data })
+      jc.check()
+    }
+  } finally {
+    fs.rm(work, { recursive: true, force: true }, () => undefined)
+  }
   const { rules, example } = houseRules()
-  jc.progress(0.1, 'Writing the script')
-  const raw = await provider.structured({ system: IDEA_SYSTEM, prompt: buildIdeaPrompt({ brief: input.brief, kinds, rules, example }), images: [], schema: IdeaScriptSchema, signal: jc.signal })
+  jc.progress(0.15, 'Writing the script')
+  const raw = await provider.structured({ system: IDEA_SYSTEM, prompt: buildIdeaPrompt({ brief: input.brief, kinds, rules, example, media }), images, schema: IdeaScriptSchema, signal: jc.signal })
   const check = IdeaScriptSchema.safeParse(raw)
   if (!check.success) throw new HttpError(502, 'server', 'The AI response did not match the script format')
-  const scenes = normalizeIdeaScript(check.data, kinds)
+  const scenes = normalizeIdeaScript(check.data, kinds, media)
   jc.check()
   await saveOnLatest(input.projectId, (cur) => ({ ...cur, ai: { ...(cur.ai ?? {}), brief: input.brief, script: { scenes, message: check.data.message, brief: input.brief }, status: 'scripted' } }))
   jc.progress(1, `${scenes.length} scenes`)
@@ -392,8 +433,15 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     let windows = visual.kind === 'footage' ? scene.footage.filter((f) => inp.footage.has(f.assetId) && f.end > f.start) : []
     const madeClip = gen?.kind === 'video' && (visual.kind === 'stock' || visual.kind === 'aiVideo')
     if (madeClip) windows = [{ assetId: gen.id, start: 0, end: gen.duration ?? dur }]
-    const fit = madeClip ? 'cover' : 'contain'
-    const still = gen?.kind === 'image' && visual.kind === 'image' ? gen : undefined
+    // the person's own clip (from its start, or the part they chose) or image, filling the frame like a made one
+    const own = visual.kind === 'media' ? inp.footage.get(visual.assetId) : undefined
+    const ownClip = own?.kind === 'video' && visual.kind === 'media'
+    if (ownClip) {
+      const start = Math.min(Math.max(0, visual.start ?? 0), Math.max(0, (own.duration ?? 0) - 0.5))
+      windows = [{ assetId: own.id, start, end: Math.max(start + 0.5, visual.end ?? own.duration ?? start + dur) }]
+    }
+    const fit = madeClip || ownClip ? 'cover' : 'contain'
+    const still = gen?.kind === 'image' && visual.kind === 'image' ? gen : own?.kind === 'image' ? own : undefined
     const pieces: Item[] = []
     if (windows.length) {
       // cut to fill the scene; slow slightly or hold the last frame when short
@@ -414,7 +462,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
       }
       for (const f of windows) addAsset(clip(f.assetId)!)
     } else if (still) {
-      // an AI still, brought to life with a slow pan and zoom
+      // a still (AI-made or the person's own), brought to life with a slow pan and zoom
       addAsset(still)
       pieces.push(createImageItem(still, 0, { name: `${scene.id} · ${still.name}`, duration: dur, fit: 'cover', effects: [{ id: uid('fx'), type: 'kenBurns', intensity: 70 }] }))
     } else {
@@ -587,7 +635,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const { getBrandKit } = await import('../services/brand')
   const brand = await getBrandKit(row.workspaceId, brief.brandKitId, { fallback: true })
   if (!input.scenes?.length) throw invalid('No scenes to assemble')
-  const footageIds = [...new Set(input.scenes.flatMap((s) => s.footage.map((f) => f.assetId)))]
+  const footageIds = [...new Set(input.scenes.flatMap((s) => [...s.footage.map((f) => f.assetId), ...(s.visual?.kind === 'media' ? [s.visual.assetId] : [])]))]
   const footageRows = await ctx().db.select().from(assets).where(and(eq(assets.workspaceId, row.workspaceId), inArray(assets.id, footageIds.length ? footageIds : ['-'])))
   const footage = new Map(footageRows.map((r) => [r.id, assetDoc(r)]))
   // 1. voice per scene (reuse one already made for the same narration and voice)

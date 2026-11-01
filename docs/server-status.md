@@ -117,6 +117,11 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   the workspace's own key (OpenAI or Gemini stills; Gemini Omni clips, at most 3 per video; Pexels stock via `PEXELS_API_KEY`),
   stored as assets with `meta.generated` and reused while the prompt/search is unchanged; a scene whose visual can't be made
   falls back to motion and the job result carries `notes`. Model ids and fallbacks: top of `ai/generate/capabilities.ts`.
+  **Your own clips and images** (1 Nov 2026): in idea mode the script request's `assetIds` are the person's library media,
+  not recordings: never transcribed, listed for the writer as m1…mN (name, kind, length, any stored transcript) with a
+  picture of each (the image, or three frames across a clip), and offered as a `media` visual (`{ kind: 'media', assetId,
+  start?, end? }`). Assembly looks them up with the footage (in the project's space only; one that's gone becomes a card) and
+  places a clip like a stock clip (filling the frame, from `start`) and an image like an AI still (slow pan and zoom).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

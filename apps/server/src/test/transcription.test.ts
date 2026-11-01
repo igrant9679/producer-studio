@@ -30,7 +30,7 @@ const saved: { cli?: string; model?: string } = {}
 
 const jc = (kind = 'asset.process') => inlineContext({ id: `t-${kind}`, kind, workspaceId, userId, projectId: null, input: {} })
 
-async function clip(file: string, name: string, mime = 'video/mp4', kind: 'video' | 'audio' = 'video') {
+async function clip(file: string, name: string, mime = 'video/mp4', kind: 'video' | 'audio' | 'image' = 'video') {
   const a = await createAssetFromFile({ workspaceId, userId, filePath: file, name, mime, kind, origin: 'upload' })
   return processAsset(a.id, jc())
 }
@@ -133,6 +133,49 @@ describe('clips with no sound (PIP-1)', () => {
     expect(prompts[0]).toContain(screen.id)
     // only the clip with sound went to whisper
     expect(calls).toHaveLength(1)
+  })
+
+  it('Producer AI makes a video from an idea with your own clips and images, and shows the writer each one', async () => {
+    const calls = fakeWhisper()
+    const photoFile = path.join(dir, 'team.png')
+    await proc.ffmpeg(['-f', 'lavfi', '-i', 'color=c=0x3366cc:s=320x240', '-frames:v', '1', photoFile])
+    const beach = await clip(talk, 'beach.mp4')
+    const photo = await clip(photoFile, 'team.png', 'image/png', 'image')
+    const seen: Array<{ prompt: string; images: Array<{ label: string; data: string }> }> = []
+    vi.spyOn(provider, 'requireProvider').mockResolvedValue({
+      id: 'anthropic-api',
+      status: async () => ({ available: true }),
+      write: async () => '',
+      runAgent: async () => ({ text: '' }),
+      structured: async (req: { prompt: string; images: Array<{ label: string; data: string }> }) => {
+        seen.push(req)
+        const blank = { points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '' }
+        return {
+          message: 'A good trip',
+          scenes: [
+            { id: 's01', title: 'Team', headline: 'Our team', narration: 'This is our team.', visual: { ...blank, kind: 'media', mediaId: 'm2' } },
+            { id: 's02', title: 'Beach', headline: 'The beach', narration: 'And this is where we went.', visual: { ...blank, kind: 'media', mediaId: 'm1' } },
+            { id: 's03', title: 'Close', headline: 'See you', narration: 'See you next year.', visual: { ...blank, kind: 'motion', points: ['Next year'] } },
+          ],
+        }
+      },
+    } as unknown as provider.AiProvider)
+    const project = await client.json<ProjectDocResponse>('POST', '/api/projects', { workspaceId, name: 'Team trip', kind: 'producer', width: 1920, height: 1080 })
+    const brief = { title: 'Team trip', audience: 'Staff', goal: 'Remember it', tone: 'Warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, source: 'idea' as const, idea: 'Our team trip to the coast' }
+    const out = await produceScript(inlineContext({ id: 'j-idea-media', kind: 'ai.produce.script', workspaceId, userId, projectId: project.body.project.id, input: { projectId: project.body.project.id, assetIds: [beach.id, photo.id], brief } }))
+    expect(out.script.scenes.map((sc) => sc.visual)).toEqual([
+      { kind: 'media', assetId: photo.id },
+      { kind: 'media', assetId: beach.id },
+      { kind: 'motion', points: ['Next year'] },
+    ])
+    expect(seen[0].prompt).toContain('YOUR MEDIA')
+    expect(seen[0].prompt).toContain('- m1 · video clip, 2 s · "beach.mp4"')
+    expect(seen[0].prompt).toContain('- m2 · image · "team.png"')
+    // a picture of each: three frames across the clip, and the image
+    expect(seen[0].images.map((i) => i.label)).toEqual(['m1 (three frames across the clip):', 'm2 (image):'])
+    expect(seen[0].images.every((i) => i.data.length > 100)).toBe(true)
+    // nothing is transcribed for a video made from an idea
+    expect(calls).toHaveLength(0)
   })
 })
 

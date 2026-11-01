@@ -1,6 +1,7 @@
 // Videos made from an idea (no recordings): the script writer's scene format, and how each scene's visual becomes
 // timeline items. Motion text and diagrams are built from the editor's own text and shape items (editable, on brand,
-// identical in preview and export); AI stills, stock clips and AI clips arrive as assets (ai/generate).
+// identical in preview and export); AI stills, stock clips and AI clips arrive as assets (ai/generate); the person's own
+// clips and images (`media`) are library assets already.
 import * as z from 'zod/v4'
 import type { DiagramType, SceneDiagram, SceneVisual, ScriptScene, VisualKind } from '@producer/core'
 import { HttpError } from '../http'
@@ -39,6 +40,7 @@ export const VisualSchema: z.ZodType<SceneVisual> = z.union([
     credit: z.object({ author: short(120), url: z.string().max(400).regex(/^https:\/\/[^\s"'<>]+$/, 'must be an https link') }).optional(),
   }),
   z.object({ kind: z.literal('aiVideo'), prompt: short(1000), assetId: z.string().max(80).optional() }),
+  z.object({ kind: z.literal('media'), assetId: z.string().min(1).max(80), start: z.number().finite().min(0).optional(), end: z.number().finite().min(0).optional() }),
 ]) as z.ZodType<SceneVisual>
 
 // ---------------- the writer's output (idea mode) ----------------
@@ -54,7 +56,7 @@ export const IdeaScriptSchema = z.object({
       headline: z.string().describe('3-6 word on-screen headline (2-4 for vertical)'),
       narration: z.string().describe('Exactly what the narrator says, written as spoken'),
       visual: z.object({
-        kind: z.enum(['motion', 'diagram', 'image', 'stock', 'aiVideo']).describe('What fills the screen for this scene'),
+        kind: z.enum(['motion', 'diagram', 'image', 'stock', 'aiVideo', 'media']).describe('What fills the screen for this scene'),
         points: z.array(z.string()).describe('motion: 2-4 short on-screen points revealed in order (else empty)'),
         diagramType: z.enum(['none', 'steps', 'cycle', 'hub', 'bars', 'compare', 'timeline', 'stat']).describe('diagram: which diagram (else none)'),
         items: z.array(z.string()).describe('diagram steps/cycle/hub/timeline/bars: the labels in order, 2-6, each 1-4 words (else empty)'),
@@ -68,6 +70,7 @@ export const IdeaScriptSchema = z.object({
         rightPoints: z.array(z.string()).describe('diagram compare: right column points, 1-4 (else empty)'),
         prompt: z.string().describe('image / aiVideo: a vivid visual description of the shot, no text or logos in it (else empty)'),
         query: z.string().describe('stock: 2-5 word stock-footage search, concrete and visual (else empty)'),
+        mediaId: z.string().describe('media: which of YOUR MEDIA to show, e.g. m2 (else empty)'),
       }),
     }),
   ),
@@ -75,7 +78,7 @@ export const IdeaScriptSchema = z.object({
 export type IdeaScriptOutput = z.infer<typeof IdeaScriptSchema>
 
 export const IDEA_SYSTEM =
-  'You are the script writer and director for Producer, which turns an idea into a short narrated, branded video with no camera footage. You write warm, plain, spoken narration with one idea per scene, and for each scene you choose the visual that explains it best: animated text, a clear diagram, a generated image, stock footage or a generated video clip.'
+  'You are the script writer and director for Producer, which turns an idea into a short narrated, branded video. You write warm, plain, spoken narration with one idea per scene, and for each scene you choose the visual that explains it best: the person’s own clips and images when they added some, animated text, a clear diagram, a generated image, stock footage or a generated video clip.'
 
 const KIND_GUIDE: Record<VisualKind, string> = {
   footage: '',
@@ -85,16 +88,41 @@ const KIND_GUIDE: Record<VisualKind, string> = {
   image: '- image: a generated still image with a slow pan and zoom. Write a vivid, specific shot description (subject, setting, light, style). No words, logos or UI in the image.',
   stock: '- stock: real stock video footage. Give a short, concrete search such as "team meeting whiteboard" or "city traffic night".',
   aiVideo: '- aiVideo: a generated video clip (expensive, use for at most 2 scenes where real motion matters). Describe one continuous shot: subject, action, camera move, setting, light. No words or logos.',
+  media: '- media: one of the clips or images under YOUR MEDIA, filling the screen (images get a slow pan and zoom). Set mediaId to its m-number.',
 }
 
-export function buildIdeaPrompt(opts: { brief: NonNullable<import('@producer/core').ProducerMeta['brief']>; kinds: VisualKind[]; rules: string; example: string }): string {
+/** One of the person's own clips or images, as the writer sees it (m1, m2, … in the order they were added). */
+export interface IdeaMedia {
+  ref: string
+  assetId: string
+  kind: 'video' | 'image'
+  name: string
+  duration?: number
+  /** What a clip says, when it has been transcribed. */
+  speech?: string
+}
+
+function mediaLine(m: IdeaMedia): string {
+  const what = m.kind === 'image' ? 'image' : `video clip, ${Math.max(1, Math.round(m.duration ?? 0))} s`
+  return `- ${m.ref} · ${what} · "${m.name.replace(/"/g, "'").slice(0, 80)}"${m.speech ? ` · says: "${m.speech.replace(/\s+/g, ' ').replace(/"/g, "'").slice(0, 240)}"` : ''}`
+}
+
+export function buildIdeaPrompt(opts: { brief: NonNullable<import('@producer/core').ProducerMeta['brief']>; kinds: VisualKind[]; rules: string; example: string; media?: IdeaMedia[] }): string {
   const b = opts.brief
   const vertical = b.aspect === '9:16'
   const seconds = Math.max(15, Math.min(600, b.lengthSec ?? 60))
   const words = Math.round(seconds * 2.6)
   const scenes = Math.max(3, Math.min(14, Math.round(seconds / 9)))
-  const kinds = opts.kinds.filter((k) => k !== 'footage')
-  return `Write the production script for a narrated video made from the idea below. There are no recordings: every scene's visual is one of the kinds listed.
+  const media = opts.media ?? []
+  const kinds = opts.kinds.filter((k) => k !== 'footage' && (k !== 'media' || media.length > 0))
+  const yours = media.length
+    ? `
+YOUR MEDIA (the person's own clips and images, added for this video; their pictures follow the prompt, labelled with these m-numbers)
+${media.map(mediaLine).join('\n')}
+Build the video around these: show each where it fits what the narration says (kind "media"), use most of them, and the same one at most twice. Describe only what you can see in them. Fill the other scenes with the other kinds.
+`
+    : ''
+  return `Write the production script for a narrated video made from the idea below. ${media.length ? 'The person added their own clips and images (YOUR MEDIA); the other' : 'There are no recordings: every'} scene's visual is one of the kinds listed.
 
 BRIEF
 - Title: ${b.title}
@@ -107,7 +135,7 @@ BRIEF
 
 THE IDEA (a topic, an outline, or a full script — if it's a script, keep its words and split it into scenes)
 ${(b.idea ?? '').trim() || b.title}
-
+${yours}
 VISUALS YOU MAY USE (only these kinds)
 ${kinds.map((k) => KIND_GUIDE[k]).join('\n')}
 
@@ -129,7 +157,7 @@ const clean = (s: string | undefined, max: number) => (s ?? '').replace(/\s+/g, 
 const list = (a: string[] | undefined, max: number, len: number) => (a ?? []).map((s) => clean(s, len)).filter(Boolean).slice(0, max)
 
 /** The model's flat visual → a SceneVisual, or a motion scene when what it gave can't be drawn. */
-export function toSceneVisual(v: IdeaScriptOutput['scenes'][number]['visual'], allowed: VisualKind[], fallbackPoints: string[] = []): SceneVisual {
+export function toSceneVisual(v: IdeaScriptOutput['scenes'][number]['visual'], allowed: VisualKind[], fallbackPoints: string[] = [], media: IdeaMedia[] = []): SceneVisual {
   const motion = (): SceneVisual => ({ kind: 'motion', points: list(v.points?.length ? v.points : fallbackPoints, 4, 120) })
   if (!allowed.includes(v.kind)) return motion()
   switch (v.kind) {
@@ -141,6 +169,11 @@ export function toSceneVisual(v: IdeaScriptOutput['scenes'][number]['visual'], a
       return clean(v.prompt, 1000) ? { kind: 'aiVideo', prompt: clean(v.prompt, 1000) } : motion()
     case 'stock':
       return clean(v.query, 120) ? { kind: 'stock', query: clean(v.query, 120) } : motion()
+    case 'media': {
+      const ref = clean(v.mediaId, 12).toLowerCase()
+      const m = media.find((x) => x.ref === ref || x.assetId === clean(v.mediaId, 80))
+      return m ? { kind: 'media', assetId: m.assetId } : motion()
+    }
     case 'diagram': {
       const d = toDiagram(v)
       return d ? { kind: 'diagram', diagram: d } : motion()
@@ -180,7 +213,7 @@ function toDiagram(v: IdeaScriptOutput['scenes'][number]['visual']): SceneDiagra
 }
 
 /** Idea-mode output → scenes (no footage windows). */
-export function normalizeIdeaScript(out: IdeaScriptOutput, allowed: VisualKind[]): ScriptScene[] {
+export function normalizeIdeaScript(out: IdeaScriptOutput, allowed: VisualKind[], media: IdeaMedia[] = []): ScriptScene[] {
   const scenes: ScriptScene[] = []
   out.scenes.forEach((s, i) => {
     const narration = s.narration.trim()
@@ -191,7 +224,7 @@ export function normalizeIdeaScript(out: IdeaScriptOutput, allowed: VisualKind[]
       headline: s.headline.trim(),
       narration,
       footage: [],
-      visual: toSceneVisual(s.visual, allowed, [s.headline]),
+      visual: toSceneVisual(s.visual, allowed, [s.headline], media),
     })
   })
   if (!scenes.length) throw new HttpError(502, 'server', 'The AI returned an empty script')

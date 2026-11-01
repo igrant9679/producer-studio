@@ -36,6 +36,7 @@
 .ps-drop.over { border-color: var(--cyan); background: var(--cyan-soft); }
 .ps-drop-icon { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: 6px; }
 .ps-drop strong { font: 700 1rem/1.2 var(--font-display); }
+.ps-drop.ps-drop-compact { align-items: flex-start; text-align: left; padding: 14px 16px; border-radius: 12px; font-size: 0.8125rem; color: var(--text-2); }
 .ps-files { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 .ps-file { display: flex; align-items: center; gap: 14px; padding: 10px 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--border); }
 .ps-file.error { border-color: var(--danger-line); }
@@ -179,6 +180,8 @@
 .ps-visual-hint { font-size: 0.7187rem; }
 .ps-visual-made { display: flex; align-items: center; gap: 10px; font-size: 0.75rem; color: var(--text-2); }
 .ps-visual-made a { color: var(--accent); }
+.ps-visual-made.ps-media-choice { flex-wrap: wrap; }
+.ps-media-choice select { flex: 1 1 160px; min-width: 0; }
 @media (max-width: 700px) {
   .ps-source { grid-template-columns: 1fr; }
   /* phone: the stepper keeps its five numbers in a row; the words show for the current step only */

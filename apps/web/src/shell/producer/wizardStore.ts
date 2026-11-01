@@ -232,7 +232,8 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
       onProjectCreated?.(res.summary.id)
     }
     s = get()
-    // from an idea there's nothing to transcribe: straight to the script
+    // from an idea there's nothing to transcribe: straight to the script, with any clips and images added as media
+    const media = isIdea(s) ? readyAssetIds(s) : []
     const ids = isIdea(s) ? [] : readyAssetIds(s)
     // a recording with no sound is footage only: there's nothing to transcribe (the script step skips it too)
     const silent = ids.filter((id) => !s.transcribed.includes(id) && s.assets.find((a) => a.assetId === id)?.hasAudio === false)
@@ -258,7 +259,7 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
     patch({ run: { status: 'running', phase: 'script', message: writing, progress: -1 } })
     const job = await runJob(
       patch,
-      () => api.produceScript({ projectId: s.projectId!, assetIds: ids, brief: s.brief }),
+      () => api.produceScript({ projectId: s.projectId!, assetIds: isIdea(s) ? media : ids, brief: s.brief }),
       (j) => patch((st) => ({ run: { ...st.run, message: j.message || writing, progress: j.progress } })),
       resumePhase === 'script' ? resumeJob : undefined,
     )

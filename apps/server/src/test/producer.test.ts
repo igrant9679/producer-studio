@@ -96,6 +96,29 @@ describe('Producer AI assembly', () => {
     expect(p.tracks.some((t) => t.items.some((i) => i.type === 'text' && i.text === 'Decide'))).toBe(true)
   })
 
+  it('assembles your own image from the library, and never one from another space', async () => {
+    const id = await newProject('From my photos')
+    const me = (await client.json('GET', '/api/auth/me')).body.user.id as string
+    const other = await signup((await setup()).app, 'Someone else')
+    const now = Date.now()
+    const row = (assetId: string, ws: string, by: string) => ({ id: assetId, workspaceId: ws, kind: 'image', name: `${assetId}.png`, mime: 'image/png', status: 'ready', origin: 'upload', meta: { width: 800, height: 600 }, sourceKey: `ws/${ws}/assets/${assetId}/source.png`, createdBy: by, createdAt: now, updatedAt: now })
+    const otherUser = (await other.client.json('GET', '/api/auth/me')).body.user.id as string
+    await ctx().db.insert(assets).values([row('as_mine_photo', workspaceId, me), row('as_theirs_photo', other.workspaceId, otherUser)] as never)
+    const own: ScriptScene[] = [
+      { ...scenes[0], visual: { kind: 'media', assetId: 'as_mine_photo' } },
+      { ...scenes[1], visual: { kind: 'media', assetId: 'as_theirs_photo' } },
+    ]
+    const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes: own, brief: { ...brief, source: 'idea', idea: 'Our photos' } })
+    expect(r.status).toBe(200)
+    const job = (await getJob(r.body.id))!
+    await produceAssemble(inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }))
+    const p = (await load(id)).project
+    const main = p.tracks.find((t) => t.main)!
+    expect(main.items.find((i) => i.type === 'image')).toMatchObject({ assetId: 'as_mine_photo', fit: 'cover' })
+    expect(JSON.stringify(p.tracks)).not.toContain('as_theirs_photo')
+    expect(p.assets.as_theirs_photo).toBeUndefined()
+  })
+
   it('keeps a rename made while it ran', async () => {
     const id = await newProject()
     const a = await assemble(id)

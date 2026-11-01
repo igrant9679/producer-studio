@@ -54,7 +54,7 @@ export default function EditorHome() {
           <QuickCard icon={<FileText size={20} />} title="Transcript-based editing" body="Delete words, remove fillers and pauses." onClick={() => void create({ tab: 'transcript', name: 'Transcript edit' })} lockedTip={gate.tip} {...AMBER} />
           <QuickCard icon={<Type size={20} />} title="Text templates" body="Titles, lower thirds and callouts, animated." onClick={() => void create({ tab: 'text', name: 'Untitled project' })} lockedTip={gate.tip} />
           <QuickCard icon={<Wand2 size={20} />} title="Transitions" body="Crossfades, pushes, zooms and wipes between clips." onClick={() => void create({ tab: 'transitions', name: 'Untitled project' })} lockedTip={gate.tip} {...VIOLET} />
-          <QuickCard icon={<Sparkles size={20} />} title="Producer AI" body="Let AI write, narrate and assemble the first cut." onClick={() => navigate('/producer/new')} lockedTip={gate.tip} {...VIOLET} />
+          <QuickCard icon={<Sparkles size={20} />} title="Producer AI" body="Let AI write, narrate and assemble the first cut — from an idea, your clips and photos, or a recording." onClick={() => navigate('/producer/new')} lockedTip={gate.tip} {...VIOLET} />
         </div>
       </section>
 

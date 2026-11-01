@@ -501,7 +501,7 @@ export interface WriteRequest {
  * script that comes back as a raw validation error after a long wait.
  */
 export const PRODUCE_LIMITS = {
-  /** Recordings one script is written from. */
+  /** Recordings one script is written from (and, for a video made from an idea, your own clips and images). */
   recordings: 20,
   /** Scenes one assembly takes. */
   scenes: 40,

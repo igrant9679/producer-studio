@@ -523,7 +523,8 @@ export type DiagramType = SceneDiagram['type']
 /**
  * What fills the screen during a scene. Absent or `footage`: windows from the uploaded recordings (a title card when
  * there are none). The rest need no recording: animated text, a diagram, an AI still with slow motion, a stock clip,
- * or an AI-generated clip (`assetId` once generated or downloaded, so re-assembling reuses it).
+ * or an AI-generated clip (`assetId` once generated or downloaded, so re-assembling reuses it). `media` is one of the
+ * person's own clips or images from the library (a clip from `start` to `end` seconds, or all of it).
  */
 export type SceneVisual =
   | { kind: 'footage' }
@@ -532,6 +533,7 @@ export type SceneVisual =
   | { kind: 'image'; prompt: string; assetId?: Id }
   | { kind: 'stock'; query: string; assetId?: Id; credit?: { author: string; url: string } }
   | { kind: 'aiVideo'; prompt: string; assetId?: Id }
+  | { kind: 'media'; assetId: Id; start?: number; end?: number }
 
 export type VisualKind = SceneVisual['kind']
 
@@ -566,7 +568,8 @@ export interface ProducerMeta {
     idea?: string
     /** Target length in seconds (source = idea). */
     lengthSec?: number
-    /** Scene visuals the writer may use (source = idea); AI images and clips also need a key that can make them. */
+    /** Scene visuals the writer may use (source = idea); AI images and clips also need a key that can make them. Your
+     * own clips and images (`media`) come with the script request's asset ids, not this list. */
     visualKinds?: VisualKind[]
     /** The space's brand kit the video uses (absent: the default kit). */
     brandKitId?: string
