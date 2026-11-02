@@ -107,19 +107,20 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
           const holdSrc = tm.hold && (reversed || !it.reverse) ? opts.holdFramePath?.(it.id) : undefined
           const hold = holdSrc ? `<img data-ps-hold="${round(tm.hold!.until, 4)}" src="${attr(holdSrc)}" alt="">` : ''
           const timing = `data-start="${round(from, 4)}" data-duration="${round(tm.end - from, 4)}" data-media-start="${round(mediaStart, 4)}" data-track-index="${trackIndex}"${rate ? ` data-automation='${JSON.stringify({ version: 1, lanes: [{ target: 'rate', points: rate }] })}'` : it.speed !== 1 ? ` data-playback-rate="${clampRate(it.speed)}"` : ''}`
-          body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><video id="v-${attr(it.id)}" data-ps-content src="${attr(src)}" ${timing} muted playsinline></video>${hold}</div>`)
+          // a blurred fill comes first: it shares the clip's depth, so the page's order puts it behind (as the preview does)
           if (it.background?.type === 'blur' && track.main) {
             body.push(`<div data-ps-bg="${attr(it.id)}" style="position:absolute;inset:0;display:none;overflow:hidden"><video id="vb-${attr(it.id)}" src="${attr(src)}" ${timing} muted playsinline></video>${hold}</div>`)
           }
+          body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><video id="v-${attr(it.id)}" data-ps-content src="${attr(src)}" ${timing} muted playsinline></video>${hold}</div>`)
           // its sound (none for a reversed clip, as in the preview), widened into the transitions either side;
           // neighbours overlap there, so they alternate tracks
           const span = spans.get(it.id)
           if (span) audio.push(audioTag(p, span, 100 + trackIndex + (ii % 2 ? 1000 : 0), opts.assetPath(it.assetId), solo, opts.pitchShiftPath?.(it.id)))
         }
       } else if (it.type === 'image') {
-        body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><img data-ps-content src="${attr(opts.assetPath(it.assetId))}" alt=""></div>`)
         if (it.background?.type === 'blur' && track.main)
           body.push(`<div data-ps-bg="${attr(it.id)}" style="position:absolute;inset:0;display:none;overflow:hidden"><img src="${attr(opts.assetPath(it.assetId))}" alt=""></div>`)
+        body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><img data-ps-content src="${attr(opts.assetPath(it.assetId))}" alt=""></div>`)
       } else if (it.type === 'text' || it.type === 'shape' || it.type === 'adjustment') {
         body.push(`<div data-ps-layer="${attr(it.id)}" style="position:absolute;display:none"><div data-ps-content></div></div>`)
       }

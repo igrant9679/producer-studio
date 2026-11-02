@@ -101,18 +101,14 @@ export function SpeedTab({ item }: { item: VideoItem | AudioItem }) {
 // ---------- speed ramp ----------
 
 function RampSection({ item, reversed, readOnly }: { item: VideoItem | AudioItem; reversed: boolean; readOnly?: boolean }) {
-  if (reversed) {
-    return (
-      <Section title="Speed ramp">
-        <p className="ed-note">A reversed clip plays at one speed. Turn Reverse off to ramp it.</p>
-      </Section>
-    )
-  }
   const shape = rampShape(item)
   const preset = rampPresetOf(item)
   return (
     <Section title="Speed ramp">
-      <p className="ed-note">Speed up and slow down within the clip. It keeps the same stretch of the recording, so its length changes.</p>
+      <p className="ed-note">
+        Speed up and slow down within the clip. It keeps the same stretch of the recording, so its length changes.
+        {reversed && ' The ramp runs from the clip’s start, as it plays backwards.'}
+      </p>
       <div className="ed-chiprow" role="group" aria-label="Speed ramp presets">
         <button type="button" className={clsx('chip', !shape && 'active')} aria-pressed={!shape} onClick={() => commit((p) => setSpeedRamp(p, item.id, null), 'No speed ramp')}>
           None

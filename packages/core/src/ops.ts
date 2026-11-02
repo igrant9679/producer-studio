@@ -287,11 +287,11 @@ export function pruneEmptyTracks(p: Project) {
   p.tracks = p.tracks.filter((t) => t.main || t.items.length > 0)
 }
 
-function mediaSpan(p: Project, it: Item): { in: number; speed: number; max: number } | null {
+function mediaSpan(p: Project, it: Item): { in: number; max: number } | null {
   if (it.type !== 'video' && it.type !== 'audio') return null
   const asset = p.assets[it.assetId]
   const max = asset?.duration ?? Infinity
-  return { in: it.in, speed: it.speed, max }
+  return { in: it.in, max }
 }
 
 /** A reversed clip plays its source range backwards: its first frame is the end of the range, its last is `in`. */
@@ -329,8 +329,11 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
     if (Number.isFinite(next)) dur = Math.min(dur, Math.max(next, itemEnd(it)) - it.start)
     if (span && isReversed(it)) {
       // the end of a reversed clip is the start of its range: trimming it moves `in`, extending needs source before it
-      dur = Math.min(dur, it.duration + span.in / span.speed)
-      ;(it as VideoItem).in = round(Math.max(0, span.in + (it.duration - dur) * span.speed), 4)
+      // (along a speed ramp too, which stays where it is in the clip)
+      const m = it as VideoItem
+      const played = sourceOffset(m, it.duration)
+      dur = Math.min(dur, localAtOffset(m, played + span.in))
+      m.in = round(Math.max(0, span.in + played - sourceOffset(m, dur)), 4)
     } else if (span && !frozen) dur = Math.min(dur, localAtOffset(it as VideoItem | AudioItem, span.max - span.in))
     it.duration = round(dur, 4)
     syncAverageSpeed(it)
@@ -341,7 +344,8 @@ export function trimItem(p0: Project, itemId: string, edge: 'start' | 'end', t: 
     let start = Math.max(Math.min(prev, it.start), Math.min(t, end - minDur))
     if (span && isReversed(it)) {
       // the start of a reversed clip is the end of its range: `in` stays, extending needs source after the range
-      start = Math.max(start, it.start - (span.max - span.in - it.duration * span.speed) / span.speed)
+      const m = it as VideoItem
+      start = Math.max(start, it.start + localAtOffset(m, sourceOffset(m, it.duration) - (span.max - span.in)))
     } else if (span) {
       // moving the start later advances `in` (along a speed ramp too); earlier needs source headroom
       const m = it as VideoItem | AudioItem
@@ -425,7 +429,7 @@ function cutAt(p: Project, track: Track, index: number, t: number): Item | null 
   if (it.type === 'video' || it.type === 'audio') {
     const r = right as VideoItem | AudioItem
     // a reversed clip shows the later part of its range first, so the left piece takes that part
-    if (isReversed(it)) (it as VideoItem).in = round(it.in + rest * it.speed, 4)
+    if (isReversed(it)) (it as VideoItem).in = round(it.in + sourceOffset(it, local + rest) - sourceOffset(it, local), 4)
     else if (!(it.type === 'video' && it.freezeAt !== undefined)) r.in = round(it.in + sourceOffset(it, local), 4)
     // the right piece's speed ramp carries on from the cut
     if (r.speedRamp) r.speedRamp = shiftRamp(r.speedRamp, -local)

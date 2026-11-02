@@ -605,6 +605,8 @@ export interface FrameLayer {
   objectFit?: 'contain' | 'cover' | 'fill'
   crop?: Crop
   background?: BackgroundFill
+  /** The clip's colour (adjust and look, without its animation's brightness or blur): a blurred fill shows it too. */
+  colourFilter?: string
   /** `full`: the whole text's markup when `html` shows part of it (typewriter); a fit is measured on it. */
   text?: { html: string; style: TextStyle; full?: string }
   shape?: ShapeItem

@@ -5,7 +5,7 @@ import { evaluate, textBoxCss, textInnerHtml } from './evaluate'
 import { GradeLayers, STAGES, snapshotFrame } from './gradeRuntime'
 import { itemEnd, projectDuration } from './ops'
 import { applyKey, keyFilterId, smartWrapCss } from './smartRuntime'
-import { clipLocalAt, clipSourceAt, localAtOffset, smoothSource, speedAt } from './speed'
+import { clipLocalAt, clipSourceAt, localAtOffset, smoothSource, sourceOffset, speedAt } from './speed'
 import { fitScale, scaledTextStyle } from './text'
 import type { FrameLayer, Item, Project, TextStyle, Track, VideoItem } from './types'
 import { cssNumber, safeColor } from './util'
@@ -71,6 +71,15 @@ export function followRate(speed: number, drift: number): number {
 
 const LAYER_BASE = 'position:absolute;transform-origin:50% 50%;will-change:transform,opacity;'
 const MEDIA_FILL = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;display:block'
+
+/** The blurred copy of a clip behind it, in the clip's colour (its grade is drawn under this, by GradeLayers). */
+export function blurFillCss(layer: Pick<FrameLayer, 'background' | 'colourFilter'>): string {
+  const amount = layer.background?.type === 'blur' ? layer.background.amount : 0
+  return `position:absolute;inset:-5%;width:110%;height:110%;object-fit:cover;filter:${layer.colourFilter ? `${layer.colourFilter} ` : ''}blur(${amount}px) brightness(.8);display:block`
+}
+
+/** The grade surface of a clip's blurred fill. */
+const bgGradeId = (itemId: string) => `bg:${itemId}`
 
 export class StageRenderer {
   readonly root: HTMLElement
@@ -286,6 +295,7 @@ export class StageRenderer {
     }
     this.layers.delete(id)
     this.grades.remove(id)
+    this.grades.remove(bgGradeId(id))
   }
 
   private createLayer(layer: FrameLayer): LayerEl {
@@ -370,7 +380,7 @@ export class StageRenderer {
         bg.appendChild(m)
         el.bgMedia = m
       }
-      el.bgMedia.style.cssText = `position:absolute;inset:-5%;width:110%;height:110%;object-fit:cover;filter:blur(${fill.amount}px) brightness(.8);display:block`
+      el.bgMedia.style.cssText = blurFillCss(layer)
       if (this.opts.mode === 'preview' && el.bgMedia instanceof HTMLVideoElement && layer.mediaTime !== undefined) this.syncVideo(el.bgMedia, layer.mediaTime, layer.itemId, true)
     }
   }
@@ -425,6 +435,9 @@ export class StageRenderer {
       // a graded clip shows the grade's canvas in place of the picture: it carries the chroma key too
       const keyed = layer.smart?.key ? `${fill};filter:url(#${keyFilterId(layer.itemId)})` : fill
       this.grades.update(layer.itemId, el.wrap, media, layer, keyed, el.hold && t < el.hold.until ? el.hold.still : undefined)
+      // the blurred fill is the same picture: graded the same, then blurred
+      if (el.bg && el.bgMedia && layer.background?.type === 'blur') this.grades.update(bgGradeId(layer.itemId), el.bg, el.bgMedia, layer, blurFillCss(layer), el.hold && t < el.hold.until ? el.hold.bgStill : undefined)
+      else this.grades.remove(bgGradeId(layer.itemId))
     } else if (layer.text) {
       const st = layer.text.style
       const styleKey = JSON.stringify(st)
@@ -677,13 +690,15 @@ export function exportVideoTiming(p: Project, trackIdx: number, itemIdx: number)
   const pre = it.start - win.start
   const post = win.end - itemEnd(it)
   if (it.reverse) {
-    const span = it.duration * it.speed
+    // source seconds played from the clip's first frame to `local` (a speed ramp too, held past either end)
+    const played = (local: number) => sourceOffset(it, local)
+    const span = played(it.duration)
     // footage before the clip's first frame: the source after its range
     const before = known ? Math.max(0, dur - (it.in + span)) : 0
-    const lead = Math.min(pre, before / it.speed)
+    const lead = Math.min(pre, -localAtOffset(it, -before))
     const from = it.start - lead
-    const out: ExportVideoTiming = { start: win.start, end: win.end, from, mediaStart: 0, reversed: { from: Math.max(0, it.in - post * it.speed), to: it.in + span + lead * it.speed } }
-    if (from - win.start > 1e-3) out.hold = { until: from, at: Math.min(Math.max(0, it.in + span + pre * it.speed), known ? dur : Infinity) }
+    const out: ExportVideoTiming = { start: win.start, end: win.end, from, mediaStart: 0, reversed: { from: Math.max(0, it.in - (played(it.duration + post) - span)), to: it.in + span - played(-lead) } }
+    if (from - win.start > 1e-3) out.hold = { until: from, at: Math.min(Math.max(0, it.in + span - played(-pre)), known ? dur : Infinity) }
     return out
   }
   // footage before the clip's first frame: the source before its in-point (in its smooth copy, when it plays one),

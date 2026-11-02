@@ -14,10 +14,13 @@ type Timed = VideoItem | AudioItem
 
 const timed = (it: Item | undefined): it is Timed => !!it && (it.type === 'video' || it.type === 'audio')
 
-/** The ramp a clip plays at, or null when it plays at its constant `speed`. Freeze frames and reversed clips don't ramp. */
+/**
+ * The ramp a clip plays at, or null when it plays at its constant `speed`. Freeze frames don't ramp. A reversed clip
+ * ramps in its own time too: the speed at each moment of the clip, played backwards through its range.
+ */
 export function rampOf(it: Item): SpeedPoint[] | null {
   if (!timed(it)) return null
-  if (it.type === 'video' && (it.freezeAt !== undefined || it.reverse)) return null
+  if (it.type === 'video' && it.freezeAt !== undefined) return null
   return it.speedRamp && it.speedRamp.length >= 2 ? it.speedRamp : null
 }
 
@@ -118,23 +121,26 @@ export function sourceSpan(it: Timed): number {
   return sourceOffset(it, it.duration)
 }
 
-/** Source time a clip shows `local` seconds into it, also outside it (the frames a transition plays past its edges). */
+/**
+ * Source time a clip shows `local` seconds into it, also outside it (the frames a transition plays past its edges).
+ * A reversed clip starts at the end of its range and plays back towards `in` at the same speeds.
+ */
 export function clipSourceAt(it: Timed, local: number): number {
   if (it.type === 'video' && it.freezeAt !== undefined) return it.freezeAt
-  if (it.type === 'video' && it.reverse) return it.in + (it.duration - local) * it.speed
+  if (it.type === 'video' && it.reverse) return it.in + sourceSpan(it) - sourceOffset(it, local)
   return it.in + sourceOffset(it, local)
 }
 
 /** Seconds into a clip at which it shows source time `src` (freeze frames: never, NaN). */
 export function clipLocalAt(it: Timed, src: number): number {
   if (it.type === 'video' && it.freezeAt !== undefined) return NaN
-  if (it.type === 'video' && it.reverse) return it.duration - (src - it.in) / it.speed
+  if (it.type === 'video' && it.reverse) return localAtOffset(it, it.in + sourceSpan(it) - src)
   return localAtOffset(it, src - it.in)
 }
 
-/** The source range a clip plays: [in, in + span]. */
+/** The source range a clip plays: [in, in + span] (backwards for a reversed clip). */
 export function sourceRange(it: Timed): { start: number; end: number } {
-  return { start: it.in, end: it.in + (it.type === 'video' && it.reverse ? it.duration * it.speed : sourceSpan(it)) }
+  return { start: it.in, end: it.in + sourceSpan(it) }
 }
 
 /** The ramp `by` seconds later in the clip (a trim at the start moves it the other way): the same speed on the same frames. */
@@ -272,7 +278,7 @@ export function setItemSpeed(p0: Project, itemId: string, speed: number): Projec
  */
 export function setSpeedRamp(p0: Project, itemId: string, shape: RampShape | null): Project {
   const it = findItem(p0, itemId)?.item
-  if (!timed(it) || (it.type === 'video' && (it.freezeAt !== undefined || it.reverse))) return p0
+  if (!timed(it) || (it.type === 'video' && it.freezeAt !== undefined)) return p0
   if (!shape) {
     if (!it.speedRamp) return p0
     return retime(p0, itemId, (x, span) => {

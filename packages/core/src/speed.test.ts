@@ -7,6 +7,7 @@ import {
   addItem,
   applyRampPreset,
   applySmoothCopy,
+  clipLocalAt,
   clipSourceAt,
   compileToHyperFrames,
   createAudioItem,
@@ -532,12 +533,117 @@ describe('the export lanes', { timeout: 60_000 }, () => {
     expect(early[1].t).toBeCloseTo(0.5, 6)
   })
 
-  it('a reversed clip or a freeze frame ignores a ramp it still carries', () => {
+  it('a freeze frame ignores a ramp it still carries', () => {
     const { p, id } = oneClip()
-    const q = updateItem<VideoItem>(applyRampPreset(p, id, 'rampUp'), id, { reverse: true })
+    const q = updateItem<VideoItem>(applyRampPreset(p, id, 'rampUp'), id, { freezeAt: 7 })
     expect(rateLane(clip(q, id), 0)).toBeNull()
-    expect(speedAt(clip(q, id), 1)).toBe(clip(q, id).speed)
     expect(applyRampPreset(q, id, 'hero')).toBe(q)
+  })
+})
+
+describe('a reversed clip with a speed ramp', () => {
+  /** The 8 s clip from 5 s, reversed, then ramped up: slow at its start (the range's end), fast at its end. */
+  function reversedRamp() {
+    const { p, id } = oneClip({ reverse: true })
+    return { p: applyRampPreset(p, id, 'rampUp'), id }
+  }
+  /** The source time shown at each timeline moment from a to b (the preview's own mapping). */
+  const shown = (p: Project, id: string, a: number, b: number) => {
+    const out: number[] = []
+    // one clip on screen at a time (a split's pieces have their own ids)
+    for (let t = a; t < b; t += 0.0713) out.push(evaluate(p, t).layers.find((l) => l.type === 'video')!.mediaTime!)
+    void id
+    return out
+  }
+
+  it('keeps its range and plays it backwards at the ramp’s speeds', () => {
+    const { p: fwd } = oneClip()
+    const { p, id } = reversedRamp()
+    const it = clip(p, id)
+    // the same 8 s of the recording, played end to start
+    expect(sourceSpan(it)).toBeCloseTo(8, 3)
+    expect(clipSourceAt(it, 0)).toBeCloseTo(13, 3)
+    expect(clipSourceAt(it, it.duration)).toBeCloseTo(5, 3)
+    // slow at first, fast at the end: the first second covers less of the recording than the last
+    expect(clipSourceAt(it, 0) - clipSourceAt(it, 1)).toBeCloseTo(speedAt(it, 0.5), 0)
+    expect(clipSourceAt(it, 0) - clipSourceAt(it, 1)).toBeLessThan(clipSourceAt(it, it.duration - 1) - clipSourceAt(it, it.duration))
+    expect(speedAt(it, 0)).toBeCloseTo(0.5, 3)
+    // and the mapping goes both ways
+    for (const x of [0.3, 2.2, it.duration - 0.4]) expect(clipLocalAt(it, clipSourceAt(it, x))).toBeCloseTo(x, 4)
+    // a forwards clip ramped the same way covers the same range in the same time
+    const fid = mainTrack(fwd)!.items[0].id
+    expect(clip(applyRampPreset(fwd, fid, 'rampUp'), fid).duration).toBeCloseTo(it.duration, 4)
+  })
+
+  it('a split keeps every frame where it was', () => {
+    const { p, id } = reversedRamp()
+    const end = itemEnd(clip(p, id))
+    const before = shown(p, id, 0, end)
+    const r = splitItem(p, id, 3.1)
+    expect(r.rightId).toBeTruthy()
+    const after = shown(r.project, id, 0, end)
+    after.forEach((s, i) => expect(s, `frame ${i}`).toBeCloseTo(before[i], 3))
+    // the left piece shows the later part of the range, the right piece the earlier part down to `in`
+    expect(clip(r.project, id).in).toBeCloseTo(clipSourceAt(clip(p, id), 3.1), 3)
+    expect(clip(r.project, r.rightId!).in).toBeCloseTo(5, 4)
+  })
+
+  it('trimming either end keeps the frames that stay, and extends only as far as the recording goes', () => {
+    const { p, id } = reversedRamp()
+    const it = clip(p, id)
+    const end = itemEnd(it)
+    // trim the end: the frames before it don't move, `in` advances
+    const te = trimItem(p, id, 'end', end - 1)
+    expect(shown(te, id, 0, end - 1.2)).toEqual(shown(p, id, 0, end - 1.2).map((s) => expect.closeTo(s, 3)))
+    expect(clip(te, id).in).toBeGreaterThan(5)
+    // extend the end as far as it goes: down to the recording's start
+    const ext = trimItem(p, id, 'end', end + 100)
+    expect(clipSourceAt(clip(ext, id), clip(ext, id).duration)).toBeCloseTo(0, 3)
+    // trim the start (the range's end): `in` stays, the later frames keep their places (the main track ripples them)
+    const ts = trimItem(p, id, 'start', 1)
+    const cut = clip(ts, id)
+    expect(cut.in).toBeCloseTo(5, 4)
+    expect(clipSourceAt(cut, 0)).toBeCloseTo(clipSourceAt(it, 1), 3)
+    expect(clipSourceAt(cut, cut.duration)).toBeCloseTo(5, 3)
+    // after another clip, the start back as far as it goes: up to the recording's end (30 s), `in` unchanged
+    // (a long one: at the ramp's first speed, 0.5×, the 17 s left of the recording take 34 s)
+    let two = addAsset(addAsset(createProject(), video('first', 60)), video('rec'))
+    two = addItem(two, createVideoItem(two.assets.first, 0, { duration: 50 }))
+    two = addItem(two, createVideoItem(two.assets.rec, 99, { in: 5, duration: 8, reverse: true }))
+    const second = mainTrack(two)!.items[1].id
+    const back = clip(trimItem(applyRampPreset(two, second, 'rampUp'), second, 'start', -999), second)
+    expect(clipSourceAt(back, 0)).toBeCloseTo(30, 3)
+    expect(back.in).toBeCloseTo(5, 4)
+  })
+
+  it('the export plays the reversed copy with the ramp’s rate lane, on the frames the preview shows', () => {
+    // a clip before it with a crossfade, so the copy also pre-rolls into the transition
+    let p = addAsset(createProject(), video('rec'))
+    p = addItem(p, createVideoItem(p.assets.rec, 0, { in: 20, duration: 3, transitionOut: { type: 'crossfade', duration: 1 } }))
+    p = addItem(p, createVideoItem(p.assets.rec, 3, { in: 5, duration: 8, reverse: true }))
+    const id = mainTrack(p)!.items[1].id
+    p = applyRampPreset(p, id, 'rampUp')
+    const tr = mainTrack(p)!
+    const ti = p.tracks.indexOf(tr)
+    const ii = tr.items.findIndex((x) => x.id === id)
+    const tm = exportVideoTiming(p, ti, ii)
+    expect(tm.reversed).toBeTruthy()
+    const html = compileToHyperFrames(p, { ...opts, reversedPath: (x) => (x === id ? 'reversed.mp4' : undefined) })
+    const tag = tags(html, 'video').find((v) => v.id === id)!
+    expect(tag.src).toBe('reversed.mp4')
+    expect(tag.lane).toBeTruthy()
+    // the copy runs forwards from source `to` down: the frame it shows at t is `to` minus how far it has played
+    let checked = 0
+    for (let t = Math.max(tag.start, tm.from); t < tag.start + tag.duration - 1e-3; t += 0.0237) {
+      const layer = evaluate(p, t).layers.find((l) => l.itemId === id)
+      if (!layer) continue
+      expect(Math.abs(tm.reversed!.to - exportTime(tag, t) - layer.mediaTime!), `frame at ${t.toFixed(3)}`).toBeLessThan(2e-3)
+      checked++
+    }
+    expect(checked).toBeGreaterThan(100)
+    // the copy covers everything it plays, the pre-roll included
+    expect(tm.reversed!.to - exportTime(tag, tag.start)).toBeLessThanOrEqual(tm.reversed!.to + 1e-6)
+    expect(tm.reversed!.to - exportTime(tag, tag.start + tag.duration)).toBeGreaterThanOrEqual(tm.reversed!.from - 2e-3)
   })
 
   it('constant speed still plays as a playback rate', () => {

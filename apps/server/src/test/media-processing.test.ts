@@ -232,6 +232,15 @@ describe('iPhone HDR footage (PIP-13)', () => {
     })
   }
 
+  it('a reversed copy of a range a hair over whole chunks is just that range', async () => {
+    // 6 s; the copy of 1..3.00003 s (two 2 s chunks and a sliver) used to start with 3..6 s, the sliver read as -t 0
+    const clip = await make('six.mp4', ['-f', 'lavfi', '-i', 'testsrc2=s=160x90:r=30:d=6', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p'])
+    const rev = path.join(dir, 'rev-sliver.mp4')
+    await reverseRange(clip, rev, { from: 1, to: 3.00003 }, { fps: 30 })
+    const v = (await streamsOf(rev)).find((s) => s.codec_type === 'video') as { duration?: string } | undefined
+    expect(Number(v?.duration)).toBeCloseTo(2, 1)
+  })
+
   it('SDR footage is left as it is', async () => {
     const clip = await make('sdr.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=1', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p'])
     expect(await sdrStillArgs(clip)).toEqual([])

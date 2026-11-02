@@ -284,8 +284,9 @@ describe('export renderer', () => {
     document.body.innerHTML = html.slice(html.indexOf('<div id="root"'), html.indexOf('<script>\n(function'))
     const stage = document.getElementById('stage')!
     const renderer = new StageRenderer(stage, p, { mode: 'export', resolveUrl: (id) => `assets/${id}.mp4` })
-    const holds = [...stage.querySelectorAll<HTMLImageElement>('[data-ps-hold]')]
-    expect(holds.map((h) => h.closest('[data-ps-layer],[data-ps-bg]')!.getAttribute('data-ps-layer') ?? 'bg')).toEqual([b, 'bg'])
+    // the clip's held still, and its blurred fill's (which comes first on the page, behind the clip)
+    const holds = [`[data-ps-layer="${b}"] [data-ps-hold]`, `[data-ps-bg="${b}"] [data-ps-hold]`].map((q) => stage.querySelector<HTMLImageElement>(q)!)
+    expect(stage.querySelectorAll('[data-ps-hold]')[0]).toBe(holds[1])
     const shown = () => holds.map((h) => h.style.display)
     renderer.render(9.7)
     expect(shown()).toEqual(['block', 'block'])

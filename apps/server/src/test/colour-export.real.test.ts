@@ -10,7 +10,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { addAsset, addItem, createProject, createVideoItem, type Project } from '@producer/core'
+import { addAsset, addItem, createProject, createVideoItem, type Project, type VideoItem } from '@producer/core'
 import { eq } from 'drizzle-orm'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { ctx } from '../context'
@@ -102,14 +102,14 @@ beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-colour-'))
 }, 300_000)
 
-async function exportOf(file: string, name: string, size: { w: number; h: number }) {
+async function exportOf(file: string, name: string, size: { w: number; h: number }, over: Partial<VideoItem> = {}) {
   const created = await createAssetFromFile({ workspaceId, userId, filePath: file, name, mime: 'video/mp4', kind: 'video', origin: 'upload' })
   const row = await processAsset(created.id, inlineContext({ id: 'c', kind: 'asset.process', workspaceId, userId, projectId: null, input: {} }))
   const r = await client.json('POST', '/api/projects', { workspaceId, name: `Colour ${name}`, width: size.w, height: size.h })
   let p = r.body.project as Project
   const a = assetDoc(row)
   p = addAsset(p, a)
-  p = addItem(p, createVideoItem(a, 0, { duration: 2 }))
+  p = addItem(p, createVideoItem(a, 0, { duration: 2, ...over }))
   await client.json('PUT', `/api/projects/${r.body.project.id}`, { project: p, baseVersion: r.body.version })
   const job = await enqueue('export.render', { projectId: r.body.project.id, resolution: '720p', fps: 30, quality: 'standard', format: 'mp4' }, { workspaceId, userId, projectId: r.body.project.id })
   const result = await exportRender(inlineContext(await claimJob(job.id)))
@@ -164,5 +164,27 @@ describe.skipIf(!REAL)('the preview and a real export show the same colours', ()
       was += diff(preview, before)
     }
     expect(after).toBeLessThan(was)
+  }, 1_500_000)
+
+  it('a portrait clip’s blurred fill is graded like the clip', async () => {
+    // a green portrait clip in a landscape frame: the sides show its blurred copy
+    const file = path.join(dir, 'portrait-green.mp4')
+    await ffmpeg(['-f', 'lavfi', '-i', 'color=c=0x20c040:s=360x640:r=30', '-t', '3', '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', file])
+    const background = { type: 'blur' as const, amount: 20 }
+    const plain = await exportOf(file, 'portrait.mp4', { w: 1280, h: 720 }, { background })
+    // curves that invert every channel: the green becomes a magenta, in the clip and in its fill
+    const graded = await exportOf(file, 'portrait-graded.mp4', { w: 1280, h: 720 }, { background, grade: { curves: { master: [[0, 1], [1, 0]] } } })
+    const side = { x: 120, y: 360 }
+    const middle = { x: 640, y: 360 }
+    const px = { plainSide: await playerPixel(plain.file, 1, side.x, side.y), plainMiddle: await playerPixel(plain.file, 1, middle.x, middle.y), gradedSide: await playerPixel(graded.file, 1, side.x, side.y), gradedMiddle: await playerPixel(graded.file, 1, middle.x, middle.y) }
+    console.log(JSON.stringify({ test: 'blurred fill', ...px }))
+    // the plain fill is the clip's green, darkened; the clip itself is in front of it, at full strength
+    expect(px.plainSide[1]).toBeGreaterThan(px.plainSide[0] + 60)
+    expect(px.plainMiddle[1]).toBeGreaterThan(px.plainSide[1] + 20)
+    // graded: the clip is inverted, and so is its fill (more red and blue than green), darkened as before
+    expect(px.gradedMiddle[0]).toBeGreaterThan(px.gradedMiddle[1] + 80)
+    expect(px.gradedSide[0]).toBeGreaterThan(px.gradedSide[1] + 60)
+    expect(px.gradedSide[2]).toBeGreaterThan(px.gradedSide[1] + 60)
+    expect(px.gradedSide[0]).toBeLessThan(px.gradedMiddle[0])
   }, 1_500_000)
 })

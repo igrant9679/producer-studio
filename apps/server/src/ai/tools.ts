@@ -353,7 +353,7 @@ export async function runTool(s: ToolState, name: string, rawInput: unknown, env
       let next = Object.keys(patch).length ? updateItem(p, it.id, patch as Partial<Item>) : p
       if (speed !== undefined) next = setItemSpeed(next, it.id, speed)
       if (ramp !== undefined) {
-        if (it.type === 'video' && (it.freezeAt !== undefined || it.reverse)) throw new ToolError('Frozen or reversed clips can’t take a speed ramp')
+        if (it.type === 'video' && it.freezeAt !== undefined) throw new ToolError('A freeze frame can’t take a speed ramp')
         const ramped = ramp === 'none' ? setSpeedRamp(next, it.id, null) : applyRampPreset(next, it.id, ramp as (typeof RAMP_PRESETS)[number]['id'])
         if (ramp === 'none' && ramped === next && bits.length === 1) throw new ToolError('That item has no speed ramp')
         next = ramped

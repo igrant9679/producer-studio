@@ -281,6 +281,8 @@ class GradeGL {
 }
 
 interface Surface {
+  /** The layer's id, or `bg:<id>` for its blurred fill. */
+  id: string
   canvas: HTMLCanvasElement
   ctx: CanvasRenderingContext2D | null
   wrap: HTMLElement
@@ -310,7 +312,8 @@ export class GradeLayers {
     // export: HyperFrames puts each video frame into the page as an <img> beside its <video> after the timeline has
     // been seeked, then takes the screenshot: grade again when it arrives (a capture listener sees every load)
     this.onLoad = (e) => {
-      const id = (e.target as HTMLElement | null)?.closest?.('[data-ps-layer]')?.getAttribute('data-ps-layer')
+      const at = (e.target as HTMLElement | null)?.closest?.('[data-ps-layer],[data-ps-bg]')
+      const id = at?.getAttribute('data-ps-layer') ?? (at?.hasAttribute('data-ps-bg') ? `bg:${at.getAttribute('data-ps-bg')}` : undefined)
       const s = id ? this.surfaces.get(id) : undefined
       if (s) this.draw(s, true)
     }
@@ -325,7 +328,8 @@ export class GradeLayers {
 
   /**
    * Called for every drawn video or image layer: grade it (over `content`, styled `fill`), or put the plain picture
-   * back. `still` is the frame an export shows before the clip's file starts, when it is showing.
+   * back. `still` is the frame an export shows before the clip's file starts, when it is showing. A blurred fill
+   * behind a clip is graded as `bg:<id>`, inside its own element.
    */
   update(id: string, wrap: HTMLElement, content: HTMLElement, layer: FrameLayer, fill: string, still?: HTMLImageElement) {
     let s = this.surfaces.get(id)
@@ -343,7 +347,7 @@ export class GradeLayers {
     if (!s) {
       const canvas = document.createElement('canvas')
       canvas.dataset.psGrade = '1'
-      s = { canvas, ctx: null, wrap, content, stages }
+      s = { id, canvas, ctx: null, wrap, content, stages }
       this.surfaces.set(id, s)
     }
     s.content = content
@@ -362,7 +366,7 @@ export class GradeLayers {
     if (s.listening === s.content) return
     s.listening = s.content
     // a seek or a load finishes after the frame was asked for: grade the frame that arrived
-    for (const ev of ['seeked', 'loadeddata', 'load']) s.content.addEventListener(ev, () => this.surfaces.get(s.layer?.itemId ?? '') === s && this.draw(s, true))
+    for (const ev of ['seeked', 'loadeddata', 'load']) s.content.addEventListener(ev, () => this.surfaces.get(s.id) === s && this.draw(s, true))
   }
 
   private hide(s: Surface, keepLayer = false) {

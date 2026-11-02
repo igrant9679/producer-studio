@@ -73,6 +73,16 @@ describe('speed ramps in the Speed tab (E-17)', () => {
     expect(clip().duration).toBe(8)
   })
 
+  it('a reversed clip ramps too, along the same stretch played backwards', () => {
+    const p = project()
+    open({ ...p, tracks: p.tracks.map((t) => ({ ...t, items: t.items.map((i) => (i.id === 'va' ? { ...i, reverse: true } : i)) })) })
+    expect(screen.getByText(/The ramp runs from the clip’s start, as it plays backwards/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Ramp up' }))
+    expect(rampOf(clip())).toBeTruthy()
+    expect(clip().reverse).toBe(true)
+    expect(sourceSpan(clip())).toBeCloseTo(8, 3)
+  })
+
   it('the curve takes the keyboard: speeds up and down, points added and removed', () => {
     open()
     fireEvent.click(screen.getByRole('button', { name: 'Ramp up' }))

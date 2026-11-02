@@ -103,6 +103,9 @@ export async function reverseRange(src: string, out: string, range: { from: numb
       const start = range.from + i * chunk
       const part = path.join(parts, `${n - 1 - i}.mp4`)
       const t = Math.min(chunk, range.from + len - start)
+      // a sliver under half a frame (a range a hair over whole chunks) is no frame at all; written as -t 0, ffmpeg
+      // would take it as "to the end of the file" and put the rest of the recording at the copy's start
+      if (round3(t) < 0.5 / fps) continue
       await ffmpeg(['-ss', String(round3(start)), '-t', String(round3(t)), '-i', src, '-vf', vf, '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', part], { signal: opts.signal })
       list.push(`file '${part.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`)
     }

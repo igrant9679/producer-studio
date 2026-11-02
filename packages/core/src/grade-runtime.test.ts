@@ -186,6 +186,49 @@ describe('colour grades in the renderer (E-20)', () => {
     r.destroy()
   })
 
+  it('the blurred fill behind a clip is graded and coloured like the clip, in the preview and the export', () => {
+    const { p: p0, id } = project(GRADE)
+    const it0 = mainTrack(p0)!.items[0] as VideoItem
+    const p = updateItem<VideoItem>(p0, id, { background: { type: 'blur', amount: 20 }, adjust: { ...it0.adjust, saturation: -50 } })
+    const { root, r } = previewOf(p)
+    r.render(0.5)
+    const bg = root.querySelector(`[data-ps-bg="${id}"]`)!
+    const bgVideo = ready(bg.querySelector('video')!)
+    bgVideo.dispatchEvent(new Event('loadeddata'))
+    const canvas = bg.querySelector('canvas[data-ps-grade]') as HTMLCanvasElement & Px
+    expect(canvas.style.display).toBe('block')
+    expect(bgVideo.style.opacity).toBe('0')
+    expect([...canvas.__px!]).toEqual(expected(p, updateGradeOf(p, id)))
+    // blurred and darkened as before, in the clip's colour, laid out like the fill
+    expect(canvas.style.filter).toMatch(/saturate\([\d.]+\).*blur\(20px\) brightness\(0?\.8\)/)
+    expect(bgVideo.style.filter).toBe(canvas.style.filter)
+    expect(canvas.style.objectFit).toBe('cover')
+    // a colour fill instead: the grade canvas goes with the blurred copy
+    r.setProject(updateItem<VideoItem>(p, id, { background: { type: 'color', color: '#112233' } }))
+    r.render(0.6)
+    expect(bg.querySelector('canvas[data-ps-grade]')).toBeNull()
+    r.destroy()
+
+    // export: HyperFrames' frame for the fill's own <video> is graded in the fill
+    const html = compileToHyperFrames(p, { assetPath: (a) => `assets/${a}.mp4`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '' })
+    document.body.innerHTML = html.slice(html.indexOf('<div id="root"'), html.indexOf('<script>\n(function'))
+    const stage = document.getElementById('stage')!
+    const ex = new StageRenderer(stage, p, { mode: 'export', resolveUrl: (a) => `assets/${a}.mp4` })
+    ex.render(0.5)
+    const exBg = stage.querySelector(`[data-ps-bg="${id}"]`)!
+    // the fill shares the clip's depth, so it must come first on the page to sit behind it (it hid the clip before)
+    expect(exBg.compareDocumentPosition(stage.querySelector(`[data-ps-layer="${id}"]`)!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const frame = ready(document.createElement('img'))
+    frame.className = '__render_frame__'
+    frame.style.visibility = 'visible'
+    exBg.querySelector('video')!.after(frame)
+    frame.dispatchEvent(new Event('load'))
+    const exCanvas = exBg.querySelector('canvas[data-ps-grade]') as HTMLCanvasElement & Px
+    expect(exCanvas.style.display).toBe('block')
+    expect([...exCanvas.__px!]).toEqual(expected(p, updateGradeOf(p, id)))
+    ex.destroy()
+  })
+
   it('a media host that refuses to share pixels leaves the clip ungraded in the preview, after one CORS retry', () => {
     const { p } = project({ curves: { master: [[0, 1], [1, 0]] } })
     const { root, r } = previewOf(p)

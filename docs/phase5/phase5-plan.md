@@ -95,8 +95,11 @@ and builds only the rest.
   panel, the Share-for-review dialog and the Activity page; Menu closing on Tab.
 - Left as decided by the groups: LUTs stored in the project document (~144 KB each); smooth slow-motion copies are
   visible library items; journals stay in the browser after sign-out; downloads-off links still stream.
-- Not graded yet: the blurred letterbox fill; text/shapes under an adjustment layer get its CSS colour but not its
-  curves/HSL/LUT; reversed clips ignore ramps.
+- Not graded yet: ~~the blurred letterbox fill~~ (done 1 Nov 2026, and the export no longer covers the clip with
+  it); text/shapes under an adjustment layer get its CSS colour but not its
+  curves/HSL/LUT (still open: the browser can't read live text's pixels, so only curves could be approximated, with
+  an SVG filter); ~~reversed clips ignore ramps~~ (done 1 Nov 2026; the export's reversed copy also lost stray frames
+  of the rest of the recording at its start whenever its range was a hair over whole 2 s chunks).
 - Owner: S3 bucket CORS (GET from producerstudio.app) for graded previews of cloud media; BG_REMOVAL_CMD for background
   removal; DENOISE_MODEL optional; production ffmpeg's libvidstab / libvpx-vp9 decide which clean-up tools show.
 

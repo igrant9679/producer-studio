@@ -357,9 +357,11 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
   }
 
   let filter = ''
+  let colourFilter = ''
   if (it.type === 'video' || it.type === 'image') {
     const f = adjustToFilter(it.adjust, it.filter?.id, it.filter?.intensity ?? 100)
     filter = f.filter
+    colourFilter = f.filter.trim()
     if (f.vignette > 0) overlays.push(`radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,${(f.vignette / 100).toFixed(2)}) 100%)`)
   }
   if (m.brightness !== 1) filter += ` brightness(${m.brightness.toFixed(3)})`
@@ -403,11 +405,13 @@ function visualLayer(p: Project, track: Track, a: Active, z: number, t: number):
     layer.objectFit = 'fill'
     layer.crop = it.crop
     layer.background = track.main ? it.background : undefined
+    if (layer.background?.type === 'blur' && colourFilter) layer.colourFilter = colourFilter
   } else if (it.type === 'image') {
     layer.assetId = it.assetId
     layer.objectFit = 'fill'
     layer.crop = it.crop
     layer.background = track.main ? it.background : undefined
+    if (layer.background?.type === 'blur' && colourFilter) layer.colourFilter = colourFilter
   } else if (it.type === 'text') {
     layer.text = { html: textHtml(it, m.textReveal), style: it.style }
     // shrink to fit: the box has the fit's height, and a typewriter's size is measured on the whole text

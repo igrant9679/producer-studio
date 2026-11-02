@@ -51,7 +51,11 @@ packages/core Shared project model, pure editing ops, evaluate() frame evaluator
   listens for `load` (capture) on its stage and grades that frame before the screenshot. Adjustment layers
   (`type: 'adjustment'` on an overlay track) draw a full-canvas element with `backdrop-filter` (their basic colour,
   filter and colour effects reach everything beneath, text included) and add their curves/HSL/LUT to every clip
-  and image beneath (`spreadAdjustments`). The blurred letterbox fill behind a main-track clip is not graded.
+  and image beneath (`spreadAdjustments`). The blurred letterbox fill behind a main-track clip is graded too (its
+  own surface, `bg:<id>`, in the fill's element) and takes the clip's colour (`FrameLayer.colourFilter`) before
+  its blur. In the export the fill's element comes before the clip's on the page: they share a z-index, and until
+  1 Nov 2026 the fill came after and covered the clip in every export (a real render in
+  `colour-export.real.test.ts` checks both).
   Verified 28 Oct 2026 with a real 1 s, 320×180 HyperFrames render (curves + HSL + LUT on colour bars, then an
   adjustment layer at saturation -100): every bar came out within 6 levels of `gradePixel` (an ungraded render
   shows the same few levels of encoder offset), and the adjustment layer's half was grey.
@@ -187,7 +191,8 @@ One mapping from a clip's time to its source time, read by everything: `evaluate
 (a HyperFrames rate lane in `data-automation` on the clip's `<video>` and `<audio>` elements for a speed ramp,
 `data-playback-rate` for a constant speed), trims, splits, J/L cuts, linked sound, freeze frames, the transcript,
 captions, beat markers and replace. A ramp is `speedRamp` points (speed at seconds from the clip's start, log-scale
-between, held outside), presets in `RAMP_PRESETS`. `pitchShift` lets a clip's pitch follow its speed: the preview
+between, held outside), presets in `RAMP_PRESETS`. A reversed clip ramps too: it shows `in + span − offset(local)`,
+and the export plays its reversed copy (made from the range, then run forwards) through the same rate lane. `pitchShift` lets a clip's pitch follow its speed: the preview
 turns the player's `preservesPitch` off, and the export plays a copy resampled to the clip's speed that
 `render/pitch.ts` makes before the render (HyperFrames' own rate keeps the pitch). `smooth` points the clip's picture
 at a `media.smooth` copy (time 0 = source `from`) while it covers what the clip plays; the sound stays the source's.
