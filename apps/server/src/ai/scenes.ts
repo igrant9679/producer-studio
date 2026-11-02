@@ -1,15 +1,24 @@
 // Videos made from an idea (no recordings): the script writer's scene format, and how each scene's visual becomes
-// timeline items. Motion text and diagrams are built from the editor's own text and shape items (editable, on brand,
-// identical in preview and export); AI stills, stock clips and AI clips arrive as assets (ai/generate); the person's own
-// clips and images (`media`) are library assets already.
+// timeline items. Motion text, diagrams and animations are built from the editor's own text, shape and image items
+// (editable, on brand, identical in preview and export); AI stills, stock clips and photos, AI clips and the animations'
+// illustrations arrive as assets (ai/generate); the person's own clips and images (`media`) are library assets already.
 import * as z from 'zod/v4'
-import type { DiagramType, SceneDiagram, SceneVisual, ScriptScene, VisualKind } from '@producer/core'
+import type { AnimationStyle, DiagramType, SceneDiagram, SceneVisual, ScriptScene, VisualKind } from '@producer/core'
 import { HttpError } from '../http'
 
-export const VISUAL_KINDS: VisualKind[] = ['motion', 'diagram', 'image', 'stock', 'aiVideo']
+export const VISUAL_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'image', 'photo', 'stock', 'aiVideo']
+export const ANIMATION_STYLES: AnimationStyle[] = ['row', 'journey', 'orbit', 'grow', 'burst', 'change']
 export const DIAGRAM_TYPES: DiagramType[] = ['steps', 'cycle', 'hub', 'bars', 'compare', 'timeline', 'stat']
 
 const short = (max: number) => z.string().trim().max(max)
+
+// shown as a link in the app: https only (a javascript: URL is a "valid URL" too)
+const CreditSchema = z.object({
+  author: short(120),
+  url: z.string().max(400).regex(/^https:\/\/[^\s"'<>]+$/, 'must be an https link'),
+  source: short(40).optional(),
+  licence: short(40).optional(),
+})
 
 /** A scene visual as the API accepts it (assemble requests, edits in the review step). */
 export const VisualSchema: z.ZodType<SceneVisual> = z.union([
@@ -32,12 +41,15 @@ export const VisualSchema: z.ZodType<SceneVisual> = z.union([
     ]),
   }),
   z.object({ kind: z.literal('image'), prompt: short(1000), assetId: z.string().max(80).optional() }),
+  z.object({ kind: z.literal('stock'), query: short(120), assetId: z.string().max(80).optional(), credit: CreditSchema.optional() }),
+  z.object({ kind: z.literal('photo'), query: short(120), assetId: z.string().max(80).optional(), credit: CreditSchema.optional() }),
   z.object({
-    kind: z.literal('stock'),
-    query: short(120),
-    assetId: z.string().max(80).optional(),
-    // shown as a link in the app: https only (a javascript: URL is a "valid URL" too)
-    credit: z.object({ author: short(120), url: z.string().max(400).regex(/^https:\/\/[^\s"'<>]+$/, 'must be an https link') }).optional(),
+    kind: z.literal('animation'),
+    style: z.enum(ANIMATION_STYLES as [AnimationStyle, ...AnimationStyle[]]),
+    objects: z
+      .array(z.object({ name: short(40).min(1), label: short(60).optional(), assetId: z.string().max(80).optional(), icon: z.string().max(80).regex(/^[a-z0-9-]+:[a-z0-9-]+$/).optional() }))
+      .min(1)
+      .max(5),
   }),
   z.object({ kind: z.literal('aiVideo'), prompt: short(1000), assetId: z.string().max(80).optional() }),
   z.object({ kind: z.literal('media'), assetId: z.string().min(1).max(80), start: z.number().finite().min(0).optional(), end: z.number().finite().min(0).optional() }),
@@ -56,7 +68,7 @@ export const IdeaScriptSchema = z.object({
       headline: z.string().describe('3-6 word on-screen headline (2-4 for vertical)'),
       narration: z.string().describe('Exactly what the narrator says, written as spoken'),
       visual: z.object({
-        kind: z.enum(['motion', 'diagram', 'image', 'stock', 'aiVideo', 'media']).describe('What fills the screen for this scene'),
+        kind: z.enum(['motion', 'diagram', 'animation', 'image', 'photo', 'stock', 'aiVideo', 'media']).describe('What fills the screen for this scene'),
         points: z.array(z.string()).describe('motion: 2-4 short on-screen points revealed in order (else empty)'),
         diagramType: z.enum(['none', 'steps', 'cycle', 'hub', 'bars', 'compare', 'timeline', 'stat']).describe('diagram: which diagram (else none)'),
         items: z.array(z.string()).describe('diagram steps/cycle/hub/timeline/bars: the labels in order, 2-6, each 1-4 words (else empty)'),
@@ -69,7 +81,10 @@ export const IdeaScriptSchema = z.object({
         rightTitle: z.string().describe('diagram compare: right column title (else empty)'),
         rightPoints: z.array(z.string()).describe('diagram compare: right column points, 1-4 (else empty)'),
         prompt: z.string().describe('image / aiVideo: a vivid visual description of the shot, no text or logos in it (else empty)'),
-        query: z.string().describe('stock: 2-5 word stock-footage search, concrete and visual (else empty)'),
+        query: z.string().describe('stock / photo: 2-5 word search, concrete and visual (else empty)'),
+        animStyle: z.enum(['none', 'row', 'journey', 'orbit', 'grow', 'burst', 'change']).describe('animation: how the illustrations move (else none)'),
+        objects: z.array(z.string()).describe('animation: 1-5 things to illustrate, each 1-2 plain words naming an everyday object, animal, person or symbol, e.g. rocket, money bag, laptop, globe (else empty)'),
+        labels: z.array(z.string()).describe('animation: a 1-3 word caption per object, same order, or empty strings (else empty)'),
         mediaId: z.string().describe('media: which of YOUR MEDIA to show, e.g. m2 (else empty)'),
       }),
     }),
@@ -78,7 +93,7 @@ export const IdeaScriptSchema = z.object({
 export type IdeaScriptOutput = z.infer<typeof IdeaScriptSchema>
 
 export const IDEA_SYSTEM =
-  'You are the script writer and director for Producer, which turns an idea into a short narrated, branded video. You write warm, plain, spoken narration with one idea per scene, and for each scene you choose the visual that explains it best: the person’s own clips and images when they added some, animated text, a clear diagram, a generated image, stock footage or a generated video clip.'
+  'You are the script writer and director for Producer, which turns an idea into a short narrated, branded video. You write warm, plain, spoken narration with one idea per scene, and for each scene you choose the visual that explains it best: the person’s own clips and images when they added some, animated text, a clear diagram, an animation of illustrations, a stock photo or clip, a generated image or a generated video clip.'
 
 const KIND_GUIDE: Record<VisualKind, string> = {
   footage: '',
@@ -86,7 +101,10 @@ const KIND_GUIDE: Record<VisualKind, string> = {
   diagram:
     '- diagram: an animated diagram whose parts appear as the narration names them. Types: steps (a process, 2-6 steps), cycle (a repeating loop, 3-6), hub (one idea and its 2-6 parts), bars (2-6 values to compare, real numbers only), compare (two columns: before/after, us/them), timeline (2-6 dated or ordered events), stat (one big number and what it means). Use the exact labels the narration says.',
   image: '- image: a generated still image with a slow pan and zoom. Write a vivid, specific shot description (subject, setting, light, style). No words, logos or UI in the image.',
-  stock: '- stock: real stock video footage. Give a short, concrete search such as "team meeting whiteboard" or "city traffic night".',
+  animation:
+    '- animation: colourful illustrations (emoji-style art of everyday things) that move as the narration names them. Name 1-5 objects in plain words (rocket, money bag, laptop, house, globe, clock, person, light bulb) and pick a style: row (they pop in one by one: a list of things), journey (the first travels past the others: a process, a delivery, a customer journey), orbit (the rest circle the first: one thing and what surrounds it), grow (each bigger than the last: growth, scale), burst (copies of the rest fly out of the first: one cause, many results), change (the first turns into the second: before and after). Great for explaining ideas with no footage; use it often.',
+  photo: '- photo: a real stock photograph with a slow pan and zoom. Give a short, concrete search such as "farmer in wheat field" or "doctor with patient".',
+  stock: '- stock: real stock video footage. Give a short, concrete search such as "team meeting whiteboard" or "city traffic night"; keep it to common, filmable subjects.',
   aiVideo: '- aiVideo: a generated video clip (expensive, use for at most 2 scenes where real motion matters). Describe one continuous shot: subject, action, camera move, setting, light. No words or logos.',
   media: '- media: one of the clips or images under YOUR MEDIA, filling the screen (images get a slow pan and zoom). Set mediaId to its m-number.',
 }
@@ -168,7 +186,15 @@ export function toSceneVisual(v: IdeaScriptOutput['scenes'][number]['visual'], a
     case 'aiVideo':
       return clean(v.prompt, 1000) ? { kind: 'aiVideo', prompt: clean(v.prompt, 1000) } : motion()
     case 'stock':
-      return clean(v.query, 120) ? { kind: 'stock', query: clean(v.query, 120) } : motion()
+    case 'photo':
+      return clean(v.query, 120) ? { kind: v.kind, query: clean(v.query, 120) } : motion()
+    case 'animation': {
+      const names = list(v.objects, 5, 40)
+      if (!names.length) return motion()
+      const labels = v.labels ?? []
+      const style = v.animStyle && v.animStyle !== 'none' ? v.animStyle : 'row'
+      return { kind: 'animation', style, objects: names.map((name, i) => ({ name, ...(clean(labels[i], 60) ? { label: clean(labels[i], 60) } : {}) })) }
+    }
     case 'media': {
       const ref = clean(v.mediaId, 12).toLowerCase()
       const m = media.find((x) => x.ref === ref || x.assetId === clean(v.mediaId, 80))

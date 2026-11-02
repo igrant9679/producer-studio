@@ -149,7 +149,7 @@ describe('clips with no sound (PIP-1)', () => {
       runAgent: async () => ({ text: '' }),
       structured: async (req: { prompt: string; images: Array<{ label: string; data: string }> }) => {
         seen.push(req)
-        const blank = { points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '' }
+        const blank = { points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '', animStyle: 'none', objects: [], labels: [] }
         return {
           message: 'A good trip',
           scenes: [

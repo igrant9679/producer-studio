@@ -212,7 +212,9 @@ export async function generationCapabilities(workspaceId: string): Promise<GenCa
   const loaded = { doc: await loadDoc(scope), meta: await keyMeta(scope) }
   const image = await pickKey(workspaceId, 'image', loaded)
   const video = await pickKey(workspaceId, 'video', loaded)
-  const out: GenCapabilities = { stock: Boolean(ctx().config.pexelsApiKey) }
+  const { SOURCE_NAMES, stockSources } = await import('./stock')
+  const names = (m: 'video' | 'photo') => stockSources(m).map((s) => SOURCE_NAMES[s])
+  const out: GenCapabilities = { stock: stockSources('video').length + stockSources('photo').length > 0, stockSources: { video: names('video'), photo: names('photo') } }
   if (!(image instanceof HttpError)) out.image = { provider: image.provider, model: liveModels(image, 'image', candidates(image.provider, 'image'))[0].id }
   if (!(video instanceof HttpError)) {
     const m = liveModels(video, 'video', GEMINI_VIDEO_MODELS)[0]

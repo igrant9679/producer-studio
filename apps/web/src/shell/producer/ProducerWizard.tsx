@@ -1,4 +1,4 @@
-import { PRODUCE_LIMITS, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { PRODUCE_LIMITS, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -35,7 +35,7 @@ import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } f
 import { sysFetch, useIsDesktop, useSystem } from '../system'
 import { Modal, Popover, Progress, RadioCards, Spinner, Thumb, useAsync, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes, formatDuration, formatTime, ssGet } from '../util'
-import { DIAGRAM_INFO, VISUAL_KIND_INFO, defaultVisual, diagramFromText, diagramToText, withPrompt } from './sceneVisuals'
+import { ANIMATION_INFO, DIAGRAM_INFO, VISUAL_KIND_INFO, defaultVisual, diagramFromText, diagramToText, objectsFromText, objectsToText, withPrompt } from './sceneVisuals'
 import { handoffSource, takeProducerHandoff } from './handoff'
 import {
   briefTitleFromPrompt,
@@ -305,19 +305,24 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
   )
 }
 
-const ALL_KINDS: Array<Exclude<VisualKind, 'footage'>> = ['motion', 'diagram', 'image', 'stock', 'aiVideo']
-const DEFAULT_KINDS: VisualKind[] = ['motion', 'diagram', 'image', 'stock']
+const ALL_KINDS: Array<Exclude<VisualKind, 'footage'>> = ['motion', 'diagram', 'animation', 'photo', 'stock', 'image', 'aiVideo']
+const DEFAULT_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'photo', 'stock', 'image']
+
+/** "Pexels, Wikimedia Commons" → "from Pexels or Wikimedia Commons". */
+const fromLibraries = (names: string[] | undefined) => (names?.length ? ` (free, from ${names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names[0]})` : '')
 
 /** What this space can make, and why not when it can't. */
 function kindStatus(k: Exclude<VisualKind, 'footage'>, caps: ProduceCapabilities | undefined): { available: boolean; note: string } {
   if (k === 'motion' || k === 'diagram') return { available: true, note: VISUAL_KIND_INFO[k].hint }
+  if (k === 'animation') return caps?.kinds && !caps.kinds.includes('animation') ? { available: false, note: 'Illustrations are turned off on this server' } : { available: true, note: `${VISUAL_KIND_INFO.animation.hint} (free, open-source art)` }
+  if (k === 'photo') return caps?.stockSources?.photo.length ? { available: true, note: `${VISUAL_KIND_INFO.photo.hint}${fromLibraries(caps.stockSources.photo)}.` } : { available: false, note: 'Stock photos aren’t set up on this server yet' }
   const who = (p: 'openai' | 'gemini') => (p === 'openai' ? 'your OpenAI account' : 'your Google account')
   if (k === 'image') return caps?.image ? { available: true, note: `${VISUAL_KIND_INFO.image.hint}. Billed to ${who(caps.image.provider)}.` } : { available: false, note: 'Needs an OpenAI or Gemini key in Settings → AI' }
   if (k === 'aiVideo')
     return caps?.video
       ? { available: true, note: `${VISUAL_KIND_INFO.aiVideo.hint}. Billed to ${who(caps.video.provider)}, at most ${caps.maxAiClips} clips per video.` }
       : { available: false, note: 'Needs a Gemini key in Settings → AI (OpenAI no longer offers video)' }
-  return caps?.stock ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint} (from Pexels).` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }
+  return caps?.stockSources ? (caps.stockSources.video.length ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint}${fromLibraries(caps.stockSources.video)}.` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }) : caps?.stock ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint}.` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }
 }
 
 function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) {
@@ -395,7 +400,7 @@ function StartStep({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
         <button role="radio" aria-checked={idea} className={clsx('ps-source-opt', idea && 'on')} disabled={locked && !idea} onClick={() => choose('idea')}>
           <Lightbulb size={22} />
           <strong>From an idea, clips or images</strong>
-          <span>Describe it or paste a script. Producer animates it with text and diagrams, your own clips and photos, and AI images or stock footage.</span>
+          <span>Describe it or paste a script. Producer animates it with text, diagrams and moving illustrations, your own clips and photos, free stock footage and photos, and AI images.</span>
         </button>
       </div>
       {idea ? <IdeaPanel s={s} workspaceId={workspaceId} /> : <UploadStep s={s} workspaceId={workspaceId} />}
@@ -661,7 +666,7 @@ function RewriteButton({ scene, brief, workspaceId, onText, onBusy }: { scene: S
 function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptScene; kinds: Array<Exclude<VisualKind, 'footage'>>; caps?: ProduceCapabilities; media: WizardAsset[]; onChange: (v: SceneVisual) => void }) {
   const v = scene.visual as Exclude<SceneVisual, { kind: 'footage' }>
   // raw text while typing (blank lines, half-written bars); the scene keeps what parses
-  const [text, setText] = useState(() => (v.kind === 'motion' ? (v.points ?? []).join('\n') : v.kind === 'diagram' ? diagramToText(v.diagram) : ''))
+  const [text, setText] = useState(() => (v.kind === 'motion' ? (v.points ?? []).join('\n') : v.kind === 'diagram' ? diagramToText(v.diagram) : v.kind === 'animation' ? objectsToText(v.objects) : ''))
   const [diagType, setDiagType] = useState<DiagramType>(v.kind === 'diagram' ? v.diagram.type : 'steps')
   const [err, setErr] = useState<string>()
   const options = kinds.includes(v.kind) ? kinds : [...kinds, v.kind]
@@ -671,7 +676,8 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
     if (nv.kind === 'diagram') {
       setDiagType(nv.diagram.type)
       setText(diagramToText(nv.diagram))
-    } else setText('')
+    } else if (nv.kind === 'animation') setText(objectsToText(nv.objects))
+    else setText('')
     onChange(nv)
   }
   const parseDiagram = (type: DiagramType, t: string) => {
@@ -681,6 +687,7 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
   }
   // something made at assembly (your own media isn't made, it's chosen)
   const made = v.kind !== 'media' && 'assetId' in v && v.assetId
+  const credit = (v.kind === 'stock' || v.kind === 'photo') && v.credit && /^https:\/\//.test(v.credit.url) ? v.credit : undefined
   return (
     <div className="ps-visual">
       <div className="ps-visual-head">
@@ -706,7 +713,14 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
             ))}
           </select>
         )}
-        <span className="muted ps-visual-hint">{VISUAL_KIND_INFO[v.kind].hint}</span>
+        {v.kind === 'animation' && (
+          <select className="input" aria-label="How they move" value={v.style} onChange={(e) => onChange({ ...v, style: e.target.value as AnimationStyle })}>
+            {(Object.keys(ANIMATION_INFO) as AnimationStyle[]).map((t) => (
+              <option key={t} value={t}>{ANIMATION_INFO[t].label}</option>
+            ))}
+          </select>
+        )}
+        <span className="muted ps-visual-hint">{v.kind === 'animation' ? ANIMATION_INFO[v.style].hint : VISUAL_KIND_INFO[v.kind].hint}</span>
       </div>
       {v.kind === 'motion' && (
         <textarea
@@ -749,15 +763,43 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
       )}
       {v.kind === 'media' && <MediaChoice v={v} media={media} onChange={onChange} />}
       {v.kind === 'stock' && <input className="input" aria-label="Stock footage search" placeholder="A short, concrete search, e.g. team meeting whiteboard" value={v.query} onChange={(e) => onChange(withPrompt(v, e.target.value))} />}
+      {v.kind === 'photo' && <input className="input" aria-label="Stock photo search" placeholder="A short, concrete search, e.g. farmer in a wheat field" value={v.query} onChange={(e) => onChange(withPrompt(v, e.target.value))} />}
+      {v.kind === 'animation' && (
+        <>
+          <textarea
+            className="input"
+            rows={3}
+            aria-label="What the animation shows"
+            placeholder={'One thing per line, with an optional caption after a colon\nrocket: Launch\nglobe: Reach\nmoney bag: Revenue'}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value)
+              const r = objectsFromText(e.target.value, v.objects)
+              setErr(r.error)
+              if (r.objects) onChange({ ...v, objects: r.objects })
+            }}
+          />
+          {err && <div className="ps-field-err">{err}</div>}
+          {v.objects.some((o) => o.assetId) && (
+            <div className="ps-visual-made">
+              {v.objects.filter((o) => o.assetId).map((o) => (
+                <Thumb key={o.assetId} src={mediaUrl(o.assetId!, 'thumb')} seed={o.assetId!} className="ps-win-thumb" />
+              ))}
+              <span>Found at the last assembly; kept while the names stay the same.</span>
+            </div>
+          )}
+        </>
+      )}
       {made && (
         <div className="ps-visual-made">
           <Thumb src={mediaUrl(made, 'thumb')} seed={made} className="ps-win-thumb" />
           <span>
             Made at the last assembly; it’s reused while this description stays the same.
-            {v.kind === 'stock' && v.credit && /^https:\/\//.test(v.credit.url) && (
+            {credit && (
               <>
-                {' '}Video by{' '}
-                <a href={v.credit.url} target="_blank" rel="noreferrer noopener">{v.credit.author}</a> on Pexels.
+                {' '}{v.kind === 'photo' ? 'Photo' : 'Video'} by{' '}
+                <a href={credit.url} target="_blank" rel="noreferrer noopener">{credit.author}</a> on {credit.source ?? 'Pexels'}
+                {credit.licence ? ` (${credit.licence}: the video credits it in the corner)` : ''}.
               </>
             )}
           </span>

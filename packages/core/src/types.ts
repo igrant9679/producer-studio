@@ -522,18 +522,52 @@ export type DiagramType = SceneDiagram['type']
 
 /**
  * What fills the screen during a scene. Absent or `footage`: windows from the uploaded recordings (a title card when
- * there are none). The rest need no recording: animated text, a diagram, an AI still with slow motion, a stock clip,
- * or an AI-generated clip (`assetId` once generated or downloaded, so re-assembling reuses it). `media` is one of the
- * person's own clips or images from the library (a clip from `start` to `end` seconds, or all of it).
+ * there are none). The rest need no recording: animated text, a diagram, an AI still with slow motion, a stock clip
+ * or photo, an AI-generated clip, or an animation of illustrations (`assetId` once generated or downloaded, so
+ * re-assembling reuses it). `media` is one of the person's own clips or images from the library (a clip from `start`
+ * to `end` seconds, or all of it).
  */
 export type SceneVisual =
   | { kind: 'footage' }
   | { kind: 'motion'; points?: string[] }
   | { kind: 'diagram'; diagram: SceneDiagram }
   | { kind: 'image'; prompt: string; assetId?: Id }
-  | { kind: 'stock'; query: string; assetId?: Id; credit?: { author: string; url: string } }
+  | { kind: 'stock'; query: string; assetId?: Id; credit?: MediaCredit }
+  | { kind: 'photo'; query: string; assetId?: Id; credit?: MediaCredit }
   | { kind: 'aiVideo'; prompt: string; assetId?: Id }
   | { kind: 'media'; assetId: Id; start?: number; end?: number }
+  | { kind: 'animation'; style: AnimationStyle; objects: SceneObject[] }
+
+/**
+ * Who made a stock clip or photo, and where it came from. `licence` is set when the licence asks for credit in the
+ * video (CC BY, CC BY-SA): the scene then shows a small credit line.
+ */
+export interface MediaCredit {
+  author: string
+  url: string
+  /** Pexels, Pixabay, Wikimedia Commons, Openverse. */
+  source?: string
+  licence?: string
+}
+
+/**
+ * How an animation scene moves its illustrations. row: they pop in one by one as they are named · journey: the first
+ * travels past the others · orbit: the rest circle the first · grow: each grows bigger than the last · burst: copies
+ * of the rest fly out of the first · change: the first turns into the second (before → after).
+ */
+export type AnimationStyle = 'row' | 'journey' | 'orbit' | 'grow' | 'burst' | 'change'
+
+/**
+ * One illustration in an animation scene: `name` is what it shows (searched in open-source illustration sets),
+ * `label` an optional caption. `assetId` / `icon` once found, so re-assembling reuses it.
+ */
+export interface SceneObject {
+  name: string
+  label?: string
+  assetId?: Id
+  /** The illustration found, e.g. fluent-emoji-flat:rocket. */
+  icon?: string
+}
 
 export type VisualKind = SceneVisual['kind']
 

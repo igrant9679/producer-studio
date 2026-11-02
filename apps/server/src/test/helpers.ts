@@ -16,6 +16,8 @@ export async function setup(): Promise<TestEnv> {
   if (env) return env
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-test-'))
   process.env.LOG_SILENT = '1'
+  // the keyless stock libraries and illustrations are reached through the network: tests that want them turn them on
+  process.env.FREE_MEDIA ??= 'off'
   process.env.DATA_DIR = dataDir
   process.env.PGLITE_DIR = 'memory://'
   // TEST_DATABASE_URL runs the suite on a real Postgres (a throwaway one: tests write to it) instead of PGlite

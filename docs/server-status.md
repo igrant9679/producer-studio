@@ -122,6 +122,17 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   picture of each (the image, or three frames across a clip), and offered as a `media` visual (`{ kind: 'media', assetId,
   start?, end? }`). Assembly looks them up with the footage (in the project's space only; one that's gone becomes a card) and
   places a clip like a stock clip (filling the frame, from `start`) and an image like an AI still (slow pan and zoom).
+  **Free stock, photos and animations** (2 Nov 2026): stock clips and the new `photo` visual (`{ kind: 'photo', query }`,
+  a still with a slow pan) search free libraries in turn (`ai/generate/stock.ts`): Pexels and Pixabay when the server has
+  their free keys (`PEXELS_API_KEY`, `PIXABAY_API_KEY`), then Openverse (photos) and Wikimedia Commons (clips and photos),
+  which need no key (`FREE_MEDIA=off` turns those off). Only licences allowing commercial use and changes are kept (CC0,
+  public domain, CC BY, CC BY-SA; no NC/ND, nothing with Commons restrictions); a CC BY / BY-SA file sets `credit.licence`
+  and the scene gets an editable credit line in the top corner. The `animation` visual (`{ kind: 'animation', style,
+  objects: [{ name, label? }] }`, styles row · journey · orbit · grow · burst · change) is built in `scene-layout.ts` from
+  image items with keyframes (editable, identical in preview and export): each object's illustration comes from Iconify's
+  open-source colour sets (Fluent Emoji MIT, Noto Apache 2.0; `ai/generate/icons.ts`, mirrors tried), drawn to a 1024 px
+  PNG with sharp, stored with `meta.generated.kind = 'illustration'` and reused across the space; an object with none
+  found is a labelled disc. `GET /api/ai/produce/capabilities` adds `stockSources`.
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

@@ -1,6 +1,6 @@
 import type { SceneDiagram } from '@producer/core'
 import { describe, expect, it } from 'vitest'
-import { defaultVisual, diagramFromText, diagramToText, withPrompt } from '../producer/sceneVisuals'
+import { defaultVisual, diagramFromText, diagramToText, objectsFromText, objectsToText, withPrompt } from '../producer/sceneVisuals'
 import { canAdvance, initialState, newScene, stateFromProject, unsavedDraft } from '../producer/wizardLogic'
 
 describe('a draft only this tab holds', () => {
@@ -50,6 +50,30 @@ describe('scene visuals', () => {
   it('starts a new visual from the scene', () => {
     expect(defaultVisual('stock', { headline: 'Teams that ship faster', narration: '' })).toEqual({ kind: 'stock', query: 'Teams that ship faster' })
     expect(defaultVisual('diagram', { headline: '', narration: '' }).kind).toBe('diagram')
+  })
+})
+
+describe('animations and stock photos', () => {
+  it('an animation is edited as lines of “thing: caption”, keeping the illustration found while the name stays', () => {
+    const prev = [{ name: 'rocket', label: 'Launch', assetId: 'as_r', icon: 'fluent-emoji:rocket' }, { name: 'globe', assetId: 'as_g' }]
+    expect(objectsToText(prev)).toBe('rocket: Launch\nglobe')
+    const r = objectsFromText('Rocket: Lift off\n\nmoney bag:  Revenue \nglobe', prev)
+    expect(r.objects).toEqual([
+      { name: 'Rocket', label: 'Lift off', assetId: 'as_r', icon: 'fluent-emoji:rocket' },
+      { name: 'money bag', label: 'Revenue' },
+      { name: 'globe', assetId: 'as_g' },
+    ])
+    expect(objectsFromText('a\nb\nc\nd\ne\nf').objects).toHaveLength(5)
+    expect(objectsFromText('  \n ').error).toMatch(/at least one/)
+  })
+
+  it('a new animation or photo starts from the scene; a changed photo search finds a new one', () => {
+    const sc = { headline: 'Fresh from the farm', narration: '' }
+    expect(defaultVisual('animation', sc)).toEqual({ kind: 'animation', style: 'row', objects: [{ name: 'light bulb', label: 'Fresh from the' }] })
+    expect(defaultVisual('photo', sc)).toEqual({ kind: 'photo', query: 'Fresh from the farm' })
+    const made = { kind: 'photo' as const, query: 'farm', assetId: 'as_1', credit: { author: 'Kim', url: 'https://x.test/' } }
+    expect(withPrompt(made, 'farm')).toBe(made)
+    expect(withPrompt(made, 'barn')).toEqual({ kind: 'photo', query: 'barn' })
   })
 })
 

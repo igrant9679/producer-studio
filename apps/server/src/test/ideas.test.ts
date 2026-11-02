@@ -14,7 +14,7 @@ beforeAll(async () => {
 })
 
 type FlatVisual = IdeaScriptOutput['scenes'][number]['visual']
-const blank: FlatVisual = { kind: 'motion', points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '' }
+const blank: FlatVisual = { kind: 'motion', points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '', animStyle: 'none', objects: [], labels: [] }
 const scene = (visual: Partial<FlatVisual>, narration = 'We plan, then build, then ship it.') => ({ id: 'x', title: 'T', headline: 'Head', narration, visual: { ...blank, ...visual } })
 
 describe("the writer's scenes", () => {
@@ -242,5 +242,124 @@ describe('timeline from an idea', () => {
     for (const tr of p.tracks) for (const it of tr.items) expect(itemEnd(it)).toBeLessThanOrEqual(end + 1e-6)
     const mid = evaluate(p, 3 + 0.5 + 3)
     expect(mid.layers.length).toBeGreaterThan(2)
+  })
+})
+
+describe('animation scenes and stock photos', () => {
+  const voice = (id: string, text: string): { asset: Asset; duration: number } => ({ asset: { id, kind: 'audio', name: id, src: '', duration: 6, transcript: syntheticTranscript(text, 6) }, duration: 6 })
+  const art = (id: string): Asset => ({ id, kind: 'image', name: `${id} (illustration)`, src: '', width: 1024, height: 1024 })
+
+  it('the writer’s animations and photos become scene visuals; an animation with nothing to draw becomes animated text', () => {
+    const out: IdeaScriptOutput = {
+      message: 'm',
+      scenes: [
+        scene({ kind: 'animation', animStyle: 'journey', objects: ['delivery truck', ' house ', 'gift'], labels: ['Shipped', '', 'Delivered'] }, 'The truck leaves, passes the house, and delivers the gift.'),
+        scene({ kind: 'animation', animStyle: 'none', objects: ['rocket'], labels: [] }),
+        scene({ kind: 'animation', animStyle: 'orbit', objects: [], labels: [] }),
+        scene({ kind: 'photo', query: ' farmer in wheat field ' }),
+        scene({ kind: 'photo', query: '' }),
+      ],
+    }
+    const scenes = normalizeIdeaScript(out, ['motion', 'animation', 'photo'])
+    expect(scenes[0].visual).toEqual({ kind: 'animation', style: 'journey', objects: [{ name: 'delivery truck', label: 'Shipped' }, { name: 'house' }, { name: 'gift', label: 'Delivered' }] })
+    // no style given: one by one
+    expect(scenes[1].visual).toMatchObject({ kind: 'animation', style: 'row' })
+    expect(scenes[2].visual?.kind).toBe('motion')
+    expect(scenes[3].visual).toEqual({ kind: 'photo', query: 'farmer in wheat field' })
+    expect(scenes[4].visual?.kind).toBe('motion')
+    // not allowed here: animated text instead
+    expect(normalizeIdeaScript(out, ['motion'])[0].visual?.kind).toBe('motion')
+  })
+
+  it('the API takes animations and photos as edited in the review step, and nothing that isn’t one', () => {
+    expect(VisualSchema.safeParse({ kind: 'animation', style: 'orbit', objects: [{ name: 'sun' }, { name: 'earth', label: 'Home', assetId: 'as_1', icon: 'noto:globe-showing-americas' }] }).success).toBe(true)
+    expect(VisualSchema.safeParse({ kind: 'animation', style: 'spiral', objects: [{ name: 'sun' }] }).success).toBe(false)
+    expect(VisualSchema.safeParse({ kind: 'animation', style: 'row', objects: [] }).success).toBe(false)
+    expect(VisualSchema.safeParse({ kind: 'animation', style: 'row', objects: [{ name: 'x', icon: '../../etc/passwd' }] }).success).toBe(false)
+    expect(VisualSchema.safeParse({ kind: 'photo', query: 'desk', credit: { author: 'Kim', url: 'https://flickr.com/x', source: 'Openverse', licence: 'CC BY 2.0' } }).success).toBe(true)
+    expect(VisualSchema.safeParse({ kind: 'photo', query: 'desk', credit: { author: 'Kim', url: 'javascript:alert(1)' } }).success).toBe(false)
+  })
+
+  it('the prompt offers the writer animations and photos only when allowed', () => {
+    const brief = { title: 'T', audience: '', goal: '', tone: '', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, idea: 'How a parcel gets to you' }
+    const yes = buildIdeaPrompt({ brief, kinds: ['motion', 'animation', 'photo'], rules: '', example: '' })
+    expect(yes).toMatch(/- animation: colourful illustrations/)
+    expect(yes).toMatch(/- photo: a real stock photograph/)
+    expect(buildIdeaPrompt({ brief, kinds: ['motion'], rules: '', example: '' })).not.toMatch(/- animation:/)
+  })
+
+  const build = (visual: ScriptScene['visual'], illustrations: Asset[] = [], generated?: Asset, aspect: '16:9' | '9:16' = '16:9') => {
+    const sc: ScriptScene[] = [{ id: 's01', title: 'How', headline: 'How it gets to you', narration: 'The truck leaves the warehouse, passes the house, and delivers the gift.', footage: [], visual }]
+    return buildProducerTimeline({
+      project: createProject({ id: 'p_anim', name: 'Anim' }),
+      brief: { title: 'Anim', audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect, source: 'idea' },
+      scenes: sc,
+      footage: new Map(),
+      voices: new Map(sc.map((s) => [s.id, voice(`as_vo_${s.id}`, s.narration)])),
+      generated: generated ? new Map([['s01', generated]]) : undefined,
+      illustrations: new Map(illustrations.map((a) => [a.id, a])),
+    })
+  }
+  const pictures = (q: Project) => q.tracks.filter((t) => !t.main).flatMap((t) => t.items).filter((i) => i.type === 'image')
+
+  for (const style of ['row', 'journey', 'orbit', 'grow', 'burst', 'change'] as const) {
+    it(`a “${style}” animation: its illustrations move inside the frame and arrive in order, as they are named`, () => {
+      for (const aspect of ['16:9', '9:16'] as const) {
+        const q = build(
+          {
+            kind: 'animation',
+            style,
+            objects: [
+              { name: 'truck', label: 'Shipped', assetId: 'as_a' },
+              { name: 'house', assetId: 'as_b' },
+              { name: 'gift', label: 'Delivered', assetId: 'as_c' },
+            ],
+          },
+          [art('as_a'), art('as_b'), art('as_c')],
+          undefined,
+          aspect,
+        )
+        const pics = pictures(q)
+        expect(pics.length).toBeGreaterThanOrEqual(3)
+        // every illustration is in the project, on a track above the main one
+        for (const id of ['as_a', 'as_b', 'as_c']) expect(q.assets[id]).toBeDefined()
+        const first = (id: string) => Math.min(...pics.filter((p) => p.assetId === id).map((p) => p.start))
+        expect(first('as_a')).toBeLessThanOrEqual(first('as_b') + 0.5)
+        expect(first('as_b')).toBeLessThan(first('as_c'))
+        // nowhere outside the canvas (keyframed positions included), and every keyframe within the item's life
+        const half = { x: q.width / 2, y: q.height / 2 }
+        for (const it of pics) {
+          if (it.type !== 'image') continue
+          const xs = [it.transform.x, ...(it.keyframes.x ?? []).map((k) => k.value)]
+          const ys = [it.transform.y, ...(it.keyframes.y ?? []).map((k) => k.value)]
+          for (const x of xs) expect(Math.abs(x)).toBeLessThan(half.x)
+          for (const y of ys) expect(Math.abs(y)).toBeLessThan(half.y)
+          for (const k of Object.values(it.keyframes).flat()) expect(k!.t).toBeLessThanOrEqual(it.duration + 1e-6)
+          expect(it.start + it.duration).toBeLessThanOrEqual(q.tracks.find((t) => t.main)!.items.at(-2)!.start + q.tracks.find((t) => t.main)!.items.at(-2)!.duration + 1e-6)
+        }
+        // the captions given are shown
+        const texts = q.tracks.flatMap((t) => t.items).filter((i) => i.type === 'text').map((i) => (i as { text: string }).text)
+        expect(texts).toEqual(expect.arrayContaining(['Shipped', 'Delivered']))
+      }
+    })
+  }
+
+  it('an object with no illustration found is a labelled disc, so the scene still says what it means', () => {
+    const q = build({ kind: 'animation', style: 'row', objects: [{ name: 'quantum widget' }, { name: 'house', assetId: 'as_b' }] }, [art('as_b')])
+    expect(pictures(q).map((p) => p.assetId)).toEqual(['as_b'])
+    const all = q.tracks.flatMap((t) => t.items)
+    expect(all.some((i) => i.type === 'shape' && i.name === 'quantum widget (no picture found)')).toBe(true)
+    expect(all.some((i) => i.type === 'text' && (i as { text: string }).text === 'quantum widget')).toBe(true)
+  })
+
+  it('a stock photo fills the frame with a slow pan; a CC BY one gets a credit line, a Pexels one none', () => {
+    const photo: Asset = { id: 'as_ph', kind: 'image', name: 'field', src: '', width: 1920, height: 1080 }
+    const credited = build({ kind: 'photo', query: 'field', assetId: 'as_ph', credit: { author: 'Kim', url: 'https://flickr.com/k', source: 'Openverse', licence: 'CC BY 2.0' } }, [], photo)
+    const img = credited.tracks.find((t) => t.main)!.items.find((i) => i.type === 'image')!
+    expect(img).toMatchObject({ assetId: 'as_ph', fit: 'cover' })
+    const credit = credited.tracks.flatMap((t) => t.items).find((i) => i.name === 's01 credit') as { text: string } | undefined
+    expect(credit?.text).toBe('Photo: Kim · CC BY 2.0 · Openverse')
+    const plain = build({ kind: 'photo', query: 'field', assetId: 'as_ph', credit: { author: 'Pat', url: 'https://www.pexels.com/photo/1/', source: 'Pexels' } }, [], photo)
+    expect(plain.tracks.flatMap((t) => t.items).some((i) => i.name === 's01 credit')).toBe(false)
   })
 })

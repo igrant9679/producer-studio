@@ -1,6 +1,6 @@
 // Motion text and diagrams as timeline items: the editor's own shapes and text, laid out for the canvas and revealed as
 // the narration names each part. Editable afterwards, on brand (look + brand kit), identical in preview and export.
-import { createShapeItem, createTextItem, round, type Item, type ItemAnimations, type SceneDiagram, type TextStyle } from '@producer/core'
+import { createImageItem, createShapeItem, createTextItem, round, type AnimationStyle, type Asset, type Item, type ItemAnimations, type Keyframe, type Keyframes, type SceneDiagram, type TextStyle } from '@producer/core'
 import { type Palette, headlineStyle, labelStyle, onColor } from '../services/looks'
 
 /** A built element: which layer stack it goes in (shapes below text) and the item itself. */
@@ -332,6 +332,260 @@ export function diagramItems(d: SceneDiagram, f: SceneFrame): Placed[] {
       out.push(label(f, at, { text: d.value, x: 0, y: cy - 30 * s, style: headlineStyle(pal, W, Math.round((vertical ? 220 : 260) * s), { color: pal.accent, lineHeight: 1 }), anim: { in: { preset: 'zoomIn', duration: 0.6 }, out: out_ } }))
       if (d.label) out.push(label(f, at + 0.4, { text: d.label, x: 0, y: cy + (vertical ? 140 : 150) * s, style: st.ink(vertical ? 44 : 48, W * 0.7), anim: fadeIn(0.5) }))
       break
+    }
+  }
+  return out
+}
+
+// ---------------- animation scenes: illustrations that move with the narration ----------------
+
+/** One illustration of an animation scene: its picture (absent: it couldn't be found, so a labelled disc stands in). */
+export interface AnimObject {
+  name: string
+  label?: string
+  asset?: Asset
+}
+
+const kf = (t: number, value: number, ease: Keyframe['ease'] = 'easeInOut'): Keyframe => ({ t: round(Math.max(0, t), 3), value: round(value, 3), ease })
+
+/** Keyframes that move a caption along with its picture: the same x, and y shifted by `dy`. */
+const follow = (keys: Keyframes | undefined, dy: number): Keyframes | undefined =>
+  keys && (keys.x || keys.y) ? { ...(keys.x ? { x: keys.x } : {}), ...(keys.y ? { y: keys.y.map((k) => ({ ...k, value: round(k.value + dy, 3) })) } : {}) } : undefined
+
+/**
+ * An illustration at (x, y), `size` px across, on screen from `at` to the scene's end. `keys` are keyframes in seconds
+ * from `at` (absolute values, as the editor stores them; `scale` in canvas fits like the item's own).
+ */
+function pic(f: SceneFrame, at: number, o: { obj: AnimObject; x: number; y: number; size: number; keys?: Keyframes; anim?: ItemAnimations; float?: number; name?: string }): Placed[] {
+  const name = o.name ?? o.obj.name
+  if (!o.obj.asset) {
+    // a disc in the accent colour with the name on it: the scene still says what it means
+    const st = styles(f)
+    const { scale: _scale, ...moves } = o.keys ?? {}
+    const disc = box(f, at, { name: `${name} (no picture found)`, shape: 'ellipse', x: o.x, y: o.y, w: o.size * 0.8, h: o.size * 0.8, fill: f.pal.accent, anim: o.anim ?? pop(), float: o.float })
+    disc.item = { ...disc.item, keyframes: moves } as Item
+    const word = label(f, at + 0.1, { text: o.obj.name.slice(0, 18), x: o.x, y: o.y, style: st.node(o.size > 300 * st.s ? 40 : 28, o.size * 0.7), anim: fadeIn(0.3) })
+    word.item = { ...word.item, keyframes: follow(o.keys, 0) ?? {} } as Item
+    return [disc, word]
+  }
+  const fit = o.size / Math.min(f.width, f.height)
+  const item = createImageItem(o.obj.asset, 0, {
+    ...until(f, at),
+    name,
+    transform: { x: round(o.x, 1), y: round(o.y, 1), scale: round(fit, 4), rotation: 0 },
+    keyframes: o.keys ?? {},
+    animations: { ...(o.anim ?? pop(0.5)), ...(o.float ? { combo: { preset: 'float' as const, period: o.float } } : {}) },
+  })
+  return [{ layer: 'shape', item }]
+}
+
+/** The caption under an illustration, when it has one (moving with it when `keys` are given). */
+function caption(f: SceneFrame, at: number, obj: AnimObject, x: number, y: number, w: number, keys?: Keyframes): Placed[] {
+  if (!obj.label) return []
+  const st = styles(f)
+  const l = label(f, at + 0.2, { text: obj.label, x, y, style: st.ink(f.height > f.width ? 40 : 38, w), anim: fadeIn(0.4) })
+  if (keys) l.item = { ...l.item, keyframes: keys } as Item
+  return [l]
+}
+
+/** Only on screen until `t` (absolute seconds), for parts that leave before the scene ends. */
+function endAt(parts: Placed[], t: number) {
+  for (const p of parts) p.item.duration = round(Math.max(0.4, t - p.item.start), 3)
+  return parts
+}
+
+/**
+ * Animation scene: illustrations (open-source emoji art, found for each object's name) moving in one of six ways,
+ * each part arriving as the narration names it. The caller places the headline above, as for a diagram.
+ */
+export function animationItems(style: AnimationStyle, objects: AnimObject[], f: SceneFrame): Placed[] {
+  const objs = objects.slice(0, style === 'row' || style === 'grow' ? 4 : 5)
+  const out = ambience(f)
+  if (!objs.length) return out
+  const { s } = styles(f)
+  const W = f.width
+  const H = f.height
+  const vertical = H > W
+  // content centre: under the headline band, clear of the captions along the bottom
+  const cy = (vertical ? 60 : 40) * s
+  const times = revealTimes(
+    objs.map((o) => [o.label, o.name].filter(Boolean).join(' ')),
+    f,
+  )
+  const end = f.start + f.duration
+  switch (style) {
+    case 'row':
+    case 'grow': {
+      const n = objs.length
+      const grow = style === 'grow'
+      // landscape: side by side; vertical: stacked when there are more than two
+      const stack = vertical && n > 2
+      const span = stack ? H * 0.56 : W * (n === 1 ? 0.3 : 0.78)
+      const slot = span / n
+      const base = Math.min(slot * (stack ? 0.8 : 0.78), stack ? H * 0.17 : H * 0.42)
+      const floor = cy + base / 2
+      objs.forEach((o, i) => {
+        const size = base * (grow ? 0.55 + (0.45 * (i + 1)) / n : 1)
+        const at = times[i]
+        if (stack) {
+          const y = cy - span / 2 + slot * (i + 0.5)
+          out.push(...pic(f, at, { obj: o, x: -W * 0.16, y, size, float: 5 + i }))
+          out.push(...caption(f, at, o, W * 0.2, y, W * 0.4))
+          return
+        }
+        const x = -span / 2 + slot * (i + 0.5)
+        // grow: they stand on one line, so the bigger ones reach higher
+        const y = grow ? floor - size / 2 : cy - 20 * s
+        out.push(...pic(f, at, { obj: o, x, y, size, anim: grow ? rise(0.6) : pop(0.5), float: grow ? undefined : 5 + i }))
+        out.push(...caption(f, at, o, x, (grow ? floor : y + size / 2) + 46 * s, slot * 0.95))
+      })
+      if (grow && !stack) out.push(line(f, f.start + 0.4, { name: 'Ground', x1: -span / 2, y1: floor + 6 * s, x2: span / 2, y2: floor + 6 * s, color: f.pal.accent, thick: 4 * s, anim: wipe(0.6) }))
+      return out
+    }
+    case 'journey': {
+      // the first travels a line past the rest, reaching each as it's named
+      const [mover, ...stops] = objs
+      const len = vertical ? H * 0.5 : W * 0.76
+      const along = (u: number) => (vertical ? { x: -W * 0.12, y: cy - len / 2 + len * u } : { x: -len / 2 + len * u, y: cy + 80 * s })
+      const size = (vertical ? 200 : 220) * s
+      const stopSize = (vertical ? 170 : 180) * s
+      const a = along(0)
+      const b = along(1)
+      out.push(line(f, f.start + 0.4, { name: 'Path', x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: f.pal.accent, thick: 4 * s, anim: wipe(0.7) }))
+      const startAt = Math.max(f.start + 0.5, times[0] - 0.2)
+      const u = (i: number) => (i + 1) / (stops.length + 1)
+      const offset = vertical ? { x: 250 * s, y: 0 } : { x: 0, y: -220 * s }
+      stops.forEach((o, i) => {
+        const p = along(u(i))
+        const at = Math.max(startAt + 0.3, times[i + 1] - 0.4)
+        // a stop shows up a beat before the traveller gets there
+        const sx = p.x + offset.x
+        const sy = p.y + offset.y
+        out.push(...pic(f, at, { obj: o, x: sx, y: sy, size: stopSize, float: 6 + i }))
+        out.push(...caption(f, at, o, sx, vertical ? sy + stopSize / 2 + 34 * s : sy - stopSize / 2 - 34 * s, (vertical ? W * 0.4 : len / (stops.length + 1)) * 0.95))
+      })
+      const xs: Keyframe[] = [kf(0, a.x)]
+      const ys: Keyframe[] = [kf(0, a.y)]
+      const rot: Keyframe[] = []
+      const arrive = stops.length ? stops.map((_, i) => times[i + 1] + 0.1) : [Math.min(end - 0.8, f.voiceStart + f.voiceDuration)]
+      let t0 = 0
+      arrive.forEach((at, i) => {
+        const p = stops.length ? along(u(i)) : b
+        const t = Math.max(t0 + 0.6, at - startAt)
+        xs.push(kf(t, p.x))
+        ys.push(kf(t, p.y))
+        // a little tilt forward while moving, level when it stops
+        rot.push(kf(t0, 0), kf(t0 + (t - t0) / 2, vertical ? 4 : -6), kf(t, 0))
+        t0 = t
+      })
+      // past the last stop, on to the end of the path
+      if (stops.length) {
+        const t = Math.min(end - startAt - 0.3, t0 + 1.6)
+        if (t > t0 + 0.4) {
+          xs.push(kf(t, b.x))
+          ys.push(kf(t, b.y))
+        }
+      }
+      out.push(...pic(f, startAt, { obj: mover, x: a.x, y: a.y, size, keys: { x: xs, y: ys, rotation: rot }, anim: pop(0.5) }))
+      out.push(...caption(f, startAt, mover, a.x, a.y + size / 2 + 30 * s, 300 * s, follow({ x: xs, y: ys }, size / 2 + 30 * s)))
+      return out
+    }
+    case 'orbit': {
+      // the rest circle the first, slowly
+      const [hub, ...moons] = objs
+      const hubSize = (vertical ? 300 : 300) * s
+      const R = vertical ? Math.min(W * 0.36, 380 * s) : Math.min(H * 0.3, 310 * s)
+      const rx = vertical ? R : R * 1.5
+      const moonSize = (vertical ? 170 : 170) * s
+      out.push(box(f, f.start + 0.4, { name: 'Orbit', shape: 'ellipse', x: 0, y: cy, w: rx * 2, h: R * 2, fill: 'transparent', stroke: { color: f.pal.accent, width: Math.max(2, Math.round(3 * s)) }, opacity: 0.5, anim: { in: { preset: 'zoomIn', duration: 0.6 }, out: out_ } }))
+      out.push(...pic(f, times[0], { obj: hub, x: 0, y: cy, size: hubSize, anim: { in: { preset: 'zoomIn', duration: 0.6 }, out: out_ }, float: 7 }))
+      out.push(...caption(f, times[0], hub, 0, cy + hubSize / 2 + 30 * s, W * 0.3))
+      // one turn in 14 s, sampled every quarter second (linear between samples reads as a smooth circle)
+      const period = 14
+      moons.forEach((o, i) => {
+        const at = times[i + 1]
+        const life = end - at
+        const phase = (2 * Math.PI * i) / moons.length - Math.PI / 2
+        const xs: Keyframe[] = []
+        const ys: Keyframe[] = []
+        const steps = Math.max(2, Math.ceil(life / 0.25))
+        for (let k = 0; k <= steps; k++) {
+          const t = (life * k) / steps
+          const ang = phase + (2 * Math.PI * (at - f.start + t)) / period
+          xs.push(kf(t, Math.cos(ang) * rx, 'linear'))
+          ys.push(kf(t, cy + Math.sin(ang) * R, 'linear'))
+        }
+        out.push(...pic(f, at, { obj: o, x: xs[0].value, y: ys[0].value, size: moonSize, keys: { x: xs, y: ys }, anim: pop(0.45) }))
+        out.push(...caption(f, at, o, xs[0].value, ys[0].value + moonSize / 2 + 26 * s, 260 * s, follow({ x: xs, y: ys }, moonSize / 2 + 26 * s)))
+      })
+      return out
+    }
+    case 'burst': {
+      // copies of the rest fly out of the first: one idea, many results
+      const [core, ...rest] = objs
+      const coreSize = 300 * s
+      const coreParts = pic(f, times[0], { obj: core, x: 0, y: cy, size: coreSize, anim: { in: { preset: 'zoomIn', duration: 0.5 }, out: out_ } })
+      out.push(...coreParts)
+      out.push(...caption(f, times[0], core, 0, cy + coreSize / 2 + 30 * s, W * 0.3))
+      const pulse: Array<[number, number]> = []
+      const total = Math.max(1, rest.length) * 3
+      const ring = (n: number, i: number, far: number) => {
+        const ang = (2 * Math.PI * n) / total - Math.PI / 2 + (i % 2 ? 0.3 : 0)
+        const dist = (vertical ? W * 0.34 : H * 0.36) * far
+        return { x: Math.cos(ang) * dist * (vertical ? 1 : 1.55), y: cy + Math.sin(ang) * dist }
+      }
+      rest.forEach((o, i) => {
+        const at = Math.max(times[i + 1], times[0] + 0.6)
+        pulse.push([at - times[0], 1.12])
+        for (let c = 0; c < 3; c++) {
+          const p = ring(i * 3 + c, i, c === 1 ? 1.08 : 0.92)
+          const size = (vertical ? 130 : 140) * s * (c === 1 ? 1.1 : 0.9)
+          const fit = size / Math.min(W, H)
+          const d = 0.7 + c * 0.08
+          const keys: Keyframes = {
+            x: [kf(0, 0, 'easeOut'), kf(d, p.x)],
+            y: [kf(0, cy, 'easeOut'), kf(d, p.y)],
+            scale: [kf(0, fit * 0.2, 'easeOut'), kf(d, fit)],
+            rotation: [kf(0, -90 + c * 60, 'easeOut'), kf(d, 0)],
+          }
+          out.push(...pic(f, at + c * 0.08, { obj: o, x: 0, y: cy, size, keys, anim: fadeIn(0.15), name: `${o.name} ${c + 1}` }))
+        }
+        const lp = ring(i * 3 + 1, i, 1.08)
+        out.push(...caption(f, at + 0.5, o, lp.x, lp.y + 100 * s, 300 * s))
+      })
+      // the first gives a little kick each time something leaves it
+      const first = coreParts[0].item
+      if (first.type === 'image' && pulse.length) {
+        const base = first.transform.scale
+        first.keyframes = { scale: [kf(0, base), ...pulse.flatMap(([t, k]) => [kf(t - 0.15, base), kf(t, base * k, 'easeOut'), kf(t + 0.3, base)])] }
+      }
+      return out
+    }
+    case 'change': {
+      // each one turns into the next: before → after
+      const size = (vertical ? 360 : 360) * s
+      const fit = size / Math.min(W, H)
+      const capY = cy + size / 2 + 40 * s
+      let at = times[0]
+      objs.forEach((o, i) => {
+        const next = i < objs.length - 1 ? Math.max(times[i + 1], at + 1.2) : undefined
+        const keys: Keyframes | undefined = next
+          ? {
+              scale: [kf(0, fit), kf(next - at - 0.1, fit * 1.06), kf(next - at + 0.35, fit * 0.02, 'easeIn')],
+              rotation: [kf(next - at - 0.1, 0), kf(next - at + 0.35, 200, 'easeIn')],
+            }
+          : undefined
+        const parts = pic(f, at, { obj: o, x: 0, y: cy, size, keys, anim: i === 0 ? pop(0.5) : { in: { preset: 'zoomIn', duration: 0.45 }, out: out_ } })
+        const cap = caption(f, at, o, 0, capY, W * 0.5)
+        out.push(...(next ? endAt(parts, next + 0.4) : parts), ...(next ? endAt(cap, next) : cap))
+        if (next) {
+          // a ring flashes out as it changes
+          const flash = box(f, next - 0.05, { name: 'Change ring', shape: 'ellipse', x: 0, y: cy, w: size * 1.2, h: size * 1.2, fill: 'transparent', stroke: { color: f.pal.accent, width: Math.max(3, Math.round(5 * s)) }, anim: { in: { preset: 'zoomIn', duration: 0.35 }, out: out_ } })
+          out.push(...endAt([flash], next + 0.6))
+          at = next + 0.25
+        }
+      })
+      return out
     }
   }
   return out

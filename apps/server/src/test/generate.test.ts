@@ -10,7 +10,8 @@ import { ApiError } from '@google/genai'
 import { ctx } from '../context'
 import { aiKeys } from '../db/schema'
 import { setKeyClients } from '../ai/keys'
-import { downloadStock, generateImage, generateVideo, generationCapabilities, searchStock, type StockClip } from '../ai/generate'
+import { downloadStock, findIllustration, generateImage, generateVideo, generationCapabilities, illustrationPng, searchStock, type StockClip } from '../ai/generate'
+import { commonsLicence } from '../ai/generate/stock'
 import { type GenInteraction, type MediaInfo, setGenerateClients } from '../ai/generate/capabilities'
 import { CancelledError } from '../jobs/worker'
 import { setup, signup, type TestEnv } from './helpers'
@@ -78,6 +79,9 @@ beforeEach(() => {
   clock = 1_000_000
   probeResult = async () => ({ width: 1536, height: 864 })
   ctx().config.pexelsApiKey = undefined
+  ctx().config.pixabayApiKey = undefined
+  // the keyless libraries are tested on their own (below); off here so nothing else reaches for them
+  ctx().config.freeMedia = false
   // also clears the model memo, so every test starts from the first candidate
   setGenerateClients({
     openai: (key) => {
@@ -130,18 +134,25 @@ const done = (): GenInteraction => ({ id: 'int-1', status: 'completed', output_v
 
 // ---------------- capabilities ----------------
 
+const NONE = { video: [], photo: [] }
+
 describe('generationCapabilities', () => {
   it('nothing without keys; stock only with the server’s Pexels key', async () => {
     const ws = await space()
-    expect(await generationCapabilities(ws)).toEqual({ stock: false })
+    expect(await generationCapabilities(ws)).toEqual({ stock: false, stockSources: NONE })
     ctx().config.pexelsApiKey = PEXELS_KEY
-    expect(await generationCapabilities(ws)).toEqual({ stock: true })
+    expect(await generationCapabilities(ws)).toEqual({ stock: true, stockSources: { video: ['Pexels'], photo: ['Pexels'] } })
+    // the free libraries need no key: stock is on without one
+    ctx().config.pexelsApiKey = undefined
+    ctx().config.freeMedia = true
+    ctx().config.pixabayApiKey = 'pixabay-test-key'
+    expect(await generationCapabilities(ws)).toEqual({ stock: true, stockSources: { video: ['Pixabay', 'Wikimedia Commons'], photo: ['Pixabay', 'Openverse', 'Wikimedia Commons'] } })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('an OpenAI key makes stills (no clips: Sora is gone)', async () => {
     const ws = await space({ openai: OPENAI_KEY })
-    expect(await generationCapabilities(ws)).toEqual({ image: { provider: 'openai', model: 'gpt-image-2.5-flare' }, stock: false })
+    expect(await generationCapabilities(ws)).toEqual({ image: { provider: 'openai', model: 'gpt-image-2.5-flare' }, stock: false, stockSources: NONE })
   })
 
   it('a Gemini key makes stills and clips', async () => {
@@ -150,6 +161,7 @@ describe('generationCapabilities', () => {
       image: { provider: 'gemini', model: 'gemini-nano-banana-2.1' },
       video: { provider: 'gemini', model: 'gemini-omni-1.1-flash', maxSeconds: 10 },
       stock: false,
+      stockSources: NONE,
     })
   })
 
@@ -170,7 +182,7 @@ describe('generationCapabilities', () => {
     const ws = await space({ openai: BAD_KEY, gemini: GEMINI_KEY, defaultProvider: 'openai' })
     expect((await generationCapabilities(ws)).image?.provider).toBe('gemini')
     const only = await space({ openai: BAD_KEY })
-    expect(await generationCapabilities(only)).toEqual({ stock: false })
+    expect(await generationCapabilities(only)).toEqual({ stock: false, stockSources: NONE })
     const err = await failure(generateImage({ workspaceId: only, prompt: 'a lighthouse', aspect: '16:9', outDir }))
     expect(err).toMatchObject({ status: 503, message: 'The OpenAI API key was rejected. Check or replace it in Settings → AI.' })
   })
@@ -178,7 +190,7 @@ describe('generationCapabilities', () => {
   it("a saved key that can't be decrypted stops with a reason (no fallback)", async () => {
     const ws = await space({ gemini: GEMINI_KEY })
     await ctx().db.update(aiKeys).set({ tag: Buffer.alloc(16).toString('base64') }).where(and(eq(aiKeys.workspaceId, ws), eq(aiKeys.provider, 'gemini')))
-    expect(await generationCapabilities(ws)).toEqual({ stock: false })
+    expect(await generationCapabilities(ws)).toEqual({ stock: false, stockSources: NONE })
     const err = await failure(generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '16:9', seconds: 8, outDir }))
     expect(err.status).toBe(503)
     expect(err.message).toMatch(/enter it again in Settings → AI/)
@@ -490,7 +502,7 @@ const pexelsVideo = (id: number, duration: number, files: Array<[number | null, 
 describe('stock footage', () => {
   it('needs the server’s Pexels key', async () => {
     const err = await failure(searchStock({ query: 'ocean', aspect: '16:9' }))
-    expect(err).toMatchObject({ status: 503, message: expect.stringContaining('free Pexels API key') })
+    expect(err).toMatchObject({ status: 503, message: expect.stringContaining('free Pexels or Pixabay API key') })
   })
 
   it('searches by orientation, puts long-enough clips first and picks the rendition nearest 1080p', async () => {
@@ -521,6 +533,8 @@ describe('stock footage', () => {
     expect(clips.map((c) => c.id)).toEqual(['2', '1'])
     expect(clips[0]).toEqual({
       id: '2',
+      kind: 'video',
+      source: 'pexels',
       url: 'https://videos.pexels.com/video-files/2/1440x2560.mp4',
       previewImage: 'https://images.pexels.com/videos/2/preview.jpeg',
       width: 1440,
@@ -574,5 +588,219 @@ describe('stock footage', () => {
 
     fetchMock.mockResolvedValueOnce(new Response('<html>', { headers: { 'content-type': 'text/html' } }))
     expect((await failure(downloadStock(clip, outDir))).status).toBe(502)
+  })
+})
+
+// ---------------- the free libraries (no key) and the other keyed one ----------------
+
+const commonsPage = (title: string, index: number, o: { mime: string; licence: string; width?: number; height?: number; size?: number; duration?: number; restrictions?: string; artist?: string }) => ({
+  pageid: index,
+  ns: 6,
+  title: `File:${title}`,
+  index,
+  imageinfo: [
+    {
+      url: `https://upload.wikimedia.org/wikipedia/commons/a/ab/${encodeURIComponent(title)}`,
+      thumburl: `https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/${encodeURIComponent(title)}/1920px-${encodeURIComponent(title)}.jpg`,
+      thumbwidth: 1920,
+      thumbheight: 1080,
+      width: o.width ?? 3840,
+      height: o.height ?? 2160,
+      size: o.size ?? 5_000_000,
+      duration: o.duration,
+      mime: o.mime,
+      descriptionurl: `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(title)}`,
+      extmetadata: {
+        LicenseShortName: { value: o.licence },
+        Artist: { value: o.artist ?? '<a href="//commons.wikimedia.org/wiki/User:Ana">Ana &amp; Bo</a>' },
+        ...(o.restrictions ? { Restrictions: { value: o.restrictions } } : {}),
+      },
+    },
+  ],
+})
+
+describe('free stock libraries', () => {
+  beforeEach(() => {
+    ctx().config.freeMedia = true
+  })
+
+  it('reads Commons licences: free ones in, NC / ND and unknown ones out, credit only where it is asked for', () => {
+    expect(commonsLicence('CC0')).toBe('')
+    expect(commonsLicence('Public domain')).toBe('')
+    expect(commonsLicence('CC BY 4.0')).toBe('CC BY 4.0')
+    expect(commonsLicence('CC BY-SA 3.0')).toBe('CC BY-SA 3.0')
+    expect(commonsLicence('CC BY-NC 2.0')).toBeUndefined()
+    expect(commonsLicence('CC BY-ND 4.0')).toBeUndefined()
+    expect(commonsLicence('GFDL')).toBeUndefined()
+  })
+
+  it('finds clips on Wikimedia Commons with no key: free, big enough, the right shape, credited', async () => {
+    fetchMock.mockImplementation(async () =>
+      Response.json({
+        query: {
+          pages: {
+            1: commonsPage('Waves.webm', 2, { mime: 'video/webm', licence: 'CC BY-SA 4.0', duration: 12 }),
+            2: commonsPage('Short.ogv', 1, { mime: 'application/ogg', licence: 'CC0', duration: 3 }),
+            3: commonsPage('NonCommercial.webm', 3, { mime: 'video/webm', licence: 'CC BY-NC 4.0', duration: 20 }),
+            4: commonsPage('Logo.webm', 4, { mime: 'video/webm', licence: 'CC0', duration: 20, restrictions: 'trademarked' }),
+            5: commonsPage('Tiny.webm', 5, { mime: 'video/webm', licence: 'CC0', duration: 20, width: 320, height: 240 }),
+            6: commonsPage('Tall.webm', 6, { mime: 'video/webm', licence: 'CC0', duration: 20, width: 1080, height: 1920 }),
+            7: commonsPage('Huge.webm', 7, { mime: 'video/webm', licence: 'CC0', duration: 20, size: 99e9 }),
+          },
+        },
+      }),
+    )
+    const clips = await searchStock({ query: 'ocean waves', aspect: '16:9', minSeconds: 6 })
+    const [url, init] = fetchMock.mock.calls[0]
+    const u = new URL(url)
+    expect(u.origin + u.pathname).toBe('https://commons.wikimedia.org/w/api.php')
+    expect(u.searchParams.get('gsrsearch')).toBe('ocean waves filetype:video')
+    expect(init.headers['User-Agent']).toMatch(/ProducerStudio/)
+    // long enough first; the rest dropped
+    expect(clips.map((c) => c.id)).toEqual(['Waves.webm', 'Short.ogv'])
+    expect(clips[0]).toMatchObject({ kind: 'video', source: 'commons', author: 'Ana & Bo', licence: 'CC BY-SA 4.0', pageUrl: 'https://commons.wikimedia.org/wiki/File:Waves.webm' })
+    expect(clips[1].licence).toBeUndefined()
+  })
+
+  it('finds photos on Openverse first, and moves on to Commons when Openverse is down', async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      Response.json({
+        results: [
+          { id: '0aa1b2c3-d4e5-4f60-8a9b-0c1d2e3f4a5b', creator: 'Kim', creator_url: 'https://www.flickr.com/photos/kim', license: 'by', license_version: '2.0', foreign_landing_url: 'https://www.flickr.com/photos/kim/1', width: 4000, height: 2250, thumbnail: 'https://api.openverse.org/v1/images/x/thumb/' },
+          { id: '1bb1b2c3-d4e5-4f60-8a9b-0c1d2e3f4a5b', creator: 'Lee', license: 'cc0', foreign_landing_url: 'https://www.flickr.com/photos/lee/2', url: 'https://live.staticflickr.com/65535/2_o.jpg', width: 3000, height: 2000 },
+          { id: '2cc1b2c3-d4e5-4f60-8a9b-0c1d2e3f4a5b', creator: 'Max', license: 'by-nc', foreign_landing_url: 'https://www.flickr.com/photos/max/3', width: 3000, height: 2000 },
+          { id: '3dd1b2c3-d4e5-4f60-8a9b-0c1d2e3f4a5b', creator: 'Ned', license: 'cc0', foreign_landing_url: 'https://www.flickr.com/photos/ned/4', width: 300, height: 200 },
+        ],
+      }),
+    )
+    const photos = await searchStock({ query: 'wheat field', aspect: '16:9', media: 'photo' })
+    const u = new URL(fetchMock.mock.calls[0][0])
+    expect(u.origin + u.pathname).toBe('https://api.openverse.org/v1/images/')
+    expect(u.searchParams.get('license_type')).toBe('commercial,modification')
+    expect(u.searchParams.get('aspect_ratio')).toBe('wide')
+    expect(photos.map((p) => p.author)).toEqual(['Kim', 'Lee'])
+    // one held somewhere else comes through Openverse's own endpoint
+    expect(photos[0]).toMatchObject({ kind: 'photo', source: 'openverse', licence: 'CC BY 2.0', url: 'https://api.openverse.org/v1/images/0aa1b2c3-d4e5-4f60-8a9b-0c1d2e3f4a5b/thumb/?full_size=true&compressed=true' })
+    // one on Flickr is fetched from Flickr itself
+    expect(photos[1].url).toBe('https://live.staticflickr.com/65535/2_o.jpg')
+
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValueOnce(new Response('error code: 504', { status: 504 }))
+    fetchMock.mockImplementationOnce(async () => Response.json({ query: { pages: { 1: commonsPage('Field.jpg', 1, { mime: 'image/jpeg', licence: 'CC BY 4.0' }) } } }))
+    const fallback = await searchStock({ query: 'wheat field', aspect: '16:9', media: 'photo' })
+    expect(new URL(fetchMock.mock.calls[1][0]).searchParams.get('gsrsearch')).toBe('wheat field filetype:bitmap')
+    // the 1920 px rendition, not the 4K original
+    expect(fallback[0]).toMatchObject({ source: 'commons', kind: 'photo', width: 1920, url: expect.stringContaining('/thumb/'), licence: 'CC BY 4.0' })
+
+    // every library down: the first failure is what's said
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValue(new Response('', { status: 503 }))
+    expect(await failure(searchStock({ query: 'wheat field', aspect: '16:9', media: 'photo' }))).toMatchObject({ status: 502, message: expect.stringContaining('Openverse') })
+  })
+
+  it('a keyed library comes first: Pexels photos, then Pixabay clips', async () => {
+    ctx().config.pexelsApiKey = PEXELS_KEY
+    fetchMock.mockImplementationOnce(async () => Response.json({ photos: [{ id: 7, width: 6000, height: 4000, url: 'https://www.pexels.com/photo/7/', photographer: 'Pat', photographer_url: 'https://www.pexels.com/@pat', src: { original: 'https://images.pexels.com/photos/7/p.jpeg', medium: 'https://images.pexels.com/photos/7/m.jpeg' } }] }))
+    const [photo] = await searchStock({ query: 'desk', aspect: '16:9', media: 'photo' })
+    expect(new URL(fetchMock.mock.calls[0][0]).pathname).toBe('/v1/search')
+    expect(photo).toMatchObject({ source: 'pexels', kind: 'photo', width: 2400, height: 1600, url: 'https://images.pexels.com/photos/7/p.jpeg?auto=compress&cs=tinysrgb&w=2400' })
+    expect(photo.licence).toBeUndefined()
+
+    ctx().config.pexelsApiKey = undefined
+    ctx().config.pixabayApiKey = 'pixabay-test-key'
+    fetchMock.mockReset()
+    fetchMock.mockImplementationOnce(async () =>
+      Response.json({
+        hits: [
+          { id: 5, pageURL: 'https://pixabay.com/videos/id-5/', user: 'Sam', user_id: 3, duration: 18, videos: { large: { url: 'https://cdn.pixabay.com/video/5/large.mp4', width: 3840, height: 2160 }, medium: { url: 'https://cdn.pixabay.com/video/5/medium.mp4', width: 1920, height: 1080, thumbnail: 'https://cdn.pixabay.com/video/5/t.jpg' } } },
+          { id: 6, pageURL: 'https://pixabay.com/videos/id-6/', user: 'Sam', user_id: 3, duration: 18, videos: { medium: { url: 'https://cdn.pixabay.com/video/6/medium.mp4', width: 1080, height: 1920 } } },
+        ],
+      }),
+    )
+    const clips = await searchStock({ query: 'desk', aspect: '16:9' })
+    expect(new URL(fetchMock.mock.calls[0][0]).searchParams.get('key')).toBe('pixabay-test-key')
+    // landscape only, and the 1080p rendition
+    expect(clips).toHaveLength(1)
+    expect(clips[0]).toMatchObject({ source: 'pixabay', url: 'https://cdn.pixabay.com/video/5/medium.mp4', authorUrl: 'https://pixabay.com/users/Sam-3/' })
+  })
+
+  it('downloads only from the library the file came from, and keeps its format', async () => {
+    probeResult = async () => ({ width: 1920, height: 1080 })
+    const base: StockClip = { id: 'Waves.webm', kind: 'video', source: 'commons', url: 'https://upload.wikimedia.org/wikipedia/commons/a/ab/Waves.webm', previewImage: '', width: 1920, height: 1080, duration: 12, author: 'Ana', authorUrl: 'https://commons.wikimedia.org/wiki/File:Waves.webm', pageUrl: 'https://commons.wikimedia.org/wiki/File:Waves.webm' }
+    fetchMock.mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/webm' } }))
+    const r = await downloadStock(base, outDir)
+    expect(r).toMatchObject({ mime: 'video/webm', provider: 'commons' })
+    expect(r.file.endsWith('.webm')).toBe(true)
+    // a Commons clip can't be fetched from Pexels' hosts, nor an Openverse photo from the site it points at
+    expect((await failure(downloadStock({ ...base, url: 'https://videos.pexels.com/x.mp4' }, outDir))).status).toBe(400)
+    expect((await failure(downloadStock({ ...base, kind: 'photo', source: 'openverse', url: 'https://cdn.example-photos.com/1/2.jpg' }, outDir))).status).toBe(400)
+    // a photo that turns out to be a page
+    fetchMock.mockResolvedValueOnce(new Response('<html>', { headers: { 'content-type': 'text/html' } }))
+    expect((await failure(downloadStock({ ...base, kind: 'photo', url: 'https://upload.wikimedia.org/x.jpg' }, outDir))).status).toBe(502)
+    // a redirect off the library's hosts
+    const moved = new Response(JPEG, { headers: { 'content-type': 'image/jpeg' } })
+    Object.defineProperty(moved, 'url', { value: 'https://evil.example/x.jpg' })
+    fetchMock.mockResolvedValueOnce(moved)
+    expect((await failure(downloadStock({ ...base, kind: 'photo', source: 'openverse', url: 'https://api.openverse.org/v1/images/abc/thumb/' }, outDir))).status).toBe(502)
+  })
+
+  it('stays off when FREE_MEDIA is off and there is no key', async () => {
+    ctx().config.freeMedia = false
+    expect((await failure(searchStock({ query: 'ocean', aspect: '16:9', media: 'photo' }))).status).toBe(503)
+    expect(await findIllustration('rocket')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('illustrations (Iconify, no key)', () => {
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="#f43"/><image href="https://evil.example/x.png" width="4" height="4"/></svg>'
+  beforeEach(() => {
+    ctx().config.freeMedia = true
+  })
+
+  it('picks an exact name from the preferred set, and falls back to a word of the phrase', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = new URL(url)
+      if (u.pathname === '/search') {
+        const q = u.searchParams.get('query')
+        expect(u.searchParams.get('prefixes')).toBe('fluent-emoji,fluent-emoji-flat,noto')
+        return Response.json({ icons: q === 'rocket' ? ['noto:rocket', 'fluent-emoji-flat:rocket', 'fluent-emoji:rocket-launch', 'twemoji:rocket'] : [] })
+      }
+      return new Response(SVG, { headers: { 'content-type': 'image/svg+xml' } })
+    })
+    // the flat Fluent one is found; its colour twin (same name, not in the search index) is what's drawn
+    const found = await findIllustration('shiny rocket')
+    expect(found?.icon).toBe('fluent-emoji:rocket')
+    const tried = fetchMock.mock.calls.map((c) => new URL(c[0]))
+    expect(tried.filter((u) => u.pathname === '/search').map((u) => u.searchParams.get('query'))).toEqual(['shiny rocket', 'rocket'])
+    expect(tried.at(-1)!.pathname).toBe('/fluent-emoji/rocket.svg')
+  })
+
+  it('draws the flat one when the colour one is missing', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = new URL(url)
+      if (u.pathname === '/search') return Response.json({ icons: ['fluent-emoji-flat:rocket'] })
+      return u.pathname.startsWith('/fluent-emoji/') ? new Response('404', { status: 404 }) : new Response(SVG)
+    })
+    expect((await findIllustration('rocket'))?.icon).toBe('fluent-emoji-flat:rocket')
+  })
+
+  it('tries a mirror when Iconify is down, and finds nothing for nonsense', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = new URL(url)
+      if (u.host === 'api.iconify.design') throw new TypeError('fetch failed')
+      return u.pathname === '/search' ? Response.json({ icons: [] }) : new Response(SVG)
+    })
+    expect(await findIllustration('zzqx')).toBeNull()
+    expect(fetchMock.mock.calls.some((c) => new URL(c[0]).host === 'api.simplesvg.com')).toBe(true)
+  })
+
+  it('draws an SVG to a 1024 px transparent PNG, without loading anything it points at', async () => {
+    const png = await illustrationPng(SVG, outDir)
+    expect(png).toMatchObject({ mime: 'image/png', width: 1024, height: 1024 })
+    const sharp = (await import('sharp')).default
+    const meta = await sharp(png.file).metadata()
+    expect(meta).toMatchObject({ format: 'png', width: 1024, height: 1024, hasAlpha: true })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

@@ -57,6 +57,10 @@ export interface Config {
   trustProxyHops: number
   /** Pexels API key (stock footage search for videos made without recordings); unset = no stock footage. */
   pexelsApiKey?: string
+  /** Pixabay API key (more stock clips and photos, free at pixabay.com/api/docs); unset = Pixabay isn't searched. */
+  pixabayApiKey?: string
+  /** Search the keyless free libraries (Wikimedia Commons, Openverse) and Iconify's illustrations; FREE_MEDIA=off turns them off. */
+  freeMedia: boolean
   /**
    * Background removal (E-21): a command run on the server with {in} and {out} in its arguments (a clip's file, and a
    * folder it fills with an alpha WebM `out.webm` or PNG frames). Unset = the tool is off.
@@ -217,6 +221,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hyperframesProtocolTimeout: env.HYPERFRAMES_PROTOCOL_TIMEOUT || undefined,
     trustProxyHops: envInt(env, 'TRUST_PROXY_HOPS', production ? 1 : 0),
     pexelsApiKey: env.PEXELS_API_KEY?.trim() || undefined,
+    pixabayApiKey: env.PIXABAY_API_KEY?.trim() || undefined,
+    freeMedia: !/^(0|off|false|no)$/i.test(env.FREE_MEDIA?.trim() ?? ''),
     bgRemovalCmd: env.BG_REMOVAL_CMD?.trim() || undefined,
     denoiseModel: env.DENOISE_MODEL?.trim() || undefined,
     operatorEmails:

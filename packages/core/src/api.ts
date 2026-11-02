@@ -565,8 +565,10 @@ export interface ProduceCapabilities {
   image?: { provider: 'openai' | 'gemini'; model: string }
   /** AI video clips (billed per second to the workspace's key). */
   video?: { provider: 'openai' | 'gemini'; model: string; maxSeconds: number }
-  /** Stock footage search (the server has a Pexels key). */
+  /** Stock footage search (always: Wikimedia Commons needs no key; Pexels and Pixabay when the server has their keys). */
   stock: boolean
+  /** Where stock clips and photos are searched, in order (e.g. Pexels, Wikimedia Commons). */
+  stockSources?: { video: string[]; photo: string[] }
   /** Scene visuals available here (motion and diagram always). */
   kinds: import('./types').VisualKind[]
   /** AI clips made per video at most. */

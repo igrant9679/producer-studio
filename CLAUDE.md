@@ -27,7 +27,9 @@ MeYouSocial's `CLAUDE.md` had to be split on 2026-10-30.
 **Every phase of the evaluation plan is live**, phase 5's four releases included (R4 since 31 Oct,
 `27a8802`, migrations v16–v18). After it: desktop first-start fixes (`c98fd7d`), plain reasons for
 jobs that failed before R4 (`2297569`), and videos from an idea with the person's own clips and
-images (`e185e6d`, a `media` scene visual). Work on branches or worktrees off `main`; the
+images (`e185e6d`, a `media` scene visual), then free stock photos and clips with no key (Wikimedia Commons,
+Openverse; Pixabay with a free key) and `animation` scenes of open-source illustrations (Iconify) — see
+`docs/server-status.md` → "Free stock, photos and animations". Work on branches or worktrees off `main`; the
 `p5-*` and older feature branches are history, all merged.
 
 The phase 5 planning docs are in **`docs/phase5/`** (recovered on 2026-10-30 from an old session

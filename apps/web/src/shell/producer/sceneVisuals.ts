@@ -1,11 +1,13 @@
 // Scene visuals in the Producer wizard (videos made from an idea): labels, defaults, and the plain-text form people
 // edit diagrams in (one item per line). Pure — unit-tested in __tests__.
-import type { DiagramType, SceneDiagram, SceneVisual, VisualKind } from '@producer/core'
+import type { AnimationStyle, DiagramType, SceneDiagram, SceneObject, SceneVisual, VisualKind } from '@producer/core'
 
 export const VISUAL_KIND_INFO: Record<Exclude<VisualKind, 'footage'>, { label: string; hint: string }> = {
   motion: { label: 'Animated text', hint: 'The headline and a few points animate in as they’re said' },
   diagram: { label: 'Diagram', hint: 'Steps, a cycle, a chart or a comparison, built as it’s explained' },
+  animation: { label: 'Animation', hint: 'Colourful illustrations that move as they’re named' },
   image: { label: 'AI image', hint: 'A generated picture with a slow pan and zoom' },
+  photo: { label: 'Stock photo', hint: 'A real photograph found for the scene, with a slow pan and zoom' },
   stock: { label: 'Stock footage', hint: 'A real video clip found for the scene' },
   aiVideo: { label: 'AI video clip', hint: 'A generated moving shot (slow, and billed per second)' },
   media: { label: 'Your clip or image', hint: 'One you added, filling the screen (images get a slow pan and zoom)' },
@@ -19,6 +21,38 @@ export const DIAGRAM_INFO: Record<DiagramType, { label: string; placeholder: str
   compare: { label: 'Comparison', placeholder: 'Left title, its points, a line with ---, then the right side\nBefore\nManual\n---\nAfter\nAutomatic' },
   timeline: { label: 'Timeline', placeholder: 'Label: detail, one per line\nJanuary: Kickoff\nMarch: Beta' },
   stat: { label: 'Big number', placeholder: 'The figure on the first line, what it means on the second\n3x\nfaster onboarding' },
+}
+
+export const ANIMATION_INFO: Record<AnimationStyle, { label: string; hint: string }> = {
+  row: { label: 'One by one', hint: 'They pop in side by side as each is named' },
+  journey: { label: 'Journey', hint: 'The first travels past the others, reaching each as it’s named' },
+  orbit: { label: 'Orbit', hint: 'The others circle the first' },
+  grow: { label: 'Growing', hint: 'Each one bigger than the last' },
+  burst: { label: 'Burst', hint: 'Copies of the others fly out of the first' },
+  change: { label: 'Before → after', hint: 'Each one turns into the next' },
+}
+
+/** Lines of “thing: caption” → an animation's objects (the illustration found before is kept while the name stays). */
+export function objectsFromText(text: string, prev: SceneObject[] = []): { objects?: SceneObject[]; error?: string } {
+  const objects = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((l): SceneObject => {
+      const i = l.indexOf(':')
+      const name = (i > 0 ? l.slice(0, i) : l).trim().slice(0, 40)
+      const label = i > 0 ? l.slice(i + 1).trim().slice(0, 60) : ''
+      const old = prev.find((p) => p.name.toLowerCase() === name.toLowerCase())
+      return { name, ...(label ? { label } : {}), ...(old?.assetId ? { assetId: old.assetId } : {}), ...(old?.icon ? { icon: old.icon } : {}) }
+    })
+    .filter((o) => o.name)
+  return objects.length ? { objects } : { error: 'Name at least one thing to draw, one per line' }
+}
+
+/** An animation's objects as the lines objectsFromText reads back. */
+export function objectsToText(objects: SceneObject[]): string {
+  return objects.map((o) => (o.label ? `${o.name}: ${o.label}` : o.name)).join('\n')
 }
 
 /** Lines of text → a diagram of `type`, or an error to show (nothing is drawn until it parses). */
@@ -104,7 +138,10 @@ export function defaultVisual(kind: Exclude<VisualKind, 'footage'>, scene: { hea
     case 'image':
       return { kind, prompt: scene.headline ? `An image that shows: ${scene.headline}` : '' }
     case 'stock':
+    case 'photo':
       return { kind, query: scene.headline.split(/\s+/).slice(0, 4).join(' ') }
+    case 'animation':
+      return { kind, style: 'row', objects: [{ name: 'light bulb', label: scene.headline.split(/\s+/).slice(0, 3).join(' ') }] }
     case 'aiVideo':
       return { kind, prompt: scene.headline ? `A cinematic shot that shows: ${scene.headline}` : '' }
   }
@@ -113,6 +150,6 @@ export function defaultVisual(kind: Exclude<VisualKind, 'footage'>, scene: { hea
 /** Editing what a generated visual asks for means it must be made again: drop the made asset. */
 export function withPrompt(v: SceneVisual, text: string): SceneVisual {
   if (v.kind === 'image' || v.kind === 'aiVideo') return text === v.prompt ? v : { kind: v.kind, prompt: text }
-  if (v.kind === 'stock') return text === v.query ? v : { kind: 'stock', query: text }
+  if (v.kind === 'stock' || v.kind === 'photo') return text === v.query ? v : { kind: v.kind, query: text }
   return v
 }
