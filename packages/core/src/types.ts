@@ -609,6 +609,11 @@ export interface ProducerMeta {
     visualKinds?: VisualKind[]
     /** The space's brand kit the video uses (absent: the default kit). */
     brandKitId?: string
+    /** Background music composed for the video on its scene cuts: a style from MUSIC_STYLES, or 'auto' (one that
+     * suits the tone). Absent or 'off': none. */
+    music?: string
+    /** Sound effects on the cuts, on graphics as they appear and on the title and close cards (absent: none). */
+    soundEffects?: boolean
   }
   script?: {
     scenes: ScriptScene[]

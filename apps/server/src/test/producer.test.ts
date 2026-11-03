@@ -4,10 +4,11 @@
 import fs from 'node:fs'
 import { eq } from 'drizzle-orm'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createShapeItem, type Project, type ProjectDocResponse, type ScriptScene } from '@producer/core'
+import { type AudioItem, createShapeItem, type Project, type ProjectDocResponse, type ScriptScene } from '@producer/core'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
-import { editedSinceAssembly, produceAssemble, timelineFingerprint } from '../ai/produce'
+import { editedSinceAssembly, produceAssemble, sceneSpans, timelineFingerprint } from '../ai/produce'
+import { MUSIC_DUCK_DB, sfxManifest } from '../ai/soundtrack'
 import { tts } from '../ai/tts'
 import { getJob } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
@@ -96,6 +97,53 @@ describe('Producer AI assembly', () => {
     expect(p.ai?.script?.scenes.map((s) => s.visual?.kind)).toEqual(['motion', 'diagram'])
     expect(p.tracks.some((t) => t.items.some((i) => i.type === 'text' && i.text === 'Decide'))).toBe(true)
   })
+
+  it('adds music composed on the cuts (ducked under the voice) and sound effects as clips, made once and reused', async () => {
+    const id = await newProject('With sound')
+    const ideaScenes: ScriptScene[] = [
+      { ...scenes[0], visual: { kind: 'motion', points: ['Every morning', 'One view'] } },
+      { ...scenes[1], visual: { kind: 'diagram', diagram: { type: 'steps', items: ['Open', 'Look', 'Decide'] } } },
+    ]
+    const go = async () => {
+      const a = await assemble(id, { scenes: ideaScenes, brief: { ...brief, source: 'idea', idea: 'A tour of the dashboard', music: 'mallet', soundEffects: true } })
+      expect(a.status).toBe(200)
+      return a.run()
+    }
+    const made = (kind: string) => ctx().db.select().from(assets).where(eq(assets.workspaceId, workspaceId)).then((rows) => rows.filter((r) => r.meta.generated?.kind === kind))
+    const res = await go()
+    expect(res.notes).toBeUndefined()
+    const p = (await load(id)).project
+    const layout = sceneSpans(ideaScenes, new Map(ideaScenes.map((s) => [s.id, { duration: 1.2 }])))
+    // the music: one clip the length of the video, on its own track that ducks under the narration
+    const music = p.tracks.find((t) => t.name === 'Music')!
+    expect(music.duck).toBe(MUSIC_DUCK_DB)
+    expect(music.items).toHaveLength(1)
+    const song = p.assets[(music.items[0] as AudioItem).assetId]
+    expect(song.duration).toBeGreaterThan(layout.duration - 0.2)
+    expect(song.duration).toBeLessThan(layout.duration + 0.2)
+    expect((await made('music'))[0].meta.generated).toMatchObject({ provider: 'huashu-motion', model: 'mallet' })
+    // the effects: a whoosh whose peak lands on each cut, a landing on the title, pops on the graphics, a ding at the close
+    const fx = p.tracks.find((t) => t.name === 'Sound effects')!
+    const names = fx.items.map((i) => i.name)
+    expect(names.filter((n) => n === 'cut sound')).toHaveLength(3)
+    expect(names).toEqual(expect.arrayContaining(['title sound', 'appear sound', 'close sound']))
+    const whoosh = sfxManifest()!.kits.crisp.roles['whoosh.short']
+    const cuts = fx.items.filter((i) => i.name === 'cut sound')
+    cuts.forEach((it, k) => {
+      const take = whoosh.takes.find((t) => p.assets[(it as AudioItem).assetId].name.includes(t.file.split('/')[1].replace('.ogg', '')))!
+      expect(it.start + take.sync).toBeCloseTo([...layout.spans.map((s) => s.start), layout.closeStart][k], 2)
+    })
+    expect(fx.items.every((i) => i.start >= 0 && (i as AudioItem).volume > 0 && (i as AudioItem).volume <= 1)).toBe(true)
+    // assembled again unchanged: the same music and the same effect files, nothing made twice
+    const counts = [(await made('music')).length, (await made('sfx')).length]
+    await go()
+    expect([(await made('music')).length, (await made('sfx')).length]).toEqual(counts)
+    // no music and no effects asked for: neither track
+    const plain = await assemble(id, { scenes: ideaScenes, brief: { ...brief, music: 'off', soundEffects: false } })
+    await plain.run()
+    expect((await load(id)).project.tracks.map((t) => t.name)).not.toEqual(expect.arrayContaining(['Music']))
+    expect((await load(id)).project.tracks.some((t) => t.name === 'Sound effects')).toBe(false)
+  }, 240_000)
 
   it('an AI-drawn scene is rendered into a clip filling the frame, reused while nothing changed; one with no AI becomes text', async ({ skip }) => {
     if (!ctx().config.chromePath || !fs.existsSync(ctx().config.chromePath!)) skip()

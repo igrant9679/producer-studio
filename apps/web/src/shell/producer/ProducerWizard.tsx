@@ -1,4 +1,4 @@
-import { PRODUCE_LIMITS, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { MUSIC_STYLES, PRODUCE_LIMITS, musicStyleFor, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -457,6 +457,24 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
             ))}
             <input className="input" style={{ width: 220, height: 28, borderRadius: 999 }} placeholder="Or describe it…" value={custom ? b.tone : ''} onChange={(e) => set({ tone: e.target.value || 'Confident' })} aria-label="Custom tone" />
           </div>
+        </div>
+        <div className="ps-field">
+          <label className="label" htmlFor="b-music">Music</label>
+          <select id="b-music" className="input" value={b.music ?? 'off'} onChange={(e) => set({ music: e.target.value })}>
+            <option value="auto">Suits the tone ({MUSIC_STYLES.find((m) => m.id === musicStyleFor('auto', b.tone))?.label})</option>
+            {MUSIC_STYLES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            <option value="off">No music</option>
+          </select>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            {musicStyleFor(b.music, b.tone) ? `${MUSIC_STYLES.find((m) => m.id === musicStyleFor(b.music, b.tone))?.about}. Composed for this video on its scene changes, and quieter while the narrator speaks. Free.` : 'The video has narration only.'}
+          </div>
+        </div>
+        <div className="ps-field">
+          <span className="label">Sound effects</span>
+          <label className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+            <input type="checkbox" checked={b.soundEffects === true} onChange={(e) => set({ soundEffects: e.target.checked })} />
+            <span>A whoosh on each scene change, a soft pop as graphics appear, and a ding on the close card. Free, and each one is a clip you can move or delete.</span>
+          </label>
         </div>
         <div className="ps-field" style={{ gridColumn: '1 / -1' }}>
           <span className="label">Aspect ratio</span>
@@ -1152,7 +1170,7 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
           <div className="muted" style={{ textAlign: 'center', fontSize: '0.75rem', marginTop: 8 }}>{r.progress && r.progress > 0 ? `${Math.round(r.progress * 100)}%` : 'Starting…'}</div>
         </div>
       )}
-      {!done && r.status !== 'error' && <TimeEstimate total={estimateAssemble(s.scenes, { renarrate: r.renarrate, whisper })} running={r.status === 'running'} progress={r.progress} />}
+      {!done && r.status !== 'error' && <TimeEstimate total={estimateAssemble(s.scenes, { renarrate: r.renarrate, whisper, music: !!musicStyleFor(s.brief.music, s.brief.tone) })} running={r.status === 'running'} progress={r.progress} />}
       <div className="row" style={{ justifyContent: 'center', marginTop: 20 }}>
         {done ? (
           <>

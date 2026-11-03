@@ -79,6 +79,8 @@ export function defaultBrief(opts: { prompt?: string; aspect?: Brief['aspect']; 
     voice: opts.voice ?? 'af_heart',
     aspect: opts.aspect ?? '16:9',
     notes: '',
+    music: 'auto',
+    soundEffects: true,
   }
 }
 

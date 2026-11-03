@@ -22,16 +22,20 @@ export function estimateWrite(s: WizardState): number {
 const VISUAL_SECONDS: Record<string, number> = { image: 20, stock: 10, photo: 5, animation: 6, drawn: 75, aiVideo: 120 }
 
 /** Seconds to narrate, time captions, make visuals and build the timeline. */
-export function estimateAssemble(scenes: ScriptScene[], opts: { renarrate?: string[]; whisper?: boolean } = {}): number {
+export function estimateAssemble(scenes: ScriptScene[], opts: { renarrate?: string[]; whisper?: boolean; music?: boolean } = {}): number {
   let t = 8
+  let length = 6.5
   for (const sc of scenes) {
     const spoken = narrationSeconds(sc.narration) / (sc.narrator?.speed ?? 1)
+    length += spoken + 2
     // a voice made before for the same words is reused
     const reuse = !!sc.voice && !opts.renarrate?.includes(sc.id)
     t += reuse ? 1 : 4 + spoken * 0.35
     t += opts.whisper === false ? 0.2 : 2 + spoken * 0.2
     t += VISUAL_SECONDS[sc.visual?.kind ?? ''] ?? 0
   }
+  // the music takes about as long to compose as the video takes to play
+  if (opts.music) t += length * 0.9
   return Math.round(t)
 }
 

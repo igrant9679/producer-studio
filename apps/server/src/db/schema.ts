@@ -119,7 +119,7 @@ export interface AssetMeta {
   tts?: { text: string; voice: string; speed: number }
   codec?: string
   /** Made for a scene of a video made from an idea: what was asked for (re-assembling reuses it while that's unchanged). */
-  generated?: { kind: 'image' | 'stock' | 'photo' | 'aiVideo' | 'illustration' | 'drawn'; prompt: string; provider?: string; model?: string; credit?: import('@producer/core').MediaCredit }
+  generated?: { kind: 'image' | 'stock' | 'photo' | 'aiVideo' | 'illustration' | 'drawn' | 'music' | 'sfx'; prompt: string; provider?: string; model?: string; credit?: import('@producer/core').MediaCredit }
   /** The job that made this clip and processes it inside itself (voiceovers, Producer AI visuals): once that job has
    * ended, a clip still "processing" never will finish, and asset recovery fails it. */
   jobId?: string

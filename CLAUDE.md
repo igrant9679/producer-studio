@@ -29,8 +29,9 @@ MeYouSocial's `CLAUDE.md` had to be split on 2026-10-30.
 jobs that failed before R4 (`2297569`), and videos from an idea with the person's own clips and
 images (`e185e6d`, a `media` scene visual), then free stock photos and clips with no key (Wikimedia Commons,
 Openverse; Pixabay with a free key) and `animation` scenes of open-source illustrations (Iconify), and `drawn` scenes the space's AI draws in code, run in a
-sandboxed headless Chrome (`ai/drawn.ts`, `media/drawing.ts`) — see
-`docs/server-status.md` → "Free stock, photos and animations" and "AI-drawn animation". Work on branches or worktrees off `main`; the
+sandboxed headless Chrome (`ai/drawn.ts`, `media/drawing.ts`), and free music composed on the cuts
+(`scripts/music`, from huashu-motion) with sound effects from earshot's kits (`sfx/`, `ai/soundtrack.ts`) — see
+`docs/server-status.md` → "Free stock, photos and animations", "AI-drawn animation" and "Music and sound effects". Work on branches or worktrees off `main`; the
 `p5-*` and older feature branches are history, all merged.
 
 The phase 5 planning docs are in **`docs/phase5/`** (recovered on 2026-10-30 from an old session

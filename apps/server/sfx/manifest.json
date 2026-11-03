@@ -1,0 +1,324 @@
+{
+ "version": 1,
+ "source": "earshot 0.4.0 (MIT, (c) 2026 Leon Lin, https://github.com/Leonxlnx/earshot): its kits launch, calm, crisp and minimal, rendered from the bank with `earshot.forge.kit.render`, at most 3 takes a role; Ogg Opus 96 kbps",
+ "kits": {
+  "calm": {
+   "roles": {
+    "land": {
+     "sound": "pro_pop_in/deep",
+     "level_db": -5.0,
+     "takes": [
+      {
+       "file": "calm/land_1.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      },
+      {
+       "file": "calm/land_2.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      },
+      {
+       "file": "calm/land_3.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      }
+     ]
+    },
+    "whoosh.short": {
+     "sound": "fit/whoosh.short/bamboo_swish",
+     "level_db": -9.0,
+     "takes": [
+      {
+       "file": "calm/whoosh-short_1.ogg",
+       "sync": 0.1295,
+       "duration": 0.477
+      },
+      {
+       "file": "calm/whoosh-short_2.ogg",
+       "sync": 0.1295,
+       "duration": 0.477
+      },
+      {
+       "file": "calm/whoosh-short_3.ogg",
+       "sync": 0.1295,
+       "duration": 0.477
+      }
+     ]
+    },
+    "pop": {
+     "sound": "fit/pop/mouth_plop",
+     "level_db": -2.5,
+     "takes": [
+      {
+       "file": "calm/pop_1.ogg",
+       "sync": 0.008,
+       "duration": 0.2808
+      },
+      {
+       "file": "calm/pop_2.ogg",
+       "sync": 0.0082,
+       "duration": 0.2808
+      },
+      {
+       "file": "calm/pop_3.ogg",
+       "sync": 0.008,
+       "duration": 0.2808
+      }
+     ]
+    },
+    "click.confirm": {
+     "sound": "pluck/kalimba_soft",
+     "level_db": -10.0,
+     "takes": [
+      {
+       "file": "calm/click-confirm_1.ogg",
+       "sync": 0.0032,
+       "duration": 3.0
+      }
+     ]
+    }
+   }
+  },
+  "crisp": {
+   "roles": {
+    "land": {
+     "sound": "pro_pop_in/deep",
+     "level_db": -4.0,
+     "takes": [
+      {
+       "file": "crisp/land_1.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      },
+      {
+       "file": "crisp/land_2.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      },
+      {
+       "file": "crisp/land_3.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      }
+     ]
+    },
+    "whoosh.short": {
+     "sound": "whoosh_fast/tight",
+     "level_db": -6.0,
+     "takes": [
+      {
+       "file": "crisp/whoosh-short_1.ogg",
+       "sync": 0.1615,
+       "duration": 0.5364
+      },
+      {
+       "file": "crisp/whoosh-short_2.ogg",
+       "sync": 0.1575,
+       "duration": 0.5314
+      },
+      {
+       "file": "crisp/whoosh-short_3.ogg",
+       "sync": 0.1605,
+       "duration": 0.5314
+      }
+     ]
+    },
+    "pop": {
+     "sound": "pro_pop_in/round",
+     "level_db": -6.0,
+     "takes": [
+      {
+       "file": "crisp/pop_1.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      },
+      {
+       "file": "crisp/pop_2.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      },
+      {
+       "file": "crisp/pop_3.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      }
+     ]
+    },
+    "click.confirm": {
+     "sound": "pro_notify/ding_2045",
+     "level_db": -9.0,
+     "takes": [
+      {
+       "file": "crisp/click-confirm_1.ogg",
+       "sync": 0.0,
+       "duration": 0.36
+      }
+     ]
+    }
+   }
+  },
+  "launch": {
+   "roles": {
+    "land": {
+     "sound": "pro_pop_in/round",
+     "level_db": -5.5,
+     "offset_ms": 30.0,
+     "min_gap_ms": 159.0,
+     "takes": [
+      {
+       "file": "launch/land_1.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      },
+      {
+       "file": "launch/land_2.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      },
+      {
+       "file": "launch/land_3.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      }
+     ]
+    },
+    "whoosh.short": {
+     "sound": "whoosh_fast/crisp",
+     "level_db": -5.5,
+     "offset_ms": 37.0,
+     "takes": [
+      {
+       "file": "launch/whoosh-short_1.ogg",
+       "sync": 0.1305,
+       "duration": 1.0561
+      },
+      {
+       "file": "launch/whoosh-short_2.ogg",
+       "sync": 0.1475,
+       "duration": 1.0311
+      },
+      {
+       "file": "launch/whoosh-short_3.ogg",
+       "sync": 0.1415,
+       "duration": 0.9561
+      }
+     ]
+    },
+    "pop": {
+     "sound": "ui_pop/soft",
+     "level_db": -8.0,
+     "offset_ms": 4.0,
+     "min_gap_ms": 114.0,
+     "takes": [
+      {
+       "file": "launch/pop_1.ogg",
+       "sync": 0.0025,
+       "duration": 0.1805
+      },
+      {
+       "file": "launch/pop_2.ogg",
+       "sync": 0.0025,
+       "duration": 0.1723
+      },
+      {
+       "file": "launch/pop_3.ogg",
+       "sync": 0.0025,
+       "duration": 0.1725
+      }
+     ]
+    },
+    "click.confirm": {
+     "sound": "notify/mid_tine",
+     "level_db": -8.5,
+     "offset_ms": 0.0,
+     "takes": [
+      {
+       "file": "launch/click-confirm_1.ogg",
+       "sync": 0.0035,
+       "duration": 0.425
+      }
+     ]
+    }
+   }
+  },
+  "minimal": {
+   "roles": {
+    "land": {
+     "sound": "pro_pop_in/deep",
+     "level_db": -5.0,
+     "takes": [
+      {
+       "file": "minimal/land_1.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      },
+      {
+       "file": "minimal/land_2.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      },
+      {
+       "file": "minimal/land_3.ogg",
+       "sync": 0.0012,
+       "duration": 0.1759
+      }
+     ]
+    },
+    "whoosh.short": {
+     "sound": "whoosh_fast/heavy",
+     "level_db": -7.0,
+     "takes": [
+      {
+       "file": "minimal/whoosh-short_1.ogg",
+       "sync": 0.1345,
+       "duration": 0.765
+      },
+      {
+       "file": "minimal/whoosh-short_2.ogg",
+       "sync": 0.1535,
+       "duration": 0.69
+      },
+      {
+       "file": "minimal/whoosh-short_3.ogg",
+       "sync": 0.1575,
+       "duration": 0.67
+      }
+     ]
+    },
+    "pop": {
+     "sound": "pro_pop_in/round",
+     "level_db": -7.0,
+     "takes": [
+      {
+       "file": "minimal/pop_1.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      },
+      {
+       "file": "minimal/pop_2.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      },
+      {
+       "file": "minimal/pop_3.ogg",
+       "sync": 0.0012,
+       "duration": 0.1716
+      }
+     ]
+    },
+    "click.confirm": {
+     "sound": "pro_notify/ding_1822",
+     "level_db": -10.0,
+     "takes": [
+      {
+       "file": "minimal/click-confirm_1.ogg",
+       "sync": 0.0,
+       "duration": 0.26
+      }
+     ]
+    }
+   }
+  }
+ }
+}

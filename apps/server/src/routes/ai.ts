@@ -3,7 +3,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import * as z from 'zod/v4'
-import { PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
+import { MUSIC_STYLES, PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { jobDto } from '../dto'
@@ -161,6 +161,8 @@ const BriefSchema = z.object({
   lengthSec: z.number().int().min(15).max(600).optional(),
   visualKinds: z.array(z.enum(['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo'])).max(9).optional(),
   brandKitId: z.string().max(80).optional(),
+  music: z.enum(['off', 'auto', ...MUSIC_STYLES.map((m) => m.id)]).optional(),
+  soundEffects: z.boolean().optional(),
 })
 
 aiRoutes.post('/produce/script', async (c) => {

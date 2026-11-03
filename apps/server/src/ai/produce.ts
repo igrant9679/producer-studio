@@ -15,6 +15,7 @@ import {
   createVideoItem,
   defaultTextStyle,
   generateCaptions,
+  musicStyleFor,
   round,
   uid,
   type Asset,
@@ -51,6 +52,7 @@ import { whisperAvailable } from './whisper'
 import { SOURCE_NAMES, type StockSource, downloadStock, findIllustration, generateImage, generateVideo, generationCapabilities, illustrationPng, searchStock } from './generate'
 import { IDEA_SYSTEM, type IdeaMedia, IdeaScriptSchema, VISUAL_KINDS, buildIdeaPrompt, normalizeIdeaScript } from './scenes'
 import { type AnimObject, type Placed, type SceneFrame, animationItems, diagramItems, motionItems, slotIndex } from './scene-layout'
+import { type SceneSpan, type VideoSound, addSound, kitFor, makeMusic, planSfx, sfxAsset, sfxCues, sfxManifest } from './soundtrack'
 
 export type Brief = NonNullable<ProducerMeta['brief']>
 
@@ -362,6 +364,18 @@ const CLOSE_TAIL = 1.8
 const TITLE_CARD = 3
 const CLOSE_CARD = 3.5
 
+/** Where each scene sits on an assembled timeline (after the title card), where the close card starts, and the length. */
+export function sceneSpans(scenes: ScriptScene[], voices: Map<string, { duration: number }>): { spans: SceneSpan[]; closeStart: number; duration: number } {
+  let t = TITLE_CARD
+  const spans = scenes.map((scene, si) => {
+    const voiceDur = voices.get(scene.id)?.duration ?? Math.max(2, scene.narration.split(/\s+/).length / 2.8)
+    const start = t
+    t = start + round(voiceDur + LEAD + (si === scenes.length - 1 ? CLOSE_TAIL : TAIL), 1)
+    return { id: scene.id, start, end: t }
+  })
+  return { spans, closeStart: t, duration: round(t + CLOSE_CARD, 3) }
+}
+
 /** Even word timings for a narration line when whisper isn't available. */
 export function syntheticTranscript(text: string, duration: number): Transcript {
   const words = text.split(/\s+/).filter(Boolean)
@@ -391,6 +405,8 @@ export interface AssembleInput {
   /** The illustrations animation scenes use (by asset id) */
   illustrations?: Map<string, Asset>
   brand?: import('@producer/core').BrandKitDoc | null
+  /** Background music and sound effects (made beforehand; see makeSound). */
+  sound?: VideoSound
 }
 
 /** Pure timeline construction from script + voices (unit-testable, no I/O). */
@@ -610,6 +626,11 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   }
   for (const tr of [...shapeTracks, ...textTracks]) tr.items.sort((a, b) => a.start - b.start)
   p.tracks = [voice, main, ...shapeTracks, ...textTracks, cards, labels].filter((tr) => tr.main || tr.items.length)
+  if (inp.sound) {
+    const sounded = addSound(p, inp.sound, closeStart + CLOSE_CARD)
+    p.tracks = sounded.tracks
+    p.assets = sounded.assets
+  }
   // captions from the voice transcripts
   const captionStyle = captionStyleFromPreset(inp.brand?.captionPreset ?? 'clean')
   captionStyle.style = { ...captionStyle.style, fontFamily: pal.bodyFont, boxWidth: Math.round(width * 0.8), fontSize: Math.round(captionStyle.style.fontSize * scale) }
@@ -715,13 +736,17 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const frameSize = sizeForAspect(brief.aspect || getLook(brief.template).aspect)
   const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand) }
   const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing })
+  // 3b. music composed on the cuts, and sound effects where things move (both free: made on this server)
+  const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand })
+  const sounded = await makeSound(subContext(jc, 0.9, 0.92, 'Adding music and sound'), { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, jobId: jc.job.id, brief, scenes: made.scenes, voices, probe, seed: brand?.name || row.id })
+  made.notes.push(...sounded.notes)
   // 4. timeline, built on the project as it is now (a rename or script edit saved meanwhile stays); a timeline
   // edited while this ran is left alone
   jc.progress(0.92, 'Assembling timeline')
   jc.check()
   const scenes = made.scenes.map((s) => ({ ...s, voice: voices.has(s.id) ? { assetId: voices.get(s.id)!.asset.id, duration: voices.get(s.id)!.duration } : undefined }))
   const build = (cur: Project) => {
-    const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand })
+    const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, sound: sounded.sound })
     built.ai = { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes }, status: 'assembled', assembled: { fingerprint: timelineFingerprint(built), at: Date.now() } }
     return built
   }
@@ -754,6 +779,58 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
 }
 
 class EditedMeanwhile extends Error {}
+
+/**
+ * The music and sound effects a brief asks for: the music composed (or reused) on the video's cuts, and each effect's
+ * take this space has (or a copy of the shipped one). Neither stops an assembly: what can't be made is left out and
+ * said in `notes`.
+ */
+async function makeSound(
+  jc: JobContext,
+  o: { workspaceId: string; userId: string; projectId: string; jobId: string; brief: Brief; scenes: ScriptScene[]; voices: Map<string, Voice>; probe: () => Project; seed: string },
+): Promise<{ sound?: VideoSound; notes: string[] }> {
+  const style = musicStyleFor(o.brief.music, o.brief.tone)
+  const effects = o.brief.soundEffects === true
+  if (!style && !effects) return { notes: [] }
+  const layout = sceneSpans(o.scenes, o.voices)
+  const notes: string[] = []
+  const sound: VideoSound = {}
+  const work = tmpDir('sound')
+  try {
+    if (style) {
+      try {
+        sound.music = await makeMusic(subContext(jc, 0, effects ? 0.8 : 1), { ...o, style, spans: layout.spans, duration: layout.duration, work })
+      } catch (err) {
+        if (jc.signal.aborted) throw err
+        log.warn('music could not be made', { err })
+        notes.push(`No music: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    const m = effects ? sfxManifest() : null
+    if (effects && !m) notes.push('No sound effects: this install has none')
+    if (m) {
+      try {
+        const plan = planSfx(sfxCues(o.probe(), layout.spans, layout.closeStart), kitFor(style), m)
+        const byFile = new Map<string, Asset>()
+        sound.effects = []
+        for (const e of plan) {
+          jc.check()
+          if (!byFile.has(e.take.file)) byFile.set(e.take.file, await sfxAsset({ ...o, take: e.take, role: e.role, work }, { signal: jc.signal, check: jc.check, progress: () => undefined }))
+          sound.effects.push({ asset: byFile.get(e.take.file)!, start: e.start, volume: e.volume, name: `${e.cue.moment} sound` })
+        }
+        jc.progress(1, `${sound.effects.length} sound effects`)
+      } catch (err) {
+        if (jc.signal.aborted) throw err
+        log.warn('sound effects could not be added', { err })
+        notes.push(`No sound effects: ${err instanceof Error ? err.message : String(err)}`)
+        sound.effects = undefined
+      }
+    }
+  } finally {
+    fs.rm(work, { recursive: true, force: true }, () => undefined)
+  }
+  return { sound, notes }
+}
 
 /** At most this many AI clips per video: each costs real money on the workspace's key and minutes to make. */
 export const MAX_AI_CLIPS = 3

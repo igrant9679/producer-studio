@@ -1,7 +1,8 @@
 import type { SceneDiagram } from '@producer/core'
 import { describe, expect, it } from 'vitest'
 import { defaultVisual, diagramFromText, diagramToText, objectsFromText, objectsToText, withPrompt } from '../producer/sceneVisuals'
-import { canAdvance, initialState, newScene, stateFromProject, unsavedDraft } from '../producer/wizardLogic'
+import { estimateAssemble } from '../producer/estimates'
+import { canAdvance, defaultBrief, initialState, newScene, stateFromProject, unsavedDraft } from '../producer/wizardLogic'
 
 describe('a draft only this tab holds', () => {
   it('is unsaved once it has an idea, a title, recordings or scenes, and never once a project holds it', () => {
@@ -108,5 +109,24 @@ describe('starting from an idea', () => {
       version: 1,
     })
     expect(s.step).toBe('brief')
+  })
+})
+
+describe('music and sound effects', () => {
+  it('a new brief has music that suits the tone and sound effects; one saved before has neither', () => {
+    expect(defaultBrief()).toMatchObject({ music: 'auto', soundEffects: true })
+    const s = stateFromProject({
+      summary: { id: 'p1', workspaceId: 'ws', name: 'Old' } as never,
+      project: { assets: {}, ai: { brief: { title: 'Old', audience: '', goal: '', tone: 'warm', template: '', voice: 'af_heart', aspect: '16:9' } } } as never,
+      version: 1,
+    })
+    expect(s.brief.music).toBeUndefined()
+    expect(s.brief.soundEffects).toBeUndefined()
+  })
+
+  it('composing the music adds about the video’s length to the wait', () => {
+    const scenes = [newScene(), newScene()].map((sc) => ({ ...sc, narration: 'A line of narration that takes a few seconds to say out loud.' }))
+    const plain = estimateAssemble(scenes)
+    expect(estimateAssemble(scenes, { music: true }) - plain).toBeGreaterThan(10)
   })
 })

@@ -143,6 +143,21 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   encoded to an mp4 asset (`meta.generated.kind = 'drawn'`, keyed on code + length + frame + word timings, so an unchanged
   scene reuses it and a changed narration re-renders the same code); assembly places it like a stock clip. At most
   `MAX_DRAWN` (6) per video; offered when the export browser exists.
+  **Music and sound effects** (3 Nov 2026): a brief's `music` (`'auto'` = a style that suits the tone, one of core's
+  `MUSIC_STYLES`, or `'off'`/absent = none) and `soundEffects` (absent = none; the wizard defaults new briefs to `'auto'`
+  and on). The music is composed for the video on its scene cuts by huashu-motion's score engine (MIT), vendored in
+  `scripts/music/` (dsp.js and score.js unchanged; soundtrack.js is the music half of its sound.js; samples.js a stub,
+  so every instrument is synthesized). It runs as its own process (`scripts/music/compose.mjs`, about a minute per minute
+  of video on one core, stopped after 15 min), levelled to `MUSIC_LUFS` (-30; Kokoro narrates near -22.5), encoded to AAC and stored as an asset
+  (`meta.generated.kind = 'music'`, keyed on style + cuts + length, so an unchanged video reuses it). It goes on its own
+  `Music` track that ducks `MUSIC_DUCK_DB` (10) under the voice in the editor, so moved or re-recorded narration stays
+  ducked. The effects are earshot's kits (MIT): `launch`, `calm`, `crisp` and `minimal`, rendered once from its bank
+  (at most 3 takes a role) and shipped as Ogg Opus in `sfx/` (~300 KB, `manifest.json` gives each take's sync point:
+  its onset, or its peak for a whoosh). `ai/soundtrack.ts` puts a landing on the title, a whoosh on each cut, up to
+  three spaced pops per scene as graphics appear (not on a cut), and a ding on the close card, each an ordinary clip
+  on a `Sound effects` track; the kit follows the music style. Each take is copied into the space once
+  (`kind = 'sfx'`). Neither stops an assembly: what can't be made is left out and said in the job's notes. The desktop
+  build copies `scripts/music` and `sfx` (stage.mjs).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

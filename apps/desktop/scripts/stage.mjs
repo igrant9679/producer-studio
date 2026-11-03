@@ -60,6 +60,9 @@ await build({
 fs.mkdirSync(path.join(out, 'scripts'), { recursive: true })
 for (const f of ['tts-worker.mjs', 'mcp-server.mjs']) fs.copyFileSync(path.join(serverSrc, 'scripts', f), path.join(out, 'scripts', f))
 fs.cpSync(path.join(serverSrc, 'skill'), path.join(out, 'skill'), { recursive: true })
+// the music composer runs as its own process (plain JS, not bundled); the sound effects are files
+fs.cpSync(path.join(serverSrc, 'scripts', 'music'), path.join(out, 'scripts', 'music'), { recursive: true, filter: (f) => !f.endsWith('.d.ts') })
+fs.cpSync(path.join(serverSrc, 'sfx'), path.join(out, 'sfx'), { recursive: true })
 await build({
   entryPoints: [path.join(repo, 'packages', 'core', 'src', 'runtime.ts')],
   outfile: path.join(out, 'runtime.js'),
