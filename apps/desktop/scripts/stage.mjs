@@ -32,6 +32,8 @@ const EXTERNAL = [
   'ffprobe-static',
   'hyperframes',
   'gsap',
+  'roughjs',
+  'puppeteer-core',
   ...fs.readdirSync(path.join(repo, 'node_modules', '@fontsource')).map((f) => `@fontsource/${f}`),
 ]
 

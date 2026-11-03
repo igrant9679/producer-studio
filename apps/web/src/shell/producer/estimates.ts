@@ -19,7 +19,7 @@ export function estimateWrite(s: WizardState): number {
   return Math.round(t + 20 + Math.min(90, (footage / 60) * 4))
 }
 
-const VISUAL_SECONDS: Record<string, number> = { image: 20, stock: 10, photo: 5, animation: 6, aiVideo: 120 }
+const VISUAL_SECONDS: Record<string, number> = { image: 20, stock: 10, photo: 5, animation: 6, drawn: 75, aiVideo: 120 }
 
 /** Seconds to narrate, time captions, make visuals and build the timeline. */
 export function estimateAssemble(scenes: ScriptScene[], opts: { renarrate?: string[]; whisper?: boolean } = {}): number {

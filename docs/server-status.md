@@ -133,6 +133,16 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   open-source colour sets (Fluent Emoji MIT, Noto Apache 2.0; `ai/generate/icons.ts`, mirrors tried), drawn to a 1024 px
   PNG with sharp, stored with `meta.generated.kind = 'illustration'` and reused across the space; an object with none
   found is a labelled disc. `GET /api/ai/produce/capabilities` adds `stockSources`.
+  **AI-drawn animation** (2 Nov 2026): the `drawn` visual (`{ kind: 'drawn', prompt, code?, assetId? }`) is a scene the
+  space's AI draws in code (`ai/drawn.ts`): from the writer's note, the narration and the voice's word timings it writes
+  `function draw(ctx, t, env)` (canvas 2D + Rough.js; rules distilled from explainroo and video-director, both MIT);
+  `media/drawing.ts` runs it in headless Chrome (the export's `CHROME_PATH`) with a CSP that allows only inline script,
+  the network APIs removed, a dead proxy for every request, WebRTC off UDP, seeded randomness and the frame's time as
+  the clock; a frame over 8 s (an endless loop) stops it. A failing run gets one fix round with the error, then the model
+  looks at four of its frames once and may fix what it sees (a fix that breaks keeps the working code). The frames are
+  encoded to an mp4 asset (`meta.generated.kind = 'drawn'`, keyed on code + length + frame + word timings, so an unchanged
+  scene reuses it and a changed narration re-renders the same code); assembly places it like a stock clip. At most
+  `MAX_DRAWN` (6) per video; offered when the export browser exists.
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

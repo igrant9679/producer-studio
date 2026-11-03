@@ -159,7 +159,7 @@ const BriefSchema = z.object({
   source: z.enum(['recordings', 'idea']).optional(),
   idea: z.string().max(PRODUCE_LIMITS.ideaChars).optional(),
   lengthSec: z.number().int().min(15).max(600).optional(),
-  visualKinds: z.array(z.enum(['motion', 'diagram', 'animation', 'image', 'photo', 'stock', 'aiVideo'])).max(8).optional(),
+  visualKinds: z.array(z.enum(['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo'])).max(9).optional(),
   brandKitId: z.string().max(80).optional(),
 })
 
@@ -222,7 +222,7 @@ aiRoutes.get('/produce/capabilities', async (c) => {
   if (!ws) throw new HttpError(400, 'invalid', 'workspaceId is required')
   await requireRole(u.id, ws, 'viewer')
   const caps = await generationCapabilities(ws)
-  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'animation', 'image', 'photo', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS } satisfies ProduceCapabilities)
+  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS } satisfies ProduceCapabilities)
 })
 
 aiRoutes.post('/produce/assemble', async (c) => {

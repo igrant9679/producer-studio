@@ -7,7 +7,7 @@ AI video production plus a full timeline editor, in two editions that share one 
 
 ## What it does
 
-- **Producer AI**: turn a screen recording into a narrated, branded video. It transcribes the recording (whisper.cpp), writes a script (Claude, Gemini or OpenAI), generates narration (Kokoro TTS) and assembles the timeline in one of eight looks. Or start from an idea or a pasted script, with no recording: Producer animates it with text, diagrams and moving illustrations, your own clips and photos, free stock footage and photos (Pexels, Pixabay, Openverse, Wikimedia Commons), AI images or AI clips.
+- **Producer AI**: turn a screen recording into a narrated, branded video. It transcribes the recording (whisper.cpp), writes a script (Claude, Gemini or OpenAI), generates narration (Kokoro TTS) and assembles the timeline in one of eight looks. Or start from an idea or a pasted script, with no recording: Producer animates it with text, diagrams, moving illustrations and scenes your AI draws in code, your own clips and photos, free stock footage and photos (Pexels, Pixabay, Openverse, Wikimedia Commons), AI images or AI clips.
 - **Editor**: multi-track timeline, canvas transforms, keyframes, text and captions (auto, karaoke, SRT), transcript-based editing, pause and filler removal, effects, filters, transitions, speed and freeze frames, and an AI assistant that edits the timeline for you.
 - **Export**: rendered by [HyperFrames](https://www.npmjs.com/package/hyperframes) at 720p–4K (drawn natively at the output resolution), 24–60 fps, as MP4, WebM or GIF, with share links.
 

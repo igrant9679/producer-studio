@@ -77,6 +77,15 @@ describe('animations and stock photos', () => {
   })
 })
 
+describe('AI-drawn scenes', () => {
+  it('start from the headline, and a changed note means drawing it again (its code and clip dropped)', () => {
+    expect(defaultVisual('drawn', { headline: 'Small ideas grow', narration: '' })).toEqual({ kind: 'drawn', prompt: 'A simple hand-drawn animation that shows: Small ideas grow' })
+    const made = { kind: 'drawn' as const, prompt: 'A seed grows', code: 'function draw() {}', assetId: 'as_d' }
+    expect(withPrompt(made, 'A seed grows')).toBe(made)
+    expect(withPrompt(made, 'A seed grows into a tree')).toEqual({ kind: 'drawn', prompt: 'A seed grows into a tree' })
+  })
+})
+
 describe('starting from an idea', () => {
   it('needs a sentence of idea instead of recordings', () => {
     const s = initialState()

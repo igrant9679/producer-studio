@@ -6,6 +6,7 @@ export const VISUAL_KIND_INFO: Record<Exclude<VisualKind, 'footage'>, { label: s
   motion: { label: 'Animated text', hint: 'The headline and a few points animate in as they’re said' },
   diagram: { label: 'Diagram', hint: 'Steps, a cycle, a chart or a comparison, built as it’s explained' },
   animation: { label: 'Animation', hint: 'Colourful illustrations that move as they’re named' },
+  drawn: { label: 'AI-drawn animation', hint: 'An animated drawing your AI makes for the scene, timed to the words' },
   image: { label: 'AI image', hint: 'A generated picture with a slow pan and zoom' },
   photo: { label: 'Stock photo', hint: 'A real photograph found for the scene, with a slow pan and zoom' },
   stock: { label: 'Stock footage', hint: 'A real video clip found for the scene' },
@@ -144,12 +145,14 @@ export function defaultVisual(kind: Exclude<VisualKind, 'footage'>, scene: { hea
       return { kind, style: 'row', objects: [{ name: 'light bulb', label: scene.headline.split(/\s+/).slice(0, 3).join(' ') }] }
     case 'aiVideo':
       return { kind, prompt: scene.headline ? `A cinematic shot that shows: ${scene.headline}` : '' }
+    case 'drawn':
+      return { kind, prompt: scene.headline ? `A simple hand-drawn animation that shows: ${scene.headline}` : '' }
   }
 }
 
 /** Editing what a generated visual asks for means it must be made again: drop the made asset. */
 export function withPrompt(v: SceneVisual, text: string): SceneVisual {
-  if (v.kind === 'image' || v.kind === 'aiVideo') return text === v.prompt ? v : { kind: v.kind, prompt: text }
+  if (v.kind === 'image' || v.kind === 'aiVideo' || v.kind === 'drawn') return text === v.prompt ? v : { kind: v.kind, prompt: text }
   if (v.kind === 'stock' || v.kind === 'photo') return text === v.query ? v : { kind: v.kind, query: text }
   return v
 }

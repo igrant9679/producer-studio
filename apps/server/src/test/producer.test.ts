@@ -1,6 +1,7 @@
 // Producer AI assembly never loses work: it uses the brief as it is now, keeps edits made to the project while it ran
 // (and refuses to replace an edited timeline), reuses the voices a failed run made, asks before re-assembling over
 // edits, and can assemble into a copy. Kokoro is replaced by a short sine WAV; everything else is real.
+import fs from 'node:fs'
 import { eq } from 'drizzle-orm'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createShapeItem, type Project, type ProjectDocResponse, type ScriptScene } from '@producer/core'
@@ -95,6 +96,36 @@ describe('Producer AI assembly', () => {
     expect(p.ai?.script?.scenes.map((s) => s.visual?.kind)).toEqual(['motion', 'diagram'])
     expect(p.tracks.some((t) => t.items.some((i) => i.type === 'text' && i.text === 'Decide'))).toBe(true)
   })
+
+  it('an AI-drawn scene is rendered into a clip filling the frame, reused while nothing changed; one with no AI becomes text', async ({ skip }) => {
+    if (!ctx().config.chromePath || !fs.existsSync(ctx().config.chromePath!)) skip()
+    const id = await newProject('Drawn')
+    const code = 'function draw(ctx, t, env) { ctx.fillStyle = env.palette.accent; ctx.fillRect(40 + t * 50, env.H / 2 - 40, 80, 80); }'
+    const drawn: ScriptScene[] = [
+      { ...scenes[0], visual: { kind: 'drawn', prompt: 'A square slides right', code } },
+      // no code yet and no AI in this space: animated text, with the reason
+      { ...scenes[1], visual: { kind: 'drawn', prompt: 'A circle grows' } },
+    ]
+    const run = async (sc: ScriptScene[]) => {
+      const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes: sc, brief: { ...brief, source: 'idea', idea: 'Shapes' } })
+      expect(r.status).toBe(200)
+      const job = (await getJob(r.body.id))!
+      const out = await produceAssemble(inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }))
+      return { out, p: (await load(id)).project }
+    }
+    const { out, p } = await run(drawn)
+    const made = p.ai!.script!.scenes[0].visual as Extract<ScriptScene['visual'], { kind: 'drawn' }>
+    expect(made).toMatchObject({ kind: 'drawn', code, assetId: expect.any(String) })
+    expect(p.tracks.find((t) => t.main)!.items.find((i) => i.type === 'video')).toMatchObject({ assetId: made.assetId, fit: 'cover', muted: true })
+    const row = (await ctx().db.select().from(assets).where(eq(assets.id, made.assetId!)))[0]
+    expect(row).toMatchObject({ origin: 'ai', kind: 'video', status: 'ready' })
+    expect(row.meta.generated).toMatchObject({ kind: 'drawn', model: 'code' })
+    expect(p.ai!.script!.scenes[1].visual?.kind).toBe('motion')
+    expect(out.notes?.[0]).toMatch(/^s02: /)
+    // again, unchanged: the same clip
+    const again = await run(p.ai!.script!.scenes.map((s, i) => (i === 0 ? s : drawn[1])))
+    expect((again.p.ai!.script!.scenes[0].visual as { assetId?: string }).assetId).toBe(made.assetId)
+  }, 240_000)
 
   it('assembles your own image from the library, and never one from another space', async () => {
     const id = await newProject('From my photos')

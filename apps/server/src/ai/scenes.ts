@@ -6,7 +6,7 @@ import * as z from 'zod/v4'
 import type { AnimationStyle, DiagramType, SceneDiagram, SceneVisual, ScriptScene, VisualKind } from '@producer/core'
 import { HttpError } from '../http'
 
-export const VISUAL_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'image', 'photo', 'stock', 'aiVideo']
+export const VISUAL_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']
 export const ANIMATION_STYLES: AnimationStyle[] = ['row', 'journey', 'orbit', 'grow', 'burst', 'change']
 export const DIAGRAM_TYPES: DiagramType[] = ['steps', 'cycle', 'hub', 'bars', 'compare', 'timeline', 'stat']
 
@@ -52,6 +52,7 @@ export const VisualSchema: z.ZodType<SceneVisual> = z.union([
       .max(5),
   }),
   z.object({ kind: z.literal('aiVideo'), prompt: short(1000), assetId: z.string().max(80).optional() }),
+  z.object({ kind: z.literal('drawn'), prompt: short(1500), code: z.string().max(60_000).optional(), assetId: z.string().max(80).optional() }),
   z.object({ kind: z.literal('media'), assetId: z.string().min(1).max(80), start: z.number().finite().min(0).optional(), end: z.number().finite().min(0).optional() }),
 ]) as z.ZodType<SceneVisual>
 
@@ -68,7 +69,7 @@ export const IdeaScriptSchema = z.object({
       headline: z.string().describe('3-6 word on-screen headline (2-4 for vertical)'),
       narration: z.string().describe('Exactly what the narrator says, written as spoken'),
       visual: z.object({
-        kind: z.enum(['motion', 'diagram', 'animation', 'image', 'photo', 'stock', 'aiVideo', 'media']).describe('What fills the screen for this scene'),
+        kind: z.enum(['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo', 'media']).describe('What fills the screen for this scene'),
         points: z.array(z.string()).describe('motion: 2-4 short on-screen points revealed in order (else empty)'),
         diagramType: z.enum(['none', 'steps', 'cycle', 'hub', 'bars', 'compare', 'timeline', 'stat']).describe('diagram: which diagram (else none)'),
         items: z.array(z.string()).describe('diagram steps/cycle/hub/timeline/bars: the labels in order, 2-6, each 1-4 words (else empty)'),
@@ -80,7 +81,7 @@ export const IdeaScriptSchema = z.object({
         leftPoints: z.array(z.string()).describe('diagram compare: left column points, 1-4 (else empty)'),
         rightTitle: z.string().describe('diagram compare: right column title (else empty)'),
         rightPoints: z.array(z.string()).describe('diagram compare: right column points, 1-4 (else empty)'),
-        prompt: z.string().describe('image / aiVideo: a vivid visual description of the shot, no text or logos in it (else empty)'),
+        prompt: z.string().describe('image / aiVideo: a vivid visual description of the shot, no text or logos in it; drawn: the animation beat by beat, what is drawn and how it moves on which words (else empty)'),
         query: z.string().describe('stock / photo: 2-5 word search, concrete and visual (else empty)'),
         animStyle: z.enum(['none', 'row', 'journey', 'orbit', 'grow', 'burst', 'change']).describe('animation: how the illustrations move (else none)'),
         objects: z.array(z.string()).describe('animation: 1-5 things to illustrate, each 1-2 plain words naming an everyday object, animal, person or symbol, e.g. rocket, money bag, laptop, globe (else empty)'),
@@ -103,6 +104,8 @@ const KIND_GUIDE: Record<VisualKind, string> = {
   image: '- image: a generated still image with a slow pan and zoom. Write a vivid, specific shot description (subject, setting, light, style). No words, logos or UI in the image.',
   animation:
     '- animation: colourful illustrations (emoji-style art of everyday things) that move as the narration names them. Name 1-5 objects in plain words (rocket, money bag, laptop, house, globe, clock, person, light bulb) and pick a style: row (they pop in one by one: a list of things), journey (the first travels past the others: a process, a delivery, a customer journey), orbit (the rest circle the first: one thing and what surrounds it), grow (each bigger than the last: growth, scale), burst (copies of the rest fly out of the first: one cause, many results), change (the first turns into the second: before and after). Great for explaining ideas with no footage; use it often.',
+  drawn:
+    '- drawn: a custom animated illustration drawn in code for this scene (hand-drawn or flat style: simple characters acting, objects that move, a process unfolding, a map, a chart that builds, a metaphor in motion). Write the director’s note in prompt: what is drawn, what moves, and on which words of the narration. Best for the scenes that most need showing rather than telling; use it for up to 6 scenes.',
   photo: '- photo: a real stock photograph with a slow pan and zoom. Give a short, concrete search such as "farmer in wheat field" or "doctor with patient".',
   stock: '- stock: real stock video footage. Give a short, concrete search such as "team meeting whiteboard" or "city traffic night"; keep it to common, filmable subjects.',
   aiVideo: '- aiVideo: a generated video clip (expensive, use for at most 2 scenes where real motion matters). Describe one continuous shot: subject, action, camera move, setting, light. No words or logos.',
@@ -123,6 +126,15 @@ export interface IdeaMedia {
 function mediaLine(m: IdeaMedia): string {
   const what = m.kind === 'image' ? 'image' : `video clip, ${Math.max(1, Math.round(m.duration ?? 0))} s`
   return `- ${m.ref} · ${what} · "${m.name.replace(/"/g, "'").slice(0, 80)}"${m.speech ? ` · says: "${m.speech.replace(/\s+/g, ' ').replace(/"/g, "'").slice(0, 240)}"` : ''}`
+}
+
+/** What a good mix looks like with the kinds on offer (a writer left alone leans on text and diagrams). */
+function mix(kinds: VisualKind[]): string {
+  const want: string[] = []
+  if (kinds.includes('drawn')) want.push('draw (drawn) the one or two scenes that most need showing: a process, a change, a cause and effect, a character doing something')
+  if (kinds.includes('photo') || kinds.includes('stock')) want.push(`show real people, places and things with ${kinds.includes('photo') && kinds.includes('stock') ? 'a stock photo or clip' : kinds.includes('photo') ? 'a stock photo' : 'a stock clip'} at least once`)
+  if (kinds.includes('animation')) want.push('use animation for lists of things and simple journeys')
+  return want.length ? ` In a video of four or more scenes: ${want.join('; ')}; keep text and diagrams for the points that are words or numbers.` : ''
 }
 
 export function buildIdeaPrompt(opts: { brief: NonNullable<import('@producer/core').ProducerMeta['brief']>; kinds: VisualKind[]; rules: string; example: string; media?: IdeaMedia[] }): string {
@@ -166,7 +178,7 @@ ${opts.example}
 REQUIREMENTS
 - Value-first story: the hook speaks the viewer's language, the message lands by scene 2, every later scene earns its place. Do not open with a rhetorical question.
 - About ${scenes} scenes, ids s01..sNN in order; the last scene is the close. Narration 15-60 words per scene at ~2.6 words/second (about ${words} words in total).
-- Vary the visuals; pick the one that makes each line easiest to understand. Never put a number on screen that the narration doesn't say, and don't invent statistics: use bars or stat only with figures from the idea, otherwise use another visual.
+- Vary the visuals; pick the one that makes each line easiest to understand.${mix(kinds)} Never put a number on screen that the narration doesn't say, and don't invent statistics: use bars or stat only with figures from the idea, otherwise use another visual.
 - Headlines are what the viewer reads (official spelling); narration is what the voice says (spoken spelling).
 - Fill every visual field; use empty strings, empty lists and diagramType "none" for fields that don't apply to the chosen kind.`
 }
@@ -183,6 +195,8 @@ export function toSceneVisual(v: IdeaScriptOutput['scenes'][number]['visual'], a
       return motion()
     case 'image':
       return clean(v.prompt, 1000) ? { kind: 'image', prompt: clean(v.prompt, 1000) } : motion()
+    case 'drawn':
+      return clean(v.prompt, 1500) ? { kind: 'drawn', prompt: clean(v.prompt, 1500) } : motion()
     case 'aiVideo':
       return clean(v.prompt, 1000) ? { kind: 'aiVideo', prompt: clean(v.prompt, 1000) } : motion()
     case 'stock':

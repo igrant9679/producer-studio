@@ -43,6 +43,8 @@ import { getLook, headlineStyle, labelStyle, lookPalette, sizeForAspect } from '
 import { insertProject, loadProjectRow, saveProjectDoc, withFreshIds, type SaveOptions } from '../services/projects'
 import { getBrand } from '../routes/workspaces'
 import { requireProvider } from './provider'
+import { writeDrawing } from './drawn'
+import { type DrawingEnv, renderDrawing } from '../media/drawing'
 import { houseRules } from './rules'
 import { ensureTranscript, synthesizeToAsset, transcribeAsset } from './speech'
 import { whisperAvailable } from './whisper'
@@ -232,7 +234,9 @@ export async function allowedVisualKinds(workspaceId: string, requested?: Visual
             ? !!caps.stockSources?.photo.length
             : k === 'animation'
               ? ctx().config.freeMedia
-              : true
+              : k === 'drawn'
+                ? !!ctx().config.chromePath && fs.existsSync(ctx().config.chromePath!)
+                : true
   return VISUAL_KINDS.filter((k) => want.has(k) && can(k))
 }
 
@@ -448,7 +452,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     const clip = (id: string) => inp.footage.get(id) ?? (gen?.id === id ? gen : undefined)
     // footage windows: the recordings' own, or the whole stock / AI clip made for this scene (filling the frame)
     let windows = visual.kind === 'footage' ? scene.footage.filter((f) => inp.footage.has(f.assetId) && f.end > f.start) : []
-    const madeClip = gen?.kind === 'video' && (visual.kind === 'stock' || visual.kind === 'aiVideo')
+    const madeClip = gen?.kind === 'video' && (visual.kind === 'stock' || visual.kind === 'aiVideo' || visual.kind === 'drawn')
     if (madeClip) windows = [{ assetId: gen.id, start: 0, end: gen.duration ?? dur }]
     // the person's own clip (from its start, or the part they chose) or image, filling the frame like a made one
     const own = visual.kind === 'media' ? inp.footage.get(visual.assetId) : undefined
@@ -708,7 +712,9 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
     v.asset = { ...v.asset, transcript }
   }
   // 3. generated visuals (videos made from an idea): AI stills, stock clips, AI clips
-  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices })
+  const frameSize = sizeForAspect(brief.aspect || getLook(brief.template).aspect)
+  const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand) }
+  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing })
   // 4. timeline, built on the project as it is now (a rename or script edit saved meanwhile stays); a timeline
   // edited while this ran is left alone
   jc.progress(0.92, 'Assembling timeline')
@@ -751,6 +757,8 @@ class EditedMeanwhile extends Error {}
 
 /** At most this many AI clips per video: each costs real money on the workspace's key and minutes to make. */
 export const MAX_AI_CLIPS = 3
+/** At most this many AI-drawn scenes per video: each is a few calls to the space's AI and a minute of rendering. */
+export const MAX_DRAWN = 6
 
 type MadeKind = 'image' | 'stock' | 'photo' | 'aiVideo'
 const MAKING: Record<MadeKind, string> = { image: 'Making an image', stock: 'Finding footage', photo: 'Finding a photo', aiVideo: 'Making a video clip' }
@@ -762,16 +770,26 @@ const MAKING: Record<MadeKind, string> = { image: 'Making an image', stock: 'Fin
  */
 async function makeSceneVisuals(
   jc: JobContext,
-  o: { workspaceId: string; userId: string; projectId: string; aspect: Brief['aspect']; scenes: ScriptScene[]; voices: Map<string, { asset: Asset; duration: number }> },
+  o: {
+    workspaceId: string
+    userId: string
+    projectId: string
+    aspect: Brief['aspect']
+    scenes: ScriptScene[]
+    voices: Map<string, { asset: Asset; duration: number }>
+    /** The frame AI-drawn scenes are drawn for. */
+    drawing?: { width: number; height: number; fps: number; pal: { canvas: string; accent: string; ink: string; headlineFont: string; bodyFont: string } }
+  },
 ): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[] }> {
   const generated = new Map<string, Asset>()
   const illustrations = new Map<string, Asset>()
   const notes: string[] = []
   const scenes = o.scenes.map((s) => ({ ...s }))
-  const todo = scenes.filter((s) => s.visual && (s.visual.kind === 'image' || s.visual.kind === 'stock' || s.visual.kind === 'photo' || s.visual.kind === 'aiVideo' || s.visual.kind === 'animation'))
+  const todo = scenes.filter((s) => s.visual && (s.visual.kind === 'image' || s.visual.kind === 'stock' || s.visual.kind === 'photo' || s.visual.kind === 'aiVideo' || s.visual.kind === 'animation' || s.visual.kind === 'drawn'))
   if (!todo.length) return { scenes, generated, illustrations, notes }
   const work = tmpDir('scene-visuals')
   let clips = 0
+  let drawn = 0
   try {
     for (let i = 0; i < todo.length; i++) {
       const s = todo[i]
@@ -781,6 +799,28 @@ async function makeSceneVisuals(
         const { visual, missing } = await findIllustrations(jc, { ...o, jobId: jc.job.id, visual: s.visual, work, into: illustrations })
         s.visual = visual
         if (missing.length) notes.push(`${s.id}: no illustration found for ${missing.map((m) => `“${m}”`).join(', ')}, so a labelled circle stands in`)
+        continue
+      }
+      if (s.visual?.kind === 'drawn') {
+        const v = s.visual
+        const sub = subContext(jc, 0.6 + (i / todo.length) * 0.3, 0.6 + ((i + 1) / todo.length) * 0.3, `Drawing ${s.id}`)
+        if (!o.drawing || drawn >= MAX_DRAWN) {
+          if (o.drawing) notes.push(`${s.id}: only ${MAX_DRAWN} scenes are drawn per video`)
+          s.visual = { kind: 'motion', points: [] }
+          continue
+        }
+        try {
+          const made = await makeDrawn(sub, { ...o, drawing: o.drawing, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work })
+          drawn++
+          generated.set(s.id, made.asset)
+          s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id }
+        } catch (err) {
+          if (jc.signal.aborted) throw err
+          const why = err instanceof HttpError ? err.message : 'it could not be drawn'
+          log.warn('drawn scene failed', { scene: s.id, err })
+          notes.push(`${s.id}: ${why}`)
+          s.visual = { kind: 'motion', points: [] }
+        }
         continue
       }
       const v = s.visual as Extract<NonNullable<ScriptScene['visual']>, { kind: MadeKind }>
@@ -817,6 +857,74 @@ async function makeSceneVisuals(
     fs.rm(work, { recursive: true, force: true }, () => undefined)
   }
   return { scenes, generated, illustrations, notes }
+}
+
+/** What a drawn clip was made from: the code, its length and frame (the same → the clip is reused). */
+const drawnKey = (code: string, env: Pick<DrawingEnv, 'width' | 'height' | 'fps' | 'duration' | 'palette'>, words: string) =>
+  `drawn:${crypto.createHash('sha256').update(JSON.stringify([code, env.width, env.height, env.fps, env.duration, env.palette, words])).digest('hex')}`
+
+/**
+ * An AI-drawn scene's clip: the same clip again while its code, length, frame and word timings are unchanged; else the
+ * code it has (a re-assembly with a changed narration) or new code from the space's AI, rendered in the sandbox.
+ */
+async function makeDrawn(
+  jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
+  o: {
+    workspaceId: string
+    userId: string
+    projectId: string
+    jobId: string
+    scene: ScriptScene
+    visual: Extract<SceneVisual, { kind: 'drawn' }>
+    voices: Map<string, { asset: Asset; duration: number }>
+    drawing: NonNullable<Parameters<typeof makeSceneVisuals>[1]['drawing']>
+    last: boolean
+    work: string
+  },
+): Promise<{ asset: Asset; code: string }> {
+  const voice = o.voices.get(o.scene.id)
+  const voiceDur = voice?.duration ?? Math.max(2, o.scene.narration.split(/\s+/).length / 2.6)
+  const words = (voice?.asset.transcript?.segments ?? []).flatMap((sg) => sg.words ?? []).map((w) => ({ w: w.w, start: round(LEAD + w.start, 3), ...(w.end !== undefined ? { end: round(LEAD + w.end, 3) } : {}) }))
+  const { pal } = o.drawing
+  const env: DrawingEnv = {
+    width: o.drawing.width,
+    height: o.drawing.height,
+    fps: o.drawing.fps,
+    duration: round(voiceDur + LEAD + (o.last ? CLOSE_TAIL : TAIL) + 0.2, 2),
+    words,
+    palette: { canvas: pal.canvas, accent: pal.accent, ink: pal.ink },
+    fonts: { headline: pal.headlineFont, body: pal.bodyFont },
+  }
+  const wordsKey = words.map((w) => `${w.w}@${w.start}`).join(' ')
+  if (o.visual.code && o.visual.assetId) {
+    const prev = (await ctx().db.select().from(assets).where(and(eq(assets.id, o.visual.assetId), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
+    if (prev && prev.status === 'ready' && prev.meta?.generated?.kind === 'drawn' && prev.meta.generated.prompt === drawnKey(o.visual.code, env, wordsKey)) return { asset: assetDoc(prev), code: o.visual.code }
+  }
+  let code = o.visual.code
+  let provider = 'ai'
+  if (!code) {
+    const ai = await requireProvider(o.workspaceId, 'script')
+    provider = ai.id
+    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m) })).code
+  }
+  jc.check()
+  jc.progress(0.6, 'Rendering the animation')
+  const file = path.join(o.work, `drawn-${o.scene.id.replace(/[^\w-]/g, '')}-${crypto.randomBytes(4).toString('hex')}.mp4`)
+  await renderDrawing(code, env, file, { signal: jc.signal, onProgress: (f) => jc.progress(0.6 + f * 0.3, 'Rendering the animation') })
+  const row = await createAssetFromFile({
+    workspaceId: o.workspaceId,
+    userId: o.userId,
+    projectId: o.projectId,
+    filePath: file,
+    name: `${o.scene.id} · ${o.scene.headline || o.scene.title} (drawn)`.slice(0, 200),
+    mime: 'video/mp4',
+    kind: 'video',
+    origin: 'ai',
+    meta: { generated: { kind: 'drawn', prompt: drawnKey(code, env, wordsKey), provider, model: 'code' }, jobId: o.jobId },
+  })
+  jc.progress(0.92, 'Preparing it for the editor')
+  const ready = await processAsset(row.id, jc)
+  return { asset: assetDoc(ready), code }
 }
 
 /** An illustration this space already has for this icon (any video's): drawn once, reused everywhere. */

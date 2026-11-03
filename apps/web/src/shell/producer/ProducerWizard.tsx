@@ -305,8 +305,8 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
   )
 }
 
-const ALL_KINDS: Array<Exclude<VisualKind, 'footage'>> = ['motion', 'diagram', 'animation', 'photo', 'stock', 'image', 'aiVideo']
-const DEFAULT_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'photo', 'stock', 'image']
+const ALL_KINDS: Array<Exclude<VisualKind, 'footage'>> = ['motion', 'diagram', 'animation', 'drawn', 'photo', 'stock', 'image', 'aiVideo']
+const DEFAULT_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'drawn', 'photo', 'stock', 'image']
 
 /** "Pexels, Wikimedia Commons" → "from Pexels or Wikimedia Commons". */
 const fromLibraries = (names: string[] | undefined) => (names?.length ? ` (free, from ${names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names[0]})` : '')
@@ -315,6 +315,7 @@ const fromLibraries = (names: string[] | undefined) => (names?.length ? ` (free,
 function kindStatus(k: Exclude<VisualKind, 'footage'>, caps: ProduceCapabilities | undefined): { available: boolean; note: string } {
   if (k === 'motion' || k === 'diagram') return { available: true, note: VISUAL_KIND_INFO[k].hint }
   if (k === 'animation') return caps?.kinds && !caps.kinds.includes('animation') ? { available: false, note: 'Illustrations are turned off on this server' } : { available: true, note: `${VISUAL_KIND_INFO.animation.hint} (free, open-source art)` }
+  if (k === 'drawn') return caps?.kinds && !caps.kinds.includes('drawn') ? { available: false, note: 'Needs the export’s browser on this server' } : { available: true, note: `${VISUAL_KIND_INFO.drawn.hint}. Written by the AI that writes your script (a few calls per scene), about a minute each.` }
   if (k === 'photo') return caps?.stockSources?.photo.length ? { available: true, note: `${VISUAL_KIND_INFO.photo.hint}${fromLibraries(caps.stockSources.photo)}.` } : { available: false, note: 'Stock photos aren’t set up on this server yet' }
   const who = (p: 'openai' | 'gemini') => (p === 'openai' ? 'your OpenAI account' : 'your Google account')
   if (k === 'image') return caps?.image ? { available: true, note: `${VISUAL_KIND_INFO.image.hint}. Billed to ${who(caps.image.provider)}.` } : { available: false, note: 'Needs an OpenAI or Gemini key in Settings → AI' }
@@ -751,12 +752,12 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
           {err && <div className="ps-field-err">{err}</div>}
         </>
       )}
-      {(v.kind === 'image' || v.kind === 'aiVideo') && (
+      {(v.kind === 'image' || v.kind === 'aiVideo' || v.kind === 'drawn') && (
         <textarea
           className="input"
           rows={3}
-          aria-label={v.kind === 'image' ? 'Image description' : 'Video clip description'}
-          placeholder={v.kind === 'image' ? 'What the picture shows: subject, setting, light, style. No words or logos.' : 'One continuous shot: subject, action, camera move, setting, light.'}
+          aria-label={v.kind === 'image' ? 'Image description' : v.kind === 'drawn' ? 'What the animation shows' : 'Video clip description'}
+          placeholder={v.kind === 'image' ? 'What the picture shows: subject, setting, light, style. No words or logos.' : v.kind === 'drawn' ? 'Beat by beat: what is drawn and what moves, e.g. a seed sprouts on “start”, grows into a tree on “grow”, apples appear on “results”.' : 'One continuous shot: subject, action, camera move, setting, light.'}
           value={v.prompt}
           onChange={(e) => onChange(withPrompt(v, e.target.value))}
         />
@@ -794,7 +795,7 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
         <div className="ps-visual-made">
           <Thumb src={mediaUrl(made, 'thumb')} seed={made} className="ps-win-thumb" />
           <span>
-            Made at the last assembly; it’s reused while this description stays the same.
+            {v.kind === 'drawn' ? 'Drawn at the last assembly; it’s kept while this description stays the same (a changed narration is drawn again to its new timing).' : 'Made at the last assembly; it’s reused while this description stays the same.'}
             {credit && (
               <>
                 {' '}{v.kind === 'photo' ? 'Photo' : 'Video'} by{' '}
