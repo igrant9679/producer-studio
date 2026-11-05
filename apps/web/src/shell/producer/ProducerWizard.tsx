@@ -1,4 +1,4 @@
-import { MUSIC_STYLES, PRODUCE_LIMITS, musicStyleFor, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { MUSIC_STYLES, PRODUCE_LIMITS, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -68,6 +68,8 @@ import {
   type Brief,
   type StepId,
   type WizardState,
+  animationOnly,
+  everything,
 } from './wizardLogic'
 import {
   addLibraryAssets,
@@ -305,6 +307,18 @@ function UploadStep({ s, workspaceId }: { s: WizardState; workspaceId: string })
   )
 }
 
+function PartToggle({ label, hint, on, disabled, onChange }: { label: string; hint: string; on: boolean; disabled?: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <label className={clsx('ps-part', on && 'on', disabled && 'off')}>
+      <input type="checkbox" checked={on} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        <b>{label}</b>
+        <small>{hint}</small>
+      </span>
+    </label>
+  )
+}
+
 const ALL_KINDS: Array<Exclude<VisualKind, 'footage'>> = ['motion', 'diagram', 'animation', 'drawn', 'photo', 'stock', 'image', 'aiVideo']
 const DEFAULT_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'drawn', 'photo', 'stock', 'image']
 
@@ -429,6 +443,9 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
   const kits = useAsync(() => (s.workspaceId ? brandApi.kits(s.workspaceId).then((l) => l.items) : Promise.resolve([])), [s.workspaceId])
   const builtIn = templates.filter((t) => t.builtIn)
   const custom = !TONES.includes(b.tone)
+  const parts = videoParts(b)
+  const idea = b.source === 'idea'
+  const onlyAnimation = idea && !parts.narration && !parts.onScreenText && !parts.cards
   return (
     <div className="ps-wz-body">
       <div className="ps-wz-intro">
@@ -458,6 +475,19 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
             <input className="input" style={{ width: 220, height: 28, borderRadius: 999 }} placeholder="Or describe it…" value={custom ? b.tone : ''} onChange={(e) => set({ tone: e.target.value || 'Confident' })} aria-label="Custom tone" />
           </div>
         </div>
+        <div className="ps-field" style={{ gridColumn: '1 / -1' }}>
+          <div className="row" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+            <span className="label" style={{ margin: 0 }}>What’s in the video</span>
+            <span className="spacer" />
+            {idea && <button className={clsx('chip', onlyAnimation && 'active')} aria-pressed={onlyAnimation} onClick={() => patch((st) => ({ brief: onlyAnimation ? everything(st.brief) : animationOnly(st.brief) }))}>Just the animation</button>}
+          </div>
+          <div className="ps-parts">
+            {idea && <PartToggle label="Narration" hint="A voice reads the script" on={parts.narration} onChange={(on) => set({ narration: on })} />}
+            <PartToggle label="Captions" hint={parts.narration ? 'The narration’s words along the bottom' : 'Needs narration'} on={parts.captions} disabled={!parts.narration} onChange={(on) => set({ captions: on })} />
+            <PartToggle label="Words on screen" hint="Headlines, labels and words in animations" on={parts.onScreenText} onChange={(on) => set({ onScreenText: on })} />
+            <PartToggle label="Title and closing cards" hint="A card at the start and at the end" on={parts.cards} onChange={(on) => set({ cards: on })} />
+          </div>
+        </div>
         <div className="ps-field">
           <label className="label" htmlFor="b-music">Music</label>
           <select id="b-music" className="input" value={b.music ?? 'off'} onChange={(e) => set({ music: e.target.value })}>
@@ -466,14 +496,14 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
             <option value="off">No music</option>
           </select>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            {musicStyleFor(b.music, b.tone) ? `${MUSIC_STYLES.find((m) => m.id === musicStyleFor(b.music, b.tone))?.about}. Composed for this video on its scene changes, and quieter while the narrator speaks. Free.` : 'The video has narration only.'}
+            {musicStyleFor(b.music, b.tone) ? `${MUSIC_STYLES.find((m) => m.id === musicStyleFor(b.music, b.tone))?.about}. Composed for this video on its scene changes${parts.narration ? ', and quieter while the narrator speaks' : ''}. Free.` : parts.narration ? 'The video has narration only.' : 'The video has no sound but any effects you add.'}
           </div>
         </div>
         <div className="ps-field">
           <span className="label">Sound effects</span>
           <label className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
             <input type="checkbox" checked={b.soundEffects === true} onChange={(e) => set({ soundEffects: e.target.checked })} />
-            <span>A whoosh on each scene change, a soft pop as graphics appear, and a ding on the close card. Free, and each one is a clip you can move or delete.</span>
+            <span>A whoosh on each scene change and a soft pop as graphics appear{parts.cards ? ', with a ding on the close card' : ''}. Free, and each one is a clip you can move or delete.</span>
           </label>
         </div>
         <div className="ps-field" style={{ gridColumn: '1 / -1' }}>
@@ -514,7 +544,7 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
         </div>
       )}
 
-      <div className="ps-field">
+      {parts.narration && <div className="ps-field">
         <div className="row" style={{ marginBottom: 8 }}>
           <span className="label" style={{ margin: 0 }}>Narration voice</span>
           <span className="spacer" />
@@ -530,7 +560,7 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
           ))}
         </RadioCards>
         {errs.voice && <div className="ps-field-err">{errs.voice}</div>}
-      </div>
+      </div>}
 
       <div className="ps-field">
         <label className="label" htmlFor="b-notes">Notes for the writer (optional)</label>
@@ -891,6 +921,7 @@ function SceneCard({ scene, index, total, s, kinds, caps, voices, onChange, onMo
   const footSecs = scene.footage.reduce((t, f) => t + Math.max(0, f.end - f.start), 0)
   const setWin = (i: number, p: Partial<ScriptScene['footage'][number]>) => onChange({ footage: scene.footage.map((f, j) => (j === i ? { ...f, ...p } : f)) })
   const visualScene = !!scene.visual && scene.visual.kind !== 'footage'
+  const parts = videoParts(s.brief)
   return (
     <div className="ps-scene" {...dragProps}>
       <div className="ps-scene-rail">
@@ -903,8 +934,8 @@ function SceneCard({ scene, index, total, s, kinds, caps, voices, onChange, onMo
         <div className="ps-scene-top">
           <input className="ps-scene-title" value={scene.title} onChange={(e) => onChange({ title: e.target.value })} aria-label={`Scene ${index + 1} title`} placeholder="Scene title" />
           <span className="spacer" />
-          <RewriteButton scene={scene} brief={s.brief} workspaceId={s.workspaceId} onText={(t) => onChange({ narration: t })} onBusy={setBusy} />
-          <NarratorControl scene={scene} voices={voices} briefVoice={s.brief.voice} assembled={!!scene.voice} onChange={(narrator) => onChange({ narrator })} onRenarrate={onRenarrate} />
+          {parts.narration && <RewriteButton scene={scene} brief={s.brief} workspaceId={s.workspaceId} onText={(t) => onChange({ narration: t })} onBusy={setBusy} />}
+          {parts.narration && <NarratorControl scene={scene} voices={voices} briefVoice={s.brief.voice} assembled={!!scene.voice} onChange={(narrator) => onChange({ narrator })} onRenarrate={onRenarrate} />}
           {confirmDel ? (
             <span className="row" style={{ gap: 6 }}>
               <button className="btn sm" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={onDelete}>Delete scene</button>
@@ -914,13 +945,13 @@ function SceneCard({ scene, index, total, s, kinds, caps, voices, onChange, onMo
             <button className="btn ghost sm icon" onClick={() => setConfirmDel(true)} aria-label={`Delete scene ${index + 1}`} title="Delete scene"><Trash2 size={14} /></button>
           )}
         </div>
-        <label className="label" htmlFor={`hl-${scene.id}`}>On-screen headline</label>
-        <input id={`hl-${scene.id}`} className="input" value={scene.headline} onChange={(e) => onChange({ headline: e.target.value })} placeholder="Short title shown on screen" />
-        <label className="label" htmlFor={`nar-${scene.id}`} style={{ marginTop: 12 }}>Narration</label>
+        {parts.onScreenText && <label className="label" htmlFor={`hl-${scene.id}`}>On-screen headline</label>}
+        {parts.onScreenText && <input id={`hl-${scene.id}`} className="input" value={scene.headline} onChange={(e) => onChange({ headline: e.target.value })} placeholder="Short title shown on screen" />}
+        <label className="label" htmlFor={`nar-${scene.id}`} style={{ marginTop: parts.onScreenText ? 12 : 0 }}>{parts.narration ? 'Narration' : 'What happens (not spoken)'}</label>
         <textarea id={`nar-${scene.id}`} className={clsx('input ps-narration', busy && 'streaming')} rows={3} maxLength={PRODUCE_LIMITS.narrationChars} value={scene.narration} onChange={(e) => onChange({ narration: e.target.value })} readOnly={busy} placeholder="What the narrator says during this scene" />
         <div className="ps-scene-stats">
           <span>{sceneWords(scene.narration)} words</span>
-          <span>≈ {formatDuration(secs)} spoken</span>
+          <span>≈ {formatDuration(secs)} {parts.narration ? 'spoken' : 'on screen'}</span>
           {!visualScene && <span className={footSecs && secs > footSecs + 1 ? 'warn' : ''}>{formatDuration(footSecs)} of footage{footSecs && secs > footSecs + 1 ? ' — narration runs longer; footage will be held/extended' : ''}</span>}
         </div>
         {visualScene ? (
@@ -1170,7 +1201,7 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
           <div className="muted" style={{ textAlign: 'center', fontSize: '0.75rem', marginTop: 8 }}>{r.progress && r.progress > 0 ? `${Math.round(r.progress * 100)}%` : 'Starting…'}</div>
         </div>
       )}
-      {!done && r.status !== 'error' && <TimeEstimate total={estimateAssemble(s.scenes, { renarrate: r.renarrate, whisper, music: !!musicStyleFor(s.brief.music, s.brief.tone) })} running={r.status === 'running'} progress={r.progress} />}
+      {!done && r.status !== 'error' && <TimeEstimate total={estimateAssemble(s.scenes, { renarrate: r.renarrate, whisper, music: !!musicStyleFor(s.brief.music, s.brief.tone), narration: videoParts(s.brief).narration })} running={r.status === 'running'} progress={r.progress} />}
       <div className="row" style={{ justifyContent: 'center', marginTop: 20 }}>
         {done ? (
           <>

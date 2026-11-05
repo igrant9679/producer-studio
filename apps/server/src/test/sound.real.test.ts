@@ -3,7 +3,7 @@
 // to it). Runs only with REAL_SOUND=1, and needs the Kokoro model (KOKORO_CACHE).
 import fs from 'node:fs'
 import path from 'node:path'
-import type { AudioItem, ProjectDocResponse, ScriptScene } from '@producer/core'
+import { projectDuration, type AudioItem, type ProjectDocResponse, type ScriptScene } from '@producer/core'
 import { eq } from 'drizzle-orm'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { produceAssemble } from '../ai/produce'
@@ -77,4 +77,38 @@ describe.skipIf(!REAL)('a video with music and sound effects', () => {
     expect(mix).toBeGreaterThan(music + 6)
     expect(path.extname(file)).toBe('.mp4')
   }, 3_600_000)
+
+  it('just the animation: no voice, no words, no cards, the music up front', async () => {
+    ctx().config.freeMedia = true
+    const obj = (name: string) => ({ name })
+    const scenes: ScriptScene[] = [
+      { id: 's01', title: 'Seed', headline: 'Seed', narration: 'A seed, a watering can and the sun arrive one after another along a row.', footage: [], visual: { kind: 'animation', style: 'row', objects: [obj('seedling'), obj('droplet'), obj('sun')] } },
+      { id: 's02', title: 'Grow', headline: 'Grow', narration: 'The seedling grows into a tree, and then the tree bears a red apple for everyone.', footage: [], visual: { kind: 'animation', style: 'grow', objects: [obj('seedling'), obj('deciduous tree'), obj('red apple')] } },
+      { id: 's03', title: 'World', headline: 'World', narration: 'Apples, baskets and trucks circle the globe, going everywhere at once and never stopping.', footage: [], visual: { kind: 'animation', style: 'orbit', objects: [obj('globe'), obj('red apple'), obj('basket'), obj('delivery truck')] } },
+    ]
+    const brief = { title: 'From a seed', audience: '', goal: '', tone: 'Calm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, source: 'idea' as const, idea: 'From a seed', music: 'auto', soundEffects: true, narration: false, captions: false, onScreenText: false, cards: false }
+    const r = await client.json<ProjectDocResponse>('POST', '/api/projects', { workspaceId, name: 'From a seed', kind: 'producer', width: 1920, height: 1080 })
+    const id = r.body.project.id
+    const a = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes, brief })
+    expect(a.status).toBe(200)
+    const job = (await getJob(a.body.id))!
+    const res = await produceAssemble(inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }))
+    expect(res.notes).toBeUndefined()
+    const p = (await client.json<ProjectDocResponse>('GET', `/api/projects/${id}`)).body.project
+    console.log(JSON.stringify({ tracks: p.tracks.map((t) => `${t.name}(${t.items.length})`), duration: projectDuration(p) }))
+    expect(p.tracks.flatMap((t) => t.items).filter((i) => i.type === 'text' || i.type === 'caption')).toEqual([])
+    const j = await enqueue('export.render', { projectId: id, resolution: '720p', fps: 30, quality: 'standard', format: 'mp4' }, { workspaceId, userId: job.userId, projectId: id })
+    const result = await exportRender(inlineContext(await claimJob(j.id)))
+    const ex = (await ctx().db.select().from(exportsTable).where(eq(exportsTable.id, (result as { exportId: string }).exportId)))[0]
+    const outRow = (await ctx().db.select().from(assets).where(eq(assets.id, ex.assetId)))[0]
+    const file = ctx().storage.localPath!(outRow.sourceKey)
+    const target = process.env.SOUND_SILENT_OUT
+    if (target) {
+      fs.copyFileSync(file, target)
+      await ffmpeg(['-i', file, '-vf', `fps=1/${Math.max(1, Math.floor(projectDuration(p) / 12))},scale=400:-2,tile=4x3:padding=6:color=white`, '-frames:v', '1', target.replace(/\.mp4$/, '-sheet.png')])
+    }
+    const mix = await lufs(file)
+    console.log(JSON.stringify({ export: file, mixLufs: mix }))
+    expect(mix).toBeGreaterThan(-22)
+  }, 1_500_000)
 })

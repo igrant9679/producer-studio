@@ -614,6 +614,11 @@ export interface ProducerMeta {
     music?: string
     /** Sound effects on the cuts, on graphics as they appear and on the title and close cards (absent: none). */
     soundEffects?: boolean
+    /** Parts a video can go without (false: left out; absent: included; see videoParts). */
+    narration?: boolean
+    captions?: boolean
+    onScreenText?: boolean
+    cards?: boolean
   }
   script?: {
     scenes: ScriptScene[]

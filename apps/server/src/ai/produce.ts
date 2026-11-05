@@ -16,6 +16,7 @@ import {
   defaultTextStyle,
   generateCaptions,
   musicStyleFor,
+  videoParts,
   round,
   uid,
   type Asset,
@@ -288,6 +289,10 @@ async function produceIdeaScript(jc: JobContext, input: { projectId: string; bri
   } finally {
     fs.rm(work, { recursive: true, force: true }, () => undefined)
   }
+  // no words on screen: animated text and diagrams are nothing but words (the fallback for a visual that can't be made stays)
+  if (input.brief.onScreenText === false && kinds.some((k) => k !== 'motion' && k !== 'diagram' && k !== 'media')) {
+    for (const k of ['motion', 'diagram'] as const) if (kinds.includes(k)) kinds.splice(kinds.indexOf(k), 1)
+  }
   const { rules, example } = houseRules()
   jc.progress(0.15, 'Writing the script')
   const raw = await provider.structured({ system: IDEA_SYSTEM, prompt: buildIdeaPrompt({ brief: input.brief, kinds, rules, example, media }), images, schema: IdeaScriptSchema, signal: jc.signal })
@@ -365,15 +370,15 @@ const TITLE_CARD = 3
 const CLOSE_CARD = 3.5
 
 /** Where each scene sits on an assembled timeline (after the title card), where the close card starts, and the length. */
-export function sceneSpans(scenes: ScriptScene[], voices: Map<string, { duration: number }>): { spans: SceneSpan[]; closeStart: number; duration: number } {
-  let t = TITLE_CARD
+export function sceneSpans(scenes: ScriptScene[], voices: Map<string, { duration: number }>, cards = true): { spans: SceneSpan[]; closeStart?: number; duration: number } {
+  let t = cards ? TITLE_CARD : 0
   const spans = scenes.map((scene, si) => {
     const voiceDur = voices.get(scene.id)?.duration ?? Math.max(2, scene.narration.split(/\s+/).length / 2.8)
     const start = t
     t = start + round(voiceDur + LEAD + (si === scenes.length - 1 ? CLOSE_TAIL : TAIL), 1)
     return { id: scene.id, start, end: t }
   })
-  return { spans, closeStart: t, duration: round(t + CLOSE_CARD, 3) }
+  return cards ? { spans, closeStart: t, duration: round(t + CLOSE_CARD, 3) } : { spans, duration: round(t, 3) }
 }
 
 /** Even word timings for a narration line when whisper isn't available. */
@@ -418,6 +423,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   const vertical = height > width
   const base = createProject({ id: inp.project.id, name: inp.project.name, width, height, fps: inp.project.fps || 30, background: pal.canvas })
   const p: Project = { ...base, createdAt: inp.project.createdAt, brand: inp.project.brand, ai: inp.project.ai }
+  const parts = videoParts(inp.brief)
   const main = p.tracks[0]
   main.name = 'Main'
   const cards = createTrack('text', { name: 'Headlines' })
@@ -430,32 +436,34 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   }
 
   // title card on the main track (a canvas-coloured shape) + title text
-  const titleShape = createShapeItem(0, { name: 'Title card', duration: TITLE_CARD, width, height, fill: pal.canvas, radius: 0 })
-  mainItems.push(titleShape)
-  cards.items.push(
-    createTextItem(0.25, 'heading', {
-      name: 'Title',
-      text: inp.brief.title || inp.project.name,
-      duration: TITLE_CARD - 0.25,
-      style: headlineStyle(pal, width, Math.round((vertical ? 104 : 120) * scale)),
-      transform: { x: 0, y: -30 * scale, scale: 1, rotation: 0 },
-      animations: { in: { preset: 'rise', duration: 0.6 }, out: { preset: 'fade', duration: 0.3 } },
-    }),
-  )
-  if (inp.brand?.name || inp.brief.audience) {
-    labels.items.push(
-      createTextItem(0.6, 'heading', {
-        name: 'Title label',
-        text: inp.brand?.name || inp.brief.audience,
-        duration: TITLE_CARD - 0.6,
-        style: labelStyle(pal, width, Math.round(28 * scale)),
-        transform: { x: 0, y: 90 * scale, scale: 1, rotation: 0 },
-        animations: { in: { preset: 'fade', duration: 0.4 }, out: { preset: 'fade', duration: 0.3 } },
+  if (parts.cards) {
+    const titleShape = createShapeItem(0, { name: 'Title card', duration: TITLE_CARD, width, height, fill: pal.canvas, radius: 0 })
+    titleShape.transitionOut = { type: 'crossfade', duration: 0.5 }
+    mainItems.push(titleShape)
+    cards.items.push(
+      createTextItem(0.25, 'heading', {
+        name: 'Title',
+        text: inp.brief.title || inp.project.name,
+        duration: TITLE_CARD - 0.25,
+        style: headlineStyle(pal, width, Math.round((vertical ? 104 : 120) * scale)),
+        transform: { x: 0, y: -30 * scale, scale: 1, rotation: 0 },
+        animations: { in: { preset: 'rise', duration: 0.6 }, out: { preset: 'fade', duration: 0.3 } },
       }),
     )
+    if (inp.brand?.name || inp.brief.audience) {
+      labels.items.push(
+        createTextItem(0.6, 'heading', {
+          name: 'Title label',
+          text: inp.brand?.name || inp.brief.audience,
+          duration: TITLE_CARD - 0.6,
+          style: labelStyle(pal, width, Math.round(28 * scale)),
+          transform: { x: 0, y: 90 * scale, scale: 1, rotation: 0 },
+          animations: { in: { preset: 'fade', duration: 0.4 }, out: { preset: 'fade', duration: 0.3 } },
+        }),
+      )
+    }
   }
-  let t = TITLE_CARD
-  titleShape.transitionOut = { type: 'crossfade', duration: 0.5 }
+  let t = parts.cards ? TITLE_CARD : 0
 
   inp.scenes.forEach((scene, si) => {
     const isLast = si === inp.scenes.length - 1
@@ -513,7 +521,9 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
       mainItems.push(it)
     }
     const lastPiece = pieces[pieces.length - 1] as Item & { transitionOut?: { type: import('@producer/core').TransitionType; duration: number } }
-    lastPiece.transitionOut = { type: isLast ? 'slideUp' : 'crossfade', duration: 0.5 }
+    // the last scene slides into the closing card; with no card there is nothing after it to move to
+    if (!isLast) lastPiece.transitionOut = { type: 'crossfade', duration: 0.5 }
+    else if (parts.cards) lastPiece.transitionOut = { type: 'slideUp', duration: 0.5 }
 
     // voice
     if (v) {
@@ -531,7 +541,8 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     const centred = !fullFrame && !points.length && !drawn
     const headY = centred ? -20 * scale : drawn ? -height * 0.38 : points.length ? -height * (vertical ? 0.3 : 0.28) : -height * (vertical ? 0.36 : 0.37)
     const headSize = centred ? (vertical ? 96 : 110) : drawn ? (vertical ? 60 : 66) : points.length ? (vertical ? 80 : 92) : vertical ? 64 : 72
-    cards.items.push(
+    // words off: no headline, unless it is all this scene has to show (a visual that couldn't be made)
+    if (parts.onScreenText || centred) cards.items.push(
       createTextItem(round(sceneStart + 0.3, 4), 'heading', {
         name: `${scene.id} headline`,
         text: scene.headline || scene.title,
@@ -567,12 +578,12 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
         height,
         pal,
       }
-      const objects = (a: Extract<SceneVisual, { kind: 'animation' }>): AnimObject[] => a.objects.map((o) => ({ name: o.name, label: o.label, asset: o.assetId ? inp.illustrations?.get(o.assetId) : undefined }))
+      const objects = (a: Extract<SceneVisual, { kind: 'animation' }>): AnimObject[] => a.objects.map((o) => ({ name: o.name, label: parts.onScreenText ? o.label : undefined, noWord: !parts.onScreenText, asset: o.assetId ? inp.illustrations?.get(o.assetId) : undefined }))
       graphics.push(animation ? animationItems(animation.style, objects(animation), frame) : diagram ? diagramItems(diagram, frame) : motionItems(points, frame))
       for (const o of animation?.objects ?? []) if (o.assetId && inp.illustrations?.has(o.assetId)) addAsset(inp.illustrations.get(o.assetId)!)
     }
     const noFootage = centred
-    if (noFootage && scene.title) {
+    if (noFootage && scene.title && parts.onScreenText) {
       labels.items.push(
         createTextItem(round(sceneStart + 0.5, 4), 'heading', {
           name: `${scene.id} label`,
@@ -589,27 +600,29 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
 
   // close card
   const closeStart = t
-  mainItems.push(createShapeItem(closeStart, { name: 'Close card', duration: CLOSE_CARD, width, height, fill: pal.canvas, radius: 0 }))
-  cards.items.push(
-    createTextItem(round(closeStart + 0.3, 4), 'heading', {
-      name: 'Close',
-      text: inp.brand?.name || inp.brief.title || inp.project.name,
-      duration: CLOSE_CARD - 0.3,
-      style: headlineStyle(pal, width, Math.round((vertical ? 96 : 110) * scale)),
-      transform: { x: 0, y: -20 * scale, scale: 1, rotation: 0 },
-      animations: { in: { preset: 'slideUp', duration: 0.6 } },
-    }),
-  )
-  labels.items.push(
-    createTextItem(round(closeStart + 0.7, 4), 'heading', {
-      name: 'Close label',
-      text: inp.brief.goal ? inp.brief.goal.slice(0, 60) : 'Thanks for watching',
-      duration: CLOSE_CARD - 0.7,
-      style: labelStyle(pal, width, Math.round(26 * scale)),
-      transform: { x: 0, y: 90 * scale, scale: 1, rotation: 0 },
-      animations: { in: { preset: 'fade', duration: 0.5 } },
-    }),
-  )
+  if (parts.cards) {
+    mainItems.push(createShapeItem(closeStart, { name: 'Close card', duration: CLOSE_CARD, width, height, fill: pal.canvas, radius: 0 }))
+    cards.items.push(
+      createTextItem(round(closeStart + 0.3, 4), 'heading', {
+        name: 'Close',
+        text: inp.brand?.name || inp.brief.title || inp.project.name,
+        duration: CLOSE_CARD - 0.3,
+        style: headlineStyle(pal, width, Math.round((vertical ? 96 : 110) * scale)),
+        transform: { x: 0, y: -20 * scale, scale: 1, rotation: 0 },
+        animations: { in: { preset: 'slideUp', duration: 0.6 } },
+      }),
+    )
+    labels.items.push(
+      createTextItem(round(closeStart + 0.7, 4), 'heading', {
+        name: 'Close label',
+        text: inp.brief.goal ? inp.brief.goal.slice(0, 60) : 'Thanks for watching',
+        duration: CLOSE_CARD - 0.7,
+        style: labelStyle(pal, width, Math.round(26 * scale)),
+        transform: { x: 0, y: 90 * scale, scale: 1, rotation: 0 },
+        animations: { in: { preset: 'fade', duration: 0.5 } },
+      }),
+    )
+  }
 
   main.items = mainItems
   // graphics: each scene fills slots 1..n of shared stacks (shape tracks below text tracks); scenes never overlap
@@ -627,11 +640,12 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   for (const tr of [...shapeTracks, ...textTracks]) tr.items.sort((a, b) => a.start - b.start)
   p.tracks = [voice, main, ...shapeTracks, ...textTracks, cards, labels].filter((tr) => tr.main || tr.items.length)
   if (inp.sound) {
-    const sounded = addSound(p, inp.sound, closeStart + CLOSE_CARD)
+    const sounded = addSound(p, inp.sound, parts.cards ? closeStart + CLOSE_CARD : closeStart)
     p.tracks = sounded.tracks
     p.assets = sounded.assets
   }
   // captions from the voice transcripts
+  if (!parts.captions) return { ...p, updatedAt: Date.now() }
   const captionStyle = captionStyleFromPreset(inp.brand?.captionPreset ?? 'clean')
   captionStyle.style = { ...captionStyle.style, fontFamily: pal.bodyFont, boxWidth: Math.round(width * 0.8), fontSize: Math.round(captionStyle.style.fontSize * scale) }
   const withCaptions = generateCaptions(p, { itemIds: voice.items.map((i) => i.id), style: captionStyle })
@@ -700,10 +714,13 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const footageRows = await ctx().db.select().from(assets).where(and(eq(assets.workspaceId, row.workspaceId), inArray(assets.id, footageIds.length ? footageIds : ['-'])))
   const footage = new Map(footageRows.map((r) => [r.id, assetDoc(r)]))
   // 1. voice per scene (reuse one already made for the same narration and voice)
+  // (a video with no narration has none: its scenes last as long as their description would take to say)
+  const parts = videoParts(brief)
+  const spoken = parts.narration ? input.scenes : []
   const voices = new Map<string, Voice>()
   const prior = new Map((doc.ai?.script?.scenes ?? []).map((s) => [s.id, s]))
-  for (let i = 0; i < input.scenes.length; i++) {
-    const s = input.scenes[i]
+  for (let i = 0; i < spoken.length; i++) {
+    const s = spoken[i]
     jc.check()
     const sub = subContext(jc, (i / input.scenes.length) * 0.6, ((i + 1) / input.scenes.length) * 0.6, `Voicing ${s.id}`)
     // a scene may have its own narrator (voice, speed); one asked to be narrated again gets a fresh take
@@ -719,8 +736,8 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
     voices.set(s.id, { asset: v.asset.asset, duration: v.duration })
   }
   // 2. word timings for captions (whisper round trip, or an estimate)
-  for (let i = 0; i < input.scenes.length; i++) {
-    const s = input.scenes[i]
+  for (let i = 0; i < spoken.length; i++) {
+    const s = spoken[i]
     const v = voices.get(s.id)!
     jc.check()
     jc.progress(0.6 + (i / input.scenes.length) * 0.3, `Timing captions ${s.id}`)
@@ -734,7 +751,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   }
   // 3. generated visuals (videos made from an idea): AI stills, stock clips, AI clips
   const frameSize = sizeForAspect(brief.aspect || getLook(brief.template).aspect)
-  const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand) }
+  const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand), silent: !parts.narration, noWords: !parts.onScreenText }
   const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing })
   // 3b. music composed on the cuts, and sound effects where things move (both free: made on this server)
   const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand })
@@ -792,14 +809,15 @@ async function makeSound(
   const style = musicStyleFor(o.brief.music, o.brief.tone)
   const effects = o.brief.soundEffects === true
   if (!style && !effects) return { notes: [] }
-  const layout = sceneSpans(o.scenes, o.voices)
+  const parts = videoParts(o.brief)
+  const layout = sceneSpans(o.scenes, o.voices, parts.cards)
   const notes: string[] = []
   const sound: VideoSound = {}
   const work = tmpDir('sound')
   try {
     if (style) {
       try {
-        sound.music = await makeMusic(subContext(jc, 0, effects ? 0.8 : 1), { ...o, style, spans: layout.spans, duration: layout.duration, work })
+        sound.music = await makeMusic(subContext(jc, 0, effects ? 0.8 : 1), { ...o, style, spans: layout.spans, duration: layout.duration, work, voiced: parts.narration, cards: parts.cards })
       } catch (err) {
         if (jc.signal.aborted) throw err
         log.warn('music could not be made', { err })
@@ -855,7 +873,7 @@ async function makeSceneVisuals(
     scenes: ScriptScene[]
     voices: Map<string, { asset: Asset; duration: number }>
     /** The frame AI-drawn scenes are drawn for. */
-    drawing?: { width: number; height: number; fps: number; pal: { canvas: string; accent: string; ink: string; headlineFont: string; bodyFont: string } }
+    drawing?: { width: number; height: number; fps: number; pal: { canvas: string; accent: string; ink: string; headlineFont: string; bodyFont: string }; silent?: boolean; noWords?: boolean }
   },
 ): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[] }> {
   const generated = new Map<string, Asset>()
@@ -982,7 +1000,7 @@ async function makeDrawn(
   if (!code) {
     const ai = await requireProvider(o.workspaceId, 'script')
     provider = ai.id
-    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m) })).code
+    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, silent: o.drawing.silent, noWords: o.drawing.noWords, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m) })).code
   }
   jc.check()
   jc.progress(0.6, 'Rendering the animation')

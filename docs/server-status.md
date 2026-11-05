@@ -158,6 +158,16 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   on a `Sound effects` track; the kit follows the music style. Each take is copied into the space once
   (`kind = 'sfx'`). Neither stops an assembly: what can't be made is left out and said in the job's notes. The desktop
   build copies `scripts/music` and `sfx` (stage.mjs).
+  **Videos without some parts** (5 Nov 2026): a brief's `narration`, `captions`, `onScreenText` and `cards` (false: left
+  out; absent: kept; read through core's `videoParts`: only an idea can go without narration, and captions need it). No
+  narration: no voices are made, a scene lasts as long as its `narration` text (then a description of what happens) would
+  take to say, the writer and the animator are told nobody speaks, and the music is levelled to `MUSIC_ALONE_LUFS` (-18)
+  with no duck. No words: headlines, chapter labels, animation labels and the stand-in discs' names go, motion and
+  diagram leave the writer's choices, and the animator draws no text; a scene with nothing else to show keeps its
+  headline, and a credit line a licence requires stays. No cards: the first scene starts at 0, and no whoosh goes into a
+  close that isn't there. The wizard's "Just the animation" sets all four and asks for animation and drawn visuals.
+  **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
+  failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

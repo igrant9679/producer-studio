@@ -21,6 +21,8 @@ export const MUSIC_VERSION = 1
 /** The music's loudness: Kokoro narrates near -22.5 LUFS, so the bed sits ~7 LU under it between lines and, ducked,
  * ~17 LU under it while the narrator speaks (huashu-motion's rule of thumb is 12 under plus a 10 dB duck). */
 export const MUSIC_LUFS = -30
+/** With no narration the music is the only thing to hear, at huashu-motion's level for music alone. */
+export const MUSIC_ALONE_LUFS = -18
 /** dB the music track drops while the voiceover speaks (the editor's duck, so a moved or re-recorded voice stays ducked). */
 export const MUSIC_DUCK_DB = 10
 /** A minute of video takes the composer about a minute on one core; past this it is stopped. */
@@ -33,10 +35,12 @@ export interface SceneSpan {
 }
 
 /** The music for a video: a WAV composed on its cuts, encoded to AAC. */
-export async function composeMusicFile(o: { style: MusicStyle; cuts: Array<{ id: string; t: number }>; duration: number; seed: string; out: string; signal?: AbortSignal }): Promise<{ about: string; lufs: number }> {
+export async function composeMusicFile(o: { style: MusicStyle; cuts: Array<{ id: string; t: number }>; duration: number; seed: string; out: string; voiced?: boolean; signal?: AbortSignal }): Promise<{ about: string; lufs: number }> {
+  const voiced = o.voiced !== false
+  const lufs = voiced ? MUSIC_LUFS : MUSIC_ALONE_LUFS
   const wav = o.out.replace(/\.[^.]+$/, '') + '.wav'
   const script = path.join(SERVER_ROOT, 'scripts', 'music', 'compose.mjs')
-  const req = { id: o.seed, brand: o.seed, duration: o.duration, cuts: o.cuts, style: o.style, voiced: true, lufs: MUSIC_LUFS, out: wav }
+  const req = { id: o.seed, brand: o.seed, duration: o.duration, cuts: o.cuts, style: o.style, voiced, lufs, out: wav }
   const r = await run(process.execPath, [script], { input: JSON.stringify(req), signal: o.signal, timeoutMs: COMPOSE_TIMEOUT_MS, cwd: SERVER_ROOT })
   const reply = (() => {
     try {
@@ -51,22 +55,23 @@ export async function composeMusicFile(o: { style: MusicStyle; cuts: Array<{ id:
   } finally {
     fs.rm(wav, { force: true }, () => undefined)
   }
-  return { about: reply.about ?? o.style, lufs: reply.lufs ?? MUSIC_LUFS }
+  return { about: reply.about ?? o.style, lufs: reply.lufs ?? lufs }
 }
 
 /** What the music for these cuts is keyed on: the same style, cuts and length reuse the track made before. */
-export function musicKey(style: string, cuts: Array<{ id: string; t: number }>, duration: number, seed: string): string {
+export function musicKey(style: string, cuts: Array<{ id: string; t: number }>, duration: number, seed: string, voiced = true): string {
   const c = cuts.map((x) => `${x.id}@${x.t.toFixed(2)}`).join(' ')
-  return `${style} v${MUSIC_VERSION} ${duration.toFixed(2)}s ${crypto.createHash('sha256').update(`${seed}|${c}`).digest('hex').slice(0, 16)}`
+  return `${style} v${MUSIC_VERSION}${voiced ? '' : ' alone'} ${duration.toFixed(2)}s ${crypto.createHash('sha256').update(`${seed}|${c}`).digest('hex').slice(0, 16)}`
 }
 
 /** The music track for a video: made before for the same style, cuts and length (this project's), or composed now. */
 export async function makeMusic(
   jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
-  o: { workspaceId: string; userId: string; projectId: string; jobId: string; style: MusicStyle; spans: SceneSpan[]; duration: number; seed: string; work: string },
+  o: { workspaceId: string; userId: string; projectId: string; jobId: string; style: MusicStyle; spans: SceneSpan[]; duration: number; seed: string; work: string; voiced?: boolean; cards?: boolean },
 ): Promise<Asset> {
-  const cuts = [{ id: 'title', t: 0 }, ...o.spans.map((s) => ({ id: s.id, t: s.start })), { id: 'close', t: o.spans.at(-1)?.end ?? o.duration }]
-  const key = musicKey(o.style, cuts, o.duration, o.seed)
+  const cards = o.cards !== false
+  const cuts = [...(cards ? [{ id: 'title', t: 0 }] : []), ...o.spans.map((s) => ({ id: s.id, t: s.start })), ...(cards ? [{ id: 'close', t: o.spans.at(-1)?.end ?? o.duration }] : [])]
+  const key = musicKey(o.style, cuts, o.duration, o.seed, o.voiced !== false)
   const prev = (
     await ctx()
       .db.select()
@@ -77,7 +82,7 @@ export async function makeMusic(
   if (prev) return assetDoc(prev)
   jc.progress(0.1, 'Composing the music')
   const file = path.join(o.work, `music-${crypto.randomBytes(4).toString('hex')}.m4a`)
-  const made = await composeMusicFile({ style: o.style, cuts, duration: o.duration, seed: o.seed, out: file, signal: jc.signal })
+  const made = await composeMusicFile({ style: o.style, cuts, duration: o.duration, seed: o.seed, out: file, voiced: o.voiced, signal: jc.signal })
   jc.check()
   const row = await createAssetFromFile({
     workspaceId: o.workspaceId,
@@ -153,12 +158,12 @@ const NEAR_CUT = 0.35
  * Where a built video gets its sounds: a soft landing as the title arrives, a whoosh on every cut (scene changes and
  * the close card), a pop as graphics appear (a few per scene, spaced, not on a cut) and a ding on the close card.
  */
-export function sfxCues(p: Project, spans: SceneSpan[], closeStart: number): SfxCue[] {
+export function sfxCues(p: Project, spans: SceneSpan[], closeStart?: number): SfxCue[] {
   const cues: SfxCue[] = []
   const all = p.tracks.flatMap((t) => t.items.map((it) => ({ it, track: t })))
   const title = all.find(({ it }) => it.name === 'Title')?.it
   if (title) cues.push({ moment: 'title', at: title.start })
-  const cuts = [...spans.map((s) => s.start), closeStart]
+  const cuts = [...spans.map((s) => s.start), ...(closeStart !== undefined ? [closeStart] : [])]
   for (const t of cuts) cues.push({ moment: 'cut', at: t })
   const graphics = all
     .filter(({ track, it }) => /^Graphic/.test(track.name) && it.type !== 'audio' && (it as { animations?: { in?: unknown } }).animations?.in)
@@ -242,7 +247,8 @@ export function addSound(p: Project, sound: VideoSound, duration: number): Proje
   const add: typeof tracks = []
   if (sound.music) {
     const music = createTrack('audio', { name: 'Music' })
-    music.duck = MUSIC_DUCK_DB
+    // nothing to step aside for in a video with no narration
+    if (tracks.some((t) => t.name === 'Voiceover')) music.duck = MUSIC_DUCK_DB
     music.items.push(createAudioItem(sound.music, 0, { name: 'Music', duration: Math.min(duration, sound.music.duration ?? duration), fadeIn: 0.3, fadeOut: 1.2 }))
     add.push(music)
   }

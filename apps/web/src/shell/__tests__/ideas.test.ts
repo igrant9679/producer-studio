@@ -1,8 +1,9 @@
-import type { SceneDiagram } from '@producer/core'
+import { videoParts, type SceneDiagram } from '@producer/core'
 import { describe, expect, it } from 'vitest'
 import { defaultVisual, diagramFromText, diagramToText, objectsFromText, objectsToText, withPrompt } from '../producer/sceneVisuals'
 import { estimateAssemble } from '../producer/estimates'
-import { canAdvance, defaultBrief, initialState, newScene, stateFromProject, unsavedDraft } from '../producer/wizardLogic'
+import { failedReason } from '../../editor/LeftPanel'
+import { animationOnly, canAdvance, defaultBrief, everything, initialState, newScene, stateFromProject, unsavedDraft, validateScenes } from '../producer/wizardLogic'
 
 describe('a draft only this tab holds', () => {
   it('is unsaved once it has an idea, a title, recordings or scenes, and never once a project holds it', () => {
@@ -128,5 +129,42 @@ describe('music and sound effects', () => {
     const scenes = [newScene(), newScene()].map((sc) => ({ ...sc, narration: 'A line of narration that takes a few seconds to say out loud.' }))
     const plain = estimateAssemble(scenes)
     expect(estimateAssemble(scenes, { music: true }) - plain).toBeGreaterThan(10)
+  })
+})
+
+describe('a video without some of its parts', () => {
+  it('has everything unless the brief says otherwise; captions need narration, and only an idea can go without one', () => {
+    expect(videoParts({})).toEqual({ narration: true, captions: true, onScreenText: true, cards: true })
+    expect(videoParts({ source: 'idea', narration: false })).toEqual({ narration: false, captions: false, onScreenText: true, cards: true })
+    expect(videoParts({ source: 'recordings', narration: false }).narration).toBe(true)
+    expect(videoParts({ captions: false, onScreenText: false, cards: false })).toEqual({ narration: true, captions: false, onScreenText: false, cards: false })
+  })
+
+  it('“Just the animation” turns the words off and asks for drawn visuals, and undoes', () => {
+    const b = { ...defaultBrief(), source: 'idea' as const }
+    const only = animationOnly(b)
+    expect(videoParts(only)).toEqual({ narration: false, captions: false, onScreenText: false, cards: false })
+    expect(only.visualKinds).toEqual(['animation', 'drawn'])
+    expect(only.music).toBe('auto')
+    const back = everything(only)
+    expect(videoParts(back)).toEqual({ narration: true, captions: true, onScreenText: true, cards: true })
+    expect(back.visualKinds).toBeUndefined()
+  })
+
+  it('a silent scene is asked for what happens, not for narration', () => {
+    const blank = { ...newScene(), narration: ' ' }
+    expect(validateScenes([blank])).toBe('Scene 1 has no narration')
+    expect(validateScenes([blank], true)).toBe('Scene 1 doesn’t say what happens')
+  })
+})
+
+describe('a failed clip’s tile', () => {
+  it('says why in a few words, and offers Retry only when the file reached storage', () => {
+    expect(failedReason('Upload failed: storage refused the upload (403 InvalidAccessKeyId). Upload the file again.')).toEqual({ short: 'The file never reached storage: upload it again', canRetry: false })
+    expect(failedReason("The uploaded file couldn't be found in storage. Upload it again.").canRetry).toBe(false)
+    expect(failedReason(undefined)).toEqual({ short: 'Processing failed', canRetry: true })
+    const moov = failedReason("This file is incomplete or damaged: its video index (the 'moov atom') is missing, which usually means the recording or upload was cut off.")
+    expect(moov).toEqual({ short: 'This file is incomplete or damaged', canRetry: true })
+    expect(failedReason('Processing failed: something long '.padEnd(200, 'x')).short.length).toBeLessThanOrEqual(69)
   })
 })

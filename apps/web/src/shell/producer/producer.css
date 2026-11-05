@@ -54,6 +54,13 @@
 
 /* brief */
 .ps-brief-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+.ps-parts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.ps-part { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; }
+.ps-part.on { border-color: var(--accent); }
+.ps-part.off { opacity: 0.55; cursor: not-allowed; }
+.ps-part input { margin-top: 2px; }
+.ps-part b { display: block; font-size: 0.8125rem; font-weight: 600; }
+.ps-part small { display: block; font-size: 0.6875rem; color: var(--text-3); line-height: 1.35; }
 .ps-input-lg { height: 46px !important; font-size: 1rem; font-weight: 600; border-radius: 10px; }
 .ps-ar { display: inline-block; border: 1.5px solid currentColor; border-radius: 2px; opacity: .8; }
 .ps-ar-16-9 { width: 16px; height: 9px; }

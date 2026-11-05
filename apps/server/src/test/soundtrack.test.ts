@@ -113,6 +113,19 @@ describe('sound effects', () => {
     expect(planSfx([{ moment: 'cut', at: 0 }], 'launch', m)).toEqual([])
   })
 
+  it('with no cards: no whoosh into a close that isn’t there, and one on the first cut would start too early', () => {
+    const p = createProject({ id: 'p', name: 'x', width: 1920, height: 1080, fps: 30 })
+    const cues = sfxCues(p, [{ id: 's1', start: 0, end: 4 }, { id: 's2', start: 4, end: 8 }])
+    expect(cues).toEqual([{ moment: 'cut', at: 0 }, { moment: 'cut', at: 4 }])
+    expect(planSfx(cues, 'launch', sfxManifest()!).map((e) => e.cue.at)).toEqual([4])
+  })
+
+  it('music with no voice to duck under has no duck', () => {
+    const p = createProject({ id: 'p', name: 'x', width: 1920, height: 1080, fps: 30 })
+    const out = addSound(p, { music: { id: 'as_m', kind: 'audio', name: 'Music', duration: 20 } as never }, 18)
+    expect(out.tracks.find((t) => t.name === 'Music')!.duck).toBeUndefined()
+  })
+
   it('adds the music under the voice and the effects on their own track', () => {
     const p = createProject({ id: 'p', name: 'x', width: 1920, height: 1080, fps: 30 })
     const voice = createTrack('audio', { name: 'Voiceover' })

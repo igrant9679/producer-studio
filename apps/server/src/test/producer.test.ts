@@ -131,7 +131,7 @@ describe('Producer AI assembly', () => {
     const cuts = fx.items.filter((i) => i.name === 'cut sound')
     cuts.forEach((it, k) => {
       const take = whoosh.takes.find((t) => p.assets[(it as AudioItem).assetId].name.includes(t.file.split('/')[1].replace('.ogg', '')))!
-      expect(it.start + take.sync).toBeCloseTo([...layout.spans.map((s) => s.start), layout.closeStart][k], 2)
+      expect(it.start + take.sync).toBeCloseTo([...layout.spans.map((s) => s.start), layout.closeStart!][k], 2)
     })
     expect(fx.items.every((i) => i.start >= 0 && (i as AudioItem).volume > 0 && (i as AudioItem).volume <= 1)).toBe(true)
     // assembled again unchanged: the same music and the same effect files, nothing made twice
@@ -144,6 +144,30 @@ describe('Producer AI assembly', () => {
     expect((await load(id)).project.tracks.map((t) => t.name)).not.toEqual(expect.arrayContaining(['Music']))
     expect((await load(id)).project.tracks.some((t) => t.name === 'Sound effects')).toBe(false)
   }, 240_000)
+
+  it('leaves out what the brief turns off: no voice is made for a video with no narration, and the words and cards go', async () => {
+    const id = await newProject('Just the animation')
+    const silent: ScriptScene[] = [
+      { ...scenes[0], narration: 'A square slides across the frame and settles in the middle of it.', visual: { kind: 'animation', style: 'row', objects: [{ name: 'rocket', label: 'Launch' }, { name: 'globe', label: 'World' }] } },
+      { ...scenes[1], narration: 'Nothing could be made for this one, so its headline stands in.', visual: { kind: 'motion', points: [] } },
+    ]
+    const a = await assemble(id, { scenes: silent, brief: { ...brief, source: 'idea', idea: 'A rocket', narration: false, captions: false, onScreenText: false, cards: false } })
+    expect(a.status).toBe(200)
+    await a.run()
+    expect(spoken).toEqual([])
+    const p = (await load(id)).project
+    const names = p.tracks.map((t) => t.name)
+    expect(names).not.toContain('Voiceover')
+    expect(names.some((n) => /caption/i.test(n))).toBe(false)
+    const texts = p.tracks.flatMap((t) => t.items).filter((i) => i.type === 'text')
+    // no cards, no labels, no headline but the scene with nothing else to show
+    expect(texts.map((i) => i.name)).toEqual(['s02 headline'])
+    const main = p.tracks.find((t) => t.main)!
+    expect(main.items.map((i) => i.name)).not.toContain('Title card')
+    expect(main.items.map((i) => i.name)).not.toContain('Close card')
+    expect(main.items[0].start).toBe(0)
+    expect(p.ai?.script?.scenes.every((s) => !s.voice)).toBe(true)
+  })
 
   it('an AI-drawn scene is rendered into a clip filling the frame, reused while nothing changed; one with no AI becomes text', async ({ skip }) => {
     if (!ctx().config.chromePath || !fs.existsSync(ctx().config.chromePath!)) skip()

@@ -344,6 +344,8 @@ export interface AnimObject {
   name: string
   label?: string
   asset?: Asset
+  /** No words on screen: a stand-in for a missing picture is a plain disc. */
+  noWord?: boolean
 }
 
 const kf = (t: number, value: number, ease: Keyframe['ease'] = 'easeInOut'): Keyframe => ({ t: round(Math.max(0, t), 3), value: round(value, 3), ease })
@@ -364,6 +366,7 @@ function pic(f: SceneFrame, at: number, o: { obj: AnimObject; x: number; y: numb
     const { scale: _scale, ...moves } = o.keys ?? {}
     const disc = box(f, at, { name: `${name} (no picture found)`, shape: 'ellipse', x: o.x, y: o.y, w: o.size * 0.8, h: o.size * 0.8, fill: f.pal.accent, anim: o.anim ?? pop(), float: o.float })
     disc.item = { ...disc.item, keyframes: moves } as Item
+    if (o.obj.noWord) return [disc]
     const word = label(f, at + 0.1, { text: o.obj.name.slice(0, 18), x: o.x, y: o.y, style: st.node(o.size > 300 * st.s ? 40 : 28, o.size * 0.7), anim: fadeIn(0.3) })
     word.item = { ...word.item, keyframes: follow(o.keys, 0) ?? {} } as Item
     return [disc, word]

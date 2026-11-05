@@ -1,5 +1,5 @@
 // Pure state logic for the Producer AI wizard (no React, no network) — unit-tested in __tests__.
-import { PRODUCE_LIMITS, type ProducerMeta, type ProjectDocResponse, type ScriptScene } from '@producer/core'
+import { videoParts, PRODUCE_LIMITS, type ProducerMeta, type ProjectDocResponse, type ScriptScene } from '@producer/core'
 
 export type Brief = NonNullable<ProducerMeta['brief']>
 export type StepId = 'upload' | 'brief' | 'generate' | 'review' | 'assemble'
@@ -117,18 +117,28 @@ export function narrationSeconds(text: string): number {
 }
 
 // the server's limits (PRODUCE_LIMITS), said before the long wait rather than as a validation error after it
-export function validateScenes(scenes: ScriptScene[]): string | undefined {
+export function validateScenes(scenes: ScriptScene[], silent = false): string | undefined {
   if (!scenes.length) return 'Add at least one scene'
   if (scenes.length > PRODUCE_LIMITS.scenes) return `A video can have at most ${PRODUCE_LIMITS.scenes} scenes: remove ${scenes.length - PRODUCE_LIMITS.scenes}`
   const empty = scenes.findIndex((s) => !s.narration.trim())
-  if (empty >= 0) return `Scene ${empty + 1} has no narration`
+  if (empty >= 0) return silent ? `Scene ${empty + 1} doesn’t say what happens` : `Scene ${empty + 1} has no narration`
   const long = scenes.findIndex((s) => s.narration.length > PRODUCE_LIMITS.narrationChars)
-  if (long >= 0) return `Scene ${long + 1}’s narration is over ${PRODUCE_LIMITS.narrationChars.toLocaleString('en')} characters`
+  if (long >= 0) return `Scene ${long + 1}’s ${silent ? 'description' : 'narration'} is over ${PRODUCE_LIMITS.narrationChars.toLocaleString('en')} characters`
   const many = scenes.findIndex((s) => s.footage.length > PRODUCE_LIMITS.footagePerScene)
   if (many >= 0) return `Scene ${many + 1} has more than ${PRODUCE_LIMITS.footagePerScene} footage windows`
   const bad = scenes.findIndex((s) => s.footage.some((f) => !(f.end > f.start)))
   if (bad >= 0) return `Scene ${bad + 1} has a footage window that ends before it starts`
   return undefined
+}
+
+/** Pictures and music only: what “Just the animation” sets on a brief made from an idea. */
+export function animationOnly(b: Brief): Brief {
+  return { ...b, narration: false, captions: false, onScreenText: false, cards: false, visualKinds: ['animation', 'drawn'] }
+}
+
+/** Undoes it: every part back, and the visuals to the usual choice. */
+export function everything(b: Brief): Brief {
+  return { ...b, narration: true, captions: true, onScreenText: true, cards: true, visualKinds: undefined }
 }
 
 export function validateBrief(b: Brief): Partial<Record<keyof Brief, string>> {
@@ -150,6 +160,8 @@ export const WRITER_FIELDS: Array<{ key: keyof Brief; label: string }> = [
   { key: 'notes', label: 'notes' },
   { key: 'lengthSec', label: 'length' },
   { key: 'visualKinds', label: 'visuals' },
+  { key: 'narration', label: 'narration' },
+  { key: 'onScreenText', label: 'words on screen' },
 ]
 
 /** What changed in the brief since the script was written, among the fields only the writer reads. */
@@ -202,7 +214,7 @@ export function canAdvance(s: WizardState, step: StepId = s.step): { ok: boolean
     case 'generate':
       return s.scenes.length ? { ok: true } : { ok: false, reason: 'The script is not ready yet' }
     case 'review': {
-      const r = validateScenes(s.scenes)
+      const r = validateScenes(s.scenes, !videoParts(s.brief).narration)
       if (r) return { ok: false, reason: r }
       return staleBriefFields(s).length ? { ok: false, reason: 'Rewrite the script or keep it first' } : { ok: true }
     }

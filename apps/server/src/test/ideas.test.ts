@@ -1,6 +1,6 @@
 // Videos made from an idea: the writer's scene format, reveal timing, diagram/motion layouts and the timeline.
 import { beforeAll, describe, expect, it } from 'vitest'
-import { createProject, evaluate, itemEnd, projectDuration, type Asset, type Project, type ScriptScene } from '@producer/core'
+import { createProject, evaluate, itemEnd, projectDuration, type Asset, type Project, type ScriptScene, type VisualKind } from '@producer/core'
 import { buildProducerTimeline, syntheticTranscript } from '../ai/produce'
 import { type IdeaMedia, type IdeaScriptOutput, VisualSchema, buildIdeaPrompt, normalizeIdeaScript } from '../ai/scenes'
 import { diagramItems, revealTimes, type SceneFrame } from '../ai/scene-layout'
@@ -361,5 +361,26 @@ describe('animation scenes and stock photos', () => {
     expect(credit?.text).toBe('Photo: Kim · CC BY 2.0 · Openverse')
     const plain = build({ kind: 'photo', query: 'field', assetId: 'as_ph', credit: { author: 'Pat', url: 'https://www.pexels.com/photo/1/', source: 'Pexels' } }, [], photo)
     expect(plain.tracks.flatMap((t) => t.items).some((i) => i.name === 's01 credit')).toBe(false)
+  })
+})
+
+describe('a script for a video nobody speaks in', () => {
+  const brief = { title: 'T', audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, source: 'idea' as const, idea: 'A rocket' }
+  const prompt = (over: object, kinds: VisualKind[] = ['animation', 'drawn']) => buildIdeaPrompt({ brief: { ...brief, ...over }, kinds, rules: '', example: '' })
+
+  it('says so, and says what the narration field is for instead', () => {
+    expect(prompt({})).toMatch(/Narration 15-60 words/)
+    expect(prompt({})).not.toMatch(/NOBODY SPEAKS/)
+    const silent = prompt({ narration: false, music: 'auto' })
+    expect(silent).toMatch(/NOBODY SPEAKS IN THIS VIDEO: it is pictures and music only/)
+    expect(silent).not.toMatch(/Narration 15-60 words/)
+    expect(silent).not.toMatch(/what the voice says/)
+  })
+
+  it('tells it the viewer reads nothing, and only offers text kinds when there can be text', () => {
+    expect(prompt({})).not.toMatch(/NO WORDS ON SCREEN/)
+    expect(prompt({ onScreenText: false })).toMatch(/NO WORDS ON SCREEN/)
+    expect(prompt({})).not.toMatch(/keep text and diagrams/)
+    expect(prompt({}, ['motion', 'animation', 'drawn'])).toMatch(/keep text and diagrams/)
   })
 })

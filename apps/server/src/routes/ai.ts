@@ -163,6 +163,10 @@ const BriefSchema = z.object({
   brandKitId: z.string().max(80).optional(),
   music: z.enum(['off', 'auto', ...MUSIC_STYLES.map((m) => m.id)]).optional(),
   soundEffects: z.boolean().optional(),
+  narration: z.boolean().optional(),
+  captions: z.boolean().optional(),
+  onScreenText: z.boolean().optional(),
+  cards: z.boolean().optional(),
 })
 
 aiRoutes.post('/produce/script', async (c) => {

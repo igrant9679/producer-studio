@@ -3,7 +3,7 @@
 // (editable, on brand, identical in preview and export); AI stills, stock clips and photos, AI clips and the animations'
 // illustrations arrive as assets (ai/generate); the person's own clips and images (`media`) are library assets already.
 import * as z from 'zod/v4'
-import type { AnimationStyle, DiagramType, SceneDiagram, SceneVisual, ScriptScene, VisualKind } from '@producer/core'
+import { videoParts, type AnimationStyle, type DiagramType, type SceneDiagram, type SceneVisual, type ScriptScene, type VisualKind } from '@producer/core'
 import { HttpError } from '../http'
 
 export const VISUAL_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']
@@ -134,11 +134,13 @@ function mix(kinds: VisualKind[]): string {
   if (kinds.includes('drawn')) want.push('draw (drawn) the one or two scenes that most need showing: a process, a change, a cause and effect, a character doing something')
   if (kinds.includes('photo') || kinds.includes('stock')) want.push(`show real people, places and things with ${kinds.includes('photo') && kinds.includes('stock') ? 'a stock photo or clip' : kinds.includes('photo') ? 'a stock photo' : 'a stock clip'} at least once`)
   if (kinds.includes('animation')) want.push('use animation for lists of things and simple journeys')
-  return want.length ? ` In a video of four or more scenes: ${want.join('; ')}; keep text and diagrams for the points that are words or numbers.` : ''
+  const words = kinds.includes('motion') || kinds.includes('diagram') ? '; keep text and diagrams for the points that are words or numbers' : ''
+  return want.length ? ` In a video of four or more scenes: ${want.join('; ')}${words}.` : ''
 }
 
 export function buildIdeaPrompt(opts: { brief: NonNullable<import('@producer/core').ProducerMeta['brief']>; kinds: VisualKind[]; rules: string; example: string; media?: IdeaMedia[] }): string {
   const b = opts.brief
+  const parts = videoParts(b)
   const vertical = b.aspect === '9:16'
   const seconds = Math.max(15, Math.min(600, b.lengthSec ?? 60))
   const words = Math.round(seconds * 2.6)
@@ -177,10 +179,13 @@ ${opts.example}
 
 REQUIREMENTS
 - Value-first story: the hook speaks the viewer's language, the message lands by scene 2, every later scene earns its place. Do not open with a rhetorical question.
-- About ${scenes} scenes, ids s01..sNN in order; the last scene is the close. Narration 15-60 words per scene at ~2.6 words/second (about ${words} words in total).
+- About ${scenes} scenes, ids s01..sNN in order; the last scene is the close. ${
+    parts.narration
+      ? `Narration 15-60 words per scene at ~2.6 words/second (about ${words} words in total).`
+      : `NOBODY SPEAKS IN THIS VIDEO: it is pictures${b.music && b.music !== 'off' ? ' and music' : ''} only. Write each scene's narration field as a plain description of what the viewer sees happen. It is never heard; its length sets how long the scene lasts, ~2.6 words/second (about ${words} words in total). The pictures have to tell the story alone.`
+  }${parts.onScreenText ? '' : '\n- NO WORDS ON SCREEN: the viewer reads nothing, so headlines are only your working titles and animations get no labels. Show everything through what is drawn or moves.'}
 - Vary the visuals; pick the one that makes each line easiest to understand.${mix(kinds)} Never put a number on screen that the narration doesn't say, and don't invent statistics: use bars or stat only with figures from the idea, otherwise use another visual.
-- Headlines are what the viewer reads (official spelling); narration is what the voice says (spoken spelling).
-- Fill every visual field; use empty strings, empty lists and diagramType "none" for fields that don't apply to the chosen kind.`
+${parts.narration ? '- Headlines are what the viewer reads (official spelling); narration is what the voice says (spoken spelling).\n' : ''}- Fill every visual field; use empty strings, empty lists and diagramType "none" for fields that don't apply to the chosen kind.`
 }
 
 const clean = (s: string | undefined, max: number) => (s ?? '').replace(/\s+/g, ' ').trim().slice(0, max)

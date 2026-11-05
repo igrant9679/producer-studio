@@ -179,9 +179,26 @@ function MediaPanel() {
   const loading = useLibrary((s) => s.loading)
   const [filter, setFilter] = useState<'all' | 'video' | 'image'>('all')
   const shown = list.filter((x) => filter === 'all' || x.asset.kind === filter)
+  // a clip that failed can't be used: they go last, under the ones that can
+  const ordered = [...shown.filter((x) => !isFailed(x.status)), ...shown.filter((x) => isFailed(x.status))]
+  const failed = list.filter((x) => isFailed(x.status))
   return (
     <>
       <UploadBox accept="video/*,image/*,audio/*" label="Upload media" />
+      {failed.length > 1 && (
+        <div className="ed-failedbar" role="status">
+          <AlertTriangle size={14} />
+          <span>{failed.length} clips failed</span>
+          <button
+            className="act"
+            onClick={() => {
+              if (window.confirm(`Remove ${failed.length} failed clips from your media library? They go to the media trash.`)) for (const f of failed) void removeAsset(f.asset.id)
+            }}
+          >
+            <Trash2 size={12} /> Remove all
+          </button>
+        </div>
+      )}
       <div className="ed-chiprow" style={{ margin: '12px 0 10px' }}>
         {(['all', 'video', 'image'] as const).map((f) => (
           <button key={f} className={clsx('chip', filter === f && 'active')} onClick={() => setFilter(f)}>
@@ -198,7 +215,7 @@ function MediaPanel() {
       )}
       {!loading && !shown.length && <Empty icon={<Clapperboard size={22} />} title="No media yet">Upload video or images to start editing.</Empty>}
       <div className="ed-grid2">
-        {shown.map(({ asset, status }) => (
+        {ordered.map(({ asset, status }) => (
           <AssetCard key={asset.id} asset={asset} ready={status === 'ready'} status={status} />
         ))}
       </div>
@@ -217,6 +234,17 @@ function fileSize(bytes?: number): string | undefined {
     i++
   }
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${u[i]}`
+}
+
+const isFailed = (status: string) => status === 'error'
+
+/** A failure's reason, short enough for a tile; the whole of it is in the hover card. A file that never arrived can't be retried. */
+export function failedReason(error?: string | null): { short: string; canRetry: boolean } {
+  const e = (error ?? '').trim()
+  if (/^Upload failed|never reached storage|couldn't be found in storage/i.test(e)) return { short: 'The file never reached storage: upload it again', canRetry: false }
+  if (!e) return { short: 'Processing failed', canRetry: true }
+  const first = e.replace(/^Processing failed:\s*/i, '').split(/[.:]\s/)[0].replace(/\.$/, '')
+  return { short: first.length > 70 ? `${first.slice(0, 68)}…` : first, canRetry: true }
 }
 
 /** What a clip's tile says about it. "uploading" with no upload running in this tab never finished. */
@@ -241,6 +269,7 @@ function AssetCard({ asset, ready, status }: { asset: Asset; ready: boolean; sta
   const progress = useLibrary((s) => s.progress[asset.id])
   const localUpload = useLibrary((s) => s.uploads.find((u) => u.status === 'uploading' && u.name === asset.name))
   const state = clipState(status, progress, status === 'uploading' ? localUpload : undefined)
+  const failure = failedReason(record?.error)
   const strip = filmstripUrl(asset)
   const fs = asset.filmstrip
   // A video's thumbnail exists once the server says so (asset.thumbnail). Asking earlier got a 404, the image hid
@@ -343,8 +372,9 @@ function AssetCard({ asset, ready, status }: { asset: Asset; ready: boolean; sta
             <span className="why">
               <AlertTriangle size={14} /> {state.label}
             </span>
+            {status === 'error' && <span className="reason">{failure.short}</span>}
             <span className="acts">
-              {status === 'error' && (
+              {status === 'error' && failure.canRetry && (
                 <button
                   className="act"
                   onClick={(e) => {

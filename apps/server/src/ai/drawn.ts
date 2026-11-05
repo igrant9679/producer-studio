@@ -51,17 +51,17 @@ DIRECTION
 - No flashes, no strobing, nothing faster than the eye can follow, no jarring cuts; ease in and out; end on a settled, readable frame.
 - Draw people and objects simply and charmingly (round heads, simple bodies, expressive poses), never photorealistic, never logos or brand marks.`
 
-export function buildDrawingPrompt(o: { description: string; narration: string; headline: string; env: DrawingEnv }): string {
+export function buildDrawingPrompt(o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean }): string {
   const words = o.env.words.map((w) => `${w.w}@${w.start.toFixed(2)}`).join(' ')
   return `Draw this scene.
 
 WHAT TO DRAW (the director's note)
 ${o.description.trim()}
 
-THE NARRATION OF THIS SCENE (what the voice says while it plays)
+${o.silent ? `WHAT HAPPENS IN THIS SCENE (nobody speaks: the drawing has to tell it alone, so leave nothing to a voice)` : `THE NARRATION OF THIS SCENE (what the voice says while it plays)`}
 ${o.narration.trim()}
 
-HEADLINE SHOWN ABOVE IT: ${o.headline || '(none)'}
+${o.noWords ? 'NO WORDS: this video shows no text at all, so draw no text, labels or numbers. The whole frame is yours, and nothing is added over it.' : `HEADLINE SHOWN ABOVE IT: ${o.headline || '(none)'}`}
 
 FRAME: ${o.env.width} x ${o.env.height} px (${o.env.height > o.env.width ? 'vertical' : 'landscape'}), ${o.env.duration.toFixed(1)} s, ${o.env.fps} fps
 PALETTE: canvas ${o.env.palette.canvas}, ink ${o.env.palette.ink}, accent ${o.env.palette.accent}
@@ -87,7 +87,7 @@ export const LOOK_AT = [0.18, 0.45, 0.72, 0.97]
  */
 export async function writeDrawing(
   provider: AiProvider,
-  o: { description: string; narration: string; headline: string; env: DrawingEnv; signal?: AbortSignal; progress?: (f: number, msg: string) => void },
+  o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; signal?: AbortSignal; progress?: (f: number, msg: string) => void },
 ): Promise<{ code: string; plan: string; frames: Buffer[] }> {
   const times = LOOK_AT.map((k) => k * o.env.duration)
   o.progress?.(0.05, 'Writing the animation')
