@@ -148,14 +148,34 @@ export function cliEnv(base: NodeJS.ProcessEnv = process.env, extra: Record<stri
 }
 
 /**
- * How to launch a CLI path: native binaries directly; a JS entry (tests) or an npm `claude.cmd` shim (resolved to its
- * cli.js, since .cmd files can't be spawned without a shell) with this process's Node binary.
+ * What an npm `.cmd` shim runs: the `"%dp0%\…"` path in it, relative to the shim's folder (`node_modules/.bin/claude.cmd`
+ * runs `../@anthropic-ai/claude-code/bin/claude.exe` since Claude Code 2; older ones ran its cli.js through node).
+ */
+export function shimTarget(shim: string, text: string): string | undefined {
+  const m = [...text.matchAll(/"%~?dp0%?\\([^"]+)"/gi)].map((x) => x[1]).find((p) => !/^node(\.exe)?$/i.test(p))
+  return m ? path.resolve(path.dirname(shim), m.replace(/\\/g, path.sep)) : undefined
+}
+
+/**
+ * How to launch a CLI path: native binaries directly; a JS entry (tests) with this process's Node binary; an npm
+ * `claude.cmd` shim as what it runs (a .cmd can't be spawned without a shell: Node refuses with EINVAL).
  */
 export function spawnable(bin: string, args: string[]): { file: string; args: string[]; env: Record<string, string> } {
   let js = /\.(m?js|cjs)$/i.test(bin) ? bin : undefined
-  if (!js && /\.cmd$/i.test(bin)) {
-    const cli = path.join(path.dirname(bin), 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js')
-    if (fs.existsSync(cli)) js = cli
+  if (!js && /\.(cmd|bat)$/i.test(bin)) {
+    let target: string | undefined
+    try {
+      target = shimTarget(bin, fs.readFileSync(bin, 'utf8'))
+    } catch {
+      /* unreadable: the older layout below, or nothing */
+    }
+    if (target && fs.existsSync(target)) {
+      if (/\.(m?js|cjs)$/i.test(target)) js = target
+      else return { file: target, args, env: {} }
+    } else {
+      const cli = path.join(path.dirname(bin), 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js')
+      if (fs.existsSync(cli)) js = cli
+    }
   }
   if (!js) return { file: bin, args, env: {} }
   return { file: process.execPath, args: [js, ...args], env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {} }
@@ -164,10 +184,16 @@ export function spawnable(bin: string, args: string[]): { file: string; args: st
 function execText(bin: string, argv: string[], timeoutMs = 15000): Promise<{ code: number; out: string }> {
   const { file, args, env } = spawnable(bin, argv)
   return new Promise((resolve) => {
-    execFile(file, args, { windowsHide: true, timeout: timeoutMs, env: cliEnv(process.env, env), maxBuffer: 4 * 1024 * 1024, cwd: os.tmpdir() }, (err, stdout, stderr) => {
-      const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code as number) : -1) : 0
-      resolve({ code, out: `${stdout ?? ''}${stderr ? `\n${stderr}` : ''}` })
-    })
+    try {
+      execFile(file, args, { windowsHide: true, timeout: timeoutMs, env: cliEnv(process.env, env), maxBuffer: 4 * 1024 * 1024, cwd: os.tmpdir() }, (err, stdout, stderr) => {
+        const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code as number) : -1) : 0
+        resolve({ code, out: `${stdout ?? ''}${stderr ? `\n${stderr}` : ''}` })
+      })
+    } catch (err) {
+      // a file that can't be started at all (EINVAL for a script Windows won't run directly): a CLI that doesn't answer,
+      // never an error for whatever page asked
+      resolve({ code: -1, out: err instanceof Error ? err.message : String(err) })
+    }
   })
 }
 

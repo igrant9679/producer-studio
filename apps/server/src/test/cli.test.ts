@@ -12,7 +12,7 @@ import { addAsset, addItem, createProject, createVideoItem, type Asset, type Pro
 import { runAssistant, toolSpecs } from '../ai/assistant'
 import { ClaudeCliProvider, REQUIRED_FLAGS, cliFailure, mcpServerScript, readRule, renderConversation } from '../ai/cli'
 import { startToolBridge } from '../ai/cli/bridge'
-import { claudeCandidates, cliEnv, compareVersions, parseAuthStatus, pickClaude, type DetectDeps } from '../ai/cli/detect'
+import { claudeCandidates, cliEnv, compareVersions, parseAuthStatus, pickClaude, shimTarget, spawnable, type DetectDeps } from '../ai/cli/detect'
 import { extractJson, jsonSchemaOf } from '../ai/cli/schema'
 import { type CliEvent, StreamJsonParser, TextRelay, interpretEvent } from '../ai/cli/stream'
 import { ScriptSchema } from '../ai/produce'
@@ -458,5 +458,39 @@ describe('ClaudeCliProvider against a fake claude binary', () => {
       expect(await p.status()).toMatchObject({ available: true })
       expect(await p.write({ kind: 'headline', prompt: 'x' }, () => undefined)).toBe('Bright ideas, clearly told.')
     })
+  })
+})
+
+describe('npm shims on Windows (a .cmd Node refuses to start without a shell)', () => {
+  // as npm writes them (Claude Code 2's native binary; the older cli.js through node)
+  const NEW = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', String.raw`"%dp0%\..\@anthropic-ai\claude-code\bin\claude.exe"   %*`, ''].join('\r\n')
+  const OLD = ['@ECHO off', 'SETLOCAL', 'CALL :find_dp0', String.raw`IF EXIST "%dp0%\node.exe" (`, String.raw`  SET "_prog=%dp0%\node.exe"`, ') ELSE (', '  SET "_prog=node"', ')', String.raw`"%_prog%"  "%dp0%\node_modules\@anthropic-ai\claude-code\cli.js" %*`, ''].join('\r\n')
+
+  it('reads the program a shim runs, relative to its folder', () => {
+    const bin = path.join('C:', 'x', 'node_modules', '.bin', 'claude.cmd')
+    expect(shimTarget(bin, NEW)).toBe(path.resolve(path.dirname(bin), '..', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'))
+    expect(shimTarget(bin, OLD)).toBe(path.resolve(path.dirname(bin), 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js'))
+    expect(shimTarget(bin, '@echo off\r\nclaude %*')).toBeUndefined()
+  })
+
+  it('launches what the shim runs: the native binary itself, a cli.js through node', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-shim-'))
+    const bin = path.join(dir, 'node_modules', '.bin')
+    const pkg = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code')
+    fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true })
+    fs.mkdirSync(bin, { recursive: true })
+    fs.writeFileSync(path.join(pkg, 'bin', 'claude.exe'), '')
+    fs.writeFileSync(path.join(bin, 'claude.cmd'), NEW)
+    expect(spawnable(path.join(bin, 'claude.cmd'), ['--version'])).toEqual({ file: path.join(pkg, 'bin', 'claude.exe'), args: ['--version'], env: {} })
+    // a shim whose program is missing is left as it is (and fails to start, which detection treats as no answer)
+    fs.writeFileSync(path.join(bin, 'other.cmd'), NEW.replace('claude-code', 'gone'))
+    expect(spawnable(path.join(bin, 'other.cmd'), []).file).toBe(path.join(bin, 'other.cmd'))
+    const old = path.join(dir, 'old')
+    fs.mkdirSync(path.join(old, 'node_modules', '@anthropic-ai', 'claude-code'), { recursive: true })
+    fs.writeFileSync(path.join(old, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js'), '')
+    fs.writeFileSync(path.join(old, 'claude.cmd'), OLD)
+    const run = spawnable(path.join(old, 'claude.cmd'), ['-p'])
+    expect(run.file).toBe(process.execPath)
+    expect(run.args).toEqual([path.join(old, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js'), '-p'])
   })
 })
