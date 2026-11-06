@@ -2,7 +2,7 @@
 // down with the change feed and edits made here go up under their own ids, so a project made with any kit or font can
 // be edited offline. Font files (at most 5 MB each) are fetched as soon as they arrive. Local edits win until pushed,
 // as for the default kit. The space's own settings (pronunciations, sample project) and each member's settings
-// (favourite voices, Voice Studio draft, onboarding) stay in the cloud.
+// (favourite voices, Voice Studio draft, onboarding) are read and written in the cloud (settings-proxy.ts).
 import { buffer } from 'node:stream/consumers'
 import { eq } from 'drizzle-orm'
 import type { SyncFont, SyncKit } from '@producer/core'

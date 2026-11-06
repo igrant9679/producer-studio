@@ -149,7 +149,7 @@ const DEVICE_ROUTES: Array<[string, RegExp]> = [
   ['PUT', /^\/api\/uploads\/[^/]+\/parts\/\d+$/],
   ['GET', /^\/api\/assets$/],
   ['GET|PATCH|DELETE', /^\/api\/assets\/[^/]+$/],
-  ['POST', /^\/api\/assets\/[^/]+\/(complete|abort)$/],
+  ['POST', /^\/api\/assets\/[^/]+\/(complete|abort|restore)$/],
   ['GET|HEAD', /^\/api\/media\/[^/]+\/[^/]+$/],
   ['*', /^\/api\/voice\/(profiles|relay)(\/.*)?$/],
   ['GET', /^\/api\/events$/],
@@ -159,6 +159,8 @@ const DEVICE_ROUTES: Array<[string, RegExp]> = [
   ['GET|POST', /^\/api\/projects\/[^/]+\/comments$/],
   ['PATCH|DELETE', /^\/api\/comments\/[^/]+$/],
   ['GET', /^\/api\/workspaces\/[^/]+\/activity$/],
+  // and a cloud space's settings and the person's own in it (desktop/settings-proxy.ts)
+  ['GET|PUT', /^\/api\/workspaces\/[^/]+\/(voice-settings|voice-studio|onboarding)$/],
 ]
 
 export function deviceMayUse(method: string, path: string): boolean {

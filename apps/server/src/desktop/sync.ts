@@ -1136,12 +1136,15 @@ export class SyncEngine {
         const [saved] = await db.update(assets).set({ name: take.name, meta: { ...(row.meta ?? {}), transcript: take.transcript }, updatedAt: Date.now() }).where(eq(assets.id, a.id)).returning()
         this.quietly(() => emitAsset(saved))
       }
-      // put in the trash in the cloud: here too (a trash made here isn't sent up; emptying it here is)
-      if (rec.trashedAt != null && row.trashedAt == null) {
+      // put in the trash in the cloud: here too, unless this computer restored it and hasn't said so yet. A trash or
+      // restore made here goes up with the push (cloudTrashed: what the cloud last had)
+      const cloudTrashed = rec.trashedAt != null
+      const pendingHere = s?.cloudTrashed != null && (row.trashedAt != null) !== s.cloudTrashed
+      if (cloudTrashed && row.trashedAt == null && !pendingHere) {
         const [saved] = await db.update(assets).set({ trashedAt: rec.trashedAt, updatedAt: Date.now() }).where(eq(assets.id, a.id)).returning()
         this.quietly(() => emitAsset(saved))
       }
-      await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...cloudFields } })
+      await putSync('asset', a.id, { uploaded: true, remote: false, base: { ...cloudFields }, ...(pendingHere ? {} : { cloudTrashed }) })
       return
     }
     // ours to keep: a name or transcript changed here and not pushed yet
@@ -1183,12 +1186,13 @@ export class SyncEngine {
       audioKey: null,
       meta,
       sha256: rec.sha256 ?? null,
-      // the media trash follows the cloud's (A-14)
-      trashedAt: rec.trashedAt ?? null,
+      // the media trash follows the cloud's (A-14), except a trash or restore made here and not yet sent up
+      trashedAt: row && s?.cloudTrashed != null && (row.trashedAt != null) !== s.cloudTrashed ? row.trashedAt : (rec.trashedAt ?? null),
       updatedAt: Date.now(),
     }
     // the sync record first: a crash before the row is written leaves nothing that looks like a clip made here
-    await putSync('asset', a.id, { remote: true, uploaded: true, base: { ...cloudFields } })
+    const keptHere = !!row && s?.cloudTrashed != null && (row.trashedAt != null) !== s.cloudTrashed
+    await putSync('asset', a.id, { remote: true, uploaded: true, base: { ...cloudFields }, ...(keptHere ? {} : { cloudTrashed: rec.trashedAt != null }) })
     const [saved] = row
       ? await db.update(assets).set(values).where(eq(assets.id, a.id)).returning()
       : await db
@@ -1397,6 +1401,8 @@ export class SyncEngine {
       const s = rows.get(a.id)
       if (!cloudWs.has(a.workspaceId)) continue
       if (s?.uploaded || s?.remote) {
+        // put in the trash or taken out of it here since the cloud last said: the cloud's trash follows
+        if (s.cloudTrashed != null && (a.trashedAt != null) !== s.cloudTrashed) await this.item('asset', a.id, a.name, () => this.pushTrash(c, a))
         // in the cloud already: a rename or a transcript made here since goes up (synced before this was tracked: what
         // is here now counts as agreed)
         const here = clipFields(a.name, a.meta?.transcript)
@@ -1450,6 +1456,16 @@ export class SyncEngine {
         for (const a of fresh) this.uploads.done(a.id)
         void this.emit()
       })
+  }
+
+  /** A clip put in the media trash here, or taken out of it: the same in the cloud (A-14; the files stay either way). */
+  private async pushTrash(c: CloudClient, a: AssetRow) {
+    const trashed = a.trashedAt != null
+    await (trashed ? c.json('DELETE', `/api/assets/${encodeURIComponent(a.id)}`) : c.json('POST', `/api/assets/${encodeURIComponent(a.id)}/restore`, {})).catch((err) => {
+      // gone in the cloud (its delete comes with the next pull), or no longer ours to change: stays as it is here
+      if (!(err instanceof CloudError && (err.status === 404 || err.status === 403))) throw err
+    })
+    await putSync('asset', a.id, { cloudTrashed: trashed })
   }
 
   /** A clip's name or transcript changed here since it last matched the cloud's: send what changed. */

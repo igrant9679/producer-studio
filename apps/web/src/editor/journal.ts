@@ -52,3 +52,41 @@ export function clearJournal(userId: string, projectId: string) {
     /* storage unavailable */
   }
 }
+
+/** The journal keys in this browser's storage. */
+function journalKeys(): string[] {
+  try {
+    return Object.keys(localStorage).filter((k) => k.startsWith(PREFIX))
+  } catch {
+    return []
+  }
+}
+
+/** Every person's journal of a project, gone: the project was deleted for good. */
+export function clearJournalsFor(projectId: string) {
+  for (const k of journalKeys()) if (k.endsWith(`.${projectId}`)) clearJournal(k.slice(PREFIX.length, -projectId.length - 1), projectId)
+}
+
+/** Journals never offered back in `maxAgeMs` (a project deleted elsewhere, or never opened here again), or unreadable. */
+export const JOURNAL_MAX_AGE_MS = 30 * 24 * 3600 * 1000
+export function pruneJournals(now = Date.now(), maxAgeMs = JOURNAL_MAX_AGE_MS): number {
+  let n = 0
+  for (const k of journalKeys()) {
+    let stale = true
+    try {
+      const e = JSON.parse(localStorage.getItem(k) ?? 'null') as Partial<JournalEntry> | null
+      stale = !e || e.v !== 1 || typeof e.savedAt !== 'number' || now - e.savedAt > maxAgeMs
+    } catch {
+      /* unreadable: stale */
+    }
+    if (stale) {
+      try {
+        localStorage.removeItem(k)
+        n++
+      } catch {
+        /* storage unavailable */
+      }
+    }
+  }
+  return n
+}

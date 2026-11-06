@@ -16,6 +16,7 @@ import { ensureDesktopTables } from './db'
 import { createLocalSession, ensureLocalUser, secretMatches } from './identity'
 import { fetchMissingMedia } from './media'
 import { desktopCollabRoutes } from './collab'
+import { desktopSettingsRoutes } from './settings-proxy'
 import { offlineInfo, setOffline } from './offline'
 import { SettingsPatch, getSettings, saveSettings } from './settings'
 import { CloudError } from './cloud'
@@ -127,6 +128,8 @@ export const desktopRoutes = new Hono<AppEnv>()
 desktopRoutes.route('/voicestudio', voiceStudioRoutes)
 // while linked, a cloud project's comments and a cloud space's activity are the cloud's
 desktopRoutes.route('/', desktopCollabRoutes)
+// and a cloud space's settings and its members' are the cloud's
+desktopRoutes.route('/', desktopSettingsRoutes)
 
 // one local user: no sign-ups on the desktop
 desktopRoutes.post('/auth/signup', () => {

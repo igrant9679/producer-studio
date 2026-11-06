@@ -39,6 +39,7 @@ import { SyncBadge } from '../SystemChrome'
 import { projectSyncBadge, useIsDesktop, useSystem } from '../system'
 import { CardSkeletons, ConfirmDialog, EmptyState, MenuList, Modal, Popover, TabPanel, Tabs, useAsync, useEditGate, type MenuItemDef, usePageTitle } from '../ui'
 import { absoluteUrl, aspectLabel, copyText, downloadUrl, formatDuration, relativeTime } from '../util'
+import { clearJournalsFor } from '../../editor/journal'
 import { filterProjects, mergeProjects, PROJECT_FILTERS, readLibraryView, SORTS, tagCounts, writeLibraryView, type LibraryView, type SortKey, type ViewMode } from './libraryLogic'
 
 function readStoredView(): ViewMode {
@@ -197,6 +198,8 @@ function ProjectsTab({ trash, v, update }: { trash: boolean; v: LibraryView; upd
     try {
       await Promise.all(ids.map((id) => api.deleteProject(id)))
       ids.forEach((id) => patchLocal(id, null))
+      // unsaved changes this browser kept for them have nowhere to go now
+      ids.forEach(clearJournalsFor)
       s.clear()
       toast(ids.length > 1 ? `${ids.length} projects deleted` : 'Project deleted')
     } catch (e) {

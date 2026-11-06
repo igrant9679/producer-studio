@@ -89,16 +89,17 @@ and builds only the rest.
 - R4-C: comments and activity don't sync to desktops; a project deleted through desktop sync (desktop/sync.ts) keeps
   its comments rows; shell/system.ts opens its own EventSource instead of the resumable client.
 - R4-A: presence lives in the API process's memory (one API service only); If-Match on asset/brand/space is
-  check-then-write (a same-millisecond race); orphaned local journals for deleted projects.
+  check-then-write (a same-millisecond race); orphaned local journals for deleted projects. (All done: presence and
+  If-Match in R4-A; journals 6 Nov 2026, cleared when a project is deleted and after a month unopened.)
 - R3-C: the assistant can't set speed ramps (its speed tool sets one constant speed); can't pick a caption language track.
 - R3-E: real-browser checks at 375 px for the Colour / Smart / Speed tabs, the version history panel, the comments
   panel, the Share-for-review dialog and the Activity page; Menu closing on Tab.
 - Left as decided by the groups: LUTs stored in the project document (~144 KB each); smooth slow-motion copies are
   visible library items; journals stay in the browser after sign-out; downloads-off links still stream.
 - Not graded yet: ~~the blurred letterbox fill~~ (done 1 Nov 2026, and the export no longer covers the clip with
-  it); text/shapes under an adjustment layer get its CSS colour but not its
-  curves/HSL/LUT (still open: the browser can't read live text's pixels, so only curves could be approximated, with
-  an SVG filter); ~~reversed clips ignore ramps~~ (done 1 Nov 2026; the export's reversed copy also lost stray frames
+  it); ~~text/shapes under an adjustment layer get its CSS colour but not its curves/HSL/LUT~~ (done 6 Nov 2026: an
+  SVG colour transfer measured on a grey ramp through the same grade maths, so curves are exact and HSL / LUT follow
+  neutral tones, in the preview and the export); ~~reversed clips ignore ramps~~ (done 1 Nov 2026; the export's reversed copy also lost stray frames
   of the rest of the recording at its start whenever its range was a hair over whole 2 s chunks).
 - Owner: S3 bucket CORS (GET from producerstudio.app) for graded previews of cloud media; BG_REMOVAL_CMD for background
   removal; DENOISE_MODEL optional; production ffmpeg's libvidstab / libvpx-vp9 decide which clean-up tools show.
@@ -109,7 +110,9 @@ and builds only the rest.
   with server file paths (e.g. ffprobe's) in Job history and toasts: keep the raw text in logs, show a plain reason.
 - R4-B: copying a large file between spaces runs inside the request: make it a job.
 - R4-C: extra brand kits, brand fonts, space / member settings (pronunciations, favourites) and the media trash state
-  for cloud-only rows don't sync to desktops (a desktop sees the default kit only).
+  for cloud-only rows don't sync to desktops (a desktop sees the default kit only). (Done: kits and fonts in R4-C;
+  6 Nov 2026 a linked desktop reads and writes a cloud space's settings and its member settings in the cloud, and a
+  trash or restore made on a desktop goes up.)
 - R4-D (or any group touching the shell): Voice Studio's AI writer pop-up doesn't trap focus, close on Escape or
   give focus back; the Background jobs popover stays open after its Job history link (Popover has no
   close-on-navigate); `render-cost.test.tsx` fails under machine load, also on main (make it count, not time).

@@ -275,6 +275,38 @@ describe('assets', () => {
   })
 })
 
+describe('the media trash and settings on a linked desktop (phase 5 carry-overs)', () => {
+  it('a clip put in the trash here is in the trash in the cloud, and taken out of it here, out of it there', async () => {
+    const t = await desk.json('POST', '/api/uploads', { workspaceId: cloudWs, filename: 'trash-me.png', mime: 'image/png', size: PNG.length })
+    await desk.json('PUT', t.body.url, PNG, { 'content-type': 'image/png' })
+    expect((await desk.json('POST', `/api/assets/${t.body.assetId}/complete`)).status).toBe(200)
+    await sync()
+    expect((await cloudHttp.json('GET', `/api/assets/${t.body.assetId}`)).body.trashedAt).toBeUndefined()
+    expect((await desk.json('DELETE', `/api/assets/${t.body.assetId}`)).status).toBe(200)
+    await sync()
+    expect((await cloudHttp.json('GET', `/api/assets/${t.body.assetId}`)).body.trashedAt).toEqual(expect.any(Number))
+    // the cloud's echo doesn't take it back out here
+    await sync()
+    expect((await desk.json('GET', `/api/assets/${t.body.assetId}`)).body.trashedAt).toEqual(expect.any(Number))
+    expect((await desk.json('POST', `/api/assets/${t.body.assetId}/restore`, {})).status).toBe(200)
+    await sync()
+    expect((await cloudHttp.json('GET', `/api/assets/${t.body.assetId}`)).body.trashedAt).toBeUndefined()
+    // and one put in the trash in the cloud comes down
+    expect((await cloudHttp.json('DELETE', `/api/assets/${t.body.assetId}`)).status).toBe(200)
+    await sync()
+    expect((await desk.json('GET', `/api/assets/${t.body.assetId}`)).body.trashedAt).toEqual(expect.any(Number))
+  })
+
+  it('a cloud space’s settings and this member’s are the cloud’s, read and written there', async () => {
+    const put = await desk.json('PUT', `/api/workspaces/${cloudWs}/onboarding`, { dismissed: true })
+    expect(put.status).toBe(200)
+    const there = await cloudHttp.json('GET', `/api/workspaces/${cloudWs}/onboarding`)
+    expect(there.status).toBe(200)
+    expect(there.body).toEqual(put.body)
+    expect((await desk.json('GET', `/api/workspaces/${cloudWs}/onboarding`)).body).toEqual(there.body)
+  })
+})
+
 describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
   let fake: Awaited<ReturnType<typeof import('./fake-voicestudio').startFakeVoiceStudio>>
   let voiceId: string

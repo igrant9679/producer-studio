@@ -507,8 +507,37 @@ export function adjustmentLayer(p: Project, track: Track, it: AdjustmentItem, lo
 export function spreadAdjustments(layers: FrameLayer[]) {
   for (const a of layers) {
     if (a.type !== 'adjustment' || !a.grades) continue
-    for (const l of layers) if ((l.type === 'video' || l.type === 'image') && l.z < a.z) l.grades = [...(l.grades ?? []), ...a.grades]
+    // pictures are graded pixel by pixel; text, shapes and captions get the same grade as a colour transfer (gradeTransfer)
+    for (const l of layers) if ((l.type === 'video' || l.type === 'image' || l.type === 'text' || l.type === 'shape' || l.type === 'caption') && l.z < a.z) l.grades = [...(l.grades ?? []), ...a.grades]
   }
+}
+
+/** Samples per channel of a colour transfer: enough for a smooth curve, small enough to write every frame. */
+const TRANSFER_STEPS = 17
+
+/**
+ * A grade as three per-channel tables for an SVG feComponentTransfer (phase 5 "not graded yet": text and shapes under
+ * an adjustment layer). Live text and shapes can't be graded pixel by pixel like a picture, so each channel's response
+ * is measured on a grey ramp through the same maths (gradePixel): curves come out exactly (they are per channel), HSL
+ * and a LUT as they move neutral tones. Undefined when the grades change nothing.
+ */
+export function gradeTransfer(p: Pick<Project, 'luts'>, grades: FrameLayer['grades']): [string, string, string] | undefined {
+  if (!grades?.length) return undefined
+  const stages = grades.filter((g) => !gradeNeutral(g.grade, p.luts)).map((g) => ({ grade: prepareGrade(g.grade, p.luts), mix: g.mix }))
+  if (!stages.length) return undefined
+  const ch: [number[], number[], number[]] = [[], [], []]
+  let moved = false
+  for (let i = 0; i < TRANSFER_STEPS; i++) {
+    const v = (i / (TRANSFER_STEPS - 1)) * 255
+    let px: [number, number, number] = [v, v, v]
+    for (const s of stages) px = gradePixel(s.grade, s.mix, px[0], px[1], px[2])
+    for (let c = 0; c < 3; c++) {
+      const out = clamp(px[c] / 255, 0, 1)
+      if (Math.abs(out - v / 255) > 0.002) moved = true
+      ch[c].push(Math.round(out * 1000) / 1000)
+    }
+  }
+  return moved ? [ch[0].join(' '), ch[1].join(' '), ch[2].join(' ')] : undefined
 }
 
 export function createAdjustmentItem(start: number, duration = 5, over: Partial<AdjustmentItem> = {}): AdjustmentItem {

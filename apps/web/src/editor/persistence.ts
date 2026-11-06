@@ -11,7 +11,7 @@ import { projectDuration } from '@producer/core'
 import { HttpError, api } from '../lib/api'
 import { useSession } from '../lib/session'
 import { loadDemoProject, saveDemoProject } from './demo'
-import { clearJournal, readJournal, writeJournal } from './journal'
+import { clearJournal, pruneJournals, readJournal, writeJournal } from './journal'
 import { rebase, rebaseDetailed, same } from './rebase'
 import { shareUnchanged, useEditor, type EditorState, type HistoryEntry } from './store'
 
@@ -33,6 +33,8 @@ let retries = 0
 export async function loadInto(projectId: string, demo: boolean) {
   const ticket = ++loading
   retries = 0
+  // journals of projects this browser hasn't opened in a month (deleted elsewhere, or forgotten) go
+  pruneJournals()
   if (demo) {
     const project = loadDemoProject()
     useEditor.getState().load({ project, version: 0, projectId: 'demo', demo: true })

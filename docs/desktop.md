@@ -243,7 +243,9 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
   whose files are only in the cloud (`GET/PUT /api/sync/offline`). Stopping keeps what was downloaded.
 - **Brand kits and fonts.** A space's other brand kits and its font files sync both ways (font files are fetched as
   they arrive). The space's own settings (pronunciations, sample project) and each member's settings (favourite voices,
-  Voice Studio draft, onboarding) stay in the cloud; the media trash follows the cloud's for clips from the cloud.
+  Voice Studio draft, onboarding) live in the cloud: while linked and online the desktop reads and writes them there
+  (`desktop/settings-proxy.ts`), offline it uses its own copy. The media trash goes both ways: a clip put in the trash
+  or restored on the desktop is the same in the cloud after the next sync, and the cloud's trash comes down.
 - **Comments and activity** aren't copied to the desktop. For a project or space in the cloud, the desktop reads and
   writes them in the cloud and passes on the cloud's live `comment` updates while they're open; offline they say they
   need the connection (nothing is queued). Unlinked, comments stay on this computer as before.

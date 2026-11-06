@@ -1,6 +1,7 @@
 // DOM renderer for evaluated frames. The editor preview uses it in 'preview' mode (it owns <video>/<audio>
 // playback); the HyperFrames export bundles it in 'export' mode (media elements are pre-declared in the
 // composition and HyperFrames owns their playback, the renderer only positions and styles them).
+import { gradeTransfer } from './colour'
 import { evaluate, textBoxCss, textInnerHtml } from './evaluate'
 import { GradeLayers, STAGES, snapshotFrame } from './gradeRuntime'
 import { itemEnd, projectDuration } from './ops'
@@ -398,12 +399,15 @@ export class StageRenderer {
     el ??= this.createLayer(layer)
     const w = el.wrap
     const auto = layer.box.height <= 0
+    // text, shapes and captions under an adjustment layer: its curves / HSL / LUT as a colour transfer on the layer
+    const transfer = layer.type === 'text' || layer.type === 'shape' || layer.type === 'caption' ? this.transferFilter(layer) : ''
+    const filter = [layer.filter, transfer].filter(Boolean).join(' ')
     w.style.cssText =
       LAYER_BASE +
       `display:block;left:${layer.box.cx.toFixed(2)}px;top:${layer.box.cy.toFixed(2)}px;width:${layer.box.width.toFixed(2)}px;` +
       (auto ? 'height:auto;' : `height:${layer.box.height.toFixed(2)}px;`) +
       `transform:translate(-50%,-50%) ${layer.transform};opacity:${layer.opacity.toFixed(4)};z-index:${layer.z};` +
-      (layer.filter ? `filter:${layer.filter};` : '') +
+      (filter ? `filter:${filter};` : '') +
       (layer.blend !== 'normal' ? `mix-blend-mode:${layer.blend};` : '') +
       (layer.clipPath ? `clip-path:${layer.clipPath};` : '') +
       (layer.crop ? 'overflow:hidden;' : '') +
@@ -478,6 +482,37 @@ export class StageRenderer {
         (s.stroke ? `border:${cssNumber(s.stroke.width)}px solid ${safeColor(s.stroke.color, 'transparent')};` : '') +
         (s.shape === 'line' ? `border-top:${Math.max(2, cssNumber(s.height))}px solid ${fill};height:0;top:50%;` : '')
     }
+  }
+
+  /** The stage's SVG colour transfers, by their tables: each written once and reused by every layer that needs it. */
+  private transfers = new Map<string, string>()
+
+  /** `url(#…)` of the colour transfer for a text, shape or caption layer's grades, or '' when they change nothing. */
+  private transferFilter(layer: FrameLayer): string {
+    const t = gradeTransfer(this.project, layer.grades)
+    if (!t) return ''
+    const key = t.join('|')
+    let id = this.transfers.get(key)
+    if (!id || !this.root.querySelector(`#${id}`)) {
+      id ??= `ps-grade-${this.transfers.size + 1}`
+      let svg = this.root.querySelector(':scope > svg[data-ps-grades]') as SVGSVGElement | null
+      if (!svg) {
+        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+        svg.setAttribute('data-ps-grades', '1')
+        svg.setAttribute('aria-hidden', 'true')
+        svg.setAttribute('width', '0')
+        svg.setAttribute('height', '0')
+        svg.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none'
+        this.root.appendChild(svg)
+      }
+      const holder = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+      // the tables are numbers only (gradeTransfer): nothing in them can be markup
+      holder.innerHTML = `<filter id="${id}" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR type="table" tableValues="${t[0]}"/><feFuncG type="table" tableValues="${t[1]}"/><feFuncB type="table" tableValues="${t[2]}"/></feComponentTransfer></filter>`
+      if (holder.firstElementChild) svg.appendChild(holder.firstElementChild)
+      if (this.transfers.size > 200) this.transfers.clear()
+      this.transfers.set(key, id)
+    }
+    return `url(#${id})`
   }
 
   /** The scale at which `html` fits a width × height box, measured in the content element itself. */

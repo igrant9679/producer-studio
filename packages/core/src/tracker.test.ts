@@ -1,7 +1,7 @@
 // The editor requests from the tracker that live in core: the media a project lists but doesn't use (#18), and the
 // shapes drawn as paths (#8), the same in the preview and the export.
 import { describe, expect, it } from 'vitest'
-import { addAsset, addItem, createImageItem, createProject, createShapeItem, createVideoItem, removeUnusedAssets, shapePath, shapeSvg, unusedAssetIds, type Asset } from './index'
+import { addAsset, addItem, createImageItem, createProject, createShapeItem, createVideoItem, gradeTransfer, removeUnusedAssets, shapePath, shapeSvg, spreadAdjustments, unusedAssetIds, type Asset, type FrameLayer } from './index'
 
 const asset = (id: string, kind: Asset['kind'] = 'video'): Asset => ({ id, kind, name: id, src: '', duration: 10, width: 1920, height: 1080 }) as Asset
 
@@ -45,5 +45,31 @@ describe('shapes drawn as paths', () => {
     expect(svg).toMatch(/^<svg [^>]*viewBox="-3 -3 306 306"/)
     expect(svg).toMatch(/fill="#ff0" stroke="#fff" stroke-width="6"/)
     expect(shapeSvg(createShapeItem(0, { shape: 'rect' }), '#ff0')).toBe('')
+  })
+})
+
+describe('text and shapes under an adjustment layer (phase 5: not graded yet)', () => {
+  const invert = { curves: { master: [[0, 1], [1, 0]] as Array<[number, number]> } }
+
+  it('get its grade: curves exactly, at the layer’s mix; nothing when it changes nothing', () => {
+    const [r, g, b] = gradeTransfer({}, [{ grade: invert, mix: 1 }])!.map((t) => t.split(' ').map(Number))
+    expect(r[0]).toBeCloseTo(1, 2)
+    expect(r[16]).toBeCloseTo(0, 2)
+    expect(r[8]).toBeCloseTo(0.5, 1)
+    expect(g).toEqual(r)
+    expect(b).toEqual(r)
+    // half mixed: halfway between the input and the curve
+    const half = gradeTransfer({}, [{ grade: invert, mix: 0.5 }])![0].split(' ').map(Number)
+    expect(half[0]).toBeCloseTo(0.5, 2)
+    expect(half[16]).toBeCloseTo(0.5, 2)
+    expect(gradeTransfer({}, [{ grade: {}, mix: 1 }])).toBeUndefined()
+    expect(gradeTransfer({}, undefined)).toBeUndefined()
+  })
+
+  it('every text, shape and caption beneath the adjustment carries its grades; those above don’t', () => {
+    const layer = (type: FrameLayer['type'], z: number, grades?: FrameLayer['grades']) => ({ type, z, grades }) as FrameLayer
+    const layers = [layer('text', 1), layer('shape', 2), layer('caption', 3), layer('adjustment', 4, [{ grade: invert, mix: 1 }]), layer('text', 5)]
+    spreadAdjustments(layers)
+    expect(layers.map((l) => l.grades?.length ?? 0)).toEqual([1, 1, 1, 1, 0])
   })
 })
