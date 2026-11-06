@@ -619,16 +619,45 @@ function OptionalGroup({ label, on, onToggle, children }: { label: string; on: b
 
 // ---------- shape ----------
 
+const SHAPE_NAMES: Array<[ShapeItem['shape'], string]> = [
+  ['rect', 'Rectangle'],
+  ['ellipse', 'Ellipse'],
+  ['triangle', 'Triangle'],
+  ['polygon', 'Polygon'],
+  ['star', 'Star'],
+  ['arrow', 'Arrow'],
+  ['bubble', 'Speech bubble'],
+  ['line', 'Line'],
+]
+
 function ShapeTab({ item }: { item: ShapeItem }) {
   return (
     <Section title="Shape">
       <Field label="Type">
-        <Segmented value={item.shape} options={[{ value: 'rect', label: 'Rect' }, { value: 'ellipse', label: 'Ellipse' }, { value: 'line', label: 'Line' }]} onChange={(v) => up<ShapeItem>(item, { shape: v }, 'Shape')} />
+        <select className="ed-select" value={item.shape} onChange={(e) => up<ShapeItem>(item, { shape: e.target.value as ShapeItem['shape'] }, 'Shape')}>
+          {SHAPE_NAMES.map(([v, n]) => (
+            <option key={v} value={v}>{n}</option>
+          ))}
+        </select>
       </Field>
       <Field label="Fill"><ColorInput value={item.fill} onChange={(v) => up<ShapeItem>(item, { fill: v }, 'Shape fill', `sf:${item.id}`)} /></Field>
       <Slider label="Width" value={item.width} min={2} max={4000} onChange={(v) => up<ShapeItem>(item, { width: v }, 'Shape width', `sw:${item.id}`)} suffix="px" />
       <Slider label="Height" value={item.height} min={2} max={4000} onChange={(v) => up<ShapeItem>(item, { height: v }, 'Shape height', `sh:${item.id}`)} suffix="px" />
-      <Slider label="Radius" value={item.radius} min={0} max={400} onChange={(v) => up<ShapeItem>(item, { radius: v }, 'Shape radius', `sr:${item.id}`)} suffix="px" />
+      {(item.shape === 'rect' || item.shape === 'line') && <Slider label="Radius" value={item.radius} min={0} max={400} onChange={(v) => up<ShapeItem>(item, { radius: v }, 'Shape radius', `sr:${item.id}`)} suffix="px" />}
+      {(item.shape === 'polygon' || item.shape === 'star') && (
+        <Slider label={item.shape === 'star' ? 'Points' : 'Sides'} value={item.points ?? (item.shape === 'star' ? 5 : 6)} min={3} max={12} onChange={(v) => up<ShapeItem>(item, { points: v }, item.shape === 'star' ? 'Star points' : 'Polygon sides', `spt:${item.id}`)} />
+      )}
+      {item.shape !== 'line' && (
+        <Field label="Border">
+          <Toggle checked={!!item.stroke} onChange={(v) => up<ShapeItem>(item, { stroke: v ? { color: '#ffffff', width: 6 } : undefined }, 'Shape border')} />
+        </Field>
+      )}
+      {item.stroke && item.shape !== 'line' && (
+        <>
+          <Field label="Border colour"><ColorInput value={item.stroke.color} onChange={(v) => up<ShapeItem>(item, { stroke: { ...(live<ShapeItem>(item.id)?.stroke ?? item.stroke!), color: v } }, 'Border colour', `sbc:${item.id}`)} /></Field>
+          <Slider label="Border width" value={item.stroke.width} min={1} max={60} suffix="px" onChange={(v) => up<ShapeItem>(item, { stroke: { ...(live<ShapeItem>(item.id)?.stroke ?? item.stroke!), width: v } }, 'Border width', `sbw:${item.id}`)} />
+        </>
+      )}
     </Section>
   )
 }
@@ -651,9 +680,25 @@ export function CaptionStyleEditor({ track }: { track: Track }) {
     const cur = t?.captionStyle ?? cs
     set({ style: { ...cur.style, ...patch } }, label, key)
   }
+  // the box and outline as they are now (a slider dragged several times reads the latest)
+  const liveStyle = () => (useEditor.getState().project.tracks.find((x) => x.id === track.id)?.captionStyle ?? cs).style
+  const otherTracks = useEditor((s) => s.project.tracks.filter((t) => t.kind === 'caption' && t.id !== track.id).length)
+  const copyToAll = () => {
+    const s = useEditor.getState()
+    const style = s.project.tracks.find((x) => x.id === track.id)?.captionStyle ?? cs
+    let p = s.project
+    for (const t of p.tracks) if (t.kind === 'caption' && t.id !== track.id) p = updateTrack(p, t.id, { captionStyle: { ...style } })
+    s.commit(p, 'Caption style on every track')
+  }
   return (
     <>
       <Section title="Caption style">
+        <p className="ed-note">Changes here apply to every caption on this track{track.language ? ` (${track.language})` : ''}.</p>
+        {otherTracks > 0 && (
+          <button className="btn sm" style={{ marginBottom: 8 }} onClick={copyToAll}>
+            Use this style on {otherTracks === 1 ? 'the other caption track' : `all ${otherTracks + 1} caption tracks`}
+          </button>
+        )}
         <div className="ed-capgrid">
           {CAPTION_PRESETS.map((p) => (
             <button
@@ -702,9 +747,23 @@ export function CaptionStyleEditor({ track }: { track: Track }) {
             onChange={(v) => setStyle({ background: v ? { color: '#000000', radius: 10, padding: 14, opacity: 0.7 } : undefined }, 'Caption box')}
           />
         </Field>
+        {cs.style.background && (
+          <>
+            <Field label="Box colour"><ColorInput value={cs.style.background.color} onChange={(v) => setStyle({ background: { ...liveStyle().background!, color: v } }, 'Caption box colour', 'cbgc')} /></Field>
+            <Slider label="Box opacity" value={cs.style.background.opacity} min={0} max={1} step={0.01} display={{ to: (v) => v * 100, from: (v) => v / 100, step: 1 }} suffix="%" onChange={(v) => setStyle({ background: { ...liveStyle().background!, opacity: v } }, 'Caption box opacity', 'cbgo')} />
+            <Slider label="Corners" value={cs.style.background.radius} min={0} max={60} suffix="px" onChange={(v) => setStyle({ background: { ...liveStyle().background!, radius: v } }, 'Caption box corners', 'cbgr')} />
+            <Slider label="Padding" value={cs.style.background.padding} min={0} max={80} suffix="px" onChange={(v) => setStyle({ background: { ...liveStyle().background!, padding: v } }, 'Caption box padding', 'cbgp')} />
+          </>
+        )}
         <Field label="Outline">
           <Toggle checked={!!cs.style.stroke} onChange={(v) => setStyle({ stroke: v ? { color: '#000000', width: 6 } : undefined }, 'Caption outline')} />
         </Field>
+        {cs.style.stroke && (
+          <>
+            <Field label="Outline colour"><ColorInput value={cs.style.stroke.color} onChange={(v) => setStyle({ stroke: { ...liveStyle().stroke!, color: v } }, 'Caption outline colour', 'cstc')} /></Field>
+            <Slider label="Outline width" value={cs.style.stroke.width} min={1} max={24} suffix="px" onChange={(v) => setStyle({ stroke: { ...liveStyle().stroke!, width: v } }, 'Caption outline width', 'cstw')} />
+          </>
+        )}
       </Section>
     </>
   )

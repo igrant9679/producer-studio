@@ -2,9 +2,10 @@
 import type { AnimProp, Item } from '@producer/core'
 import { isSafeColor, removeKeyframe, setKeyframe } from '@producer/core'
 import clsx from 'clsx'
-import { ChevronDown, ChevronRight, Diamond } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, Diamond, Palette } from 'lucide-react'
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { localTime, readProp } from './actions'
+import { useBrandColors } from './brandColors'
 import { useEditor } from './store'
 
 export function Section({ title, children, right, defaultOpen = true }: { title: string; children: ReactNode; right?: ReactNode; defaultOpen?: boolean }) {
@@ -63,10 +64,48 @@ function fmtNum(v: number, step: number) {
   return v.toFixed(places)
 }
 
-export function NumberInput({ value, onChange, step = 1, min, max, suffix, width = 58, label }: { value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number; suffix?: string; width?: number; label?: string }) {
+export function NumberInput({ value, onChange, step = 1, min, max, suffix, width = 68, label }: { value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number; suffix?: string; width?: number; label?: string }) {
   const field = useFieldIds()
   const [text, setText] = useState(fmtNum(value, step))
   const focused = useRef(false)
+  // the steppers: one step a press, repeating while held (Shift: ten); a hold is one undo step
+  const live = useRef(value)
+  live.current = value
+  const hold = useRef<{ delay?: number; every?: number }>({})
+  const nudge = (dir: 1 | -1, big: boolean) => {
+    let x = Math.round((live.current + dir * step * (big ? 10 : 1)) / step) * step
+    if (min !== undefined) x = Math.max(min, x)
+    if (max !== undefined) x = Math.min(max, x)
+    live.current = x
+    onChange(x)
+    setText(fmtNum(x, step))
+  }
+  const stop = () => {
+    window.clearTimeout(hold.current.delay)
+    window.clearInterval(hold.current.every)
+    hold.current = {}
+    useEditor.getState().endCoalesce()
+  }
+  useEffect(() => stop, [])
+  const stepper = (dir: 1 | -1) => (
+    <button
+      type="button"
+      tabIndex={-1}
+      className="ed-num-step"
+      aria-label={`${dir > 0 ? 'Increase' : 'Decrease'}${label ? ` ${label.replace(/ value$/, '')}` : ''}`}
+      onPointerDown={(e) => {
+        e.preventDefault()
+        const big = e.shiftKey
+        nudge(dir, big)
+        hold.current.delay = window.setTimeout(() => (hold.current.every = window.setInterval(() => nudge(dir, big), 70)), 380)
+      }}
+      onPointerUp={stop}
+      onPointerLeave={stop}
+      onPointerCancel={stop}
+    >
+      {dir > 0 ? <ChevronUp size={9} /> : <ChevronDown size={9} />}
+    </button>
+  )
   useEffect(() => {
     if (!focused.current) setText(fmtNum(value, step))
   }, [value, step])
@@ -111,6 +150,10 @@ export function NumberInput({ value, onChange, step = 1, min, max, suffix, width
         }}
       />
       {suffix && <span>{suffix}</span>}
+      <span className="ed-num-steps">
+        {stepper(1)}
+        {stepper(-1)}
+      </span>
     </div>
   )
 }
@@ -221,6 +264,8 @@ export function ColorInput({ value, onChange }: { value: string; onChange: (v: s
   const hex = toHex(value) ?? '#000000'
   const [text, setText] = useState(value)
   useEffect(() => setText(value), [value])
+  const brand = useBrandColors()
+  const [kit, setKit] = useState(false)
   return (
     <div className="ed-color">
       <label className="sw" style={{ background: value }}>
@@ -238,6 +283,31 @@ export function ColorInput({ value, onChange }: { value: string; onChange: (v: s
         }}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
       />
+      {brand.length > 0 && (
+        <>
+          <button type="button" className={clsx('ed-color-kit', kit && 'on')} aria-label="Brand colours" aria-haspopup="menu" aria-expanded={kit} title="Brand colours" onClick={() => setKit((v) => !v)}>
+            <Palette size={13} />
+          </button>
+          <Menu open={kit} onClose={() => setKit(false)} className="ed-color-pop" label="Brand colours">
+            {brand.map((c) => (
+              <button
+                key={c}
+                role="menuitemradio"
+                aria-checked={toHex(value)?.toLowerCase() === toHex(c)?.toLowerCase()}
+                aria-label={c}
+                title={c}
+                className="ed-color-dot"
+                style={{ background: c }}
+                onClick={() => {
+                  onChange(c)
+                  useEditor.getState().endCoalesce()
+                  setKit(false)
+                }}
+              />
+            ))}
+          </Menu>
+        </>
+      )}
     </div>
   )
 }

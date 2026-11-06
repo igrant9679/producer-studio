@@ -1,7 +1,7 @@
 // Left icon rail + collapsible asset panel.
 import type { Asset, AssetRecord, AudioItem } from '@producer/core'
 import { useVoices } from '../shell/components/VoiceCard'
-import { TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, itemEnd } from '@producer/core'
+import { TEXT_TEMPLATES, VOICES, addAsset, addItem, assetIdsOf, createAudioItem, createShapeItem, isPathShape, itemEnd, shapePath, type ShapeItem } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -9,7 +9,6 @@ import {
   AudioLines,
   Bot,
   ChevronsLeft,
-  Circle,
   Clapperboard,
   FileText,
   Keyboard,
@@ -22,7 +21,6 @@ import {
   Plus,
   RotateCcw,
   Sparkles,
-  Square,
   Subtitles,
   SwatchBook,
   Trash2,
@@ -34,7 +32,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import * as A from './actions'
-import { Empty, Slider } from './controls'
+import { Empty, Menu, MenuItem, Slider } from './controls'
 import { endDrag, filmstripUrl, startDrag, thumbUrl, assetUrl } from './media'
 import { AssistantPanel } from './panels/AssistantPanel'
 import { BrandPanel } from './panels/BrandPanel'
@@ -45,7 +43,7 @@ import { type LeftTab, useEditor } from './store'
 import { ViewOnly } from './viewer'
 import { CommentsPanel } from './collab/CommentsPanel'
 import { shortDuration } from './timelineMath'
-import { libraryAssets, removeAsset, retryAsset, uploadFiles, useLibrary } from './uploads'
+import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, uploadFiles, useLibrary } from './uploads'
 import { tipProps } from '../lib/tooltip'
 
 const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
@@ -178,13 +176,60 @@ function MediaPanel() {
   const list = useLibraryList(['video', 'image'])
   const loading = useLibrary((s) => s.loading)
   const [filter, setFilter] = useState<'all' | 'video' | 'image'>('all')
-  const shown = list.filter((x) => filter === 'all' || x.asset.kind === filter)
+  // This project (tracker #17): what its timeline uses or used, and what was uploaded in it; Library: the whole space
+  const projectId = useEditor((s) => s.projectId)
+  const projectAssets = useEditor((s) => s.project.assets)
+  const tracks = useEditor((s) => s.project.tracks)
+  const records = useLibrary((s) => s.records)
+  const mine = (id: string) => !!projectAssets[id] || records.find((r) => r.asset.id === id)?.projectId === projectId
+  const ours = list.filter((x) => mine(x.asset.id))
+  const [chosen, setChosen] = useState<'project' | 'library' | null>(null)
+  const scope = chosen ?? (ours.length ? 'project' : 'library')
+  const scoped = scope === 'project' ? ours : list
+  const shown = scoped.filter((x) => filter === 'all' || x.asset.kind === filter)
+  // not on the timeline (tracker #18): taken out of the project, or into the media trash
+  const used = new Set(tracks.flatMap((t) => t.items.flatMap((it) => [...assetIdsOf(it), ...(it.type === 'video' && it.smooth?.assetId ? [it.smooth.assetId] : [])])))
+  const unused = scope === 'project' ? ours.filter((x) => !used.has(x.asset.id)) : []
+  const [tidy, setTidy] = useState(false)
   // a clip that failed can't be used: they go last, under the ones that can
   const ordered = [...shown.filter((x) => !isFailed(x.status)), ...shown.filter((x) => isFailed(x.status))]
   const failed = list.filter((x) => isFailed(x.status))
   return (
     <>
-      <UploadBox accept="video/*,image/*,audio/*" label="Upload media" />
+      <UploadBox accept="video/*,image/*,audio/*" label="Upload from this device" />
+      <div className="ed-seg ed-media-scope" role="tablist" aria-label="Which media">
+        {([['project', `This project${ours.length ? ` · ${ours.length}` : ''}`], ['library', `Library · ${list.length}`]] as const).map(([v, label]) => (
+          <button key={v} role="tab" aria-selected={scope === v} className={clsx(scope === v && 'on')} onClick={() => setChosen(v)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {unused.length > 0 && (
+        <div className="ed-unusedbar" role="status">
+          <span>{unused.length} {unused.length === 1 ? 'clip isn’t' : 'clips aren’t'} on the timeline</span>
+          <button className="act" aria-haspopup="menu" aria-expanded={tidy} onClick={() => (setChosen(scope), setTidy((v) => !v))}>
+            Remove…
+          </button>
+          <Menu open={tidy} onClose={() => setTidy(false)} className="ed-unusedpop" label="Remove unused clips">
+            <MenuItem
+              onClick={() => {
+                setTidy(false)
+                void takeOutOfProject(unused.map((x) => x.asset.id))
+              }}
+              label={`Take ${unused.length === 1 ? 'it' : 'them'} out of this project (the library keeps ${unused.length === 1 ? 'it' : 'them'})`}
+            />
+            <MenuItem
+              onClick={() => {
+                setTidy(false)
+                if (window.confirm(`Move ${unused.length} clip${unused.length === 1 ? '' : 's'} to the media trash? Other projects that use ${unused.length === 1 ? 'it' : 'them'} keep playing ${unused.length === 1 ? 'it' : 'them'}, and the trash can put ${unused.length === 1 ? 'it' : 'them'} back.`))
+                  for (const x of unused) void removeAsset(x.asset.id)
+              }}
+              danger
+              label={`Move ${unused.length === 1 ? 'it' : 'them'} to the media trash`}
+            />
+          </Menu>
+        </div>
+      )}
       {failed.length > 1 && (
         <div className="ed-failedbar" role="status">
           <AlertTriangle size={14} />
@@ -213,7 +258,11 @@ function MediaPanel() {
           ))}
         </div>
       )}
-      {!loading && !shown.length && <Empty icon={<Clapperboard size={22} />} title="No media yet">Upload video or images to start editing.</Empty>}
+      {!loading && !shown.length && (scope === 'project' && list.length ? (
+        <Empty icon={<Clapperboard size={22} />} title="Nothing in this project yet">Upload from this device, or add clips you already have from the <button className="linklike" onClick={() => setChosen('library')}>Library</button>.</Empty>
+      ) : (
+        <Empty icon={<Clapperboard size={22} />} title="No media yet">Upload video or images to start editing.</Empty>
+      ))}
       <div className="ed-grid2">
         {ordered.map(({ asset, status }) => (
           <AssetCard key={asset.id} asset={asset} ready={status === 'ready'} status={status} />
@@ -422,9 +471,9 @@ function AssetCard({ asset, ready, status }: { asset: Asset; ready: boolean; sta
 
 function TextPanel() {
   const cats = [...new Set(TEXT_TEMPLATES.map((t) => t.category))].filter((c) => c !== 'Basic')
-  const addShape = (shape: 'rect' | 'ellipse') => {
+  const addShape = (k: (typeof SHAPES)[number]) => {
     const s = useEditor.getState()
-    const it = createShapeItem(s.playhead, { shape, name: shape === 'rect' ? 'Rectangle' : 'Ellipse', fill: '#ff5a5f', width: shape === 'rect' ? 480 : 320, height: shape === 'rect' ? 270 : 320 })
+    const it = createShapeItem(s.playhead, { shape: k.shape, name: k.name, fill: k.fill, width: k.w, height: k.h, ...(k.shape === 'line' ? { stroke: undefined } : {}) })
     s.commit(addItem(s.project, it), 'Add shape', { selection: [it.id] })
   }
   return (
@@ -479,14 +528,12 @@ function TextPanel() {
       <div className="ed-group">
         <div className="eyebrow">Shapes</div>
         <div className="ed-grid2">
-          <button className="ed-tpl" onClick={() => addShape('rect')}>
-            <Square size={26} color="var(--accent)" fill="var(--accent)" />
-            <small>Rectangle</small>
-          </button>
-          <button className="ed-tpl" onClick={() => addShape('ellipse')}>
-            <Circle size={26} color="var(--cyan)" fill="var(--cyan)" />
-            <small>Ellipse</small>
-          </button>
+          {SHAPES.map((k) => (
+            <button key={k.shape} className="ed-tpl" onClick={() => addShape(k)}>
+              <ShapeIcon shape={k.shape} colour={k.fill} />
+              <small>{k.name}</small>
+            </button>
+          ))}
         </div>
       </div>
     </>
@@ -638,4 +685,23 @@ export function VoiceoverBox() {
       </button>
     </div>
   )
+}
+
+/** The shapes the Text panel adds (tracker #8), at a size that reads on a 1080p canvas. */
+const SHAPES: Array<{ shape: ShapeItem['shape']; name: string; fill: string; w: number; h: number }> = [
+  { shape: 'rect', name: 'Rectangle', fill: '#ff5a5f', w: 480, h: 270 },
+  { shape: 'ellipse', name: 'Circle', fill: '#22c3e6', w: 320, h: 320 },
+  { shape: 'triangle', name: 'Triangle', fill: '#ffb020', w: 320, h: 280 },
+  { shape: 'polygon', name: 'Hexagon', fill: '#7c5cff', w: 320, h: 320 },
+  { shape: 'star', name: 'Star', fill: '#ffd23f', w: 320, h: 320 },
+  { shape: 'arrow', name: 'Arrow', fill: '#ff5a5f', w: 420, h: 180 },
+  { shape: 'bubble', name: 'Speech bubble', fill: '#ffffff', w: 480, h: 300 },
+  { shape: 'line', name: 'Line', fill: '#ffffff', w: 480, h: 8 },
+]
+
+/** A shape drawn the way the canvas draws it, small. */
+function ShapeIcon({ shape, colour }: { shape: ShapeItem['shape']; colour: string }) {
+  if (isPathShape(shape)) return <svg width={30} height={26} viewBox="0 0 30 26" aria-hidden="true"><path d={shapePath(shape, 30, 26)} fill={colour} /></svg>
+  if (shape === 'line') return <svg width={30} height={26} viewBox="0 0 30 26" aria-hidden="true"><rect x={0} y={11.5} width={30} height={3} rx={1.5} fill={colour} /></svg>
+  return <svg width={30} height={26} viewBox="0 0 30 26" aria-hidden="true">{shape === 'ellipse' ? <circle cx={15} cy={13} r={12} fill={colour} /> : <rect x={0} y={4} width={30} height={18} rx={3} fill={colour} />}</svg>
 }

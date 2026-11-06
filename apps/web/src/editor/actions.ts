@@ -33,6 +33,7 @@ import {
   unlinkItems,
   updateItem,
   withLinked,
+  TRANSITIONS,
 } from '@producer/core'
 import { toast } from '../lib/toast'
 import { useEditor } from './store'
@@ -224,6 +225,34 @@ export function freezeEnd(itemId?: string) {
   if (!v) return toast('Select a video clip to hold its last frame')
   if (!editableIds([v.id]).length) return
   S().commit(freezeAtEnd(S().project, v.id, S().freezeSec), 'Freeze last frame')
+}
+
+/**
+ * The cuts a transition can go on: each visual clip that touches the next one on its track (the clip that owns the
+ * cut is the first of the pair). `scope`: one track, the selected clips (a cut counts when either side is selected),
+ * or the whole video.
+ */
+export function transitionCuts(project: Project, scope: { trackId: string } | { selected: string[] } | 'all'): string[] {
+  const out: string[] = []
+  for (const t of project.tracks) {
+    if (t.kind !== 'video' && t.kind !== 'overlay') continue
+    if (typeof scope === 'object' && 'trackId' in scope && t.id !== scope.trackId) continue
+    t.items.forEach((it, i) => {
+      const next = t.items[i + 1]
+      if (!next || !('transform' in it) || !('transform' in next) || Math.abs(next.start - itemEnd(it)) > 0.05) return
+      if (typeof scope === 'object' && 'selected' in scope && !scope.selected.includes(it.id) && !scope.selected.includes(next.id)) return
+      out.push(it.id)
+    })
+  }
+  return out
+}
+
+/** One transition on many cuts at once (tracker #10), as a single undo step. */
+export function setTransitionOn(itemIds: string[], type: TransitionType, duration: number) {
+  let p = S().project
+  for (const id of itemIds) p = updateItem<VisualItem>(p, id, { transitionOut: { type, duration } })
+  S().commit(p, `Transition on ${itemIds.length} cut${itemIds.length === 1 ? '' : 's'}`)
+  toast(`${TRANSITIONS.find((t) => t.id === type)?.name ?? type} on ${itemIds.length} cut${itemIds.length === 1 ? '' : 's'}`)
 }
 
 export function setTransition(itemId: string, type: TransitionType | null, duration = 0.6) {

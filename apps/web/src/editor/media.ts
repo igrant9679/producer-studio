@@ -54,12 +54,15 @@ export const DRAG_MIME = 'application/x-producer-studio'
 
 export function startDrag(e: React.DragEvent, payload: DragPayload) {
   current = payload
+  // the timeline shows where this kind can land (a transition: every gap between clips)
+  document.documentElement.dataset.dragKind = payload.kind
   e.dataTransfer.effectAllowed = 'copy'
   e.dataTransfer.setData(DRAG_MIME, payload.kind)
   e.dataTransfer.setData('text/plain', payload.kind)
 }
 export function endDrag() {
   current = null
+  delete document.documentElement.dataset.dragKind
 }
 export function dragPayload(): DragPayload | null {
   return current

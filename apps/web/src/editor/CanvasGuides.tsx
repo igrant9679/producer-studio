@@ -1,9 +1,10 @@
 // Canvas view aids drawn around and over the stage: rulers, draggable guides, platform safe zones, the lines an
 // object snaps to while it moves, and the small view bar that turns them on.
-import { Ruler, X } from 'lucide-react'
+import { Maximize, Ruler, X } from 'lucide-react'
 import { useState } from 'react'
 import { SAFE_ZONES, rulerStep, safeRect, type SafeZoneId } from './canvasSnap'
 import { useCanvasView } from './canvasView'
+import { useEditor } from './store'
 import './canvas-tools.css'
 
 type Axis = 'v' | 'h'
@@ -191,6 +192,9 @@ export function CanvasViewBar() {
           <X size={13} /> <span>{count}</span>
         </button>
       )}
+      <button type="button" aria-label="Full-screen preview" title="Full-screen preview (Ctrl Shift F)" onClick={() => useEditor.setState({ fullscreen: true })}>
+        <Maximize size={14} />
+      </button>
     </div>
   )
 }

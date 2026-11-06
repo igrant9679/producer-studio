@@ -1,7 +1,7 @@
 // Workspace media library + uploads. Server: api.upload with progress, then SSE `asset` events (with a polling
 // fallback) until status 'ready'. Demo: files become local blob: assets probed in the browser.
 import type { Asset, AssetRecord, Job } from '@producer/core'
-import { addAsset, transcriptRev, uid } from '@producer/core'
+import { addAsset, removeUnusedAssets, transcriptRev, uid } from '@producer/core'
 import { create } from 'zustand'
 import { api, subscribeEvents } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
@@ -211,7 +211,8 @@ export async function uploadFiles(files: File[] | FileList, opts: { onUploaded?:
         opts.onUploaded?.(asset.id, file)
       } else {
         if (!s.workspaceId) throw new Error('No workspace selected')
-        const rec = await api.upload(s.workspaceId, file, (f) => patch({ progress: f }))
+        // uploaded here, it belongs to this project's media (the library lists it too)
+        const rec = await api.upload(s.workspaceId, file, (f) => patch({ progress: f }), s.projectId || undefined)
         patch({ progress: 1, status: rec.status === 'ready' ? 'ready' : 'processing', assetId: rec.asset.id })
         upsertRecord(rec)
         if (rec.status !== 'ready') void pollUntilReady(rec.asset.id)
@@ -224,6 +225,21 @@ export async function uploadFiles(files: File[] | FileList, opts: { onUploaded?:
     // clear finished rows after a while
     setTimeout(() => useLibrary.setState({ uploads: useLibrary.getState().uploads.filter((u) => u.key !== key || u.status === 'processing' || u.status === 'uploading') }), 8000)
   }
+}
+
+/**
+ * Take clips out of this project (tracker #18): off its media list, and no longer listed under its uploads. The
+ * library keeps them; a clip still on the timeline is left alone.
+ */
+export async function takeOutOfProject(ids: string[]) {
+  const st = useEditor.getState()
+  st.commit(removeUnusedAssets(st.project, ids), `Take ${ids.length} clip${ids.length === 1 ? '' : 's'} out of the project`)
+  if (st.demo) return
+  const mine = useLibrary.getState().records.filter((r) => ids.includes(r.asset.id) && r.projectId === st.projectId)
+  const results = await Promise.allSettled(mine.map((r) => api.setAssetProject(r.asset.id, null)))
+  for (const r of results) if (r.status === 'fulfilled') upsertRecord(r.value)
+  const failed = results.filter((r) => r.status === 'rejected').length
+  if (failed) toast(`${failed} clip${failed === 1 ? '' : 's'} couldn’t be taken out of the project: try again`)
 }
 
 /** Re-run processing for a failed clip. A clip whose file never reached storage has to be uploaded again. */

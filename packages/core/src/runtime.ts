@@ -8,6 +8,7 @@ import { applyKey, keyFilterId, smartWrapCss } from './smartRuntime'
 import { clipLocalAt, clipSourceAt, localAtOffset, smoothSource, sourceOffset, speedAt } from './speed'
 import { fitScale, scaledTextStyle } from './text'
 import type { FrameLayer, Item, Project, TextStyle, Track, VideoItem } from './types'
+import { shapeSvg, isPathShape } from './shapes'
 import { cssNumber, safeColor } from './util'
 
 /** `audio`: what the preview plays a clip's sound from (for a video, its small sound-only copy when there is one). */
@@ -36,6 +37,8 @@ interface LayerEl {
   lastFill?: string
   /** Shrink to fit: what the scale was measured for, and the scale. */
   lastFitKey?: string
+  /** The path shape last drawn into content (its SVG is made again only when it changes). */
+  lastShape?: string
   fitK?: number
 }
 
@@ -456,6 +459,19 @@ export class StageRenderer {
     } else if (layer.shape) {
       const s = layer.shape
       const fill = safeColor(s.fill, 'transparent')
+      if (isPathShape(s.shape)) {
+        const svg = shapeSvg(s, fill, s.stroke ? safeColor(s.stroke.color, 'transparent') : undefined)
+        if (el.lastShape !== svg) {
+          el.content.style.cssText = 'position:absolute;inset:0;'
+          el.content.innerHTML = svg
+          el.lastShape = svg
+        }
+        return
+      }
+      if (el.lastShape !== undefined) {
+        el.content.innerHTML = ''
+        el.lastShape = undefined
+      }
       el.content.style.cssText =
         `position:absolute;inset:0;background:${s.shape === 'line' ? 'transparent' : fill};` +
         `border-radius:${s.shape === 'ellipse' ? '50%' : `${cssNumber(s.radius)}px`};` +

@@ -86,6 +86,7 @@ export function assetRecord(a: typeof assets.$inferSelect, opts: { light?: boole
     createdAt: a.createdAt,
     etag: etagOf(assetEditable(a)),
     ...(a.trashedAt != null ? { trashedAt: a.trashedAt } : {}),
+    ...(a.projectId ? { projectId: a.projectId } : {}),
   }
   if (!opts.light) return rec
   const { transcript, ...rest } = doc

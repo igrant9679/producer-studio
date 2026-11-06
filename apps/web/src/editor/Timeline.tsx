@@ -1027,6 +1027,7 @@ const TrackRow = memo(function TrackRow({ track: t, top, height, index, zoom, co
               dragging={dragging}
               tabStop={tabStop === it.id}
               adjacent={!!adjacent}
+              nextId={adjacent ? next.id : undefined}
               linked={!!it.linkId && !!liveLinks?.has(it.linkId)}
               visFrom={Math.max(0, view.x0 - a)}
               visTo={Math.max(0, Math.min(b, view.x1) - a)}
@@ -1127,6 +1128,8 @@ interface ClipProps {
   tabStop: boolean
   /** Touches the next clip: offers the transition button. */
   adjacent: boolean
+  /** The clip after this one, when they touch: the transition between them shows while either is selected. */
+  nextId?: string
   /** In a link group with another clip: they split, trim, move and delete together. */
   linked: boolean
   /** The part of the clip (px from its left edge) near the view: waveforms and filmstrips draw only that. */
@@ -1137,8 +1140,9 @@ interface ClipProps {
 
 const TYPE_NAME: Record<Item['type'], string> = { video: 'Video', image: 'Image', audio: 'Audio', text: 'Text', caption: 'Caption', shape: 'Shape', adjustment: 'Adjustment layer' }
 
-const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMain, zoom, height, dragging, tabStop, adjacent, linked, visFrom, visTo, events }: ClipProps) {
+const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMain, zoom, height, dragging, tabStop, adjacent, nextId, linked, visFrom, visTo, events }: ClipProps) {
   const selected = useEditor((s) => s.selection.includes(item.id))
+  const nextSelected = useEditor((s) => !!nextId && s.selection.includes(nextId))
   const asset = useEditor((s) => ('assetId' in item ? s.project.assets[item.assetId] : undefined))
   const ref = useRef<HTMLDivElement>(null)
   // moved to by keyboard: take focus once drawn (also after moving to another track)
@@ -1254,7 +1258,7 @@ const ClipView = memo(function ClipView({ item, trackKind, trackLocked, trackMai
       {adjacent && (
         <button
           tabIndex={-1}
-          className={clsx('tl-trans', tr && 'on')}
+          className={clsx('tl-trans', tr && 'on', (selected || nextSelected) && 'near')}
           style={{ left: left + width, width: tr ? Math.max(18, tr.duration * zoom) : 18, top: Math.round((height - 20) / 2) }}
           title={tr ? `${TRANSITIONS.find((x) => x.id === tr.type)?.name ?? tr.type} · ${tr.duration.toFixed(1)}s — click to edit` : 'Add transition'}
           onPointerDown={(e) => e.stopPropagation()}
@@ -1465,6 +1469,7 @@ function TransitionPopover({ pop, onClose }: { pop: TransPop; onClose: () => voi
           s.commit(updateItem<VisualItem>(s.project, it.id, { transitionOut: { ...tr, duration: v } }), 'Transition duration', { coalesce: `trd:${it.id}` })
         }}
       />
+      <ApplyToMany trackId={f!.track.id} type={tr.type} duration={tr.duration} />
       <button className="btn sm" style={{ width: '100%', marginTop: 8 }} onClick={() => { A.setTransition(it.id, null); onClose() }}>
         <Trash2 size={13} /> Remove transition
       </button>
@@ -1472,3 +1477,31 @@ function TransitionPopover({ pop, onClose }: { pop: TransPop; onClose: () => voi
   )
 }
 
+/** This transition on many cuts at once (tracker #10): this track's, the selected clips', or every cut in the video. */
+function ApplyToMany({ trackId, type, duration }: { trackId: string; type: TransitionType; duration: number }) {
+  const project = useEditor((s) => s.project)
+  const selection = useEditor((s) => s.selection)
+  const onTrack = A.transitionCuts(project, { trackId })
+  const selected = selection.length > 1 ? A.transitionCuts(project, { selected: selection }) : []
+  const all = A.transitionCuts(project, 'all')
+  const same = (ids: string[]) => ids.every((id) => {
+    const t = (findItem(project, id)?.item as VisualItem | undefined)?.transitionOut
+    return t?.type === type && t.duration === duration
+  })
+  const options = [
+    selected.length > 1 && { label: `Selected clips (${selected.length} cuts)`, ids: selected },
+    onTrack.length > 1 && { label: `Every cut on this track (${onTrack.length})`, ids: onTrack },
+    all.length > onTrack.length && { label: `Every cut in the video (${all.length})`, ids: all },
+  ].filter((o): o is { label: string; ids: string[] } => !!o)
+  if (!options.length) return null
+  return (
+    <div className="tl-transall">
+      <span className="eyebrow">Apply to</span>
+      {options.map((o) => (
+        <button key={o.label} className="btn sm" disabled={same(o.ids)} title={same(o.ids) ? 'They all have this transition already' : `Use this transition and length on ${o.ids.length} cuts (replaces the ones they have)`} onClick={() => A.setTransitionOn(o.ids, type, duration)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}

@@ -295,6 +295,8 @@ export const api = {
   asset: (id: string) => req<AssetRecord>('GET', `/assets/${id}`),
   /** `etag`: the record's base (AssetRecord.etag); a change made elsewhere since is refused (412). */
   renameAsset: (id: string, name: string, etag?: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { name }, { ifMatch: etag }),
+  /** Which project's Media panel lists a clip (null: the library only). */
+  setAssetProject: (id: string, projectId: string | null) => req<AssetRecord>('PATCH', `/assets/${id}`, { projectId }),
   /** A clip's transcript with its speaker labels changed (editors). */
   setTranscript: (id: string, transcript: Transcript, etag?: string) => req<AssetRecord>('PATCH', `/assets/${id}`, { transcript }, { ifMatch: etag }),
   /** Into the media trash (A-14): nothing is removed until the trash is emptied. */
@@ -326,11 +328,12 @@ export const api = {
     return req<AssetRecord>('POST', `/assets/${id}/replace/complete`)
   },
   /** Upload a File: ticket -> PUT bytes -> complete. onProgress 0..1. */
-  async upload(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
+  async upload(workspaceId: string, file: File, onProgress?: (f: number) => void, projectId?: string): Promise<AssetRecord> {
     // big files go up in parts that survive a drop or a reload (P-5)
-    if (file.size >= MULTIPART_FROM_BYTES) return uploadResumable(workspaceId, file, onProgress)
+    if (file.size >= MULTIPART_FROM_BYTES) return uploadResumable(workspaceId, file, onProgress, projectId)
     const ticket = await req<{ assetId: string; url: string; method: 'PUT'; headers: Record<string, string> }>('POST', '/uploads', {
       workspaceId,
+      ...(projectId ? { projectId } : {}),
       filename: file.name,
       mime: file.type || 'application/octet-stream',
       size: file.size,
@@ -508,10 +511,10 @@ export const LIVE_RETRY_MAX_MS = 60_000
  * A big file in parts (P-5). The same file chosen again after a drop or a reload (this browser remembers it) carries on
  * from the parts already in storage; an upload that stops part way keeps them and says so.
  */
-async function uploadResumable(workspaceId: string, file: File, onProgress?: (f: number) => void): Promise<AssetRecord> {
+async function uploadResumable(workspaceId: string, file: File, onProgress?: (f: number) => void, projectId?: string): Promise<AssetRecord> {
   const key = resumeKey(workspaceId, file)
   const ask = (assetId?: string) =>
-    req<UploadTicket>('POST', '/uploads', { workspaceId, filename: file.name, mime: file.type || 'application/octet-stream', size: file.size, multipart: true, ...(assetId ? { assetId } : {}) })
+    req<UploadTicket>('POST', '/uploads', { workspaceId, filename: file.name, mime: file.type || 'application/octet-stream', size: file.size, multipart: true, ...(assetId ? { assetId } : {}), ...(projectId ? { projectId } : {}) })
   const saved = savedUpload(key)
   let ticket: UploadTicket
   try {

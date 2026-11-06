@@ -303,7 +303,19 @@ assetRoutes.patch('/:id', async (c) => {
   const u = requireUser(c)
   const row = await loadAsset(c.req.param('id'))
   await requireRole(u.id, row.workspaceId, 'editor')
-  const b = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), transcript: TranscriptSchema.optional() }).refine((x) => x.name !== undefined || x.transcript !== undefined, 'Nothing to change'))
+  const b = await body(
+    c,
+    z
+      .object({ name: z.string().trim().min(1).max(200).optional(), transcript: TranscriptSchema.optional(), projectId: z.string().max(80).nullable().optional() })
+      .refine((x) => x.name !== undefined || x.transcript !== undefined || x.projectId !== undefined, 'Nothing to change'),
+  )
+  // which project's Media panel lists it (null: the library only); not a versioned edit, so no If-Match
+  if (b.projectId !== undefined && b.name === undefined && b.transcript === undefined) {
+    if (b.projectId) await assertProjectInWorkspace(b.projectId, row.workspaceId)
+    const moved = assetRecord(await updateAsset(row.id, { projectId: b.projectId }))
+    c.header('ETag', moved.etag!)
+    return c.json(moved)
+  }
   checkIfMatch(c, assetEditable(row), 'This clip')
   // with If-Match, the write only lands while the name and transcript are still the ones just checked
   const t = row.meta?.transcript

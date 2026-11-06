@@ -527,6 +527,28 @@ export function duplicateItems(p0: Project, ids: string[]): { project: Project; 
   return { project: p, newIds }
 }
 
+/**
+ * Media the project lists that nothing on its timeline uses (tracker #18): not a clip, a letterbox fill, a smooth
+ * slow-motion copy or the brand logo.
+ */
+export function unusedAssetIds(p: Project): string[] {
+  const used = new Set<string>()
+  for (const t of p.tracks)
+    for (const it of t.items) {
+      for (const id of assetIdsOf(it)) used.add(id)
+      if (it.type === 'video' && it.smooth?.assetId) used.add(it.smooth.assetId)
+    }
+  if (p.brand?.logoAssetId) used.add(p.brand.logoAssetId)
+  return Object.keys(p.assets).filter((id) => !used.has(id))
+}
+
+/** The project without these media records (a clip on the timeline keeps its record). */
+export function removeUnusedAssets(p: Project, ids: string[]): Project {
+  const drop = new Set(ids.filter((id) => unusedAssetIds(p).includes(id)))
+  if (!drop.size) return p
+  return { ...p, assets: Object.fromEntries(Object.entries(p.assets).filter(([id]) => !drop.has(id))) }
+}
+
 /** Media records an item needs: its clip, and an image letterbox fill. */
 export function assetIdsOf(it: Item): string[] {
   const ids: string[] = []

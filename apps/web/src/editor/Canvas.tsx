@@ -4,7 +4,7 @@
 import type { FrameLayer, ImageItem, Item, Project, TextItem, VideoItem, VisualItem } from '@producer/core'
 import { StageRenderer, editable, evaluate, findItem, resetTransform, setTextContent, textCss, updateItem, updateTrack } from '@producer/core'
 import clsx from 'clsx'
-import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
+import { Copy, Crop, FlipHorizontal2, FlipVertical2, Loader2, Maximize, Minimize, MoreHorizontal, Pause, Play, RotateCcw, Scissors, ClipboardPaste, Trash2, CopyPlus } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { tipProps } from '../lib/tooltip'
 import * as A from './actions'
@@ -368,6 +368,7 @@ export function Canvas() {
           <Minimize size={14} /> Exit full screen
         </button>
       )}
+      {fullscreen && <FullscreenTransport />}
     </div>
   )
 }
@@ -927,4 +928,30 @@ function InlineTextEditor({ id }: { id: string }) {
   )
 }
 
-
+/** Playing the video full screen (tracker #12): play / pause, where it is, and a bar to move through it. */
+function FullscreenTransport() {
+  const playing = useEditor((s) => s.playing)
+  const fps = useEditor((s) => s.project.fps)
+  const t = useThrottledPlayhead()
+  const total = A.totalDuration()
+  const fmt = (x: number) => `${Math.floor(x / 60)}:${String(Math.floor(x % 60)).padStart(2, '0')}`
+  return (
+    <div className="cv-fs-bar" onPointerDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+      <button className="btn sm" aria-label={playing ? 'Pause' : 'Play'} onClick={() => A.togglePlay()}>
+        {playing ? <Pause size={14} /> : <Play size={14} />}
+      </button>
+      <span className="mono">{fmt(t)} / {fmt(total)}</span>
+      <input
+        type="range"
+        className="ed-range"
+        aria-label="Position"
+        min={0}
+        max={Math.max(total, 1 / fps)}
+        step={1 / fps}
+        value={Math.min(t, total)}
+        style={{ ['--pct' as string]: `${total ? (Math.min(t, total) / total) * 100 : 0}%` }}
+        onChange={(e) => A.seek(parseFloat(e.target.value))}
+      />
+    </div>
+  )
+}

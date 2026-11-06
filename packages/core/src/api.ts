@@ -340,6 +340,8 @@ export interface AssetRecord {
   etag?: string
   /** In the media trash since (A-14; library.ts): its files stay until the trash is emptied. */
   trashedAt?: number
+  /** The project it was uploaded (or made) in: the editor's Media panel shows it under This project. */
+  projectId?: string
 }
 
 /** Tells one transcript from another without sending it (cheap: no hashing of what can be an hour of words). */

@@ -417,11 +417,13 @@ export interface CaptionItem extends ItemBase {
 
 export interface ShapeItem extends ItemBase, VisualProps {
   type: 'shape'
-  shape: 'rect' | 'ellipse' | 'line'
+  shape: 'rect' | 'ellipse' | 'line' | 'triangle' | 'polygon' | 'star' | 'arrow' | 'bubble'
   width: number
   height: number
   fill: string
   radius: number
+  /** A polygon's sides, a star's points (3-12; default 6 and 5). */
+  points?: number
   stroke?: { color: string; width: number }
 }
 
