@@ -72,6 +72,16 @@ export function platformHealthy(role: string, db: boolean, worker: WorkerHealth 
   return db && !(role === 'worker' && worker && !worker.ok)
 }
 
+/** Free and total space on the data volume, in whole GB (nothing when it can't be told). */
+async function dataDisk(): Promise<{ disk?: { freeGb: number; totalGb: number } }> {
+  try {
+    const s = await fs.promises.statfs(ctx().config.dataDir)
+    return { disk: { freeGb: Math.floor((s.bavail * s.bsize) / 2 ** 30), totalGb: Math.round((s.blocks * s.bsize) / 2 ** 30) } }
+  } catch {
+    return {}
+  }
+}
+
 export function healthRoutes() {
   const h = new Hono()
 
@@ -93,6 +103,8 @@ export function healthRoutes() {
         // signed-in people only (/api/system): this endpoint is public.
         storageStatus: storageHealth().status,
         uptimeSec: Math.round((Date.now() - started) / 1000),
+        // the data volume renders work on (whole GB): an export needs room for its frames, so a full disk is said here
+        ...(await dataDisk()),
         features: {
           whisper: Boolean(cfg.whisperCli && cfg.whisperModel && fs.existsSync(cfg.whisperCli) && fs.existsSync(cfg.whisperModel)),
           ai: aiConfigured(),

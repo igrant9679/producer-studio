@@ -225,7 +225,8 @@ export function ExportDialog() {
 
   const job = tracked?.job
   const result = tracked?.result
-  const failed = tracked?.error
+  // the job's own state too: a job that ended in error is never shown spinning, whatever the poll has said
+  const failed = tracked?.error ?? (job?.status === 'error' ? job.error || 'The export failed.' : job?.status === 'cancelled' ? 'Cancelled' : undefined)
   const running = !!job && !result && !failed
   const busy = saving || running
   const pct = job ? (job.progress < 0 ? null : Math.round(job.progress * 100)) : 0

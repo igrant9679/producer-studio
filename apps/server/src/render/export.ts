@@ -6,7 +6,7 @@ import path from 'node:path'
 import { and, eq, inArray } from 'drizzle-orm'
 import { EXPORT_RESOLUTIONS, compileToHyperFrames, exportVideoTiming, isAudioFormat, loudnessLufs, projectDuration, projectForExport, sidecarCaptions, type ExportPreviewResult, type ExportRequest, type ExportResult, type Project } from '@producer/core'
 import { childEnv } from '../child-env'
-import { REPO_ROOT } from '../config'
+import { REPO_ROOT, SERVER_ROOT } from '../config'
 import { ctx } from '../context'
 import { assets, exportsTable, jobs } from '../db/schema'
 import { HttpError } from '../http'
@@ -330,6 +330,115 @@ export function parseRenderProgress(chunk: string): number | undefined {
   return last === undefined ? undefined : Math.min(1, Math.max(0, last))
 }
 
+/** Cores the server may use: the container's CPU quota when it has one (Railway reports the host's 48), else the machine's. */
+export function systemCpus(): number {
+  const all = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length
+  for (const f of ['/sys/fs/cgroup/cpu.max', '/sys/fs/cgroup/cpu/cpu.cfs_quota_us']) {
+    try {
+      const parts = fs.readFileSync(f, 'utf8').trim().split(/\s+/)
+      const quota = Number(parts[0])
+      const period = parts.length > 1 ? Number(parts[1]) : Number(fs.readFileSync('/sys/fs/cgroup/cpu/cpu.cfs_period_us', 'utf8').trim())
+      if (quota > 0 && period > 0) return Math.max(1, Math.min(all, Math.floor(quota / period)))
+    } catch {
+      /* not limited, or not Linux */
+    }
+  }
+  return all
+}
+
+/**
+ * Frame extractions one render runs at once, and the decoder threads each gets: the job slot's share of the cores at
+ * two threads each, and of the memory at ~400 MB a decoder (a 4K source's frames are large), between 1 and 8.
+ */
+export function extractionSlots(o: { cpus: number; memoryMb: number; concurrency: number }): { slots: number; threads: number } {
+  const share = Math.max(1, o.concurrency)
+  const threads = 2
+  const byCpu = Math.floor(o.cpus / share / threads)
+  const byMemory = Math.floor((o.memoryMb * 0.35) / 400 / share)
+  return { slots: Math.max(1, Math.min(8, byCpu, byMemory)), threads }
+}
+
+/**
+ * HyperFrames' ffmpeg for one render: scripts/hf-ffmpeg.mjs behind a shell shim in the render folder, so extractions
+ * take turns (HyperFrames starts them all at once) and failures name their file. Not on Windows, where Node can't
+ * start a shim without a shell; a desktop's few cores never needed it.
+ */
+export function ffmpegGate(dir: string): NodeJS.ProcessEnv {
+  if (process.platform === 'win32') return {}
+  const script = path.join(SERVER_ROOT, 'scripts', 'hf-ffmpeg.mjs')
+  if (!fs.existsSync(script)) return {}
+  const shim = path.join(dir, '.ffmpeg')
+  const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+  fs.writeFileSync(shim, `#!/bin/sh\n${process.versions.electron ? 'ELECTRON_RUN_AS_NODE=1 ' : ''}exec ${q(process.execPath)} ${q(script)} "$@"\n`, { mode: 0o755 })
+  const { slots, threads } = extractionSlots({ cpus: systemCpus(), memoryMb: systemMemoryMb(), concurrency: ctx().config.workerConcurrency })
+  return {
+    HYPERFRAMES_FFMPEG_PATH: shim,
+    PS_FFMPEG_REAL: ctx().config.ffmpegPath,
+    PS_FFMPEG_SLOTS: String(slots),
+    PS_FFMPEG_THREADS: String(threads),
+    PS_FFMPEG_LOCKS: path.join(dir, '.ffmpeg-slots'),
+    PS_FFMPEG_LOG: path.join(dir, '.ffmpeg-failures.jsonl'),
+  }
+}
+
+/** Bytes a still of `pixels` takes as HyperFrames extracts it (JPEG at its quality 80; camera footage is busier than test patterns). */
+const FRAME_BYTES_PER_PIXEL = 0.06
+
+/**
+ * Disk the render's frame extraction needs: every second of video the edit uses, at the export's frame rate and no
+ * larger than the output. HyperFrames writes them all before it draws the first frame.
+ */
+export function extractionBytes(project: Project, o: { fps: number; size: { w: number; h: number } }): number {
+  let seconds = 0
+  for (const [id, list] of usedWindows(project)) {
+    if (project.assets[id]?.kind !== 'video') continue
+    for (const w of list) seconds += Math.max(0, w.to - w.from)
+  }
+  return Math.round(seconds * o.fps * o.size.w * o.size.h * FRAME_BYTES_PER_PIXEL)
+}
+
+/** Free bytes where a path lives (undefined when it can't be told). */
+export async function freeBytes(dir: string): Promise<number | undefined> {
+  let p = dir
+  while (!fs.existsSync(p) && path.dirname(p) !== p) p = path.dirname(p)
+  try {
+    const s = await fs.promises.statfs(p)
+    return s.bavail * s.bsize
+  } catch {
+    return undefined
+  }
+}
+
+const gb = (n: number) => (n >= 10 * 2 ** 30 ? (n / 2 ** 30).toFixed(0) : (n / 2 ** 30).toFixed(1))
+
+/**
+ * Why HyperFrames couldn't read some of the video, in words: the clips (by their names in the project) and the cause
+ * ffmpeg gave, from the gate's log. Undefined when nothing was logged.
+ */
+export function extractionFailure(logFile: string, project: Project): string | undefined {
+  let lines: Array<{ input: string; code: number | null; signal: string | null; tail: string }>
+  try {
+    lines = fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  } catch {
+    return undefined
+  }
+  if (!lines.length) return undefined
+  const names = [...new Set(lines.map((l) => {
+    const id = path.basename(l.input).replace(/[~.].*$/, '')
+    return project.assets[id]?.name ?? path.basename(l.input)
+  }))]
+  const all = lines.map((l) => `${l.tail} ${l.signal ?? ''} ${l.code ?? ''}`).join('\n')
+  const cause = /No space left on device|ENOSPC/i.test(all)
+    ? 'the server ran out of disk space for its frames'
+    : /SIGKILL|Cannot allocate memory|out of memory|\b137\b/i.test(all)
+      ? 'the server ran out of memory'
+      : /Invalid data found|could not find codec|moov atom not found|Error while decoding|corrupt/i.test(all)
+        ? 'the file is damaged or in a format the renderer can’t decode'
+        : 'ffmpeg couldn’t decode it'
+  const list = names.slice(0, 3).map((n) => `“${n}”`).join(', ') + (names.length > 3 ? ` and ${names.length - 3} more` : '')
+  return `The render couldn’t read the video in ${list}: ${cause}.`
+}
+
 /** Memory the server may use: the container's limit when it has one, else the machine's. */
 export function systemMemoryMb(): number {
   const total = os.totalmem() / 2 ** 20
@@ -365,12 +474,13 @@ export function renderArgs(dir: string, out: string, opts: { fps: number; qualit
   return args
 }
 
-export async function renderComposition(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: RenderFormat; workers?: number; signal?: AbortSignal; progress?: (f: number) => void }) {
+export async function renderComposition(dir: string, out: string, opts: { fps: number; quality: ExportRequest['quality']; format: RenderFormat; workers?: number; signal?: AbortSignal; progress?: (f: number) => void; project?: Project }) {
   const args = renderArgs(dir, out, opts)
   let buf = ''
+  const gate = ffmpegGate(dir)
   const r = await run(process.execPath, args, {
     cwd: dir,
-    env: hfEnv(),
+    env: { ...hfEnv(), ...gate },
     signal: opts.signal,
     onStdout: (s) => {
       buf = (buf + stripAnsi(s)).slice(-4000)
@@ -379,6 +489,8 @@ export async function renderComposition(dir: string, out: string, opts: { fps: n
     },
   })
   if (r.code !== 0 || !fs.existsSync(out)) {
+    const read = gate.PS_FFMPEG_LOG && opts.project ? extractionFailure(gate.PS_FFMPEG_LOG, opts.project) : undefined
+    if (read) throw new HttpError(422, 'invalid', read)
     const tail = stripAnsi(`${r.stderr}\n${r.stdout}`).trim().split(/\r?\n/).filter(Boolean).slice(-8).join(' | ')
     throw new Error(`Render failed (exit ${r.code}): ${tail.slice(-900)}`)
   }
@@ -441,8 +553,17 @@ export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: 
     jc.check()
     const raw = path.join(dir, `render.${plan.format}`)
     jc.progress(0.1, 'Rendering')
-    const workers = renderWorkers({ memoryMb: systemMemoryMb(), cpus: os.cpus().length, concurrency: ctx().config.workerConcurrency, frames: Math.ceil(prep.duration * plan.fps) })
-    await steps.render(dir, raw, { fps: plan.fps, quality: plan.quality, format: plan.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering') })
+    // HyperFrames writes every frame of the video it uses before drawing one: said now, not as a failure at 18%
+    const need = extractionBytes(project, { fps: plan.fps, size: tgt })
+    const free = need > 2 ** 30 ? await freeBytes(ctx().config.renderCacheDir) : undefined
+    if (free !== undefined && free < need * 1.15 + 2 ** 30)
+      throw new HttpError(
+        507,
+        'invalid',
+        `This export needs about ${gb(need * 1.15 + 2 ** 30)} GB of working space on the server for its video frames, and only ${gb(free)} GB is free. Export at 720p, or a part at a time (In to out), or free some space.`,
+      )
+    const workers = renderWorkers({ memoryMb: systemMemoryMb(), cpus: systemCpus(), concurrency: ctx().config.workerConcurrency, frames: Math.ceil(prep.duration * plan.fps) })
+    await steps.render(dir, raw, { fps: plan.fps, quality: plan.quality, format: plan.format, workers, signal: jc.signal, progress: (f) => jc.progress(0.1 + f * 0.8, 'Rendering'), project: prep.project })
     jc.check()
     // a draft preview is for looking at the edit: it skips loudness, which needs two more passes over the sound
     const lufs = input.format === 'gif' || input.preview ? undefined : loudnessLufs(input.loudness)
