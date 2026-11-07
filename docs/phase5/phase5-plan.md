@@ -72,26 +72,37 @@ and builds only the rest.
   option, D-16 Claude CLI flags, D-17 Linux build, D-18 configurable boot wait.
 
 ## Carried into later releases (found in R1)
+
+**Status, 7 Nov 2026: every carry-over in the three lists below is done (each says where); only the lines marked Owner remain, and they wait on the owner’s accounts and decisions.**
+
 - R2-E: the editor has no read-only mode. A viewer can open a project and change it locally; every save then 403s.
   Build a viewer mode (store flag from the workspace role; every write action/shortcut/drag disabled with the
   viewer tip; comments allowed), and the same when the project is opened from a share link.
 - Done in R1/R2: the dev mock API has POST /api/projects/:id/export; the editor viewer mode (R2-E).
-- R1-D's caption tab drops karaoke timings on text edits (switch to setCaptionText) — check at R1 merge.
-- The editor's shared Menu popover closes on Tab (transition popover hard to use by keyboard): R3-E.
-- Assistant caption tools can't pick a language track: R3-C or R3-E.
+- ~~R1-D's caption tab drops karaoke timings on text edits (switch to setCaptionText) — check at R1 merge.~~ (done:
+  the caption editor uses setCaptionText, `18b469b`)
+- ~~The editor's shared Menu popover closes on Tab (transition popover hard to use by keyboard): R3-E.~~ (done; checked
+  in a real browser 6 Nov 2026)
+- ~~Assistant caption tools can't pick a language track: R3-C or R3-E.~~ (done: a `language` on the caption tools,
+  `18b469b`)
 - Owner: speaker detection mapped but off (needs a tinydiarize whisper model); filler list per project.
 
 ## Carried into later releases (found in R2)
-- R4-B (P-17/P-19): untagged video (no colour matrix) decodes differently in the preview (Chrome: BT.709 for HD) and
+- ~~R4-B (P-17/P-19): untagged video (no colour matrix) decodes differently in the preview (Chrome: BT.709 for HD) and
   the export (HyperFrames' ffmpeg frames: BT.601) — the seed's Sample A green is 216 vs 254, so a chroma key or grade
   tuned in the preview misses in the export. Tag proxies and the export's copy with the matrix the source was made in
-  (or convert at upload) so both read the same pixels. Tagged phone/camera footage is fine.
-- R4-C: comments and activity don't sync to desktops; a project deleted through desktop sync (desktop/sync.ts) keeps
-  its comments rows; shell/system.ts opens its own EventSource instead of the resumable client.
+  (or convert at upload) so both read the same pixels. Tagged phone/camera footage is fine.~~ (done in R4-B,
+  `50c1a24`: proxies are tagged with the source's matrix and the export converts a non-BT.601 source first,
+  media/colour.ts)
+- ~~R4-C: comments and activity don't sync to desktops; a project deleted through desktop sync (desktop/sync.ts) keeps
+  its comments rows; shell/system.ts opens its own EventSource instead of the resumable client.~~ (done in R4-C: a
+  linked desktop reads and writes a cloud project's comments and activity in the cloud, live, `cee1f10`; a project
+  deleted through sync takes its comments, `2c8f874`; system.ts follows the resumable stream, `f5bb9bd`)
 - R4-A: presence lives in the API process's memory (one API service only); If-Match on asset/brand/space is
   check-then-write (a same-millisecond race); orphaned local journals for deleted projects. (All done: presence and
   If-Match in R4-A; journals 6 Nov 2026, cleared when a project is deleted and after a month unopened.)
-- R3-C: the assistant can't set speed ramps (its speed tool sets one constant speed); can't pick a caption language track.
+- ~~R3-C: the assistant can't set speed ramps (its speed tool sets one constant speed); can't pick a caption language
+  track.~~ (done: a `ramp` preset on the assistant's item tool, `bb249b8`; caption `language`, `18b469b`)
 - ~~R3-E: real-browser checks at 375 px for the Colour / Smart / Speed tabs, the version history panel, the comments
   panel, the Share-for-review dialog and the Activity page; Menu closing on Tab.~~ (done 6 Nov 2026 in a real
   browser: every clip tab, version history, comments with a long comment, Share for review and Activity fit at 375 px;
@@ -108,17 +119,22 @@ and builds only the rest.
   removal; DENOISE_MODEL optional; production ffmpeg's libvidstab / libvpx-vp9 decide which clean-up tools show.
 
 ## Carried into later releases (found in R3)
-- R4-A: the sign-in rate limiter in auth.ts is still in memory per process (move it onto limits.ts `hit`); two
+- ~~R4-A: the sign-in rate limiter in auth.ts is still in memory per process (move it onto limits.ts `hit`); two
   workers claiming at the same instant can give one space two slots for that round; job errors show raw tool output
-  with server file paths (e.g. ffprobe's) in Job history and toasts: keep the raw text in logs, show a plain reason.
-- R4-B: copying a large file between spaces runs inside the request: make it a job.
+  with server file paths (e.g. ffprobe's) in Job history and toasts: keep the raw text in logs, show a plain reason.~~
+  (done: sign-in limits on limits.ts `hit`, `29155cd`; claims take turns under an advisory lock, `3501088`; plain
+  reasons for job errors, older failed jobs included, `2297569`)
+- ~~R4-B: copying a large file between spaces runs inside the request: make it a job.~~ (done: the `asset.copy` job,
+  `83e299f`)
 - R4-C: extra brand kits, brand fonts, space / member settings (pronunciations, favourites) and the media trash state
   for cloud-only rows don't sync to desktops (a desktop sees the default kit only). (Done: kits and fonts in R4-C;
   6 Nov 2026 a linked desktop reads and writes a cloud space's settings and its member settings in the cloud, and a
   trash or restore made on a desktop goes up.)
-- R4-D (or any group touching the shell): Voice Studio's AI writer pop-up doesn't trap focus, close on Escape or
+- ~~R4-D (or any group touching the shell): Voice Studio's AI writer pop-up doesn't trap focus, close on Escape or
   give focus back; the Background jobs popover stays open after its Job history link (Popover has no
-  close-on-navigate); `render-cost.test.tsx` fails under machine load, also on main (make it count, not time).
+  close-on-navigate); `render-cost.test.tsx` fails under machine load, also on main (make it count, not time).~~
+  (done: the AI writer is in the shared Modal, `b205ee5`; Popover closes on navigation, `8795894`; render-cost counts
+  work on a simulated clock. The other "load" flakes were real races, fixed 6 Nov 2026, `9eaab9a`)
 - ~~Real-browser look still owed (the pane couldn't screenshot at R3): 375 px for Account, Members, Usage, Job history,
   the palette, the kit bar, Compare voices, the CSV batch table and the footage picker; focus rings and bottom
   sheets in light and dark; FontFace + brand-font embedding in a real export; eight live template previews at once.~~
