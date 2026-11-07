@@ -171,6 +171,12 @@
 .ps-seg button { min-height: calc(var(--h-control-sm) + 2px); padding: 0 12px; border-radius: 7px; border: 0; background: transparent; color: var(--text-2); cursor: pointer; font-weight: 600; font-size: 0.7812rem; display: inline-flex; align-items: center; gap: 6px; }
 .ps-seg button:hover { color: var(--text); }
 .ps-seg button.on { background: var(--seg-on); color: var(--text); box-shadow: var(--seg-shadow); }
+/* phone: a segmented control no wider than its column; its buttons shrink and wrap their words only when they must
+   (Producer AI's "16:9 Landscape / 9:16 Vertical / 1:1 Square" ran off the screen) */
+@media (max-width: 700px) {
+  .ps-seg { max-width: 100%; }
+  .ps-seg button { flex: 0 1 auto; min-width: 0; white-space: normal; text-align: center; justify-content: center; line-height: 1.15; padding: 4px 8px; }
+}
 .ps-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
 .ps-tabs button { position: relative; height: calc(var(--h-control) + 6px); padding: 0 14px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; font-weight: 600; font-size: 0.875rem; display: inline-flex; gap: 8px; align-items: center; }
 .ps-tabs button:hover { color: var(--text); }

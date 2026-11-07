@@ -74,3 +74,18 @@ describe('big libraries (A-15)', () => {
     expect(a.tracks.flatMap((t) => t.items).map((i) => i.type)).toEqual(['audio'])
   })
 })
+
+describe('a shift-click while the list has an update queued (the flaky "2 selected")', () => {
+  it('still selects the range from the card clicked before', async () => {
+    const { act, renderHook } = await import('@testing-library/react')
+    const { useSelection } = await import('../library/bulk')
+    const order = ['a', 'b', 'c', 'd', 'e']
+    const { result } = renderHook(() => useSelection(order, 'k'))
+    // both clicks in one batch: React runs the second updater later, after the click handler has moved on
+    act(() => {
+      result.current.toggle('b')
+      result.current.toggle('d', { shift: true })
+    })
+    expect([...result.current.sel].sort()).toEqual(['b', 'c', 'd'])
+  })
+})

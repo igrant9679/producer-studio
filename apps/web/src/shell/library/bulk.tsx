@@ -57,8 +57,12 @@ export function useSelection(order: string[], resetKey: unknown) {
   }, [shown])
   const toggle = useCallback(
     (id: string, how?: { shift: boolean }) => {
-      setSel((s) => selectWithClick(order, s, anchor.current, id, !!how?.shift))
+      // Read the anchor now, not inside the updater: React may run the updater later (whenever the component already
+      // has an update queued, e.g. a list that just loaded), by which time the anchor is this click, and a shift-click
+      // would only toggle this one card instead of selecting the range.
+      const from = anchor.current
       anchor.current = id
+      setSel((s) => selectWithClick(order, s, from, id, !!how?.shift))
     },
     [order],
   )

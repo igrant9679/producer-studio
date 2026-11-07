@@ -92,8 +92,11 @@ and builds only the rest.
   check-then-write (a same-millisecond race); orphaned local journals for deleted projects. (All done: presence and
   If-Match in R4-A; journals 6 Nov 2026, cleared when a project is deleted and after a month unopened.)
 - R3-C: the assistant can't set speed ramps (its speed tool sets one constant speed); can't pick a caption language track.
-- R3-E: real-browser checks at 375 px for the Colour / Smart / Speed tabs, the version history panel, the comments
-  panel, the Share-for-review dialog and the Activity page; Menu closing on Tab.
+- ~~R3-E: real-browser checks at 375 px for the Colour / Smart / Speed tabs, the version history panel, the comments
+  panel, the Share-for-review dialog and the Activity page; Menu closing on Tab.~~ (done 6 Nov 2026 in a real
+  browser: every clip tab, version history, comments with a long comment, Share for review and Activity fit at 375 px;
+  Tab closes a menu and moves on. Field labels too long for their column now take a second line instead of an
+  ellipsis.)
 - Left as decided by the groups: LUTs stored in the project document (~144 KB each); smooth slow-motion copies are
   visible library items; journals stay in the browser after sign-out; downloads-off links still stream.
 - Not graded yet: ~~the blurred letterbox fill~~ (done 1 Nov 2026, and the export no longer covers the clip with
@@ -116,8 +119,15 @@ and builds only the rest.
 - R4-D (or any group touching the shell): Voice Studio's AI writer pop-up doesn't trap focus, close on Escape or
   give focus back; the Background jobs popover stays open after its Job history link (Popover has no
   close-on-navigate); `render-cost.test.tsx` fails under machine load, also on main (make it count, not time).
-- Real-browser look still owed (the pane couldn't screenshot at R3): 375 px for Account, Members, Usage, Job history,
+- ~~Real-browser look still owed (the pane couldn't screenshot at R3): 375 px for Account, Members, Usage, Job history,
   the palette, the kit bar, Compare voices, the CSV batch table and the footage picker; focus rings and bottom
-  sheets in light and dark; FontFace + brand-font embedding in a real export; eight live template previews at once.
+  sheets in light and dark; FontFace + brand-font embedding in a real export; eight live template previews at once.~~
+  Done 6 Nov 2026. Fixed on the way: Producer AI on a phone (the brief ran off the screen, the review's heading was
+  squeezed to a word a line, a scene's title to nothing and its Delete off the edge); the CSV batch table now wraps so
+  every column shows, and its voice column takes a voice's name ("Bella"), not only its id; live template previews
+  drew a corner of the frame at full size instead of the whole frame. Focus rings: every control in the editor's
+  properties shows one in both themes (light: #0e7490, 5.4:1). A real export draws an uploaded brand font
+  (`brand-font.real.test.ts`). Noted, not changed: with a brand kit applied, the built-in looks share their layout
+  and differ little (palette and fonts are most of a look), so the grid's eight branded previews look alike.
 - Owner (R3): RESEND_API_KEY + MAIL_FROM + PUBLIC_URL for mail; who may switch on the server's AI key (now any space
   owner); OpenAI / Gemini cost rates; SAMPLE_PROJECT; whether invite acceptance needs a confirmed email.

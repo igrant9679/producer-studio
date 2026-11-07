@@ -156,7 +156,8 @@
 }
 @media (max-width: 1080px) {
   .ps-stepper button { padding: 8px; gap: 8px; }
-  .ps-brief-grid { grid-template-columns: 1fr; }
+  /* minmax(0, …): a plain 1fr can't shrink below its widest field, which pushed the brief off a phone's screen */
+  .ps-brief-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* start: recordings or an idea */
@@ -197,6 +198,16 @@
   .ps-stepper li:not(.on) .ps-step-text { display: none; }
   .ps-stepper li.on .ps-step-text span { display: none; }
   .ps-wz-head h1 { font-size: 1.5rem; white-space: normal; }
+  .ps-wz-body { padding: 18px 14px 16px; }
+  .ps-wz-foot { padding: 12px 14px; }
+  /* the review: the counts go under the heading instead of squeezing it to a word a line */
+  .ps-wz-intro.row { flex-wrap: wrap; }
+  .ps-wz-intro.row > div:first-child { min-width: 100%; }
+  /* a scene's title has its own line and its tools wrap beneath it (the title was squeezed to nothing and
+     Delete pushed off the screen) */
+  .ps-scene-main { padding: 12px 12px 14px; }
+  .ps-scene-top { flex-wrap: wrap; }
+  .ps-scene-title { flex: 1 1 100%; }
 }
 
 /* the draft saved to the project; a space switched mid-wizard */

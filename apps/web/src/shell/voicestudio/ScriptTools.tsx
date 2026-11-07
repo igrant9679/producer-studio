@@ -149,7 +149,7 @@ export function BatchCsvModal({ voices, defaultVoice, speed, onClose }: { voices
     const text = await readText(f)
     setFile(f.name)
     setStates({})
-    setRows(parseVoiceCsv(text, new Set(voices.map((v) => v.id))))
+    setRows(parseVoiceCsv(text, voices))
   })
   const ok = rows.filter((r) => !r.error)
   const voiceName = (id: string) => voices.find((v) => v.id === id)?.name ?? id
@@ -185,7 +185,7 @@ export function BatchCsvModal({ voices, defaultVoice, speed, onClose }: { voices
   return (
     <Modal
       title="Batch voiceovers from a CSV"
-      subtitle={`One voiceover per row: a text column (or just one column of lines), with optional voice, name and speed columns. At most ${BATCH_MAX_ROWS} at a time.`}
+      subtitle={`One voiceover per row: a text column (or just one column of lines), with optional voice (its name, like Heart), name and speed columns. At most ${BATCH_MAX_ROWS} at a time.`}
       onClose={() => {
         if (running) stop.current = true
         onClose()

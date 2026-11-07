@@ -26,13 +26,13 @@ describe('the export dialog (EDT-36, E-5)', { timeout: 20_000 }, () => {
   it('Escape closes it while the video renders, and the render carries on', async () => {
     const running = { id: 'j1', kind: 'export.render', status: 'running', progress: 0.3, message: 'Rendering' } as unknown as Job<ExportResult>
     vi.spyOn(api, 'exportProject').mockResolvedValue(running as never)
-    vi.spyOn(api, 'job').mockResolvedValue(running as never)
+    const job = vi.spyOn(api, 'job').mockResolvedValue(running as never)
     S().set({ exportOpen: true })
     const view = render(<ExportDialog />)
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Export$/ }))
-      await new Promise((r) => setTimeout(r, 10))
-    })
+    fireEvent.click(screen.getByRole('button', { name: /^Export$/ }))
+    // following the render has begun (not a fixed wait: a loaded machine takes longer)
+    await waitFor(() => expect(job).toHaveBeenCalled())
+    await screen.findByText('Rendering')
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(S().exportOpen).toBe(false)
     view.unmount()
@@ -53,10 +53,9 @@ describe('a voiceover that finishes later (EDT-36)', { timeout: 20_000 }, () => 
     vi.spyOn(api, 'job').mockImplementation(() => new Promise((r) => (finish = r as never)) as never)
     render(<VoiceoverBox />)
     fireEvent.change(screen.getByPlaceholderText(/narrator should say/), { target: { value: 'Welcome back' } })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Generate and add/ }))
-      await new Promise((r) => setTimeout(r, 10))
-    })
+    fireEvent.click(screen.getByRole('button', { name: /Generate and add/ }))
+    // the box is following the job once it has asked for it (not a fixed wait: a loaded machine takes longer)
+    await waitFor(() => expect(finish).toBeTypeOf('function'))
     return finish
   }
   const done = { id: 'j2', status: 'done', progress: 1, result: { asset: { asset: voice } as AssetRecord, duration: 2 } } as unknown as Job

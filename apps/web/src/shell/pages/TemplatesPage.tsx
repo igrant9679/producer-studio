@@ -2,7 +2,7 @@ import type { BrandKitSummary, Project, TemplateSummary } from '@producer/core'
 import { DEFAULT_KIT_ID } from '@producer/core'
 import clsx from 'clsx'
 import { BookmarkPlus, ChevronLeft, ChevronRight, Clock, Film, Image as ImageIcon, LayoutTemplate, Link2, Pause, Play, Ratio, Search, Type, Users } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { brandApi, templateApi } from '../../lib/brandApi'
@@ -89,23 +89,25 @@ function TemplateModal({ list, index, aspect, onIndex, onClose, onTeamChanged }:
   const kitList = kits.data ?? []
   const kitName = kitList.find((k) => k.id === kitId)?.doc.name
 
-  // ← → move through the templates (not while typing in a field or using a list)
+  // ← → move through the templates (not while typing in a field or using a list). The keys count from the last one
+  // pressed, not from the last render: two quick presses before the page has re-rendered move two templates, not one.
+  const nav = useRef({ index, length: list.length, onIndex })
+  nav.current = { index, length: list.length, onIndex }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return
       const el = e.target as HTMLElement | null
       if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return
-      if (e.key === 'ArrowLeft' && index > 0) {
-        e.preventDefault()
-        onIndex(index - 1)
-      } else if (e.key === 'ArrowRight' && index < list.length - 1) {
-        e.preventDefault()
-        onIndex(index + 1)
-      }
+      const n = nav.current
+      const step = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
+      if (!step || n.index + step < 0 || n.index + step >= n.length) return
+      e.preventDefault()
+      n.index += step
+      n.onIndex(n.index)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [index, list.length, onIndex])
+  }, [])
 
   async function copyLink() {
     const url = `${location.origin}/templates?t=${encodeURIComponent(t.id)}${aspect !== 'Any' ? `&aspect=${encodeURIComponent(aspect)}` : ''}`

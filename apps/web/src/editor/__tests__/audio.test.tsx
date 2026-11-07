@@ -1,6 +1,6 @@
 // Sound on the timeline: track volume, solo and ducking in the track header (E-14), the volume rubber band and fade
 // handles on a clip (E-15), J and L cuts with Shift on an audio edge (E-13), and the export's loudness target (E-14).
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { addAsset, addItem, createAudioItem, createProject, createVideoItem, findItem, mainTrack, separateAudio, type AudioItem, type Asset, type ExportResult, type Job, type Project, type User, type Workspace } from '@producer/core'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
@@ -271,10 +271,9 @@ describe('loudness on export (E-14)', () => {
     fireEvent.click(podcast)
     expect(podcast.getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByText(/evened out to -16 LUFS/)).toBeTruthy()
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /^Export$/ }))
-      await new Promise((r) => setTimeout(r, 10))
-    })
+    fireEvent.click(screen.getByRole('button', { name: /^Export$/ }))
+    // the dialog saves first, then asks for the export: wait for the call, not for a fixed time
+    await waitFor(() => expect(exp).toHaveBeenCalled())
     expect(exp.mock.calls[0][1]).toMatchObject({ loudness: 'podcast', format: 'mp4' })
   }, 20_000)
 })

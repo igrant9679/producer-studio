@@ -123,7 +123,7 @@ describe('the Smart tab', () => {
   })
 })
 
-describe('masks', () => {
+describe('masks', { timeout: 60_000 }, () => {  // long synchronous edits: a loaded machine takes over 20 s
   it('adds a rectangle, edits it by keyboard with keyframes, inverts it and takes it off, each one undo step', () => {
     open()
     fireEvent.click(screen.getByRole('button', { name: 'Rectangle mask' }))

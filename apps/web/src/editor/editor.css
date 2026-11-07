@@ -428,7 +428,8 @@
 .ed-section-body { padding: 0 14px 12px; }
 .ed-panelbody .ed-section { border: 1px solid var(--border); border-radius: var(--radius); margin-top: 10px; background: var(--bg-2); }
 .ed-field { display: grid; grid-template-columns: calc(84px * var(--ui-scale)) 1fr 22px; align-items: center; gap: 8px; min-height: var(--row-h-field); }
-.ed-field > label { font-size: 0.75rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a label too long for its column takes a second line instead of losing its end ("Clean-up s…") */
+.ed-field > label { font-size: 0.75rem; line-height: 1.2; color: var(--text-3); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .ed-field-ctl { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 0; }
 .ed-field-ctl .ed-seg { flex-wrap: nowrap; max-width: 100%; }
 .ed-field-ctl .ed-seg button { flex: 1 1 auto; min-width: 0; padding: 0 7px; overflow: hidden; text-overflow: ellipsis; }

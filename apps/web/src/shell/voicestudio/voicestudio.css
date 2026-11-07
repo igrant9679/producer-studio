@@ -120,6 +120,9 @@ html.vs-dict-widget-root, html.vs-dict-widget-root body, html.vs-dict-widget-roo
 .vs-batch-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
 .vs-batch-table th, .vs-batch-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .vs-batch-table td.err { color: var(--danger); }
+/* long file names and links wrap, so a phone sees every column without scrolling sideways */
+.vs-batch-table td { overflow-wrap: anywhere; }
+.vs-batch-table td:nth-child(2) { max-width: 9rem; }
 .vs-batch-wrap { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
 .vs-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .vs-compare-col { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--border); }

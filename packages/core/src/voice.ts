@@ -162,9 +162,15 @@ export function parseCsv(src: string): string[][] {
 
 /**
  * Voiceovers from a CSV: a `text` (or `script`) column, optional `voice`, `name`, `speed`; without a header row the
- * first column is the text. `voiceIds` checks the voices; rows past BATCH_MAX_ROWS are refused.
+ * first column is the text. `voices` checks the voice column: a voice's id, or (given the voices themselves) its name
+ * as the app shows it, in any case ("Bella", "heart"); a row's `voice` is always the id. Rows past BATCH_MAX_ROWS
+ * are refused.
  */
-export function parseVoiceCsv(src: string, voiceIds: Set<string>, maxChars = 5000): CsvVoiceRow[] {
+export function parseVoiceCsv(src: string, voices: Set<string> | ReadonlyArray<{ id: string; name: string }>, maxChars = 5000): CsvVoiceRow[] {
+  const ids = voices instanceof Set ? voices : new Set(voices.map((v) => v.id))
+  const byName = new Map<string, string>()
+  if (!(voices instanceof Set)) for (const v of voices) for (const k of [v.id, v.name]) if (!byName.has(k.trim().toLowerCase())) byName.set(k.trim().toLowerCase(), v.id)
+  const resolve = (v: string) => (ids.has(v) ? v : byName.get(v.toLowerCase()))
   const rows = parseCsv(src)
   if (!rows.length) return []
   const head = rows[0].map((h) => h.trim().toLowerCase())
@@ -181,12 +187,12 @@ export function parseVoiceCsv(src: string, voiceIds: Set<string>, maxChars = 500
     const voice = vi >= 0 ? r[vi]?.trim() : ''
     const name = ni >= 0 ? r[ni]?.trim() : ''
     const speed = si >= 0 && r[si]?.trim() ? Number(r[si].trim()) : undefined
-    if (voice) out.voice = voice
+    if (voice) out.voice = resolve(voice) ?? voice
     if (name) out.name = name
     if (speed !== undefined) out.speed = speed
     if (!out.text) out.error = 'No text'
     else if (out.text.length > maxChars) out.error = `Longer than ${maxChars} characters`
-    else if (voice && !voiceIds.has(voice)) out.error = `Unknown voice “${voice}”`
+    else if (voice && !resolve(voice)) out.error = `Unknown voice “${voice}”`
     else if (speed !== undefined && !(speed >= 0.5 && speed <= 2)) out.error = 'Speed must be 0.5 to 2'
     else if (i >= BATCH_MAX_ROWS) out.error = `At most ${BATCH_MAX_ROWS} voiceovers at a time`
     return out

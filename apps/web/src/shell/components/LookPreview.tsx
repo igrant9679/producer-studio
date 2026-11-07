@@ -62,7 +62,9 @@ export function LookPreview({ doc, playing, className }: { doc: Project; playing
 
   const k = width ? width / doc.width : 0
   return (
-    <div ref={wrap} className={className} style={{ position: 'relative', overflow: 'hidden', aspectRatio: `${doc.width} / ${doc.height}`, background: doc.background }} aria-hidden="true" data-look-preview={doc.name}>
+    // width 100%: inside a template card (a grid) the box otherwise took the stage's own size (1080 px), so the scale
+    // measured 1 and a card showed a corner of the frame at full size instead of the whole frame
+    <div ref={wrap} className={className} style={{ position: 'relative', width: '100%', minWidth: 0, overflow: 'hidden', aspectRatio: `${doc.width} / ${doc.height}`, background: doc.background }} aria-hidden="true" data-look-preview={doc.name}>
       <div ref={stage} style={{ position: 'absolute', left: 0, top: 0, width: doc.width, height: doc.height, transformOrigin: '0 0', transform: `scale(${k})` }} />
     </div>
   )

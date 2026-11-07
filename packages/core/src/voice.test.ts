@@ -48,6 +48,14 @@ describe('voice script markup (A-20)', () => {
       { line: 4, name: 'Slow', text: 'Too slow', speed: 0.1, error: 'Speed must be 0.5 to 2' },
       { line: 5, name: 'Empty', text: '', error: 'No text' },
     ])
+    // a voice by the name the app shows, in any case; the id still works, and the row always carries the id
+    const named = [{ id: 'af_heart', name: 'Heart' }, { id: 'am_eric', name: 'Eric' }]
+    expect(parseVoiceCsv('text,voice\nOne,heart\nTwo,ERIC\nThree,am_eric\nFour,Robot', named).map((r) => [r.voice, r.error])).toEqual([
+      ['af_heart', undefined],
+      ['am_eric', undefined],
+      ['am_eric', undefined],
+      ['Robot', 'Unknown voice “Robot”'],
+    ])
     expect(parseVoiceCsv('First line\nSecond line', voices).map((r) => [r.line, r.text])).toEqual([[1, 'First line'], [2, 'Second line']])
     const many = Array.from({ length: 52 }, (_, i) => `line ${i}`).join('\n')
     expect(parseVoiceCsv(many, voices).filter((r) => r.error).map((r) => r.line)).toEqual([51, 52])
