@@ -128,3 +128,27 @@ describe('your own clips and images in a video made from an idea', () => {
     expect(stateFromProject(res).assets.map((a) => [a.assetId, a.name])).toEqual([['as_team', 'team.jpg']])
   })
 })
+
+describe('how AI-drawn scenes are drawn', () => {
+  it('can be picked when drawn scenes are on, and goes in the brief', async () => {
+    vi.spyOn(api, 'produceCapabilities').mockResolvedValue({ stock: false, kinds: ['motion', 'diagram', 'drawn'], maxAiClips: 3 })
+    useWizard.getState().replace({ ...initialState(), brief: { ...initialState().brief, source: 'idea', idea: 'How bridges stand up', visualKinds: ['motion', 'drawn'] } })
+    show()
+    const pick = (await screen.findByLabelText('How AI-drawn scenes are drawn')) as HTMLSelectElement
+    // the clean look until another is chosen
+    expect(pick.value).toBe('clean')
+    expect(pick.options.length).toBe(10)
+    fireEvent.change(pick, { target: { value: 'blueprint' } })
+    expect(st().brief.drawingStyle).toBe('blueprint')
+    expect(screen.getByText(/White lines on blue paper/)).toBeTruthy()
+  })
+
+  it('is not offered while drawn scenes are off', async () => {
+    vi.spyOn(api, 'produceCapabilities').mockResolvedValue({ stock: false, kinds: ['motion', 'diagram', 'drawn'], maxAiClips: 3 })
+    useWizard.getState().replace({ ...initialState(), brief: { ...initialState().brief, source: 'idea', idea: 'How bridges stand up', visualKinds: ['motion'] } })
+    show()
+    await screen.findByText('The idea')
+    await waitFor(() => expect(screen.queryByText('Checking…')).toBeNull())
+    expect(screen.queryByLabelText('How AI-drawn scenes are drawn')).toBeNull()
+  })
+})

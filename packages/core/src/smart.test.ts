@@ -7,6 +7,8 @@ import {
   addAsset,
   addItem,
   applyProcessedCopy,
+  applySketch,
+  drawingStyleOf,
   clipSourceRange,
   compileToHyperFrames,
   createImageItem,
@@ -294,3 +296,44 @@ describe('processed copies', () => {
   })
 })
 
+describe('sketches', () => {
+  const picture: Asset = { id: 'pic', kind: 'image', name: 'pic.jpg', src: 'pic.jpg', width: 1600, height: 900 }
+  function withPicture(): Project {
+    let p = createProject()
+    p = addAsset(p, picture)
+    p = addItem(p, createImageItem(p.assets.pic, 0, { id: 'im', duration: 6, opacity: 0.7, name: 'pic.jpg', crop: { left: 0.1, right: 0, top: 0, bottom: 0.05 } }))
+    return setMask(p, 'im', defaultMask('ellipse'))
+  }
+
+  it('puts the sketch in the picture’s place as a muted video, keeping its place, framing, look and mask', () => {
+    const p = withPicture()
+    const before = findItem(p, 'im')!.item
+    const r = applySketch(p, 'im', video('sk', 6, { name: 'pic (sketched).mp4', hasAudio: false }))
+    const v = clip(r.project, 'im')
+    expect(r.refused).toBeUndefined()
+    expect(v).toMatchObject({ id: 'im', type: 'video', assetId: 'sk', start: before.start, duration: 6, in: 0, speed: 1, muted: true, opacity: 0.7, crop: { left: 0.1, bottom: 0.05 }, name: 'pic (sketched).mp4' })
+    expect(v.mask?.shape).toBe('ellipse')
+    expect(r.project.assets.sk).toBeTruthy()
+    // the original document is untouched (one undo step puts it back)
+    expect(findItem(p, 'im')!.item.type).toBe('image')
+  })
+
+  it('shortens the clip to a shorter sketch, and refuses what Replace media refuses', () => {
+    const p = withPicture()
+    const r = applySketch(p, 'im', video('sk', 4))
+    expect(r.shortened).toBe(true)
+    expect(clip(r.project, 'im').duration).toBe(4)
+    expect(applySketch(p, 'nope', video('sk', 4)).refused).toBe('missing')
+    expect(applySketch(p, 'im', { ...picture, id: 'other' }).refused).toBe('kind')
+    const { p: withVideo } = oneClip()
+    expect(applySketch(withVideo, 'va', video('sk', 4)).refused).toBe('kind')
+    const locked = { ...p, tracks: p.tracks.map((t) => ({ ...t, items: t.items.map((x) => ({ ...x, locked: true })) })) }
+    expect(applySketch(locked, 'im', video('sk', 4)).refused).toBe('locked')
+  })
+
+  it('reads a drawing style, falling back to the clean look', () => {
+    expect(drawingStyleOf('blueprint')).toBe('blueprint')
+    expect(drawingStyleOf(undefined)).toBe('clean')
+    expect(drawingStyleOf('crayon-ish')).toBe('clean')
+  })
+})

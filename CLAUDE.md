@@ -31,7 +31,10 @@ images (`e185e6d`, a `media` scene visual), then free stock photos and clips wit
 Openverse; Pixabay with a free key) and `animation` scenes of open-source illustrations (Iconify), and `drawn` scenes the space's AI draws in code, run in a
 sandboxed headless Chrome (`ai/drawn.ts`, `media/drawing.ts`), and free music composed on the cuts
 (`scripts/music`, from huashu-motion) with sound effects from earshot's kits (`sfx/`, `ai/soundtrack.ts`) — see
-`docs/server-status.md` → "Free stock, photos and animations", "AI-drawn animation" and "Music and sound effects". Work on branches or worktrees off `main`; the
+`docs/server-status.md` → "Free stock, photos and animations", "AI-drawn animation" and "Music and sound effects". On 9 Nov:
+anidoodle's drawing media in the sandbox (Apache-2.0, `vendor/anidoodle`, rebuild with `scripts/build-anidoodle.mjs`),
+drawing styles for drawn scenes, and Sketch it in for pictures (`media/sketch.ts`) — "Drawing media and styles" and
+"Sketch it in" there. Work on branches or worktrees off `main`; the
 `p5-*` and older feature branches are history, all merged.
 
 The phase 5 planning docs are in **`docs/phase5/`** (recovered on 2026-10-30 from an old session

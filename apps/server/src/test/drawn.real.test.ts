@@ -1,12 +1,14 @@
 // AI-drawn scenes, for real: the locally signed-in Claude Code CLI (the desktop edition's provider) writes the drawing
 // code, the sandbox renders it, and a contact sheet of the clip is written for a person to look at (DRAWN_SHEET=<file>).
-// Runs only with REAL_DRAW=1 (it uses the CLI's subscription and takes a few minutes).
+// Runs only with REAL_DRAW=1 (it uses the CLI's subscription and takes a few minutes). DRAWN_STYLE=<id> draws them in a
+// drawing style (core's DRAWING_STYLES), DRAWN_ONLY=<name> draws one scene.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { ClaudeCliProvider } from '../ai/cli'
-import { writeDrawing } from '../ai/drawn'
+import { drawingPalette, writeDrawing } from '../ai/drawn'
+import { drawingStyleOf } from '@producer/core'
 import { syntheticTranscript } from '../ai/produce'
 import { type DrawingEnv, renderDrawing } from '../media/drawing'
 import { ffmpeg } from '../media/proc'
@@ -39,7 +41,8 @@ const SCENES = [
 ]
 
 describe.skipIf(!REAL)('AI-drawn scenes, drawn and rendered', () => {
-  for (const sc of SCENES) {
+  const style = drawingStyleOf(process.env.DRAWN_STYLE)
+  for (const sc of SCENES.filter((s) => !process.env.DRAWN_ONLY || s.name === process.env.DRAWN_ONLY)) {
     it(`draws “${sc.name}”`, async () => {
       const voice = 0.5
       const t = syntheticTranscript(sc.narration, sc.narration.split(/\s+/).length / 2.6)
@@ -49,16 +52,16 @@ describe.skipIf(!REAL)('AI-drawn scenes, drawn and rendered', () => {
         fps: 30,
         duration: (words.at(-1)?.start ?? 4) + 1.8,
         words,
-        palette: { canvas: '#14161f', accent: '#ff6b4a', ink: '#f4f1ea' },
+        palette: drawingPalette(style, { canvas: '#14161f', accent: '#ff6b4a', ink: '#f4f1ea' }),
         fonts: { headline: 'Montserrat', body: 'Inter' },
       }
-      const made = await writeDrawing(new ClaudeCliProvider(), { description: sc.description, narration: sc.narration, headline: sc.headline, env, progress: (_f, m) => console.log(sc.name, m) })
+      const made = await writeDrawing(new ClaudeCliProvider(), { description: sc.description, narration: sc.narration, headline: sc.headline, env, style, progress: (_f, m) => console.log(sc.name, m) })
       fs.writeFileSync(path.join(dir, `${sc.name}.js`), made.code)
       const file = path.join(dir, `${sc.name}.mp4`)
       await renderDrawing(made.code, env, file)
       const shots = [0.12, 0.3, 0.48, 0.66, 0.84, 0.98].map((k) => k * env.duration)
       for (const [i, at] of shots.entries()) await ffmpeg(['-ss', at.toFixed(2), '-i', file, '-frames:v', '1', '-vf', `scale=${sc.size.width > sc.size.height ? 480 : 270}:-2`, path.join(dir, `${sc.name}-${i}.png`)])
-      const sheet = path.join(process.env.DRAWN_SHEET || dir, `drawn-${sc.name}.png`)
+      const sheet = path.join(process.env.DRAWN_SHEET || dir, `drawn-${sc.name}-${style}.png`)
       await ffmpeg(['-framerate', '1', '-i', path.join(dir, `${sc.name}-%d.png`), '-vf', `tile=${sc.size.width > sc.size.height ? '3x2' : '6x1'}:padding=6:color=white`, '-frames:v', '1', sheet])
       console.log(JSON.stringify({ plan: made.plan, code: path.join(dir, `${sc.name}.js`), clip: file, sheet }))
       expect(fs.statSync(file).size).toBeGreaterThan(10_000)

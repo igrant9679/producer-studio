@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import * as z from 'zod/v4'
-import { writeDrawing } from '../ai/drawn'
+import { buildDrawingPrompt, drawingPalette, writeDrawing } from '../ai/drawn'
 import type { AiProvider, StructuredRequest } from '../ai/provider'
 import { toSceneVisual, VisualSchema } from '../ai/scenes'
 import { ctx } from '../context'
@@ -100,6 +100,40 @@ describe('the drawing sandbox', () => {
     }
   }, 120_000)
 
+  it('gives the drawing anidoodle’s media and marks, built once and drawn the same every time', async ({ skip }) => {
+    if (!chrome) skip()
+    // a pencil line drawn on, a watercolour wash, a shaded form, hatching laid down in order, paper grain over it all
+    const code = `function draw(ctx, t, env) {
+      const d = env.doodle(ctx, t, 'pencil');
+      d.group('paint', () => d.wash(env.shapes.oval(160, 95, 70, 45, 12), env.palette.accent, { alpha: 0.6, seed: 3 }));
+      d.form(env.shapes.softBox(250, 90, 60, 50), '#7fb0d8', '#40607e', { seed: 4 });
+      d.pen([[20, 150], [120, 120], [220, 150], [300, 130]], { color: env.palette.ink, seed: 5, progress: env.progress(t, 0, 1, env.ease.linear) });
+      const inks = env.memo('hatch', () => env.marks.hatch(env.marks.ellR(70, 70, 45, 35), { ang: -0.9, gap: 5, len: 18, w: 1.2, col: env.palette.ink, a: 0.8, seed: 9 }));
+      if (!inks.length) throw new Error('no hatching');
+      env.marks.play(ctx, inks, t, 0.1, 1.0);
+      d.paper('paper', 0.35);
+    }`
+    const [a, b] = await testDrawing(code, { ...env, palette: { canvas: '#f5f0e4', accent: '#d9632e', ink: '#3a3236' } }, [0.15, 1.1])
+    expect(a.equals(b)).toBe(false)
+    const [again] = await testDrawing(code, { ...env, palette: { canvas: '#f5f0e4', accent: '#d9632e', ink: '#3a3236' } }, [0.15])
+    expect(again.equals(a)).toBe(true)
+  }, 120_000)
+
+  it('reads pictures it was given as data URLs, and nothing else', async ({ skip }) => {
+    if (!chrome) skip()
+    const png = await (await import('sharp')).default({ create: { width: 8, height: 8, channels: 3, background: '#00ff00' } }).png().toBuffer()
+    const code = `function draw(ctx, t, env) {
+      const img = env.image('pic');
+      if (!img || img.naturalWidth !== 8) throw new Error('no picture');
+      if (env.image('missing')) throw new Error('a picture that was never given');
+      ctx.drawImage(img, 0, 0, env.W, env.H);
+    }`
+    const [f] = await testDrawing(code, { ...env, images: { pic: `data:image/png;base64,${png.toString('base64')}` } }, [0])
+    const px = await (await import('sharp')).default(f).raw().toBuffer()
+    expect(px[1]).toBeGreaterThan(200)
+    expect(px[0]).toBeLessThan(60)
+  }, 120_000)
+
   it('renders the whole scene to an mp4 at the frame rate', async ({ skip }) => {
     if (!chrome) skip()
     const out = path.join(ctx().config.dataDir, 'drawn-test.mp4')
@@ -166,4 +200,25 @@ describe('the writer and the API', () => {
     expect(VisualSchema.safeParse({ kind: 'drawn', prompt: 'x', code: GOOD, assetId: 'as_1' }).success).toBe(true)
     expect(VisualSchema.safeParse({ kind: 'drawn', prompt: 'x', code: 'x'.repeat(60_001) }).success).toBe(false)
   })
+})
+
+describe('drawing styles and the bundled media', () => {
+  it('asks for the style’s recipe and draws it on its own paper and ink, keeping the brand’s accent', () => {
+    const brand = { canvas: '#101010', accent: '#ff5500', ink: '#ffffff' }
+    expect(drawingPalette('clean', brand)).toEqual(brand)
+    expect(drawingPalette('blueprint', brand)).toEqual({ canvas: '#1d4378', ink: '#f2f0e8', accent: '#ff5500' })
+    const plain = buildDrawingPrompt({ description: 'A seed grows', narration: 'Plant it.', headline: 'Grow', env })
+    expect(plain).not.toMatch(/DRAWING STYLE/)
+    const styled = buildDrawingPrompt({ description: 'A seed grows', narration: 'Plant it.', headline: 'Grow', env, style: 'watercolour' })
+    expect(styled).toMatch(/DRAWING STYLE: Pencil and watercolour\. Pencil and pan watercolour/)
+  })
+
+  it('ships the anidoodle bundle built from the vendored sources, with its licence', async () => {
+    const dir = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', 'vendor', 'anidoodle')
+    // @ts-expect-error plain .mjs script without types
+    const { bundleAnidoodle } = await import('../../scripts/build-anidoodle.mjs')
+    expect(fs.readFileSync(path.join(dir, 'anidoodle.js'), 'utf8').replace(/\r\n/g, '\n')).toBe(await bundleAnidoodle())
+    expect(fs.readFileSync(path.join(dir, 'LICENSE'), 'utf8')).toMatch(/Apache License/)
+    expect(fs.readFileSync(path.join(dir, 'NOTICE'), 'utf8')).toMatch(/Alex Greenshpun/)
+  }, 60_000)
 })

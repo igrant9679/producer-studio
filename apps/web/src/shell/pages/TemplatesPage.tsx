@@ -2,7 +2,7 @@ import type { BrandKitSummary, Project, TemplateSummary } from '@producer/core'
 import { DEFAULT_KIT_ID } from '@producer/core'
 import clsx from 'clsx'
 import { BookmarkPlus, ChevronLeft, ChevronRight, Clock, Film, Image as ImageIcon, LayoutTemplate, Link2, Pause, Play, Ratio, Search, Type, Users } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { brandApi, templateApi } from '../../lib/brandApi'
@@ -91,9 +91,11 @@ function TemplateModal({ list, index, aspect, onIndex, onClose, onTeamChanged }:
 
   // ← → move through the templates (not while typing in a field or using a list). The keys count from the last one
   // pressed, not from the last render: two quick presses before the page has re-rendered move two templates, not one.
+  // The listener goes on as the modal is put on screen (a layout effect), not after it is painted: a key pressed the
+  // moment it shows was lost, and so was the test's (it flaked on a busy machine).
   const nav = useRef({ index, length: list.length, onIndex })
   nav.current = { index, length: list.length, onIndex }
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return
       const el = e.target as HTMLElement | null

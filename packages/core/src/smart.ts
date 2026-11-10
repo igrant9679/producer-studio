@@ -5,10 +5,11 @@ import { clone, findItem } from './ops'
 import { replaceClipMedia, replaceRefusal } from './replace'
 import { sourceRange } from './speed'
 import type { AssetRecord } from './api'
-import type { Asset, Item, Project } from './types'
+import type { SketchStyleId } from './drawingStyles'
+import type { Asset, ImageItem, Item, Project, VideoItem } from './types'
 import { EPS, round } from './util'
 
-export type SmartTool = 'stabilise' | 'denoise' | 'removeBackground'
+export type SmartTool = 'stabilise' | 'denoise' | 'removeBackground' | 'sketch'
 
 /** What this server can do (GET /api/smart-tools); null where it can't, with `why` for the person. */
 export interface SmartToolsInfo {
@@ -18,6 +19,8 @@ export interface SmartToolsInfo {
   denoise: { audio: Array<'afftdn' | 'arnndn'>; video: Array<'hqdn3d' | 'nlmeans'> }
   /** A background-removal command configured on the server (BG_REMOVAL_CMD). */
   removeBackground: { available: boolean }
+  /** Sketching a picture in (the drawing sandbox's browser is on the server). */
+  sketch: { available: boolean }
   /** Why a tool is missing, by tool. */
   why: Partial<Record<SmartTool, string>>
 }
@@ -34,6 +37,10 @@ export interface SmartJobRequest {
   soundOnly?: boolean
   /** Stabilise: 0..100, how much movement is smoothed out. */
   smoothing?: number
+  /** Sketch: the medium, whether it ends on the picture in colour, and its length (SKETCH_SECONDS). */
+  style?: SketchStyleId
+  colour?: boolean
+  seconds?: number
 }
 
 /** A finished smart job: the new copy and where in the original file it starts. */
@@ -78,4 +85,40 @@ export function applyProcessedCopy(p0: Project, itemId: string, asset: Asset, of
   if (it.linkId && asset.hasAudio !== false)
     for (const t of p.tracks) for (const o of t.items) if (o !== it && o.linkId === it.linkId && o.type === 'audio' && o.assetId === old && !o.locked && !t.locked) shift(o)
   return replaceClipMedia(p, itemId, asset)
+}
+
+/**
+ * Put a sketch (a video of the picture being drawn, made at the picture's own shape) in place of an image clip: the
+ * same id, place, length, framing, crop, look, mask and keyframes, now a muted video playing from its start. A video
+ * shorter than the clip shortens it (`shortened`). Refused as Replace media is: gone, locked, not an image clip or not
+ * a video, or already this file.
+ */
+export function applySketch(p0: Project, itemId: string, asset: Asset): { project: Project; shortened?: boolean; refused?: ReturnType<typeof replaceRefusal> } {
+  const f0 = findItem(p0, itemId)
+  if (!f0 || !('assetId' in f0.item)) return { project: p0, refused: 'missing' }
+  if (f0.item.locked || f0.track.locked) return { project: p0, refused: 'locked' }
+  if (f0.item.type !== 'image' || asset.kind !== 'video') return { project: p0, refused: 'kind' }
+  if (f0.item.assetId === asset.id) return { project: p0, refused: 'same' }
+  const p = clone(p0)
+  p.assets[asset.id] = asset
+  const f = findItem(p, itemId)!
+  const img = f.item as ImageItem
+  const oldName = p0.assets[img.assetId]?.name
+  const { type: _type, assetId: _asset, ...rest } = img
+  const shortened = asset.duration !== undefined && asset.duration + EPS < img.duration
+  const video: VideoItem = {
+    ...rest,
+    type: 'video',
+    assetId: asset.id,
+    name: !img.name || img.name === oldName ? asset.name : img.name,
+    duration: shortened ? round(asset.duration!, 4) : img.duration,
+    in: 0,
+    speed: 1,
+    volume: 1,
+    muted: true,
+    fadeIn: 0,
+    fadeOut: 0,
+  }
+  f.track.items[f.track.items.indexOf(img)] = video
+  return shortened ? { project: p, shortened } : { project: p }
 }

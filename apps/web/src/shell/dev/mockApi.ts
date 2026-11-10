@@ -1174,7 +1174,7 @@ on('POST', '/api/assets/([^/]+)/scenes', (m, _q, b) => {
 })
 // smart tools (E-21): like a server whose ffmpeg has every tool and no background removal command set up
 on('GET', '/api/smart-tools', () =>
-  json({ stabilise: { method: 'vidstab' }, denoise: { audio: ['afftdn'], video: ['hqdn3d', 'nlmeans'] }, removeBackground: { available: false }, why: { removeBackground: 'Background removal is not set up on this server: the owner sets BG_REMOVAL_CMD to a removal tool installed there.' } }),
+  json({ stabilise: { method: 'vidstab' }, denoise: { audio: ['afftdn'], video: ['hqdn3d', 'nlmeans'] }, removeBackground: { available: false }, sketch: { available: false }, why: { removeBackground: 'Background removal is not set up on this server: the owner sets BG_REMOVAL_CMD to a removal tool installed there.', sketch: 'Sketching runs on a server: the demo has none.' } }),
 )
 on('POST', '/api/assets/([^/]+)/(stabilise|denoise|remove-background)', (m, _q, b) => {
   const denied = editorOnly(assetWs(m[1]))

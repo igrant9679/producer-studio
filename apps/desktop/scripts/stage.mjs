@@ -4,6 +4,7 @@
 //   server/scripts/            tts-worker.mjs, mcp-server.mjs (plain Node scripts, run with Electron-as-Node)
 //   server/skill/              vendored producer-pipeline skill (looks + house rules)
 //   server/runtime.js          packages/core runtime bundle used by exports (no esbuild at runtime)
+//   server/vendor/anidoodle/   the AI-drawing sandbox's media bundle (Apache-2.0) with its LICENSE and NOTICE
 //   web/                       apps/web/dist without sourcemaps
 //   tools/                     whisper.cpp + ggml-small.en, Kokoro-82M ONNX, chrome-headless-shell (from build/tools,
 //                              filled by scripts/fetch-tools.mjs)
@@ -63,6 +64,9 @@ fs.cpSync(path.join(serverSrc, 'skill'), path.join(out, 'skill'), { recursive: t
 // the music composer runs as its own process (plain JS, not bundled); the sound effects are files
 fs.cpSync(path.join(serverSrc, 'scripts', 'music'), path.join(out, 'scripts', 'music'), { recursive: true, filter: (f) => !f.endsWith('.d.ts') })
 fs.cpSync(path.join(serverSrc, 'sfx'), path.join(out, 'sfx'), { recursive: true })
+// the AI-drawing sandbox's media (anidoodle, Apache-2.0): the browser bundle, read from disk, with its licence
+fs.mkdirSync(path.join(out, 'vendor', 'anidoodle'), { recursive: true })
+for (const f of ['anidoodle.js', 'LICENSE', 'NOTICE', 'PROVENANCE.md']) fs.copyFileSync(path.join(serverSrc, 'vendor', 'anidoodle', f), path.join(out, 'vendor', 'anidoodle', f))
 await build({
   entryPoints: [path.join(repo, 'packages', 'core', 'src', 'runtime.ts')],
   outfile: path.join(out, 'runtime.js'),

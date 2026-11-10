@@ -539,8 +539,9 @@ export type SceneVisual =
   | { kind: 'aiVideo'; prompt: string; assetId?: Id }
   | { kind: 'media'; assetId: Id; start?: number; end?: number }
   | { kind: 'animation'; style: AnimationStyle; objects: SceneObject[] }
-  /** Drawn in code by the space's AI from `prompt` (canvas + Rough.js), kept as `code` and rendered to a clip. */
-  | { kind: 'drawn'; prompt: string; code?: string; assetId?: Id }
+  /** Drawn in code by the space's AI from `prompt` (canvas, Rough.js and anidoodle's media), kept as `code` and rendered
+   * to a clip; `style` is the drawing style the code was written for (absent: 'clean'). */
+  | { kind: 'drawn'; prompt: string; code?: string; assetId?: Id; style?: string }
 
 /**
  * Who made a stock clip or photo, and where it came from. `licence` is set when the licence asks for credit in the
@@ -606,6 +607,8 @@ export interface ProducerMeta {
     idea?: string
     /** Target length in seconds (source = idea). */
     lengthSec?: number
+    /** How AI-drawn scenes are drawn (DRAWING_STYLES; absent: 'clean'). */
+    drawingStyle?: string
     /** Scene visuals the writer may use (source = idea); AI images and clips also need a key that can make them. Your
      * own clips and images (`media`) come with the script request's asset ids, not this list. */
     visualKinds?: VisualKind[]

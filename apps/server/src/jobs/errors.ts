@@ -29,6 +29,7 @@ const WHAT: Record<string, string> = {
   'media.denoise': 'Denoising',
   'media.bgremove': 'Removing the background',
   'media.smooth': 'Smooth slow motion',
+  'media.sketch': 'Sketching the picture in',
 }
 
 /**

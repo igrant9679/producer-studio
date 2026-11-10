@@ -21,6 +21,7 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'media.denoise': 'Denoising',
   'media.bgremove': 'Background removal',
   'media.smooth': 'Smooth slow motion',
+  'media.sketch': 'Sketch',
   'voicestudio.install': 'Installing VoiceStudio',
 }
 

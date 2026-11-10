@@ -3,8 +3,11 @@
 // at frames of its own drawing to fix what it sees. The rules below are distilled from two open-source agent kits for
 // code-made video (both MIT): explainroo (github.com/vincentsch/explainroo: drawings that appear on a word of the
 // narration) and video-director (github.com/win4r/video-director: plan in numbers, draw from the clock alone, check
-// what you can't watch).
+// what you can't watch). The media the drawings can use (pencil, ink, watercolour, chalk, riso, paper, marks that draw
+// themselves) are anidoodle's (github.com/alexgreensh/anidoodle, Apache-2.0, vendored in vendor/anidoodle); the
+// drawing styles' recipes are ours.
 import * as z from 'zod/v4'
+import { DRAWING_STYLES, type DrawingStyleId } from '@producer/core'
 import { HttpError } from '../http'
 import { log } from '../log'
 import { DrawingError, type DrawingEnv, testDrawing } from '../media/drawing'
@@ -49,15 +52,99 @@ DIRECTION
 - Add secondary motion so nothing is ever frozen: idle bob or breathing, sway, a blink, drifting particles, a soft parallax on the background.
 - Text in the drawing is rare and short (labels of 1-3 words, at least H*0.04 tall, in env.palette.ink); the headline and captions are added by the editor, don't repeat them.
 - No flashes, no strobing, nothing faster than the eye can follow, no jarring cuts; ease in and out; end on a settled, readable frame.
-- Draw people and objects simply and charmingly (round heads, simple bodies, expressive poses), never photorealistic, never logos or brand marks.`
+- Draw people and objects simply and charmingly (round heads, simple bodies, expressive poses), never photorealistic, never logos or brand marks.
 
-export function buildDrawingPrompt(o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean }): string {
+MEDIA AND MARKS (anidoodle: for drawn looks such as pencil, ink, watercolour, chalk and print)
+- const d = env.doodle(ctx, t, medium) is this frame's drawing surface; medium 'pencil' | 'ink' | 'riso' | 'chalk' | 'marker'. It owns ctx's transform: place things with d.push(x, y, scale, rotationRadians) ... d.pop() rather than ctx.translate, and call ctx.setTransform(1, 0, 0, 1, 0, 0) before plain ctx drawing after it.
+  d.pen(points, { w, color, seed, closed, progress, opacity, wobble, boil, taper }): a hand-drawn line through [[x, y], ...] (smoothed, tapered, gently boiling by itself); progress 0..1 draws it on from its start. Give every line its own seed.
+  d.hatch(x, y, width, { n, len, angle, color, seed, pw, opacity }): a row of n short hatch strokes.
+  d.wash(points, color, { alpha, seed, shrink }): a watercolour wash with a wet edge that doesn't quite fill its outline.
+  d.form(points, color, shadeColor, { seed, light: [dx, dy], hi: [x, y, rx, ry] }): a painted, softly lit solid shape (highlight optional).
+  d.fill(points, color, alpha); d.glow(cx, cy, r, color, opacity).
+  d.group('ink' | 'paint' | 'plain', () => { d.pen(...); d.wash(...) }, { blend, alpha, off: [dx, dy], textures }): draws on its own layer, adds the medium's tooth ('ink' pencil grain, 'paint' soft granulating wash; textures: 'risoSpeck', 'risoMottle', 'draftTooth'), then lays it on the frame (blend 'multiply' and off for inks printed off register). d.inkGroup(() => ...) is the same with a soft bloom under light ink on a dark ground.
+  d.paper(kind, opacity): paper grain over the whole frame, kind 'paper' | 'coldpress' | 'pencilTooth' | 'blueMottle' | 'draftTooth' | 'risoMottle'. Call it last.
+- env.shapes gives point lists for those: oval(cx, cy, rx, ry, n), softBox(cx, cy, w, h), arc(cx, cy, rx, ry, a0, a1, n), line([x, y], [x, y], bow), poly(corners, per), heart(cx, cy, size), tube(centrePoints, r0, r1) (a limb, stem or branch), turn(points, cx, cy, degrees), jitter(points, amount, seed), displace(points, amp, freq, octaves, seed); halftone({ x0, y0, x1, y1 }, pitch, angleDegrees, (x, y) => tone 0..1) returns dots [[x, y, r], ...]; fractal(seed, x, y, fx, fy, octaves) is smooth noise 0..1; rng(seed).
+- env.marks are marks that draw themselves, made once and laid down in order: stroke(points, { w, col, a, taper }), contour(points, { w, col, a, seed, closed }) (a list), hatch(region, { ang, gap, len, w, col, a, seed, dens: (x, y) => 0..1 }) (a list), sketchEllipse(cx, cy, rx, ry, { w, col, a, seed }); regions polyR(points), ellR(cx, cy, rx, ry), union, minus, inter. env.marks.play(ctx, list, t, start, end) draws a list the way a hand would between two times.
+- env.memo('name', () => value) builds something once and gives the same value to every frame (lists of marks, paths): it must depend on its key alone, never on t, and must not be changed after.
+
+When a DRAWING STYLE is given below, it decides the look (paper, ink, fills, outlines, colours, which tools) in place of the look rules in DIRECTION; the contract, the safe areas and the timing still hold.`
+
+/**
+ * How each drawing style is drawn: its paper and ink (the accent stays the brand's) and the recipe the AI follows.
+ * Our own recipes, written for anidoodle's media; 'clean' is the look the rules above describe.
+ */
+export const DRAWING_RECIPES: Record<DrawingStyleId, { canvas?: string; ink?: string; recipe: string }> = {
+  clean: { recipe: '' },
+  sketchbook: {
+    canvas: '#f5f0e4',
+    ink: '#3a3236',
+    recipe:
+      "Graphite on cream paper (the canvas is the paper). const d = env.doodle(ctx, t, 'pencil'). Outlines with d.pen in env.palette.ink, each drawn on (progress) as the thing enters on its word; shading as hatching in one diagonal (d.hatch, or env.marks.hatch in a region, denser in shadow); no solid fills, except the accent as a light wash on the one thing that matters (d.group('paint', () => d.wash(...))). Finish with d.paper('paper', 0.35).",
+  },
+  watercolour: {
+    canvas: '#f7f3ea',
+    ink: '#4a4046',
+    recipe:
+      "Pencil and pan watercolour on cold-press paper. For each object, first its washes (d.group('paint', () => d.wash(shape, colour, { alpha: 0.55, seed }))) in soft natural colours that don't quite fill the outline, then a pencil outline over the paint (d.pen, 'pencil' medium) that may be drawn on as it enters. The accent for the key object. Finish with d.paper('coldpress', 0.35).",
+  },
+  ink: {
+    canvas: '#fbfaf6',
+    ink: '#16141a',
+    recipe:
+      "Ink line and grey wash. A confident, tapered pen line (env.doodle(ctx, t, 'ink'), d.pen) in env.palette.ink, drawn on as things enter; washes in two or three greys made from the ink at low alpha (d.wash), and one accent wash. Finish with d.paper('paper', 0.2).",
+  },
+  storybook: {
+    canvas: '#f6efe2',
+    ink: '#3d3437',
+    recipe:
+      "A painted picture book. Rounded, softly lit forms (d.form(shape, colour, shadeColour, { light: [-8, -9], seed })) under one warm light, a soft pencil outline over them (d.pen at opacity 0.6), a gentle, warm palette with the accent for the hero. Characters have simple rounded bodies and expressive poses. Finish with d.paper('coldpress', 0.25).",
+  },
+  riso: {
+    canvas: '#f4efe4',
+    ink: '#1f3f8f',
+    recipe:
+      "A two-ink risograph print: env.palette.ink (deep blue) and env.palette.accent on off-white paper. Every colour area goes inside d.group('plain', () => ..., { blend: 'multiply', textures: ['risoMottle', 'risoSpeck'] }), the accent's group printed a little off register (off: [3, -2]); tones are halftone dots (env.shapes.halftone, pitch about 8 px, the blue at 75 degrees, the accent at 15), and where the inks overlap they make a third colour. Lines with the 'riso' medium. Finish with d.paper('paper', 0.25).",
+  },
+  halftone: {
+    canvas: '#efe9da',
+    ink: '#151515',
+    recipe:
+      "Newsprint: black and one spot colour (the accent) on unbleached newsprint. Shapes are filled with halftone dots (env.shapes.halftone, pitch 7 to 9 px, black at 45 degrees, the accent at 15), a heavy black contour (d.pen, 'ink' medium, w about H/150), inks multiplied (d.group('plain', ..., { blend: 'multiply' })). Finish with d.paper('paper', 0.3).",
+  },
+  blueprint: {
+    canvas: '#1d4378',
+    ink: '#f2f0e8',
+    recipe:
+      "A cyanotype blueprint: everything in white ink on Prussian blue with the 'ink' medium. Ruled lines (d.pen with wobble 0.2, boil 0.2), circles from env.shapes.oval, dimension lines with arrowheads and small measured labels, centre lines dashed; lines wrapped in d.inkGroup(() => ...) for the ink's bloom, drawn on as each part enters. The accent only for the one highlighted part. Finish with d.paper('blueMottle', 0.3).",
+  },
+  chalkboard: {
+    canvas: '#27332f',
+    ink: '#f1eee4',
+    recipe:
+      "Chalk on a slate board. The 'chalk' medium in env.palette.ink, the accent as coloured chalk; areas are scumbled with dense hatching (env.marks.hatch with back: true, or d.hatch rows) rather than solid fills; faint ghosts of old rubbed-out lessons at very low alpha; chalk work inside d.group('ink', ...) for the board's tooth. Things are drawn on as they are named.",
+  },
+  whiteboard: {
+    canvas: '#fbfbf8',
+    ink: '#1c1c1f',
+    recipe:
+      "A whiteboard explainer: everything drawn on stroke by stroke as it is named (env.marks.contour / d.pen with progress, the 'marker' medium), a black marker for everything and the accent marker for the key thing, short hand-lettered labels, simple stick-and-shape figures. No textures, no fills but quick marker scribbles.",
+  },
+}
+
+/** The palette a style is drawn in: its own paper and ink, the brand's accent ('clean' keeps the brand's). */
+export function drawingPalette(style: DrawingStyleId, brand: DrawingEnv['palette']): DrawingEnv['palette'] {
+  const r = DRAWING_RECIPES[style]
+  return { canvas: r.canvas ?? brand.canvas, ink: r.ink ?? brand.ink, accent: brand.accent }
+}
+
+export function buildDrawingPrompt(o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; style?: DrawingStyleId }): string {
   const words = o.env.words.map((w) => `${w.w}@${w.start.toFixed(2)}`).join(' ')
+  const style = o.style && o.style !== 'clean' ? DRAWING_STYLES.find((s) => s.id === o.style) : undefined
   return `Draw this scene.
 
 WHAT TO DRAW (the director's note)
 ${o.description.trim()}
-
+${style ? `\nDRAWING STYLE: ${style.label}. ${DRAWING_RECIPES[style.id].recipe}\n` : ''}
 ${o.silent ? `WHAT HAPPENS IN THIS SCENE (nobody speaks: the drawing has to tell it alone, so leave nothing to a voice)` : `THE NARRATION OF THIS SCENE (what the voice says while it plays)`}
 ${o.narration.trim()}
 
@@ -87,7 +174,7 @@ export const LOOK_AT = [0.18, 0.45, 0.72, 0.97]
  */
 export async function writeDrawing(
   provider: AiProvider,
-  o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; signal?: AbortSignal; progress?: (f: number, msg: string) => void },
+  o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; style?: DrawingStyleId; signal?: AbortSignal; progress?: (f: number, msg: string) => void },
 ): Promise<{ code: string; plan: string; frames: Buffer[] }> {
   const times = LOOK_AT.map((k) => k * o.env.duration)
   o.progress?.(0.05, 'Writing the animation')

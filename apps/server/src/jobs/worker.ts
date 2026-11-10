@@ -96,6 +96,7 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'media.denoise': 'Denoising',
   'media.bgremove': 'Removing the background',
   'media.smooth': 'Smooth slow motion',
+  'media.sketch': 'Sketching the picture in',
   'asset.copy': 'Copying the clip',
 }
 

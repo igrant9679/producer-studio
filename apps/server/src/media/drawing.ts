@@ -4,7 +4,9 @@
 // The contract the code follows: it defines `function draw(ctx, t, env)`, which paints the WHOLE frame on a canvas
 // 2D context for time `t` (seconds from the scene's start), from `t` alone: no state kept between calls, no timers, no
 // DOM, no network. `env` (below, `ENV_HELPERS`) holds the size, the brand palette and fonts, the narration's word
-// timings, Rough.js (hand-drawn shapes, MIT, roughjs.com) and easing helpers.
+// timings, Rough.js (hand-drawn shapes, MIT, roughjs.com), easing helpers, and anidoodle's art core (Apache-2.0,
+// vendor/anidoodle: pencil, ink, riso and chalk media, watercolour washes, shaded forms, paper textures, strokes that
+// draw themselves, hatching), with `env.memo` to build marks once per page.
 //
 // The code is the model's, and the model read text a person typed, so it is treated as hostile:
 //   - the page has a CSP that allows inline script and nothing else (no fetch, no images or fonts from anywhere
@@ -17,6 +19,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { SERVER_ROOT } from '../config'
 import { ctx } from '../context'
 import { HttpError } from '../http'
 import { CancelledError } from '../jobs/worker'
@@ -41,6 +44,8 @@ export interface DrawingEnv {
   words: Array<{ w: string; start: number; end?: number }>
   palette: { canvas: string; accent: string; ink: string }
   fonts: { headline: string; body: string }
+  /** Pictures the code may read with env.image(name): data: URLs (PNG or JPEG), decoded before the first frame. */
+  images?: Record<string, string>
 }
 
 /** The drawing code failed: a compile error, an error thrown at `t`, or a frame that never finished. */
@@ -57,6 +62,15 @@ let roughSource: string | undefined
 function rough(): string {
   roughSource ??= fs.readFileSync(path.join(path.dirname(require.resolve('roughjs/package.json')), 'bundled', 'rough.js'), 'utf8')
   return roughSource
+}
+
+/** anidoodle's art core, bundled (vendor/anidoodle/anidoodle.js, built by scripts/build-anidoodle.mjs). */
+export const ANIDOODLE_JS = () => path.join(SERVER_ROOT, 'vendor', 'anidoodle', 'anidoodle.js')
+let doodleSource: string | undefined
+function anidoodle(): string {
+  // a closing tag inside the bundle's strings would end the script early
+  doodleSource ??= fs.readFileSync(ANIDOODLE_JS(), 'utf8').replace(/<\/script/gi, '<\\/script')
+  return doodleSource
 }
 
 /** @font-face rules for the look's fonts (Latin faces, inlined as data: URLs: the page loads nothing). */
@@ -96,6 +110,36 @@ const wordAt = (text, after = 0) => {
   return undefined;
 };
 const rand = (seed) => { let s = (seed >>> 0) || 1; return () => { s = (s + 0x6d2b79f5) >>> 0; let x = s; x = Math.imul(x ^ (x >>> 15), x | 1); x ^= x + Math.imul(x ^ (x >>> 7), x | 61); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; }; };
+// a value built once per page and reused by every frame: it must depend on its key alone (never on t)
+const MEMO = new Map();
+const memo = (key, build) => { const k = String(key); if (!MEMO.has(k)) MEMO.set(k, build()); return MEMO.get(k); };
+// anidoodle (window.anidoodle, Apache-2.0): its surfaces and caches come from the host, as its contract asks
+const AD = window.anidoodle;
+const IMAGES = {};
+const surface = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return { canvas: c, ctx: c.getContext('2d', { willReadFrequently: true }) }; };
+const DENV = { W: ENV.width, H: ENV.height, scale: 1, canvas: surface, cache: new Map(), image: (name) => IMAGES[name] };
+const MEDIA = {
+  pencil: AD.core.PENCIL,
+  riso: AD.core.RISOLINE,
+  ink: { nib: 1.15, taper: 0.85, pressure: 0.6, retrace: false, wobble: 0.5, rough: 0.35 },
+  chalk: { nib: 2.2, taper: 0.35, pressure: 0.8, retrace: true, wobble: 1.4, rough: 2.4 },
+  marker: { nib: 2.4, taper: 0.12, pressure: 0.25, retrace: false, wobble: 0.6, rough: 0.3 },
+};
+const doodle = (ctx, t, medium = 'pencil') => new AD.core.Gfx(ctx, DENV, Math.round(t * ENV.fps), typeof medium === 'string' ? (MEDIA[medium] || MEDIA.pencil) : { ...MEDIA.pencil, ...medium });
+const C = AD.core, M = AD.marks;
+const shapes = Object.freeze({ rng: C.rng, fractal: C.fractal, jitter: C.jitter, sample: C.sample, oval: C.oval, softBox: C.softBox, arc: C.arc, line: C.line, turn: C.turn, poly: C.poly, heart: C.heart, tube: C.tube, displace: C.displace, halftone: C.halftone, GRAPHITE: C.GRAPHITE, TINT: C.TINT });
+// lay a list of marks down one after another between two times, each taking time by its length (its cost)
+const play = (ctx, inks, t, start, end) => {
+  let total = 0;
+  for (const m of inks) total += m.cost;
+  let left = clamp((t - start) / Math.max(1e-6, end - start)) * (total || 1);
+  for (const m of inks) {
+    if (left <= 0) break;
+    m.draw(ctx, Math.min(1, left / m.cost));
+    left -= m.cost;
+  }
+};
+const marks = Object.freeze({ stroke: M.stroke, hatch: M.hatch, contour: M.contour, sketchEllipse: M.sketchEllipse, guideLine: M.guideLine, scribbleDot: M.scribbleDot, polyR: M.polyR, ellR: M.ellR, union: M.union, minus: M.minus, inter: M.inter, edgeDist: M.edgeDist, ellipsePts: M.ellipsePts, lengthOf: M.lengthOf, play });
 `
 
 function page(code: string, env: DrawingEnv, fonts: string): string {
@@ -107,6 +151,7 @@ function page(code: string, env: DrawingEnv, fonts: string): string {
 html,body{margin:0;padding:0;overflow:hidden;background:${/^#[0-9a-f]{3,8}$/i.test(env.palette.canvas) ? env.palette.canvas : '#000'}}canvas{display:block}</style></head>
 <body><canvas id="c" width="${env.width}" height="${env.height}"></canvas>
 <script>${rough()}</script>
+<script>${anidoodle()}</script>
 <script>
 (() => {
   const ENV = ${json(env)};
@@ -122,7 +167,11 @@ html,body{margin:0;padding:0;overflow:hidden;background:${/^#[0-9a-f]{3,8}$/i.te
   window.setTimeout = window.setInterval = () => 0;
   const canvas = document.getElementById('c');
   const g = canvas.getContext('2d');
-  const env = Object.freeze({ ...ENV, W: ENV.width, H: ENV.height, rough: rough.canvas(canvas), clamp, lerp, ease, progress, wordAt, rand });
+  const { images: _images, ...plain } = ENV;
+  const env = Object.freeze({
+    ...plain, W: ENV.width, H: ENV.height, rough: rough.canvas(canvas), clamp, lerp, ease, progress, wordAt, rand, memo, doodle, shapes, marks,
+    image: (name) => IMAGES[name], surface, lib: AD, doodleEnv: DENV,
+  });
   let draw;
   try {
     draw = new Function('env', ${json(code)} + '\\n;return typeof draw === "function" ? draw : undefined;')(env);
@@ -130,7 +179,14 @@ html,body{margin:0;padding:0;overflow:hidden;background:${/^#[0-9a-f]{3,8}$/i.te
   } catch (e) {
     window.__compileError = String((e && e.message) || e);
   }
-  window.__ready = Promise.all([ENV.fonts.headline, ENV.fonts.body].map((f) => Promise.all([400, 700, 900].map((w) => document.fonts.load(w + ' 40px "' + f + '"').catch(() => null))))).then(() => true);
+  // the pictures are decoded before the first frame (data: URLs only: the page loads nothing else)
+  const pictures = Object.entries(ENV.images || {}).map(([name, src]) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { IMAGES[name] = img; resolve(true); };
+    img.onerror = () => resolve(false);
+    img.src = String(src).startsWith('data:image/') ? src : '';
+  }));
+  window.__ready = Promise.all([...pictures, ...[ENV.fonts.headline, ENV.fonts.body].map((f) => Promise.all([400, 700, 900].map((w) => document.fonts.load(w + ' 40px "' + f + '"').catch(() => null))))]).then(() => true);
   window.__frame = (t, jpeg) => {
     if (window.__compileError) return 'error:' + window.__compileError;
     now = t;

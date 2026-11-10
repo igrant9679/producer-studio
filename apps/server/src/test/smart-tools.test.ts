@@ -14,6 +14,7 @@ import { audioDenoiseFilter, denoiseClip, videoDenoiseFilter } from '../media/de
 import { ffmpeg } from '../media/proc'
 import { probe, processAsset } from '../media/process'
 import { resetFfmpegFilters, shiftTranscript, sourceRange } from '../media/smartTools'
+import { sketchFrame, sketchPicture } from '../media/sketch'
 import { stabiliseClip, vidstabSmoothing } from '../media/stabilise'
 import { loadAsset, createAssetFromFile } from '../services/assets'
 import { Client, claimJob, setup, signup } from './helpers'
@@ -29,7 +30,7 @@ let tone: ReturnType<typeof assetDoc>
 const FAKE_TOOL = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'fixtures', 'fake-bg-removal.mjs')
 const jc = (job: Awaited<ReturnType<typeof claimJob>>) => inlineContext(job)
 
-async function addClip(file: string, name: string, mime: string, kind: 'video' | 'audio', ws = workspaceId, user = userId) {
+async function addClip(file: string, name: string, mime: string, kind: 'video' | 'audio' | 'image', ws = workspaceId, user = userId) {
   const created = await createAssetFromFile({ workspaceId: ws, userId: user, filePath: file, name, mime, kind, origin: 'upload' })
   return assetDoc(await processAsset(created.id, inlineContext({ id: 't', kind: 'asset.process', workspaceId: ws, userId: user, projectId: null, input: {} })))
 }
@@ -259,5 +260,49 @@ describe('the copy lines up with the original', () => {
     expect(sourceRange({ from: 2, to: 99 }, 4)).toEqual({ from: 2, length: 2 })
     expect(sourceRange({}, undefined)).toEqual({ from: 0 })
     expect(() => sourceRange({ from: 4, to: 9 }, 4)).toThrow(/too short/)
+  })
+})
+
+describe('sketch it in', () => {
+  let picture: ReturnType<typeof assetDoc>
+  beforeAll(async () => {
+    // a dark house shape and a sun on a light sky: edges to trace and darks to hatch
+    const file = path.join(tmp, 'house.png')
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="250"><rect width="400" height="250" fill="#dfe9f2"/><circle cx="320" cy="60" r="30" fill="#f2c94c"/><polygon points="80,140 160,70 240,140" fill="#5b3a29"/><rect x="95" y="140" width="130" height="90" fill="#8a5a3c"/><rect x="145" y="175" width="30" height="55" fill="#2b1d14"/></svg>`
+    await (await import('sharp')).default(Buffer.from(svg)).png().toFile(file)
+    picture = await addClip(file, 'house.png', 'image/png', 'image')
+  }, 120_000)
+
+  it('is offered while the drawing browser is there, and refuses what isn’t a picture or a medium it has', async () => {
+    const info = (await client.json('GET', '/api/smart-tools')).body as SmartToolsInfo
+    const chrome = !!ctx().config.chromePath && fs.existsSync(ctx().config.chromePath!)
+    expect(info.sketch.available).toBe(chrome)
+    const wrong = await client.json('POST', `/api/assets/${shaky.id}/sketch`, {})
+    expect(wrong.status).toBe(400)
+    expect(wrong.body.error).toMatch(/works on pictures/)
+    expect((await client.json('POST', `/api/assets/${picture.id}/sketch`, { style: 'crayon' })).status).toBe(400)
+    expect((await client.json('POST', `/api/assets/${picture.id}/sketch`, { seconds: 120 })).status).toBe(400)
+  })
+
+  it('sketches the picture in, as a video at its shape, saved next to it', async ({ skip }) => {
+    if (!ctx().config.chromePath || !fs.existsSync(ctx().config.chromePath!)) skip()
+    const res = await runTool(picture.id, 'sketch', { style: 'ink', colour: true, seconds: 3 }, sketchPicture)
+    expect(res.tool).toBe('sketch')
+    expect(res.sourceAssetId).toBe(picture.id)
+    const a = res.asset.asset
+    expect(a.kind).toBe('video')
+    expect({ width: a.width, height: a.height }).toEqual(sketchFrame(400, 250))
+    expect(a.duration).toBeGreaterThan(2.8)
+    expect(a.duration).toBeLessThan(3.3)
+    expect(a.name).toBe('house (sketched).mp4')
+    const row = await loadAsset(a.id)
+    expect(row.meta?.derivedFrom).toMatchObject({ assetId: picture.id, tool: 'sketch', settings: { style: 'ink', colour: true, seconds: 3 } })
+  }, 300_000)
+
+  it('makes the video at the picture’s shape, at least 960 and at most 1920 on its long side, both sides even', () => {
+    expect(sketchFrame(400, 250)).toEqual({ width: 960, height: 600 })
+    expect(sketchFrame(4000, 3000)).toEqual({ width: 1920, height: 1440 })
+    expect(sketchFrame(1080, 1350)).toEqual({ width: 1080, height: 1350 })
+    expect(sketchFrame(1001, 701).width % 2).toBe(0)
   })
 })

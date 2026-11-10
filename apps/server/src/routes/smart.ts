@@ -1,8 +1,9 @@
 // Smart tools (E-21): what this server can do, and the jobs that make a stabilised, denoised or background-removed copy
-// of a clip's media (editors). The editor swaps the copy in when the job is done.
+// of a clip's media, or a picture sketched in (editors). The editor swaps the copy in when the job is done.
 import { Hono } from 'hono'
 import * as z from 'zod/v4'
 import type { JobKind, SmartTool } from '@producer/core'
+import { SKETCH_SECONDS, SKETCH_STYLES } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { jobDto } from '../dto'
 import { HttpError, body, requireRole } from '../http'
@@ -35,21 +36,36 @@ const TOOLS: Record<string, { tool: SmartTool; kind: JobKind; schema: z.ZodObjec
     kinds: ['video', 'audio'],
   },
   'remove-background': { tool: 'removeBackground', kind: 'media.bgremove', schema: z.object(Range), what: 'Removing the background of', kinds: ['video'] },
+  sketch: {
+    tool: 'sketch',
+    kind: 'media.sketch',
+    schema: z.object({ style: z.enum(SKETCH_STYLES.map((s) => s.id) as [string, ...string[]]).optional(), colour: z.boolean().optional(), seconds: z.number().min(SKETCH_SECONDS.min).max(SKETCH_SECONDS.max).optional() }),
+    what: 'Sketching',
+    kinds: ['image'],
+  },
 }
 
-smartRoutes.post('/:id/:tool{stabilise|denoise|remove-background}', async (c) => {
+const WRONG_KIND: Record<SmartTool, string> = {
+  stabilise: 'Stabilisation works on video clips',
+  denoise: 'Denoising works on video and sound clips',
+  removeBackground: 'Background removal works on video clips',
+  sketch: 'Sketch it in works on pictures',
+}
+
+smartRoutes.post('/:id/:tool{stabilise|denoise|remove-background|sketch}', async (c) => {
   const u = requireUser(c)
   const t = TOOLS[c.req.param('tool')]
   const a = await loadAsset(c.req.param('id'))
   await requireRole(u.id, a.workspaceId, 'editor')
   const b = (await body(c, t.schema)) as { from?: number; to?: number; target?: 'audio' | 'video'; method?: string }
-  if (!t.kinds.includes(a.kind)) throw new HttpError(400, 'invalid', t.tool === 'denoise' ? 'Denoising works on video and sound clips' : `${t.tool === 'stabilise' ? 'Stabilisation' : 'Background removal'} works on video clips`)
+  if (!t.kinds.includes(a.kind)) throw new HttpError(400, 'invalid', WRONG_KIND[t.tool])
   if (a.status !== 'ready') throw new HttpError(409, 'conflict', 'This clip is still being processed')
   if (b.from !== undefined && b.to !== undefined && b.to <= b.from) throw new HttpError(400, 'invalid', 'The range must end after it starts')
   // say what is missing now, not after the job has waited its turn
   const info = await smartToolsInfo()
   if (t.tool === 'stabilise' && !info.stabilise) throw new HttpError(501, 'server', info.why.stabilise!)
   if (t.tool === 'removeBackground' && !info.removeBackground.available) throw new HttpError(501, 'server', info.why.removeBackground!)
+  if (t.tool === 'sketch' && !info.sketch.available) throw new HttpError(501, 'server', info.why.sketch!)
   if (t.tool === 'denoise') {
     if (b.target === 'video' && a.kind !== 'video') throw new HttpError(400, 'invalid', 'A sound clip has no picture to clean')
     const offered: string[] = b.target === 'video' ? info.denoise.video : info.denoise.audio

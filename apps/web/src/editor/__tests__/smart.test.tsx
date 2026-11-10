@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import {
   addAsset,
   addItem,
+  createImageItem,
   createProject,
   createTextItem,
   createVideoItem,
@@ -48,6 +49,7 @@ const TOOLS: SmartToolsInfo = {
   stabilise: { method: 'vidstab' },
   denoise: { audio: ['afftdn'], video: ['hqdn3d', 'nlmeans'] },
   removeBackground: { available: false },
+  sketch: { available: true },
   why: { removeBackground: 'Background removal is not set up on this server: the owner sets BG_REMOVAL_CMD to a removal tool installed there.' },
 }
 
@@ -330,5 +332,47 @@ describe('clean-up tools', () => {
     await waitFor(() => expect(toasts().at(-1)).toMatch(/still being processed/))
     expect(useSmart.getState().running).toEqual({})
     expect(clip().assetId).toBe('a')
+  })
+})
+
+describe('Sketch it in', () => {
+  const picture = (id: string): Asset => ({ id, kind: 'image', name: `${id}.jpg`, src: `/demo/${id}.jpg`, width: 1600, height: 900 })
+  function withPicture() {
+    let p = S().project
+    p = addAsset(p, picture('pic'))
+    p = addItem(p, createImageItem(p.assets.pic, 9, { id: 'im', duration: 6, opacity: 0.8 }))
+    act(() => S().load({ project: p, version: 1, projectId: 'p1', demo: false, workspaceId: 'w1' }))
+  }
+  const sketchCopy = (seconds: number) => ({ asset: video('sk', seconds, { name: 'pic (sketched).mp4', hasAudio: false, width: 1600, height: 900 }), status: 'ready', workspaceId: 'w1', origin: 'smart', createdAt: 0 })
+
+  it('is offered for pictures only, and says why when the server can’t', () => {
+    withPicture()
+    open('va', false)
+    expect(screen.queryByRole('button', { name: 'Sketch it in' })).toBeNull()
+    cleanup()
+    useSmart.setState({ tools: { ...TOOLS, sketch: { available: false }, why: { sketch: 'Sketching needs the export’s browser, which isn’t on this server yet.' } } })
+    open('im', false)
+    const btn = screen.getByRole('button', { name: 'Sketch it in' }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(document.getElementById(btn.getAttribute('aria-describedby')!)!.textContent).toMatch(/browser/)
+  })
+
+  it('sketches the picture over the clip’s length and puts the video in its place, in one undo step', async () => {
+    withPicture()
+    const call = vi.spyOn(api, 'smartTool').mockResolvedValue({ id: 'j1', status: 'queued', progress: 0, message: 'Queued' } as never)
+    vi.spyOn(api, 'job').mockResolvedValue({ id: 'j1', status: 'done', progress: 1, result: { tool: 'sketch', asset: sketchCopy(6), offset: 0, sourceAssetId: 'pic' } } as unknown as Job as never)
+    const start = findItem(S().project, 'im')!.item.start
+    open('im', false)
+    fireEvent.click(screen.getByRole('button', { name: 'Chalk: White chalk on a dark slate' }))
+    fireEvent.click(within(screen.getByText('Ending').closest('.ed-field') as HTMLElement).getByRole('switch'))
+    fireEvent.click(screen.getByRole('button', { name: 'Sketch it in' }))
+    expect(call).toHaveBeenCalledWith('pic', 'sketch', { style: 'chalk', colour: false, seconds: 6 })
+    await waitFor(() => expect(findItem(S().project, 'im')!.item.type).toBe('video'), { timeout: 4000 })
+    // the same clip, place and look, now a muted video from its start
+    expect(findItem(S().project, 'im')!.item).toMatchObject({ assetId: 'sk', start, duration: 6, opacity: 0.8, in: 0, muted: true })
+    expect(lastLabel()).toBe('Sketch it in')
+    expect(toasts().at(-1)).toMatch(/Sketched in\. Undo puts the original back/)
+    act(() => S().undo())
+    expect(findItem(S().project, 'im')!.item).toMatchObject({ type: 'image', assetId: 'pic' })
   })
 })

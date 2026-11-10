@@ -81,6 +81,7 @@ export const NOTIFY_JOB_KINDS = [
   'media.denoise',
   'media.bgremove',
   'media.smooth',
+  'media.sketch',
   'voicestudio.install',
 ] as const
 

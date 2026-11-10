@@ -79,6 +79,7 @@ export const JOB_LABELS: Record<JobKind, string> = {
   'media.denoise': 'Denoising',
   'media.bgremove': 'Removing the background',
   'media.smooth': 'Smooth slow motion',
+  'media.sketch': 'Sketching the picture in',
   'asset.copy': 'Copying a clip to another space',
 }
 

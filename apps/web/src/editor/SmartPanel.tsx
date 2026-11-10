@@ -1,7 +1,8 @@
 // The Properties panel's Smart tab (E-21): a shape mask (edited here and with handles on the canvas), a chroma key
-// with an eyedropper, and the server tools that make a stabilised, denoised or background-removed copy of the clip.
-import type { AudioItem, ImageItem, MaskProp, MaskShape, VideoItem } from '@producer/core'
-import { DEFAULT_KEY, KEY_PRESETS, MASK_PROPS, readMaskProp } from '@producer/core'
+// with an eyedropper, the server tools that make a stabilised, denoised or background-removed copy of the clip, and
+// Sketch it in (a picture drawn in, stroke by stroke, in its place).
+import type { AudioItem, ImageItem, MaskProp, MaskShape, SketchStyleId, VideoItem } from '@producer/core'
+import { DEFAULT_KEY, KEY_PRESETS, MASK_PROPS, SKETCH_SECONDS, SKETCH_STYLES, readMaskProp } from '@producer/core'
 import { Brush, Circle, Loader2, Pipette, RectangleHorizontal, SquareDashedMousePointer, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useAnnounceChange } from '../lib/announce'
@@ -39,6 +40,7 @@ export function SmartTab({ item }: { item: VideoItem | ImageItem | AudioItem }) 
         {item.type !== 'audio' && <MaskSection item={item} />}
         {item.type !== 'audio' && <KeySection item={item} />}
         {item.type !== 'image' && <CleanUpSection item={item} />}
+        {item.type === 'image' && <SketchSection item={item} />}
       </fieldset>
     </div>
   )
@@ -198,6 +200,67 @@ function CleanUpSection({ item }: { item: VideoItem | AudioItem }) {
                   </div>
                 )
               })}
+            </div>
+          </>
+        )
+      )}
+    </Section>
+  )
+}
+
+// ---------- sketch it in ----------
+
+const SKETCH_OPTIONS = SKETCH_STYLES.map((s) => ({ value: s.id, label: s.label, title: `${s.label}: ${s.about}` }))
+
+function SketchSection({ item }: { item: ImageItem }) {
+  const tools = useSmart((s) => s.tools)
+  const toolsError = useSmart((s) => s.toolsError)
+  const running = useSmart((s) => s.running[item.id])
+  const [style, setStyle] = useState<SketchStyleId>('pencil')
+  const [colour, setColour] = useState(true)
+  useAnnounceChange(running ? `${TOOL_LABEL[running.tool]}: started` : undefined)
+  const why = toolUnavailable(tools, 'sketch')
+  const seconds = Math.min(SKETCH_SECONDS.max, Math.max(SKETCH_SECONDS.min, item.duration))
+  return (
+    <Section title="Sketch">
+      <p className="ed-note">
+        The picture is drawn in, stroke by stroke, over the clip’s {Math.round(seconds * 10) / 10} seconds{item.duration > SKETCH_SECONDS.max ? ` (the longest a sketch takes is ${SKETCH_SECONDS.max})` : ''}, and put in its place as a video clip with the same framing and effects. Undo puts the picture back; the sketch is in the media library too.
+      </p>
+      {toolsError && (
+        <p className="ed-note" role="alert">
+          Couldn’t ask the server what it can do: {toolsError}{' '}
+          <button type="button" className="btn sm" onClick={() => void loadSmartTools()}>Try again</button>
+        </p>
+      )}
+      {running ? (
+        <div className="ed-smart-run">
+          <Loader2 size={13} className="spin" aria-hidden />
+          <span className="msg">{TOOL_LABEL[running.tool]} · {running.message || 'Working'}</span>
+          <progress max={1} value={Math.max(0, running.progress)} aria-label={TOOL_LABEL[running.tool]} />
+          <button type="button" className="ed-mini" aria-label={`Stop: ${TOOL_LABEL[running.tool]}`} title="Stop" disabled={!running.jobId} onClick={() => void cancelSmartTool(item.id)}>
+            <X size={12} />
+          </button>
+        </div>
+      ) : (
+        tools && (
+          <>
+            <Field label="Drawn in">
+              <Segmented size="sm" value={style} options={SKETCH_OPTIONS} onChange={setStyle} />
+            </Field>
+            <Field label="Ending">
+              <Toggle checked={colour} onChange={setColour} label="Turns into the picture in colour" />
+            </Field>
+            <div className="ed-smart-tools">
+              <div className="ed-smart-tool">
+                <button type="button" className="btn sm" disabled={!!why} aria-describedby={why ? `why-sketch-${item.id}` : undefined} onClick={() => void runSmartTool(item.id, 'sketch', { style, colour })}>
+                  {TOOL_LABEL.sketch}
+                </button>
+                {why && (
+                  <span className="why" id={`why-sketch-${item.id}`}>
+                    {why}
+                  </span>
+                )}
+              </div>
             </div>
           </>
         )

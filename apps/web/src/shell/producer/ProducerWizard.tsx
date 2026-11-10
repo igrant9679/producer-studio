@@ -1,4 +1,4 @@
-import { MUSIC_STYLES, PRODUCE_LIMITS, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { DRAWING_STYLES, MUSIC_STYLES, PRODUCE_LIMITS, drawingStyleOf, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -394,6 +394,17 @@ function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
           )
         })}
       </div>
+      {kindStatus('drawn', caps.data).available && kinds.includes('drawn') && (
+        <div className="ps-field" style={{ marginTop: 12 }}>
+          <label className="label" htmlFor="ps-draw-style">How AI-drawn scenes are drawn</label>
+          <select id="ps-draw-style" className="input" value={drawingStyleOf(b.drawingStyle)} onChange={(e) => set({ drawingStyle: e.target.value })}>
+            {DRAWING_STYLES.map((d) => (
+              <option key={d.id} value={d.id}>{d.label}</option>
+            ))}
+          </select>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{DRAWING_STYLES.find((d) => d.id === drawingStyleOf(b.drawingStyle))?.about}. Changing it redraws those scenes the next time the video is made.</div>
+        </div>
+      )}
     </>
   )
 }

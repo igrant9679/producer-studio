@@ -1,6 +1,6 @@
 // Smart tools (E-21): what this server's ffmpeg (and configuration) can do, and the part every tool shares: read the
 // clip's file, make a processed copy of the part asked for, save it as a new clip processed inside the same job, and
-// answer where in the original it starts. The tools themselves are stabilise.ts, denoise.ts and bgremove.ts.
+// answer where in the original it starts. The tools themselves are stabilise.ts, denoise.ts, bgremove.ts and sketch.ts.
 import fs from 'node:fs'
 import path from 'node:path'
 import { and, eq } from 'drizzle-orm'
@@ -48,7 +48,9 @@ export async function smartToolsInfo(): Promise<SmartToolsInfo> {
   else if (!video.length) why.denoise = "This server's ffmpeg can't denoise pictures (no hqdn3d or nlmeans); sound it can."
   const bg = !!cfg.bgRemovalCmd
   if (!bg) why.removeBackground = 'Background removal is not set up on this server: the owner sets BG_REMOVAL_CMD to a removal tool installed there.'
-  return { stabilise, denoise: { audio: [...audio], video: [...video] }, removeBackground: { available: bg }, why }
+  const sketch = !!cfg.chromePath && fs.existsSync(cfg.chromePath)
+  if (!sketch) why.sketch = 'Sketching needs the export’s browser, which isn’t on this server yet.'
+  return { stabilise, denoise: { audio: [...audio], video: [...video] }, removeBackground: { available: bg }, sketch: { available: sketch }, why }
 }
 
 export interface SmartInput extends SmartJobRequest {
@@ -57,7 +59,7 @@ export interface SmartInput extends SmartJobRequest {
 }
 
 /** Names the copies get in the media library. */
-const SUFFIX: Record<SmartTool, string> = { stabilise: 'stabilised', denoise: 'denoised', removeBackground: 'background removed' }
+const SUFFIX: Record<SmartTool, string> = { stabilise: 'stabilised', denoise: 'denoised', removeBackground: 'background removed', sketch: 'sketched' }
 
 export async function smartSource(input: SmartInput): Promise<AssetRow> {
   const row = (await ctx().db.select().from(assets).where(and(eq(assets.id, input.assetId), eq(assets.workspaceId, input.workspaceId))).limit(1))[0]

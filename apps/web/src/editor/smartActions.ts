@@ -1,9 +1,11 @@
 // Smart tools in the editor (E-21): masks and the chroma key (document edits, one undo step each), editing a mask on
 // the canvas, the key colour eyedropper, and the server jobs that make a stabilised, denoised or background-removed
-// copy of a clip's media, swapped in when done (one undo step: Undo puts the original back).
-import type { ChromaKey, Item, Mask, MaskProp, MaskShape, Project, SmartJobRequest, SmartJobResult, SmartTool, SmartToolsInfo } from '@producer/core'
+// copy of a clip's media, or sketch a picture in, swapped in when done (one undo step: Undo puts the original back).
+import type { ChromaKey, Item, Mask, MaskProp, MaskShape, Project, SketchStyleId, SmartJobRequest, SmartJobResult, SmartTool, SmartToolsInfo } from '@producer/core'
 import {
+  SKETCH_SECONDS,
   applyProcessedCopy,
+  applySketch,
   clipSourceRange,
   defaultMask,
   editable,
@@ -26,13 +28,14 @@ import { useLibrary } from './uploads'
 const S = () => useEditor.getState()
 
 /** A smart tool as the panel offers it: denoise comes as two (sound, picture). */
-export type ToolChoice = 'stabilise' | 'denoiseAudio' | 'denoiseVideo' | 'removeBackground'
+export type ToolChoice = 'stabilise' | 'denoiseAudio' | 'denoiseVideo' | 'removeBackground' | 'sketch'
 
 export const TOOL_LABEL: Record<ToolChoice, string> = {
   stabilise: 'Stabilise',
   denoiseAudio: 'Clean up sound',
   denoiseVideo: 'Clean up picture',
   removeBackground: 'Remove background',
+  sketch: 'Sketch it in',
 }
 
 const DONE: Record<ToolChoice, string> = {
@@ -40,6 +43,7 @@ const DONE: Record<ToolChoice, string> = {
   denoiseAudio: 'Sound cleaned up',
   denoiseVideo: 'Picture cleaned up',
   removeBackground: 'Background removed',
+  sketch: 'Sketched in',
 }
 
 export interface RunningTool {
@@ -256,13 +260,14 @@ export function toolAvailable(tools: SmartToolsInfo | undefined, choice: ToolCho
   if (choice === 'stabilise') return !!tools.stabilise
   if (choice === 'denoiseAudio') return tools.denoise.audio.length > 0
   if (choice === 'denoiseVideo') return tools.denoise.video.length > 0
+  if (choice === 'sketch') return !!tools.sketch?.available
   return tools.removeBackground.available
 }
 
 /** Why a tool can't run here (for the panel), or undefined. */
 export function toolUnavailable(tools: SmartToolsInfo | undefined, choice: ToolChoice): string | undefined {
   if (!tools || toolAvailable(tools, choice)) return undefined
-  const tool: SmartTool = choice === 'stabilise' ? 'stabilise' : choice === 'removeBackground' ? 'removeBackground' : 'denoise'
+  const tool: SmartTool = choice === 'stabilise' ? 'stabilise' : choice === 'removeBackground' ? 'removeBackground' : choice === 'sketch' ? 'sketch' : 'denoise'
   return tools.why[tool] ?? `${TOOL_LABEL[choice]} is not available on this server`
 }
 
@@ -275,7 +280,7 @@ function setRunning(itemId: string, r: RunningTool | null) {
  * Make a processed copy of the clip's media on the server and swap it in. The copy covers the part of the file the
  * clip shows (a second either side); sound is cleaned over the whole file so the picture can be copied untouched.
  */
-export async function runSmartTool(itemId: string, choice: ToolChoice, opts: { strength?: number; smoothing?: number; method?: string } = {}) {
+export async function runSmartTool(itemId: string, choice: ToolChoice, opts: { strength?: number; smoothing?: number; method?: string; style?: SketchStyleId; colour?: boolean } = {}) {
   if (demoBlocked('smart tools')) return
   const it = changeable(itemId)
   if (!it || !('assetId' in it)) return
@@ -293,7 +298,13 @@ export async function runSmartTool(itemId: string, choice: ToolChoice, opts: { s
     // the separated sound of a video: a sound file, so only that clip changes
     if (it.type === 'audio' && asset?.kind === 'video') body.soundOnly = true
   }
-  const tool = choice === 'stabilise' ? 'stabilise' : choice === 'removeBackground' ? 'remove-background' : 'denoise'
+  if (choice === 'sketch') {
+    // drawn over the clip's own length
+    body.style = opts.style
+    body.colour = opts.colour
+    body.seconds = Math.round(Math.min(SKETCH_SECONDS.max, Math.max(SKETCH_SECONDS.min, it.duration)) * 100) / 100
+  }
+  const tool = choice === 'stabilise' ? 'stabilise' : choice === 'removeBackground' ? 'remove-background' : choice === 'sketch' ? 'sketch' : 'denoise'
   setRunning(itemId, { tool: choice, progress: 0, message: 'Starting' })
   try {
     const job = await api.smartTool(it.assetId, tool, body)
@@ -309,10 +320,10 @@ export async function runSmartTool(itemId: string, choice: ToolChoice, opts: { s
     const cur = findItem(now.project, itemId)?.item
     if (now.session !== session) return
     if (!cur || !('assetId' in cur) || cur.assetId !== it.assetId) return toast(`${DONE[choice]}: the clip changed meanwhile, so the copy is in the media library`)
-    const r = applyProcessedCopy(now.project, itemId, rec.asset, result.offset)
+    const r = choice === 'sketch' ? applySketch(now.project, itemId, rec.asset) : applyProcessedCopy(now.project, itemId, rec.asset, result.offset)
     if (r.refused) return toast(REFUSED[r.refused])
     now.commit(r.project, TOOL_LABEL[choice], { selection: [itemId] })
-    toast(`${DONE[choice]}. Undo puts the original back.`)
+    toast(`${DONE[choice]}${choice === 'sketch' && r.shortened ? ': the sketch is shorter than the clip, so the clip is shorter now' : ''}. Undo puts the original back.`)
   } catch (e) {
     if (!/cancelled/i.test(e instanceof Error ? e.message : '')) toastError(e, `Couldn’t ${TOOL_LABEL[choice].toLowerCase()}`)
   } finally {

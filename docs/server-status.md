@@ -143,6 +143,27 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   encoded to an mp4 asset (`meta.generated.kind = 'drawn'`, keyed on code + length + frame + word timings, so an unchanged
   scene reuses it and a changed narration re-renders the same code); assembly places it like a stock clip. At most
   `MAX_DRAWN` (6) per video; offered when the export browser exists.
+  **Drawing media and styles** (9 Nov 2026): the sandbox also loads anidoodle's art core (github.com/alexgreensh/anidoodle,
+  Apache-2.0, three files vendored unchanged in `vendor/anidoodle/src` at a pinned commit, bundled to
+  `vendor/anidoodle/anidoodle.js` by `scripts/build-anidoodle.mjs`; a test fails when the bundle is stale; LICENSE,
+  NOTICE and PROVENANCE.md beside it). Drawings get `env.doodle(ctx, t, medium)` (pencil, ink, riso, chalk and marker
+  lines that draw on and boil, watercolour washes, shaded forms, hatching, layer groups with paper tooth and multiply
+  registration, paper grain), `env.shapes` (point lists, halftone dots, noise), `env.marks` (strokes, contours and
+  hatching built once and laid down in order with `env.marks.play`), `env.memo` (built once per page, keyed) and
+  `env.image(name)` (pictures passed as data URLs in `DrawingEnv.images`, decoded before the first frame). A brief's
+  `drawingStyle` (core's `DRAWING_STYLES`: clean, pencil sketch, pencil and watercolour, ink and wash, storybook,
+  risograph, newsprint, blueprint, chalkboard, whiteboard; absent = clean) adds that style's recipe to the drawing
+  prompt (`DRAWING_RECIPES`, ours) and draws on its own paper and ink with the brand's accent; a scene keeps the style
+  its code was written for (`visual.style`), so changing it redraws.
+  **Sketch it in** (9 Nov 2026): `POST /api/assets/:id/sketch` (`{ style: pencil|ink|charcoal|chalk, colour, seconds }`,
+  editors, pictures only, 501 without the export browser) queues `media.sketch` (`media/sketch.ts`): the picture is
+  drawn in, stroke by stroke, by fixed code in the same sandbox (no AI): anidoodle's photo fields give its edges and the
+  direction its texture runs, our tracer walks the strong edges into contour lines (biggest first), anidoodle's
+  hatching shades the darks in two directions (the lights, for chalk), and with `colour` the picture fades up under the
+  lines at the end. The video is made at the picture's shape (long side 960 to 1920) and saved like the other smart
+  copies (`derivedFrom.tool = 'sketch'`); the editor's Smart tab puts it in the image clip's place as a muted video clip
+  with the same framing, look and keyframes (core `applySketch`, one undo step). Same idea as Sketch2Motion (photo →
+  line drawing → drawing-on animation), written fresh: that repo has no licence.
   **Music and sound effects** (3 Nov 2026): a brief's `music` (`'auto'` = a style that suits the tone, one of core's
   `MUSIC_STYLES`, or `'off'`/absent = none) and `soundEffects` (absent = none; the wizard defaults new briefs to `'auto'`
   and on). The music is composed for the video on its scene cuts by huashu-motion's score engine (MIT), vendored in

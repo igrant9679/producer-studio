@@ -21,6 +21,7 @@ const DONE: Partial<Record<Job['kind'], string>> = {
   'media.denoise': 'Denoised copy ready',
   'media.bgremove': 'Background removed',
   'media.smooth': 'Smooth slow motion ready',
+  'media.sketch': 'Sketch ready',
   'voicestudio.install': 'VoiceStudio is installed',
 }
 

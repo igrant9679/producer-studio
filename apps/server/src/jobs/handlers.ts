@@ -4,6 +4,7 @@ import { synthesizeToAsset, transcribeAsset } from '../ai/speech'
 import { processAsset } from '../media/process'
 import { detectScenes } from '../media/scenes'
 import { removeBackground } from '../media/bgremove'
+import { sketchPicture } from '../media/sketch'
 import { denoiseClip } from '../media/denoise'
 import { stabiliseClip } from '../media/stabilise'
 import { makeSmoothCopy } from '../media/smooth'
@@ -50,5 +51,6 @@ export function registerHandlers() {
   registerHandler('media.denoise', denoiseClip)
   registerHandler('media.bgremove', removeBackground)
   registerHandler('media.smooth', makeSmoothCopy)
+  registerHandler('media.sketch', sketchPicture)
   registerHandler('asset.copy', copyAssetJob)
 }

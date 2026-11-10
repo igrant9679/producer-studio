@@ -14,12 +14,14 @@ import {
   createTrack,
   createVideoItem,
   defaultTextStyle,
+  drawingStyleOf,
   generateCaptions,
   musicStyleFor,
   videoParts,
   round,
   uid,
   type Asset,
+  type DrawingStyleId,
   type Item,
   type MediaCredit,
   type ProducerMeta,
@@ -45,7 +47,7 @@ import { getLook, headlineStyle, labelStyle, lookPalette, sizeForAspect } from '
 import { insertProject, loadProjectRow, saveProjectDoc, withFreshIds, type SaveOptions } from '../services/projects'
 import { getBrand } from '../routes/workspaces'
 import { requireProvider } from './provider'
-import { writeDrawing } from './drawn'
+import { drawingPalette, writeDrawing } from './drawn'
 import { type DrawingEnv, renderDrawing } from '../media/drawing'
 import { houseRules } from './rules'
 import { ensureTranscript, synthesizeToAsset, transcribeAsset } from './speech'
@@ -751,7 +753,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   }
   // 3. generated visuals (videos made from an idea): AI stills, stock clips, AI clips
   const frameSize = sizeForAspect(brief.aspect || getLook(brief.template).aspect)
-  const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand), silent: !parts.narration, noWords: !parts.onScreenText }
+  const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand), silent: !parts.narration, noWords: !parts.onScreenText, style: drawingStyleOf(brief.drawingStyle) }
   const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing })
   // 3b. music composed on the cuts, and sound effects where things move (both free: made on this server)
   const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand })
@@ -873,7 +875,7 @@ async function makeSceneVisuals(
     scenes: ScriptScene[]
     voices: Map<string, { asset: Asset; duration: number }>
     /** The frame AI-drawn scenes are drawn for. */
-    drawing?: { width: number; height: number; fps: number; pal: { canvas: string; accent: string; ink: string; headlineFont: string; bodyFont: string }; silent?: boolean; noWords?: boolean }
+    drawing?: { width: number; height: number; fps: number; pal: { canvas: string; accent: string; ink: string; headlineFont: string; bodyFont: string }; silent?: boolean; noWords?: boolean; style: DrawingStyleId }
   },
 ): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[] }> {
   const generated = new Map<string, Asset>()
@@ -908,7 +910,7 @@ async function makeSceneVisuals(
           const made = await makeDrawn(sub, { ...o, drawing: o.drawing, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work })
           drawn++
           generated.set(s.id, made.asset)
-          s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id }
+          s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id, ...(o.drawing.style !== 'clean' ? { style: o.drawing.style } : {}) }
         } catch (err) {
           if (jc.signal.aborted) throw err
           const why = err instanceof HttpError ? err.message : 'it could not be drawn'
@@ -987,20 +989,21 @@ async function makeDrawn(
     fps: o.drawing.fps,
     duration: round(voiceDur + LEAD + (o.last ? CLOSE_TAIL : TAIL) + 0.2, 2),
     words,
-    palette: { canvas: pal.canvas, accent: pal.accent, ink: pal.ink },
+    palette: drawingPalette(o.drawing.style, { canvas: pal.canvas, accent: pal.accent, ink: pal.ink }),
     fonts: { headline: pal.headlineFont, body: pal.bodyFont },
   }
   const wordsKey = words.map((w) => `${w.w}@${w.start}`).join(' ')
-  if (o.visual.code && o.visual.assetId) {
+  if (o.visual.code && o.visual.assetId && drawingStyleOf(o.visual.style) === o.drawing.style) {
     const prev = (await ctx().db.select().from(assets).where(and(eq(assets.id, o.visual.assetId), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
     if (prev && prev.status === 'ready' && prev.meta?.generated?.kind === 'drawn' && prev.meta.generated.prompt === drawnKey(o.visual.code, env, wordsKey)) return { asset: assetDoc(prev), code: o.visual.code }
   }
-  let code = o.visual.code
+  // code written for another drawing style is written again in this one
+  let code = drawingStyleOf(o.visual.style) === o.drawing.style ? o.visual.code : undefined
   let provider = 'ai'
   if (!code) {
     const ai = await requireProvider(o.workspaceId, 'script')
     provider = ai.id
-    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, silent: o.drawing.silent, noWords: o.drawing.noWords, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m) })).code
+    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, silent: o.drawing.silent, noWords: o.drawing.noWords, style: o.drawing.style, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m) })).code
   }
   jc.check()
   jc.progress(0.6, 'Rendering the animation')
