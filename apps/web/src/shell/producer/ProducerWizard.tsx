@@ -331,12 +331,12 @@ function kindStatus(k: Exclude<VisualKind, 'footage'>, caps: ProduceCapabilities
   if (k === 'animation') return caps?.kinds && !caps.kinds.includes('animation') ? { available: false, note: 'Illustrations are turned off on this server' } : { available: true, note: `${VISUAL_KIND_INFO.animation.hint} (free, open-source art)` }
   if (k === 'drawn') return caps?.kinds && !caps.kinds.includes('drawn') ? { available: false, note: 'Needs the export’s browser on this server' } : { available: true, note: `${VISUAL_KIND_INFO.drawn.hint}. Written by the AI that writes your script (a few calls per scene), about a minute each.` }
   if (k === 'photo') return caps?.stockSources?.photo.length ? { available: true, note: `${VISUAL_KIND_INFO.photo.hint}${fromLibraries(caps.stockSources.photo)}.` } : { available: false, note: 'Stock photos aren’t set up on this server yet' }
-  const who = (p: 'openai' | 'gemini') => (p === 'openai' ? 'your OpenAI account' : 'your Google account')
+  const who = (p: 'openai' | 'gemini' | 'fal') => (p === 'openai' ? 'your OpenAI account' : p === 'fal' ? 'your fal.ai account (Wan)' : 'your Google account')
   if (k === 'image') return caps?.image ? { available: true, note: `${VISUAL_KIND_INFO.image.hint}. Billed to ${who(caps.image.provider)}.` } : { available: false, note: 'Needs an OpenAI or Gemini key in Settings → AI' }
   if (k === 'aiVideo')
     return caps?.video
       ? { available: true, note: `${VISUAL_KIND_INFO.aiVideo.hint}. Billed to ${who(caps.video.provider)}, at most ${caps.maxAiClips} clips per video.` }
-      : { available: false, note: 'Needs a Gemini key in Settings → AI (OpenAI no longer offers video)' }
+      : { available: false, note: 'Needs a Gemini or fal.ai key in Settings → AI (OpenAI no longer offers video)' }
   return caps?.stockSources ? (caps.stockSources.video.length ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint}${fromLibraries(caps.stockSources.video)}.` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }) : caps?.stock ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint}.` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }
 }
 
@@ -865,7 +865,7 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
           </span>
         </div>
       )}
-      {v.kind === 'aiVideo' && caps?.video && !made && <div className="muted ps-visual-hint">Made at assembly: a few minutes, billed per second to your {caps.video.provider === 'openai' ? 'OpenAI' : 'Google'} account.</div>}
+      {v.kind === 'aiVideo' && caps?.video && !made && <div className="muted ps-visual-hint">Made at assembly: a few minutes, billed per second to your {caps.video.provider === 'openai' ? 'OpenAI' : caps.video.provider === 'fal' ? 'fal.ai' : 'Google'} account.</div>}
     </div>
   )
 }

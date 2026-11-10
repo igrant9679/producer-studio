@@ -1,6 +1,7 @@
-// Key validation (a cheap model-list call) and provider construction for the bring-your-own-key providers.
+// Key validation (a cheap model-list call; fal.ai: its price list) and provider construction for the bring-your-own-key
+// providers. fal.ai is a media key only (Wan clips): it is tested here, never built into a writing provider.
 import Anthropic from '@anthropic-ai/sdk'
-import type { AiKeyProvider, AiKeyTestResult } from '@producer/core'
+import type { AiKeyProvider, AiKeyTestResult, StoredKeyProvider } from '@producer/core'
 import { HttpError } from '../http'
 import { log } from '../log'
 import { AnthropicApiProvider } from './anthropic'
@@ -8,6 +9,8 @@ import { keyClient, mapAiError } from './claude'
 import { FALLBACK_MODEL, PROVIDER_LABEL, filterAnthropicModels, pickDefaultModel, redact } from './common'
 import { type GeminiClientLike, GeminiProvider, geminiClient, listGeminiModels } from './gemini'
 import { type OpenAiClientLike, OpenAiProvider, listOpenAiModels, openAiClient } from './openai'
+import { genDeps } from './generate/capabilities'
+import { testFalKey } from './generate/fal'
 import type { AiProvider } from './provider'
 
 /** Model-listing slice of the Anthropic client. */
@@ -34,7 +37,7 @@ export function setKeyClients(c: Partial<KeyClients> | undefined) {
 }
 
 /** Basic shape check before we store or send a key anywhere. */
-export function checkKeyShape(provider: AiKeyProvider, key: string): string {
+export function checkKeyShape(provider: StoredKeyProvider, key: string): string {
   const k = key.trim()
   if (k.length < 8 || k.length > 400 || /\s/.test(k)) throw new HttpError(400, 'invalid', `That doesn’t look like a${provider === 'openai' ? 'n' : ''} ${PROVIDER_LABEL[provider]} API key.`)
   return k
@@ -57,7 +60,8 @@ export async function listModels(provider: AiKeyProvider, key: string): Promise<
 }
 
 /** Validate a key with a model-list call; never throws for key problems (they come back as ok:false + detail). */
-export async function testKey(provider: AiKeyProvider, key: string): Promise<AiKeyTestResult> {
+export async function testKey(provider: StoredKeyProvider, key: string): Promise<AiKeyTestResult> {
+  if (provider === 'fal') return { models: [], ...(await testFalKey(genDeps(), key)) }
   try {
     const models = await listModels(provider, key)
     const defaultModel = pickDefaultModel(provider, models)

@@ -2,7 +2,7 @@
 // settings. Desktop: one local scope (workspaceId ignored). Keys are write-only: no response ever contains one.
 import { Hono, type Context } from 'hono'
 import * as z from 'zod/v4'
-import type { AiKeyProvider, AiKeyTestResult, Role } from '@producer/core'
+import type { AiKeyProvider, AiKeyTestResult, Role, StoredKeyProvider } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { audit } from '../services/audit'
 import { ctx } from '../context'
@@ -10,11 +10,11 @@ import { HttpError, body, invalid, requireRole } from '../http'
 import { checkKeyShape, testKey } from '../ai/keys'
 import { PROVIDER_LABEL } from '../ai/common'
 import { builtinProvider, describeSettings } from '../ai/resolve'
-import { type AiSettingsDoc, keyMeta, loadDoc, readKey, removeKey, saveDoc, writeKey } from '../ai/store'
+import { type AiSettingsDoc, isMediaKey, keyMeta, loadDoc, readKey, removeKey, saveDoc, writeKey } from '../ai/store'
 
 export const aiSettingsRoutes = new Hono<AppEnv>()
 
-const Provider = z.enum(['openai', 'gemini', 'anthropic'])
+const Provider = z.enum(['openai', 'gemini', 'anthropic', 'fal'])
 const Choice = z.enum(['builtin', 'openai', 'gemini', 'anthropic'])
 const ModelId = z
   .string()
@@ -36,15 +36,23 @@ const ownerOnly = (c: Context<AppEnv>, workspaceId: string | undefined) =>
     throw err
   })
 
-function providerParam(c: Context<AppEnv>): AiKeyProvider {
+function providerParam(c: Context<AppEnv>): StoredKeyProvider {
   const r = Provider.safeParse(c.req.param('provider'))
-  if (!r.success) throw invalid('provider must be openai, gemini or anthropic')
+  if (!r.success) throw invalid('provider must be openai, gemini, anthropic or fal')
   return r.data
 }
 
 /** Record a test result (non-secret) on the settings document. */
-async function recordTest(scope: string, provider: AiKeyProvider, result: AiKeyTestResult, doc?: AiSettingsDoc): Promise<AiSettingsDoc> {
+async function recordTest(scope: string, provider: StoredKeyProvider, result: AiKeyTestResult, doc?: AiSettingsDoc): Promise<AiSettingsDoc> {
   const d = doc ?? (await loadDoc(scope))
+  if (isMediaKey(provider)) {
+    const prev = d.media?.[provider]
+    d.media = {
+      ...d.media,
+      [provider]: { valid: result.ok, error: result.ok ? undefined : result.detail.slice(0, 500), price: result.ok ? result.price : prev?.price, checkedAt: Date.now() },
+    }
+    return d
+  }
   const prev = d.providers[provider]
   d.providers[provider] = {
     model: prev?.model || (result.ok ? (result.defaultModel ?? '') : ''),
@@ -69,6 +77,7 @@ aiSettingsRoutes.put('/settings', async (c) => {
       defaultProvider: Choice.nullable().optional(),
       perFeature: z.object({ writer: Choice.nullable().optional(), script: Choice.nullable().optional(), assistant: Choice.nullable().optional() }).optional(),
       models: z.object({ openai: ModelId.optional(), gemini: ModelId.optional(), anthropic: ModelId.optional() }).optional(),
+      videoProvider: z.enum(['gemini', 'fal']).nullable().optional(),
     }),
   )
   const { scope, canEdit } = await ownerOnly(c, b.workspaceId)
@@ -89,6 +98,10 @@ aiSettingsRoutes.put('/settings', async (c) => {
       doc.perFeature[f] = v as AiSettingsDoc['perFeature'][typeof f]
     }
   }
+  if (b.videoProvider !== undefined) {
+    if (b.videoProvider) usable(b.videoProvider)
+    doc.videoProvider = b.videoProvider
+  }
   for (const [p, m] of Object.entries(b.models ?? {}) as Array<[AiKeyProvider, string | undefined]>) {
     if (m === undefined) continue
     doc.providers[p] = { ...(doc.providers[p] ?? {}), model: m }
@@ -107,7 +120,8 @@ aiSettingsRoutes.put('/keys/:provider', async (c) => {
   const result = await testKey(provider, key)
   const doc = await recordTest(scope, provider, result)
   // first working key while the built-in provider isn't usable: make it the default so AI works right away
-  if (result.ok && !doc.defaultProvider && !(await (await builtinProvider()).status()).available) doc.defaultProvider = provider
+  // (a media key makes clips only: it is never a writing provider)
+  if (result.ok && !isMediaKey(provider) && !doc.defaultProvider && !(await (await builtinProvider()).status()).available) doc.defaultProvider = provider
   await saveDoc(scope, doc)
   return c.json({ ...result, settings: await describeSettings(scope, canEdit) } satisfies AiKeyTestResult)
 })
@@ -118,10 +132,15 @@ aiSettingsRoutes.delete('/keys/:provider', async (c) => {
   await removeKey(scope, provider)
   await audit(c, { kind: 'ai.key.removed', workspaceId: c.req.query('workspaceId') || null, target: provider, data: { provider } })
   const doc = await loadDoc(scope)
-  if (doc.defaultProvider === provider) doc.defaultProvider = null
-  for (const f of Object.keys(doc.perFeature) as Array<keyof AiSettingsDoc['perFeature']>) if (doc.perFeature[f] === provider) delete doc.perFeature[f]
-  const prev = doc.providers[provider]
-  if (prev) doc.providers[provider] = { model: prev.model }
+  if (doc.videoProvider === provider) doc.videoProvider = null
+  if (isMediaKey(provider)) {
+    if (doc.media) delete doc.media[provider]
+  } else {
+    if (doc.defaultProvider === provider) doc.defaultProvider = null
+    for (const f of Object.keys(doc.perFeature) as Array<keyof AiSettingsDoc['perFeature']>) if (doc.perFeature[f] === provider) delete doc.perFeature[f]
+    const prev = doc.providers[provider]
+    if (prev) doc.providers[provider] = { model: prev.model }
+  }
   await saveDoc(scope, doc)
   return c.json(await describeSettings(scope, canEdit))
 })

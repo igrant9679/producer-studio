@@ -3,8 +3,9 @@
 // (edit them here) and the test hook for the SDK clients, fetch, ffprobe and the clock.
 //   stills – OpenAI GPT Image or Gemini image models; when both keys are stored the space's default provider wins,
 //            otherwise OpenAI.
-//   clips  – Gemini only. OpenAI shut its Sora video API down on 24 Sep 2026 with no replacement, and Google moved the
-//            Gemini API from Veo to Gemini Omni Flash (the Veo 3.1 previews shut down on 22 Oct 2026).
+//   clips  – Gemini (Omni Flash) or Wan on fal.ai (fal.ts). With both keys stored the space's video choice wins
+//            (Settings → AI), otherwise Gemini. OpenAI shut its Sora video API down on 24 Sep 2026 with no replacement,
+//            and Google moved the Gemini API from Veo to Gemini Omni Flash (the Veo 3.1 previews shut down on 22 Oct 2026).
 // Candidates are tried in list order. One the key can't use (404, no permission, unknown model) is remembered for
 // MEMO_MS and the next is tried: models.list() has been seen advertising image/video models that then 404 for a key.
 // Model ids were checked on 2026-10-26 against the SDK types (openai 7.23.0, @google/genai 2.24.0) and the providers'
@@ -16,7 +17,7 @@ import OpenAI from 'openai'
 import type { ImageGenerateParamsNonStreaming, ImagesResponse } from 'openai/resources/images'
 import { GoogleGenAI } from '@google/genai'
 import type { GenerateContentParameters, GenerateContentResponse } from '@google/genai'
-import type { AiKeyProvider } from '@producer/core'
+import type { StoredKeyProvider } from '@producer/core'
 import { ctx } from '../../context'
 import { HttpError } from '../../http'
 import { CancelledError } from '../../jobs/worker'
@@ -24,6 +25,7 @@ import { log } from '../../log'
 import { redact } from '../common'
 import { LOCAL_SCOPE } from '../provider'
 import { type AiSettingsDoc, type KeyMeta, keyMeta, loadDoc, readKey } from '../store'
+import { FAL_VIDEO_MODELS, FalError } from './fal'
 import type { GenCapabilities, GenProvider } from './index'
 
 // ---------------- candidate models (first that works for the key wins) ----------------
@@ -157,33 +159,41 @@ export interface GenKey {
   id: string
 }
 
-const LABEL: Record<GenProvider, string> = { openai: 'OpenAI', gemini: 'Gemini' }
-const candidates = (p: GenProvider, kind: GenKind): Array<{ id: string }> =>
-  kind === 'image' ? (p === 'openai' ? OPENAI_IMAGE_MODELS : GEMINI_IMAGE_MODELS) : p === 'gemini' ? GEMINI_VIDEO_MODELS : []
+const LABEL: Record<GenProvider, string> = { openai: 'OpenAI', gemini: 'Gemini', fal: 'fal.ai' }
+/** The models `p` can make `kind` with, in the order they're tried. */
+export function candidates(p: GenProvider, kind: GenKind): GeminiVideoModel[] | Array<{ id: string }> {
+  if (kind === 'image') return p === 'openai' ? OPENAI_IMAGE_MODELS : p === 'gemini' ? GEMINI_IMAGE_MODELS : []
+  return p === 'gemini' ? GEMINI_VIDEO_MODELS : p === 'fal' ? FAL_VIDEO_MODELS : []
+}
 
 const UNREADABLE = 'The saved AI key for this space can’t be read any more (the server’s secrets key changed). An owner needs to enter it again in Settings → AI.'
 
-function noKey(kind: GenKind, meta: Partial<Record<AiKeyProvider, KeyMeta>>): HttpError {
+function noKey(kind: GenKind, meta: Partial<Record<StoredKeyProvider, KeyMeta>>): HttpError {
   if (kind === 'image') return new HttpError(503, 'server', 'AI images need your own OpenAI or Gemini API key. Add one in Settings → AI.')
   if (meta.openai)
-    return new HttpError(503, 'server', 'AI video clips need a Gemini API key (OpenAI shut down its Sora video API in September 2026). Add one in Settings → AI.')
-  return new HttpError(503, 'server', 'AI video clips need your own Gemini API key. Add one in Settings → AI.')
+    return new HttpError(503, 'server', 'AI video clips need a Gemini or fal.ai API key (OpenAI shut down its Sora video API in September 2026). Add one in Settings → AI.')
+  return new HttpError(503, 'server', 'AI video clips need your own Gemini or fal.ai API key. Add one in Settings → AI.')
+}
+
+/** Which providers to try for `kind`, best first: stills follow the default writing provider, clips the video choice. */
+function providerOrder(doc: AiSettingsDoc, kind: GenKind): GenProvider[] {
+  if (kind === 'image') return doc.defaultProvider === 'gemini' ? ['gemini', 'openai'] : ['openai', 'gemini']
+  return doc.videoProvider === 'fal' ? ['fal', 'gemini'] : ['gemini', 'fal']
 }
 
 /**
  * The key to use for `kind`, or why there is none. A key whose last test failed, or whose models all failed for it
  * lately, is passed over while another works; a saved key that can't be decrypted stops here (never a fallback).
  */
-async function pickKey(workspaceId: string, kind: GenKind, loaded?: { doc: AiSettingsDoc; meta: Partial<Record<AiKeyProvider, KeyMeta>> }): Promise<GenKey | HttpError> {
+async function pickKey(workspaceId: string, kind: GenKind, loaded?: { doc: AiSettingsDoc; meta: Partial<Record<StoredKeyProvider, KeyMeta>> }): Promise<GenKey | HttpError> {
   const scope = ctx().config.mode === 'desktop' ? LOCAL_SCOPE : workspaceId
   const doc = loaded?.doc ?? (await loadDoc(scope))
   const meta = loaded?.meta ?? (await keyMeta(scope))
-  const order: GenProvider[] = doc.defaultProvider === 'gemini' ? ['gemini', 'openai'] : ['openai', 'gemini']
-  const stored = order.filter((p) => meta[p] && candidates(p, kind).length)
+  const stored = providerOrder(doc, kind).filter((p) => meta[p] && candidates(p, kind).length)
   if (!stored.length) return noKey(kind, meta)
   let problem: HttpError | undefined
   for (const p of stored) {
-    const d = doc.providers[p]
+    const d = p === 'fal' ? doc.media?.fal : doc.providers[p]
     if (d?.valid === false) {
       problem ??= new HttpError(503, 'server', d.error || `The ${LABEL[p]} key failed its last test. Test it again in Settings → AI.`)
       continue
@@ -215,9 +225,9 @@ export async function generationCapabilities(workspaceId: string): Promise<GenCa
   const { SOURCE_NAMES, stockSources } = await import('./stock')
   const names = (m: 'video' | 'photo') => stockSources(m).map((s) => SOURCE_NAMES[s])
   const out: GenCapabilities = { stock: stockSources('video').length + stockSources('photo').length > 0, stockSources: { video: names('video'), photo: names('photo') } }
-  if (!(image instanceof HttpError)) out.image = { provider: image.provider, model: liveModels(image, 'image', candidates(image.provider, 'image'))[0].id }
+  if (!(image instanceof HttpError)) out.image = { provider: image.provider as Exclude<GenProvider, 'fal'>, model: liveModels(image, 'image', candidates(image.provider, 'image'))[0].id }
   if (!(video instanceof HttpError)) {
-    const m = liveModels(video, 'video', GEMINI_VIDEO_MODELS)[0]
+    const m = liveModels(video, 'video', candidates(video.provider, 'video') as GeminiVideoModel[])[0]
     out.video = { provider: video.provider, model: m.id, maxSeconds: m.maxSeconds }
   }
   return out
@@ -251,6 +261,8 @@ const messageOf = (err: unknown) => (err instanceof Error ? err.message : String
 /** True when the error means "this key can't use this model" (so the next candidate is worth a try). */
 export function modelUnavailable(provider: GenProvider, err: unknown): boolean {
   if (err instanceof HttpError) return false
+  // fal: a model it doesn't host (any more) is a 404; 403 there means the account (balance, key scope), not the model
+  if (provider === 'fal') return err instanceof FalError && (err.status === 404 || err.status === 410)
   const status = statusOf(err)
   const msg = messageOf(err)
   if (provider === 'openai') {
@@ -289,7 +301,7 @@ export function withoutKey(err: unknown, key: string): unknown {
 function noModels(p: GenProvider, kind: GenKind, tried: string[], last?: unknown): HttpError {
   if (p === 'openai' && /verif/i.test(messageOf(last))) return unverified()
   const what = kind === 'image' ? 'image' : 'video'
-  const where = p === 'openai' ? 'your OpenAI account' : 'Google AI Studio'
+  const where = p === 'openai' ? 'your OpenAI account' : p === 'fal' ? 'your fal.ai account' : 'Google AI Studio'
   return new HttpError(503, 'server', `This ${LABEL[p]} key can’t use any of the ${what} models Producer Studio works with (${tried.join(', ')}). Check the key’s access in ${where}, or add another provider’s key in Settings → AI.`)
 }
 

@@ -1,7 +1,7 @@
 // Shared helpers for the bring-your-own-key providers (OpenAI, Gemini, Anthropic key): JSON Schema dialects,
 // structured-output validation + repair, model-list filtering/defaults and key redaction.
 import * as z from 'zod/v4'
-import type { AiKeyProvider } from '@producer/core'
+import type { AiKeyProvider, StoredKeyProvider } from '@producer/core'
 import { HttpError } from '../http'
 import { extractJson } from './cli/schema'
 
@@ -136,7 +136,7 @@ export const formatMismatch = () => new HttpError(502, 'server', 'The AI respons
 
 // ---------------- models ----------------
 
-export const PROVIDER_LABEL: Record<AiKeyProvider, string> = { openai: 'OpenAI', gemini: 'Gemini', anthropic: 'Claude' }
+export const PROVIDER_LABEL: Record<StoredKeyProvider, string> = { openai: 'OpenAI', gemini: 'Gemini', anthropic: 'Claude', fal: 'fal.ai' }
 
 /** Hardcoded only as a last resort (no live list yet); users can always type another id. */
 export const FALLBACK_MODEL: Record<AiKeyProvider, string> = { openai: 'gpt-5.5', gemini: 'gemini-pro-latest', anthropic: 'claude-opus-5' }

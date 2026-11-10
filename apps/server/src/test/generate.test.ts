@@ -365,13 +365,13 @@ describe('generateImage', () => {
 // ---------------- clips ----------------
 
 describe('generateVideo', () => {
-  it('needs a Gemini key (OpenAI’s Sora API is gone)', async () => {
+  it('needs a Gemini or fal.ai key (OpenAI’s Sora API is gone)', async () => {
     const ws = await space({ openai: OPENAI_KEY })
     const err = await failure(generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '16:9', seconds: 8, outDir }))
     expect(err.status).toBe(503)
-    expect(err.message).toBe('AI video clips need a Gemini API key (OpenAI shut down its Sora video API in September 2026). Add one in Settings → AI.')
+    expect(err.message).toBe('AI video clips need a Gemini or fal.ai API key (OpenAI shut down its Sora video API in September 2026). Add one in Settings → AI.')
     const none = await space()
-    expect((await failure(generateVideo({ workspaceId: none, prompt: 'waves', aspect: '16:9', seconds: 8, outDir }))).message).toMatch(/Gemini API key\. Add one in Settings → AI\./)
+    expect((await failure(generateVideo({ workspaceId: none, prompt: 'waves', aspect: '16:9', seconds: 8, outDir }))).message).toMatch(/Gemini or fal\.ai API key\. Add one in Settings → AI\./)
   })
 
   it('starts a background interaction, polls with backoff until it completes, writes the clip and reports progress', async () => {

@@ -1,7 +1,8 @@
 // Settings → AI: the built-in provider (desktop: Claude CLI; cloud: the server's Claude), bring-your-own-key cards for
-// Anthropic, Google Gemini (AI Studio) and OpenAI, the default provider and per-feature overrides. Keys are write-only:
-// the server returns hasKey + last4, never the key.
-import type { AiChoice, AiFeature, AiKeyProvider, AiKeyProviderSettings, AiSettings, SystemInfo } from '@producer/core'
+// Anthropic, Google Gemini (AI Studio) and OpenAI, the default provider and per-feature overrides, then the media-only
+// fal.ai key (Wan video clips) and who makes clips when Gemini could too. Keys are write-only: the server returns
+// hasKey + last4, never the key.
+import type { AiChoice, AiFeature, AiKeyProvider, AiKeyProviderSettings, AiSettings, StoredKeyProvider, SystemInfo, VideoClipProvider } from '@producer/core'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, ExternalLink, Info, KeyRound, Lock, Save, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -18,10 +19,16 @@ interface ProviderMeta {
   placeholder: string
 }
 
-const META: Record<AiKeyProvider, ProviderMeta> = {
+const META: Record<StoredKeyProvider, ProviderMeta> = {
   anthropic: { name: 'Anthropic API key', sub: 'Claude models, billed to your Anthropic account.', keyUrl: 'https://console.anthropic.com/settings/keys', placeholder: 'sk-ant-…' },
   gemini: { name: 'Google Gemini (AI Studio)', sub: 'Gemini models with a Google AI Studio API key.', keyUrl: 'https://aistudio.google.com/apikey', placeholder: 'AIza…' },
   openai: { name: 'OpenAI', sub: 'GPT models with an OpenAI platform API key.', keyUrl: 'https://platform.openai.com/api-keys', placeholder: 'sk-…' },
+  fal: {
+    name: 'fal.ai (Wan video clips)',
+    sub: 'AI video clips made with Wan, billed per second of video to your fal.ai account. Used for clips only, never for writing.',
+    keyUrl: 'https://fal.ai/dashboard/keys',
+    placeholder: 'key id:secret',
+  },
 }
 const ORDER: AiKeyProvider[] = ['anthropic', 'gemini', 'openai']
 const SHORT: Record<AiKeyProvider, string> = { anthropic: 'Claude (your key)', gemini: 'Gemini', openai: 'OpenAI' }
@@ -124,17 +131,20 @@ function ModelPicker({ provider, info, disabled, onSave }: { provider: AiKeyProv
   )
 }
 
-function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: AiKeyProvider; s: AiSettings; desktop: boolean; workspaceId?: string; onSettings: (s: AiSettings) => void }) {
+function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: StoredKeyProvider; s: AiSettings; desktop: boolean; workspaceId?: string; onSettings: (s: AiSettings) => void }) {
   const meta = META[provider]
-  const info = s.providers[provider]
+  const media = provider === 'fal'
+  const info = media ? s.media?.fal : s.providers[provider]
+  const textInfo = media ? undefined : s.providers[provider]
+  const okDetail = media ? `✓ valid${s.media?.fal?.price ? ` · ${s.media.fal.price}` : ''}` : `✓ valid · ${textInfo?.models?.length ?? 0} models`
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState<'save' | 'test' | 'remove' | 'model'>()
   const [result, setResult] = useState<{ ok: boolean; detail: string }>()
   const [confirm, setConfirm] = useState(false)
   const canEdit = s.canEdit
-  const status = result ?? (info?.hasKey ? (info.valid === false ? { ok: false, detail: info.error || 'The key didn’t work' } : info.valid ? { ok: true, detail: `✓ valid · ${info.models?.length ?? 0} models` } : undefined) : undefined)
-  const isDefault = s.defaultProvider === provider
-  const inUse = Object.values(s.effective).some((e) => e.provider === (provider === 'anthropic' ? 'anthropic-key' : provider))
+  const status = result ?? (info?.hasKey ? (info.valid === false ? { ok: false, detail: info.error || 'The key didn’t work' } : info.valid ? { ok: true, detail: okDetail } : undefined) : undefined)
+  const isDefault = !media && s.defaultProvider === provider
+  const inUse = media ? clipMaker(s) === 'fal' : Object.values(s.effective).some((e) => e.provider === (provider === 'anthropic' ? 'anthropic-key' : provider))
 
   async function run<T>(what: typeof busy, fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(what)
@@ -201,15 +211,22 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
                 : 'Stored encrypted on the server; it’s never shown again.'}
           </div>
         </div>
-        <ModelPicker
-          provider={provider}
-          info={info}
-          disabled={!canEdit || !!busy}
-          onSave={async (m) => {
-            const next = await run('model', () => systemApi.saveAiSettings({ workspaceId, models: { [provider]: m } }))
-            if (next) onSettings(next)
-          }}
-        />
+        {!media && (
+          <ModelPicker
+            provider={provider as AiKeyProvider}
+            info={textInfo}
+            disabled={!canEdit || !!busy}
+            onSave={async (m) => {
+              const next = await run('model', () => systemApi.saveAiSettings({ workspaceId, models: { [provider]: m } }))
+              if (next) onSettings(next)
+            }}
+          />
+        )}
+        {media && (
+          <div className="ps-hint" style={{ alignSelf: 'center' }}>
+            Wan 2.2 at 720p, up to 10 seconds a clip. When fal.ai retires Wan 2.2 (it says 4 January 2027), clips move to Wan 2.7 by themselves.
+          </div>
+        )}
       </div>
       <div className="row" style={{ flexWrap: 'wrap', marginTop: 12, gap: 8 }}>
         {status && (
@@ -259,6 +276,53 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+const usableKey = (s: AiSettings, p: VideoClipProvider) => {
+  const k = p === 'fal' ? s.media?.fal : s.providers.gemini
+  return Boolean(k?.hasKey && k.valid !== false)
+}
+
+/** Who makes AI clips here, as the server picks it (capabilities.ts): the choice, else Gemini, else fal.ai. */
+function clipMaker(s: AiSettings): VideoClipProvider | undefined {
+  const order: VideoClipProvider[] = s.videoProvider === 'fal' ? ['fal', 'gemini'] : ['gemini', 'fal']
+  return order.find((p) => usableKey(s, p))
+}
+
+/** Shown when both a Gemini and a fal.ai key are stored: who makes the clips. */
+function VideoClipChoice({ s, workspaceId, onSettings }: { s: AiSettings; workspaceId?: string; onSettings: (s: AiSettings) => void }) {
+  const [busy, setBusy] = useState(false)
+  if (!s.media?.fal?.hasKey || !s.providers.gemini?.hasKey) return null
+  return (
+    <div className="ps-set-row">
+      <div>
+        <strong>AI video clips</strong>
+        <span>Who makes the clips in videos made from an idea, billed to that key. If it can’t, the other is used.</span>
+      </div>
+      <select
+        className="input"
+        style={{ width: 'auto', minWidth: 240 }}
+        aria-label="AI video clips provider"
+        value={s.videoProvider ?? ''}
+        disabled={!s.canEdit || busy}
+        onChange={async (e) => {
+          setBusy(true)
+          try {
+            onSettings(await systemApi.saveAiSettings({ workspaceId, videoProvider: (e.target.value || null) as VideoClipProvider | null }))
+            toast('AI settings saved')
+          } catch (err) {
+            toastError(err)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        <option value="">Automatic (Gemini first)</option>
+        <option value="gemini">Gemini Omni Flash (Google)</option>
+        <option value="fal">Wan (fal.ai)</option>
+      </select>
     </div>
   )
 }
@@ -386,7 +450,7 @@ export function AiProviders({
       <div className="ps-alert info" style={{ fontSize: '0.7812rem' }}>
         <Info size={15} style={{ flex: 'none' }} />
         <span>
-          API keys are billed per token by the provider you choose (OpenAI, Google, Anthropic).{' '}
+          API keys are billed per token by the provider you choose (OpenAI, Google, Anthropic); AI video clips per second of video.{' '}
           {desktop ? 'Claude through the Claude Code CLI uses your Claude subscription instead — no per-token charges.' : 'The built-in Claude runs on Producer Studio’s servers.'}
         </span>
       </div>
@@ -410,6 +474,8 @@ export function AiProviders({
       )}
       {s && ORDER.map((p) => <KeyCard key={`${workspaceId ?? ''}:${p}`} provider={p} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />)}
       {s && <ProviderSelectors key={workspaceId ?? ''} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
+      {s && <KeyCard key={`${workspaceId ?? ''}:fal`} provider="fal" s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
+      {s && <VideoClipChoice key={`${workspaceId ?? ''}:video`} s={s} workspaceId={workspaceId} onSettings={apply} />}
     </div>
   )
 }

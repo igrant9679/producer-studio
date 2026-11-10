@@ -10,7 +10,7 @@ import { ctx } from '../context'
 import { HttpError } from '../http'
 import { buildKeyProvider } from './keys'
 import type { AiProvider, AiScope } from './provider'
-import { type AiSettingsDoc, FEATURES, KEY_PROVIDERS, keyMeta, loadDoc, readKey } from './store'
+import { type AiSettingsDoc, FEATURES, KEY_PROVIDERS, MEDIA_KEY_PROVIDERS, keyMeta, loadDoc, readKey } from './store'
 
 let builtin: AiProvider | undefined
 
@@ -171,12 +171,36 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
       ...(d?.checkedAt ? { checkedAt: d.checkedAt } : {}),
     }
   }
+  const media: NonNullable<AiSettings['media']> = {}
+  for (const p of MEDIA_KEY_PROVIDERS) {
+    const d = doc.media?.[p]
+    const m = meta[p]
+    if (!m) continue
+    media[p] = {
+      hasKey: true,
+      keyLast4: m.last4,
+      updatedAt: m.updatedAt,
+      ...(d?.valid !== undefined ? { valid: d.valid } : {}),
+      ...(d?.error ? { error: d.error } : {}),
+      ...(d?.price ? { price: d.price } : {}),
+      ...(d?.checkedAt ? { checkedAt: d.checkedAt } : {}),
+    }
+  }
   const effective = {} as AiSettings['effective']
   for (const f of FEATURES) {
     const r = await resolveProvider(scoped, f, { doc, keys })
     const s = r.provider === b ? bs : await r.provider.status()
     effective[f] = { provider: r.provider.id, model: s.model }
   }
-  return { defaultProvider: doc.defaultProvider, perFeature: doc.perFeature, providers, builtin: { id: b.id, available: bs.available, detail: bs.detail, model: bs.model, ...(bs.cli ? { cli: bs.cli } : {}) }, effective, canEdit }
+  return {
+    defaultProvider: doc.defaultProvider,
+    perFeature: doc.perFeature,
+    providers,
+    media,
+    videoProvider: doc.videoProvider ?? null,
+    builtin: { id: b.id, available: bs.available, detail: bs.detail, model: bs.model, ...(bs.cli ? { cli: bs.cli } : {}) },
+    effective,
+    canEdit,
+  }
 }
 

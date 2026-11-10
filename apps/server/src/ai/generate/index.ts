@@ -1,15 +1,16 @@
 // Media for videos made without recordings: AI stills, AI video clips, stock clips and photos, illustrations.
 // The contract (types + function signatures) lives here; the work is in images.ts / video.ts / stock.ts / icons.ts /
-// capabilities.ts. Generation is billed to the workspace's own OpenAI / Gemini key (Settings → AI), never the server's;
+// capabilities.ts / fal.ts. Generation is billed to the workspace's own OpenAI / Gemini / fal.ai key (Settings → AI), never the server's;
 // stock comes from free libraries (the server's free Pexels / Pixabay keys, and Wikimedia Commons and Openverse with
 // none) and illustrations from Iconify's open-source sets, at no charge. Which models and why: see capabilities.ts.
 
 export type GenAspect = '16:9' | '9:16' | '1:1'
-export type GenProvider = 'openai' | 'gemini'
+/** fal.ai makes clips only (Wan). */
+export type GenProvider = 'openai' | 'gemini' | 'fal'
 
 export interface GenCapabilities {
   /** AI stills, when the workspace has a key that can make them. */
-  image?: { provider: GenProvider; model: string }
+  image?: { provider: Exclude<GenProvider, 'fal'>; model: string }
   /** AI video clips, when the workspace has a key that can make them. */
   video?: { provider: GenProvider; model: string; maxSeconds: number }
   /** Stock clips and photos (some free library is searched here). */

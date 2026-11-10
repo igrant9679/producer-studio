@@ -1,4 +1,5 @@
-// AI video clips for videos made without recordings, billed to the workspace's own Gemini key.
+// AI video clips for videos made without recordings, billed to the workspace's own Gemini or fal.ai key (which one:
+// capabilities.ts). Wan on fal.ai is in fal.ts; Gemini is here.
 //   Gemini Omni Flash over the Interactions API: interactions.create in the background (response_format video,
 //   16:9 or 9:16 at 720p, duration "<n>s"), interactions.get polled with backoff, the clip read from output_video
 //   (GET returns it inline as base64) and written as mp4, then the stored interaction deleted (Google would keep it
@@ -15,10 +16,12 @@ import { CancelledError } from '../../jobs/worker'
 import { log } from '../../log'
 import { redact } from '../common'
 import { mapGeminiError } from '../gemini'
+import { FAL_VIDEO_MODELS, type FalVideoModel, falClip, falModelName, mapFalError } from './fal'
 import {
   type GeminiMediaClient,
   type GeminiVideoModel,
   type GenInteraction,
+  type GenKey,
   GEMINI_VIDEO_MODELS,
   accountProblem,
   describeFile,
@@ -35,6 +38,8 @@ const POLL_FIRST_MS = 5_000
 const POLL_MAX_MS = 20_000
 /** Typical generation time; only moves the progress bar while the API says nothing. */
 const TYPICAL_MS = 120_000
+/** Wan 2.2 A14B at 720p on fal takes a few minutes. */
+const FAL_TYPICAL_MS = 180_000
 const RESOLUTION = '720p'
 const DEFAULT_SECONDS = 8
 /** Consecutive failed status checks (network, 429, 5xx) tolerated before giving up on a clip already paid for. */
@@ -69,9 +74,10 @@ export async function generateVideo(opts: {
   const prompt = opts.prompt.trim()
   if (!prompt) throw invalid('Describe the clip to generate.')
   const k = await requireKey(opts.workspaceId, 'video')
-  const client = genDeps().gemini(k.key)
   const say = opts.onProgress ?? (() => undefined)
   say(0, 'Starting the AI clip')
+  if (k.provider === 'fal') return falVideo(k, { ...opts, prompt }, say)
+  const client = genDeps().gemini(k.key)
   let clip: Awaited<ReturnType<typeof omniClip>>
   let model: GeminiVideoModel
   let current: string | undefined
@@ -97,6 +103,49 @@ export async function generateVideo(opts: {
     file,
     mime: clip.mime,
     provider: 'gemini',
+    model: model.id,
+    seconds: info.duration ?? clip.seconds,
+    ...(info.width ? { width: info.width, height: info.height } : {}),
+  }
+}
+
+/** A clip from Wan on fal.ai, trying FAL_VIDEO_MODELS in order (one fal no longer hosts is skipped). */
+async function falVideo(
+  k: GenKey,
+  opts: { prompt: string; aspect: GenAspect; seconds: number; outDir: string; signal?: AbortSignal },
+  say: (fraction: number, message: string) => void,
+): Promise<GeneratedFile & { seconds: number }> {
+  const deps = genDeps()
+  let clip: Awaited<ReturnType<typeof falClip>>
+  let model: FalVideoModel
+  try {
+    ;({ value: clip, model } = await tryModels(k, 'video', FAL_VIDEO_MODELS, (m) =>
+      falClip(
+        deps,
+        k.key,
+        m,
+        { prompt: opts.prompt, aspect: opts.aspect, seconds: Number.isFinite(opts.seconds) && opts.seconds > 0 ? opts.seconds : DEFAULT_SECONDS, signal: opts.signal, timeoutMs: VIDEO_TIMEOUT_MS, pollFirstMs: POLL_FIRST_MS, pollMaxMs: POLL_MAX_MS, typicalMs: FAL_TYPICAL_MS, maxPollErrors: MAX_POLL_ERRORS },
+        say,
+      ),
+    ))
+  } catch (err) {
+    if (opts.signal?.aborted || err instanceof CancelledError) throw new CancelledError()
+    try {
+      mapFalError(err)
+    } catch (mapped) {
+      throw withoutKey(mapped, k.key)
+    }
+  }
+  say(0.95, 'Saving the clip')
+  const file = outFile(opts.outDir, 'ai-clip', clip.mime === 'video/webm' ? 'webm' : 'mp4')
+  await fs.promises.writeFile(file, clip.bytes)
+  const info = await describeFile(file, opts.signal)
+  say(1, 'Clip ready')
+  log.info('fal clip made', { model: falModelName(model.id), seconds: info.duration ?? clip.seconds })
+  return {
+    file,
+    mime: clip.mime,
+    provider: 'fal',
     model: model.id,
     seconds: info.duration ?? clip.seconds,
     ...(info.width ? { width: info.width, height: info.height } : {}),

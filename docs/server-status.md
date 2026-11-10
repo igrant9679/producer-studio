@@ -114,7 +114,7 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   `diagram` (steps, cycle, hub, bars, compare, timeline, stat), `image` (AI still + Ken Burns), `stock` (Pexels clip), `aiVideo`
   (AI clip). Motion and diagrams are built from editable shape/text items on shared "Graphics n" (overlay) and "Graphic text n"
   (text) tracks, each part revealed when the narration's word timings say it. Images and clips are made during assembly on
-  the workspace's own key (OpenAI or Gemini stills; Gemini Omni clips, at most 3 per video; Pexels stock via `PEXELS_API_KEY`),
+  the workspace's own key (OpenAI or Gemini stills; Gemini Omni or Wan-on-fal.ai clips, at most 3 per video; Pexels stock via `PEXELS_API_KEY`),
   stored as assets with `meta.generated` and reused while the prompt/search is unchanged; a scene whose visual can't be made
   falls back to motion and the job result carries `notes`. Model ids and fallbacks: top of `ai/generate/capabilities.ts`.
   **Your own clips and images** (1 Nov 2026): in idea mode the script request's `assetIds` are the person's library media,
@@ -164,6 +164,15 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   copies (`derivedFrom.tool = 'sketch'`); the editor's Smart tab puts it in the image clip's place as a muted video clip
   with the same framing, look and keyframes (core `applySketch`, one undo step). Same idea as Sketch2Motion (photo →
   line drawing → drawing-on animation), written fresh: that repo has no licence.
+  **AI clips with Wan on fal.ai** (10 Nov 2026; `ai/generate/fal.ts`): a space can store a **fal.ai** key
+  (`PUT /api/ai/keys/fal`, a `MediaKeyProvider`: clips only, never a writing provider, so it isn't in `providers`,
+  `defaultProvider` or `perFeature`; `AiSettings.media.fal` reports it). The key test is fal's price list
+  (`GET api.fal.ai/v1/models/pricing`, free), which also gives the price the card shows. Clips go through fal's queue
+  (submit → poll `status_url` → `response_url` → download from fal's CDN without the key; `cancel_url` on stop or after
+  15 min); the key is only sent to `*.fal.run` over https. Models in order: Wan 2.2 A14B (`num_frames` at 16 fps, 2–10 s,
+  720p) then Wan 2.7 (2–15 s, 720p), used when fal answers 404 for 2.2 (fal says 2.2 goes on 4 Jan 2027). With Gemini and
+  fal keys both stored, `AiSettings.videoProvider` (`PUT /api/ai/settings`, Settings → AI → "AI video clips") picks who
+  makes clips; automatic is Gemini first, and a key whose last test failed hands clips to the other.
   **Music and sound effects** (3 Nov 2026): a brief's `music` (`'auto'` = a style that suits the tone, one of core's
   `MUSIC_STYLES`, or `'off'`/absent = none) and `soundEffects` (absent = none; the wizard defaults new briefs to `'auto'`
   and on). The music is composed for the video on its scene cuts by huashu-motion's score engine (MIT), vendored in

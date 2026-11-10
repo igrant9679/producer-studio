@@ -1,6 +1,6 @@
 // Server mode (cloud | desktop), AI provider and desktop sync state.
 // lib/api.ts doesn't cover these endpoints yet, so the shell calls them with a small fetch helper.
-import type { AiKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, LinkChoice, LinkPreview, OfflineInfo, SyncConflictPreview, SyncFailure, SyncItems, SyncStatus, SystemInfo } from '@producer/core'
+import type { StoredKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, LinkChoice, LinkPreview, OfflineInfo, SyncConflictPreview, SyncFailure, SyncItems, SyncStatus, SystemInfo } from '@producer/core'
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { HttpError, noteStatus, subscribeEvents } from '../lib/api'
@@ -57,9 +57,9 @@ export const systemApi = {
   // bring-your-own-key AI providers (desktop ignores workspaceId)
   aiSettings: (workspaceId?: string) => sysFetch<AiSettings>('GET', `/ai/settings${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   saveAiSettings: (u: AiSettingsUpdate) => sysFetch<AiSettings>('PUT', '/ai/settings', u),
-  saveAiKey: (provider: AiKeyProvider, key: string, workspaceId?: string) => sysFetch<AiKeyTestResult>('PUT', `/ai/keys/${provider}`, { workspaceId, key }),
-  deleteAiKey: (provider: AiKeyProvider, workspaceId?: string) => sysFetch<AiSettings>('DELETE', `/ai/keys/${provider}${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
-  testAiKey: (provider: AiKeyProvider, workspaceId?: string, key?: string) => sysFetch<AiKeyTestResult>('POST', `/ai/keys/${provider}/test`, { workspaceId, key }),
+  saveAiKey: (provider: StoredKeyProvider, key: string, workspaceId?: string) => sysFetch<AiKeyTestResult>('PUT', `/ai/keys/${provider}`, { workspaceId, key }),
+  deleteAiKey: (provider: StoredKeyProvider, workspaceId?: string) => sysFetch<AiSettings>('DELETE', `/ai/keys/${provider}${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
+  testAiKey: (provider: StoredKeyProvider, workspaceId?: string, key?: string) => sysFetch<AiKeyTestResult>('POST', `/ai/keys/${provider}/test`, { workspaceId, key }),
 }
 
 /** /api/system for the current workspace (cloud: its effective AI provider). */

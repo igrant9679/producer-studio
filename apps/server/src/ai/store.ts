@@ -5,7 +5,7 @@
 // Plaintext keys only exist in memory while a provider is built or a key is tested.
 import { and, eq } from 'drizzle-orm'
 import * as z from 'zod/v4'
-import type { AiChoice, AiFeature, AiKeyProvider } from '@producer/core'
+import type { AiChoice, AiFeature, AiKeyProvider, MediaKeyProvider, StoredKeyProvider, VideoClipProvider } from '@producer/core'
 import { ctx } from '../context'
 import { aiKeys, workspaceAiSettings } from '../db/schema'
 import { invalid } from '../http'
@@ -13,6 +13,10 @@ import type { AiScope } from './provider'
 import { openKey, sealKey } from './secrets'
 
 export const KEY_PROVIDERS: AiKeyProvider[] = ['anthropic', 'gemini', 'openai']
+/** Keys that only make media (never a writing provider): fal.ai for Wan clips. */
+export const MEDIA_KEY_PROVIDERS: MediaKeyProvider[] = ['fal']
+const STORED: StoredKeyProvider[] = [...KEY_PROVIDERS, ...MEDIA_KEY_PROVIDERS]
+export const isMediaKey = (p: StoredKeyProvider): p is MediaKeyProvider => (MEDIA_KEY_PROVIDERS as string[]).includes(p)
 export const FEATURES: AiFeature[] = ['writer', 'script', 'assistant']
 
 const Choice = z.enum(['builtin', 'openai', 'gemini', 'anthropic'])
@@ -23,17 +27,30 @@ const ProviderDocSchema = z.object({
   error: z.string().max(500).optional().catch(undefined),
   checkedAt: z.number().optional().catch(undefined),
 })
+const MediaDocSchema = z.object({
+  valid: z.boolean().optional().catch(undefined),
+  error: z.string().max(500).optional().catch(undefined),
+  price: z.string().max(200).optional().catch(undefined),
+  checkedAt: z.number().optional().catch(undefined),
+})
 const DocSchema = z.object({
   defaultProvider: Choice.nullable().catch(null),
   perFeature: z.object({ writer: Choice.optional(), script: Choice.optional(), assistant: Choice.optional() }).catch({}),
   providers: z.object({ openai: ProviderDocSchema.optional(), gemini: ProviderDocSchema.optional(), anthropic: ProviderDocSchema.optional() }).catch({}),
+  media: z.object({ fal: MediaDocSchema.optional() }).catch({}).optional(),
+  videoProvider: z.enum(['gemini', 'fal']).nullable().optional().catch(undefined),
 })
 
 export type ProviderDoc = z.infer<typeof ProviderDocSchema>
+export type MediaDoc = z.infer<typeof MediaDocSchema>
 export interface AiSettingsDoc {
   defaultProvider: AiChoice | null
   perFeature: Partial<Record<AiFeature, AiChoice>>
   providers: Partial<Record<AiKeyProvider, ProviderDoc>>
+  /** Media-only keys' last test (fal.ai). */
+  media?: Partial<Record<MediaKeyProvider, MediaDoc>>
+  /** Who makes AI clips when both a Gemini and a fal.ai key are stored (absent/null = automatic). */
+  videoProvider?: VideoClipProvider | null
 }
 export interface KeyMeta {
   last4: string
@@ -48,7 +65,7 @@ export function normalizeDoc(raw: unknown): AiSettingsDoc {
 }
 
 const desktop = () => ctx().config.mode === 'desktop'
-const aad = (workspaceId: string, provider: AiKeyProvider) => `ai-key:${workspaceId}:${provider}`
+const aad = (workspaceId: string, provider: StoredKeyProvider) => `ai-key:${workspaceId}:${provider}`
 
 function requireScope(scope: AiScope): string {
   if (!scope) throw invalid('workspaceId is required')
@@ -80,22 +97,22 @@ export async function saveDoc(scope: AiScope, doc: AiSettingsDoc): Promise<void>
     .onConflictDoUpdate({ target: workspaceAiSettings.workspaceId, set: { doc: clean as unknown as Record<string, unknown>, updatedAt: now } })
 }
 
-/** last4 + timestamp of each stored key (no secrets). */
-export async function keyMeta(scope: AiScope): Promise<Partial<Record<AiKeyProvider, KeyMeta>>> {
-  const out: Partial<Record<AiKeyProvider, KeyMeta>> = {}
+/** last4 + timestamp of each stored key (no secrets), media-only keys included. */
+export async function keyMeta(scope: AiScope): Promise<Partial<Record<StoredKeyProvider, KeyMeta>>> {
+  const out: Partial<Record<StoredKeyProvider, KeyMeta>> = {}
   if (desktop()) {
     const { getAiStore } = await import('../desktop/settings')
-    for (const [p, k] of Object.entries(getAiStore().keys)) if (KEY_PROVIDERS.includes(p as AiKeyProvider)) out[p as AiKeyProvider] = { last4: k.last4, updatedAt: k.updatedAt }
+    for (const [p, k] of Object.entries(getAiStore().keys)) if (STORED.includes(p as StoredKeyProvider)) out[p as StoredKeyProvider] = { last4: k.last4, updatedAt: k.updatedAt }
     return out
   }
   if (!scope) return out
   const rows = await ctx().db.select({ provider: aiKeys.provider, last4: aiKeys.last4, updatedAt: aiKeys.updatedAt }).from(aiKeys).where(eq(aiKeys.workspaceId, scope))
-  for (const r of rows) if (KEY_PROVIDERS.includes(r.provider as AiKeyProvider)) out[r.provider as AiKeyProvider] = { last4: r.last4, updatedAt: r.updatedAt }
+  for (const r of rows) if (STORED.includes(r.provider as StoredKeyProvider)) out[r.provider as StoredKeyProvider] = { last4: r.last4, updatedAt: r.updatedAt }
   return out
 }
 
 /** Decrypted key, or undefined (none stored / undecryptable). Server-internal only. */
-export async function readKey(scope: AiScope, provider: AiKeyProvider): Promise<string | undefined> {
+export async function readKey(scope: AiScope, provider: StoredKeyProvider): Promise<string | undefined> {
   if (desktop()) {
     const { getAiStore } = await import('../desktop/settings')
     const { unseal } = await import('../desktop/secrets')
@@ -107,7 +124,7 @@ export async function readKey(scope: AiScope, provider: AiKeyProvider): Promise<
   return r ? openKey({ ciphertext: r.ciphertext, iv: r.iv, tag: r.tag }, aad(scope, provider)) : undefined
 }
 
-export async function writeKey(scope: AiScope, provider: AiKeyProvider, key: string): Promise<KeyMeta> {
+export async function writeKey(scope: AiScope, provider: StoredKeyProvider, key: string): Promise<KeyMeta> {
   const meta = { last4: key.slice(-4), updatedAt: Date.now() }
   if (desktop()) {
     const { getAiStore, saveAiStore } = await import('../desktop/settings')
@@ -126,7 +143,7 @@ export async function writeKey(scope: AiScope, provider: AiKeyProvider, key: str
   return meta
 }
 
-export async function removeKey(scope: AiScope, provider: AiKeyProvider): Promise<void> {
+export async function removeKey(scope: AiScope, provider: StoredKeyProvider): Promise<void> {
   if (desktop()) {
     const { getAiStore, saveAiStore } = await import('../desktop/settings')
     const store = getAiStore()

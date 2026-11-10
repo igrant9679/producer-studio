@@ -566,7 +566,7 @@ export interface ProduceCapabilities {
   /** AI stills: the workspace has an OpenAI or Gemini key that can make them (billed to that key). */
   image?: { provider: 'openai' | 'gemini'; model: string }
   /** AI video clips (billed per second to the workspace's key). */
-  video?: { provider: 'openai' | 'gemini'; model: string; maxSeconds: number }
+  video?: { provider: 'openai' | 'gemini' | 'fal'; model: string; maxSeconds: number }
   /** Stock footage search (always: Wikimedia Commons needs no key; Pexels and Pixabay when the server has their keys). */
   stock: boolean
   /** Where stock clips and photos are searched, in order (e.g. Pexels, Wikimedia Commons). */
@@ -900,12 +900,19 @@ export interface SyncChanges {
 // GET    /api/ai/settings?workspaceId=                        -> AiSettings            (viewer+)
 // PUT    /api/ai/settings        AiSettingsUpdate             -> AiSettings            (owner)
 // PUT    /api/ai/keys/:provider  {workspaceId?, key}          -> AiKeyTestResult       (owner; stores, then tests)
+//        :provider is a StoredKeyProvider: openai, gemini, anthropic, or fal (media only: AI clips with Wan)
 // DELETE /api/ai/keys/:provider?workspaceId=                  -> AiSettings            (owner)
 // POST   /api/ai/keys/:provider/test {workspaceId?, key?}     -> AiKeyTestResult       (owner; given key or the stored one)
 /** Provider implementations: server Anthropic key, workspace/user Anthropic key, OpenAI, Gemini, local Claude CLI. */
 export type AiProviderId = 'anthropic-api' | 'anthropic-key' | 'openai' | 'gemini' | 'claude-cli' | 'none'
 /** Providers configured with a user-supplied API key. */
 export type AiKeyProvider = 'openai' | 'gemini' | 'anthropic'
+/** Keys used only to make media (never a writing provider): fal.ai, which hosts Wan for AI video clips. */
+export type MediaKeyProvider = 'fal'
+/** Every provider whose key can be stored (PUT /api/ai/keys/:provider). */
+export type StoredKeyProvider = AiKeyProvider | MediaKeyProvider
+/** Who makes AI video clips when more than one stored key can (null in AiSettings = automatic: Gemini first). */
+export type VideoClipProvider = 'gemini' | 'fal'
 /** What a feature can be pointed at: the built-in provider (desktop: Claude CLI; cloud: the server's key) or a key. */
 export type AiChoice = 'builtin' | AiKeyProvider
 export type AiFeature = 'writer' | 'script' | 'assistant'
@@ -951,11 +958,29 @@ export interface AiKeyProviderSettings {
   updatedAt?: number
 }
 
+/** A media-only key (fal.ai): stored, tested, never a writing provider. */
+export interface MediaKeySettings {
+  hasKey: boolean
+  keyLast4?: string
+  /** Result of the last key test (undefined = never tested). */
+  valid?: boolean
+  /** User-facing reason when the last test failed. */
+  error?: string
+  /** What a clip costs, from the provider's own price list at the last test, e.g. "$0.08 per second". */
+  price?: string
+  checkedAt?: number
+  updatedAt?: number
+}
+
 export interface AiSettings {
   /** null = automatic (the built-in provider). */
   defaultProvider: AiChoice | null
   perFeature: Partial<Record<AiFeature, AiChoice>>
   providers: Partial<Record<AiKeyProvider, AiKeyProviderSettings>>
+  /** Media-only keys (fal.ai for Wan clips). Optional: older servers omit it. */
+  media?: Partial<Record<MediaKeyProvider, MediaKeySettings>>
+  /** Who makes AI video clips when Gemini and fal.ai keys are both stored; null/absent = automatic. */
+  videoProvider?: VideoClipProvider | null
   /** The built-in provider for this edition and whether it's usable. */
   builtin: { id: AiProviderId; available: boolean; detail: string; model?: string; cli?: ClaudeCliInfo }
   /** Effective provider per feature after resolution. */
@@ -969,6 +994,7 @@ export interface AiSettingsUpdate {
   defaultProvider?: AiChoice | null
   perFeature?: Partial<Record<AiFeature, AiChoice | null>>
   models?: Partial<Record<AiKeyProvider, string>>
+  videoProvider?: VideoClipProvider | null
 }
 
 export interface AiKeyTestResult {
@@ -979,6 +1005,8 @@ export interface AiKeyTestResult {
   detail: string
   /** Suggested default model from the live list. */
   defaultModel?: string
+  /** A media key (fal.ai): what a clip costs, from the provider's price list. */
+  price?: string
   settings?: AiSettings
 }
 
