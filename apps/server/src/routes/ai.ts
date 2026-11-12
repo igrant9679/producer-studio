@@ -231,7 +231,9 @@ aiRoutes.get('/produce/capabilities', async (c) => {
   if (!ws) throw new HttpError(400, 'invalid', 'workspaceId is required')
   await requireRole(u.id, ws, 'viewer')
   const caps = await generationCapabilities(ws)
-  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS, maxAiClipsFullMotion: MAX_AI_CLIPS_FULL_MOTION } satisfies ProduceCapabilities)
+  const { blenderCapability } = await import('../media/blender')
+  const blender = await blenderCapability(ws)
+  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS, maxAiClipsFullMotion: MAX_AI_CLIPS_FULL_MOTION, ...(blender ? { blender } : {}) } satisfies ProduceCapabilities)
 })
 
 aiRoutes.post('/produce/assemble', async (c) => {

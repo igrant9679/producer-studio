@@ -1,4 +1,4 @@
-import { AI_LOOKS, DRAWING_STYLES, MUSIC_STYLES, PRODUCE_LIMITS, aiLookOf, drawingStyleOf, is3dDrawingStyle, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { AI_LOOKS, DRAWING_STYLES, MUSIC_STYLES, PRODUCE_LIMITS, aiLookOf, drawingStyleOf, is3dDrawingStyle, isBlenderStyle, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -414,12 +414,20 @@ function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
         <div className="ps-field" style={{ marginTop: 12 }}>
           <label className="label" htmlFor="ps-draw-style">How AI-drawn scenes are drawn</label>
           <select id="ps-draw-style" className="input" value={drawingStyleOf(b.drawingStyle)} onChange={(e) => set({ drawingStyle: e.target.value })}>
-            {DRAWING_STYLES.map((d) => (
+            {DRAWING_STYLES.filter((d) => !isBlenderStyle(d.id) || caps.data?.blender || isBlenderStyle(b.drawingStyle)).map((d) => (
               <option key={d.id} value={d.id}>{d.label}</option>
             ))}
           </select>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            {DRAWING_STYLES.find((d) => d.id === drawingStyleOf(b.drawingStyle))?.about}.{is3dDrawingStyle(b.drawingStyle) ? ' 3D scenes take a few minutes each to render.' : ''} Changing it redraws those scenes the next time the video is made.
+            {DRAWING_STYLES.find((d) => d.id === drawingStyleOf(b.drawingStyle))?.about}.{is3dDrawingStyle(b.drawingStyle) ? ' 3D scenes take a few minutes each to render.' : ''}
+            {isBlenderStyle(b.drawingStyle)
+              ? caps.data?.blender?.where === 'computer'
+                ? ` Rendered by ${caps.data.blender.version || 'Blender'} on this computer: each scene takes several minutes, more without a good graphics card.`
+                : caps.data?.blender?.where === 'runpod'
+                  ? ' Rendered on a graphics card rented from RunPod for this video (about $0.70 an hour, billed to your RunPod account): starting it takes a few minutes, then each scene a few more.'
+                  : ' Blender isn’t set up here (install it on this computer, or add a RunPod key in Settings → AI), so these scenes will be drawn in the 3D studio style.'
+              : ''}{' '}
+            Changing it redraws those scenes the next time the video is made.
           </div>
         </div>
       )}

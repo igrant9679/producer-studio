@@ -11,6 +11,7 @@ import * as z from 'zod/v4'
 import { DRAWING_STYLES, type DrawingStyleId, is3dDrawingStyle } from '@producer/core'
 import { HttpError } from '../http'
 import { log } from '../log'
+import type { BlenderRunner } from '../media/blender'
 import { DrawingError, type DrawingEnv, testDrawing } from '../media/drawing'
 import type { AiProvider, ScriptImage } from './provider'
 
@@ -148,6 +149,8 @@ export const DRAWING_RECIPES: Record<DrawingStyleId, { canvas?: string; ink?: st
     recipe:
       "A tidy 3D isometric explainer world. Use the 3D stage (env.stage3d, { fov: 14 }) with the camera far up and to one side (about (14, 13, 14), looking at the middle of the scene) for an almost isometric view, and a low platform (a RoundedBoxGeometry slab) the scene sits on. Little buildings, devices, roads, arrows as tubes, people as simple capsule figures; 'matte' and 'plastic' materials in a fresh palette with the accent for what matters. Things pop up onto the platform on the words that name them (scale up from 0 with env.ease.back) and flows travel along paths. Paint a soft gradient backdrop first; 2D labels pinned to things with s.project.",
   },
+  // Blender scenes follow BLENDER_SYSTEM, not a canvas recipe; this sets their backdrop and ink
+  blender: { canvas: '#e8e3da', ink: '#26252c', recipe: 'A cinematic 3D scene built, lit and animated in Blender.' },
 }
 
 /** How to draw in 3D: given with the 3D styles' recipes only (the stage and three.js load for code that uses them). */
@@ -162,6 +165,55 @@ export const THREE_GUIDE = `3D (THREE.JS ON A LIT STAGE)
 - Space: units are metres; at the default camera the frame is about 10 wide. Keep the subject within x -4..4 and y 0..4.5 (landscape; narrower for vertical) and out of the top 22% and bottom 16% of the frame.
 - Motion: ease everything (env.progress, env.ease.out / back / inOut); things enter on their words (scale up from 0 with env.ease.back, drop in and squash, slide in); the camera moves slowly and smoothly (a dolly in, a gentle orbit), never jerks.
 - Keep it light: under about 60 meshes and modest segments; no textures, images, loaders or 3D text (text is 2D, on top).`
+
+/** The 'blender' drawing style: the model writes a Blender script instead of canvas code (media/blender.ts runs it). */
+export const BlenderSchema = z.object({
+  plan: z.string().describe('Two or three sentences: what is built and what happens when, in seconds and on which words'),
+  code: z.string().describe('Python that defines def build(scene, env) for Blender 5.2, and nothing that runs on its own'),
+})
+
+export const BLENDER_SYSTEM = `You are the 3D animator for Producer, a video editor. You write the Python script that builds one scene of a narrated video in Blender 5.2: you model it, light it and animate it with keyframes. Your scenes look like a polished animated film: appealing shapes, soft light, depth, and deliberate motion that explains.
+
+THE CONTRACT
+- Define exactly: def build(scene, env): ... It runs once in an empty Blender scene (background mode, no window) and builds everything: objects, materials, lights, camera, and keyframes on frames 1 to env.frames. It doesn't render or save anything: that happens afterwards.
+- Imports: only bpy, bmesh, mathutils, math, random, colorsys. Prefer bpy.data and bmesh; bpy.ops only for modelling (bpy.ops.mesh.primitive_*_add, bpy.ops.object.*, bpy.ops.curve.*, bpy.ops.transform.*). No files, paths, images or textures from disk, add-ons, drivers' expressions, handlers or timers. getattr, setattr, exec, eval, open, str.format, names starting with _ and strings containing __ are refused before the code runs (use f-strings).
+- Units are metres and Z is up. The camera from env.stage() sits at (0, -9, 2.4) looking at (0, 0, 1); the frame is about 8 m wide there (landscape; narrower when env.vertical). Keep the subject within x -3.5..3.5 and z 0..4.5, in front of y = 4 (the backdrop curves up behind it), and out of the top 22% and bottom 16% of the frame (the headline and captions go there).
+- Time: frame = env.frame(seconds); things happen on the narration's words: env.frame(env.word_at('word', default_seconds)).
+- Deterministic: call random.seed(1) before any random.
+
+ENV
+- env.W, env.H, env.fps, env.frames, env.duration, env.vertical; env.palette (canvas, ink, accent as linear RGBA), env.hex (the same as '#rrggbb').
+- env.stage(backdrop=True, camera=(0, -9, 2.4), target=(0, 0, 1), lens=50) returns st with st.camera, st.key, st.fill, st.rim, st.floor: a seamless backdrop in the canvas colour, a soft key light, fill and rim, and the camera. Call it first, then add your things; move or animate st.camera for camera moves (env.look_at(st.camera, point)).
+- env.material(color, kind) returns a Principled material. color: '#rrggbb', 'accent', 'ink', 'canvas' or (r, g, b); kind: clay, plastic, glossy, metal, glass, matte, glow (emits light), toon. Assign it with obj.data.materials.append(m).
+- env.key(obj, 'location', frame, (x, y, z)) sets a property and keyframes it ('rotation_euler', 'scale', 'data.energy' and so on). Keys are Bezier, so they ease in and out. env.interpolate(obj, 'BACK', 'EASE_OUT') gives all of obj's keys an overshoot (or 'ELASTIC', 'BOUNCE', 'SINE', 'LINEAR', 'CONSTANT').
+- env.look_at(obj, target) points a camera, light or object at a point or an object.
+
+MAKE IT LOOK PROFESSIONAL
+- Shapes: primitives refined with modifiers: a Bevel modifier (width 0.03 to 0.08, 3 segments) on hard objects; a Subdivision Surface modifier (levels 2) and smooth shading on soft ones. Curves with bevel_depth for pipes, paths and cables. 3D text (bpy.data.curves.new(name, 'FONT'), Blender's own font, with extrude and bevel) only when a word is the point and words are allowed.
+- Characters: appealing, toy-like figures: a rounded body, a big head, simple eyes (dark spheres with a small white highlight), arms and legs as rounded cylinders parented to empties at the shoulders and hips (rotate the empties to walk, wave, point). Keep proportions consistent. Animate with weight: anticipation before a move, overshoot and settle after, a gentle bob or breath while idle, secondary motion that lags behind.
+- Colour: the canvas colour for the world, ink for dark details, accent for the hero; two to four colours in all.
+- Camera: one slow, purposeful move (a dolly in, a gentle orbit around an empty, a rise), eased, never jerky; a 35 to 85 mm lens.
+- Light work: under about 80 objects, subdivision levels 2 at most, no particles, simulations or volumetrics.`
+
+export function buildBlenderPrompt(o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean }): string {
+  const words = o.env.words.map((w) => `${w.w}@${w.start.toFixed(2)}`).join(' ')
+  const frames = Math.max(1, Math.round(o.env.duration * o.env.fps))
+  return `Build this scene in Blender.
+
+WHAT TO SHOW (the director's note)
+${o.description.trim()}
+
+${o.silent ? `WHAT HAPPENS IN THIS SCENE (nobody speaks: the scene has to tell it alone)` : `THE NARRATION OF THIS SCENE (what the voice says while it plays)`}
+${o.narration.trim()}
+
+${o.noWords ? 'NO WORDS: this video shows no text at all, so build no text, labels or numbers. The whole frame is yours.' : `HEADLINE SHOWN ABOVE IT: ${o.headline || '(none)'}`}
+
+FRAME: ${o.env.width} x ${o.env.height} px (${o.env.height > o.env.width ? 'vertical' : 'landscape'}), ${o.env.duration.toFixed(1)} s = frames 1 to ${frames} at ${o.env.fps} fps
+PALETTE: canvas ${o.env.palette.canvas}, ink ${o.env.palette.ink}, accent ${o.env.palette.accent}
+WORD TIMES (word@seconds from the scene's start): ${words || '(no timings: spread the beats over the scene)'}
+
+Return the plan and the code.`
+}
 
 /** The palette a style is drawn in: its own paper and ink, the brand's accent ('clean' keeps the brand's). */
 export function drawingPalette(style: DrawingStyleId, brand: DrawingEnv['palette']): DrawingEnv['palette'] {
@@ -193,7 +245,7 @@ Return the plan and the code.`
 const fence = (code: string) =>
   code
     .trim()
-    .replace(/^```(?:javascript|js)?\s*\n/i, '')
+    .replace(/^```(?:javascript|js|python|py)?\s*\n/i, '')
     .replace(/\n```\s*$/, '')
     .trim()
 
@@ -211,18 +263,24 @@ export const MAX_LOOKS = 3
  */
 export async function writeDrawing(
   provider: AiProvider,
-  o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; style?: DrawingStyleId; signal?: AbortSignal; progress?: (f: number, msg: string) => void },
+  o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; style?: DrawingStyleId; signal?: AbortSignal; progress?: (f: number, msg: string) => void; blender?: BlenderRunner },
 ): Promise<{ code: string; plan: string; frames: Buffer[] }> {
   const times = LOOK_AT.map((k) => k * o.env.duration)
-  o.progress?.(0.05, 'Writing the animation')
-  const first = await provider.structured({ system: DRAWN_SYSTEM, prompt: buildDrawingPrompt(o), images: [], schema: DrawingSchema, signal: o.signal })
+  // canvas code tried in the drawing sandbox, or (the 'blender' style) a Blender script tried in Blender
+  const blender = o.blender
+  const system = blender ? BLENDER_SYSTEM : DRAWN_SYSTEM
+  const schema = blender ? BlenderSchema : DrawingSchema
+  const brief = () => (blender ? buildBlenderPrompt(o) : buildDrawingPrompt(o))
+  const tryIt = (c: string) => (blender ? blender.test(c, o.env, times, o.signal) : testDrawing(c, o.env, times, o.signal))
+  o.progress?.(0.05, blender ? 'Writing the Blender scene' : 'Writing the animation')
+  const first = await provider.structured({ system, prompt: brief(), images: [], schema, signal: o.signal })
   let code = fence(first.code).slice(0, MAX_CODE_CHARS)
   const plan = first.plan
   let frames: Buffer[]
   o.progress?.(0.3, 'Trying the animation')
   for (let fix = 0; ; fix++) {
     try {
-      frames = await testDrawing(code, o.env, times, o.signal)
+      frames = await tryIt(code)
       break
     } catch (err) {
       if (!(err instanceof DrawingError)) throw err
@@ -230,8 +288,8 @@ export async function writeDrawing(
       log.info('drawing failed; asking for a fix', { error: err.message, at: err.at, fix: fix + 1 })
       o.progress?.(0.35 + fix * 0.08, 'Fixing the animation')
       const fixed = await provider.structured({
-        system: DRAWN_SYSTEM,
-        prompt: `${buildDrawingPrompt(o)}
+        system,
+        prompt: `${brief()}
 
 YOUR CODE FAILED${err.at !== undefined ? ` at t = ${err.at.toFixed(2)} s` : ''}: ${err.message}
 
@@ -240,7 +298,7 @@ ${code}
 
 Fix it and return the plan and the full code.`,
         images: [],
-        schema: DrawingSchema,
+        schema,
         signal: o.signal,
       })
       code = fence(fixed.code).slice(0, MAX_CODE_CHARS)
@@ -252,8 +310,8 @@ Fix it and return the plan and the full code.`,
     const images: ScriptImage[] = frames.map((data, i) => ({ label: `Frame at ${times[i].toFixed(1)} s:`, mediaType: 'image/jpeg', data: data.toString('base64') }))
     try {
       const review = await provider.structured({
-        system: DRAWN_SYSTEM,
-        prompt: `${buildDrawingPrompt(o)}
+        system,
+        prompt: `${brief()}
 
 THE CODE YOU WROTE${look ? ` (after ${look} round${look > 1 ? 's' : ''} of your own fixes)` : ''}
 ${code}
@@ -266,7 +324,7 @@ The images that follow are frames of it at ${times.map((t) => `${t.toFixed(1)} s
       const next = fence(review.code).slice(0, MAX_CODE_CHARS)
       if (!review.changed || !next || next === code) break
       try {
-        frames = await testDrawing(next, o.env, times, o.signal)
+        frames = await tryIt(next)
         code = next
       } catch (err) {
         // the fix broke it: the working version stays

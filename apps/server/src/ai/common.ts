@@ -11,6 +11,8 @@ const KEY_PATTERNS = [
   /sk-ant-[A-Za-z0-9_-]{6,}/g,
   /sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_*-]{8,}/g,
   /AIza[0-9A-Za-z_-]{10,}/g,
+  // RunPod API keys
+  /rpa_[A-Za-z0-9]{10,}/g,
   // Google's newer "authentication keys" (AI Studio now issues only these): AQ. then a long token. Not documented, so
   // match generously but only at a word start (never "FAQ."), and don't swallow a sentence's closing full stop.
   /\bAQ\.[A-Za-z0-9_-][A-Za-z0-9_.-]{18,}[A-Za-z0-9_-]/g,
@@ -136,7 +138,7 @@ export const formatMismatch = () => new HttpError(502, 'server', 'The AI respons
 
 // ---------------- models ----------------
 
-export const PROVIDER_LABEL: Record<StoredKeyProvider, string> = { openai: 'OpenAI', gemini: 'Gemini', anthropic: 'Claude', fal: 'fal.ai' }
+export const PROVIDER_LABEL: Record<StoredKeyProvider, string> = { openai: 'OpenAI', gemini: 'Gemini', anthropic: 'Claude', fal: 'fal.ai', runpod: 'RunPod' }
 
 /** Hardcoded only as a last resort (no live list yet); users can always type another id. */
 export const FALLBACK_MODEL: Record<AiKeyProvider, string> = { openai: 'gpt-5.5', gemini: 'gemini-pro-latest', anthropic: 'claude-opus-5' }

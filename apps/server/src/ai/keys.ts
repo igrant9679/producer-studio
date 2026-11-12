@@ -62,6 +62,10 @@ export async function listModels(provider: AiKeyProvider, key: string): Promise<
 /** Validate a key with a model-list call; never throws for key problems (they come back as ok:false + detail). */
 export async function testKey(provider: StoredKeyProvider, key: string): Promise<AiKeyTestResult> {
   if (provider === 'fal') return { models: [], ...(await testFalKey(genDeps(), key)) }
+  if (provider === 'runpod') {
+    const { testRunpodKey } = await import('../media/runpod')
+    return { models: [], ...(await testRunpodKey(key)) }
+  }
   try {
     const models = await listModels(provider, key)
     const defaultModel = pickDefaultModel(provider, models)

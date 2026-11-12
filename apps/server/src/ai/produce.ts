@@ -51,6 +51,7 @@ import { getBrand } from '../routes/workspaces'
 import { requireProvider } from './provider'
 import { drawingPalette, writeDrawing } from './drawn'
 import { type DrawingEnv, renderDrawing } from '../media/drawing'
+import { BlenderUnavailableError, type BlenderRunner, openBlender } from '../media/blender'
 import { houseRules } from './rules'
 import { ensureTranscript, synthesizeToAsset, transcribeAsset } from './speech'
 import { whisperAvailable } from './whisper'
@@ -898,6 +899,21 @@ async function makeSceneVisuals(
   const maxClips = o.fullMotion ? MAX_AI_CLIPS_FULL_MOTION : MAX_AI_CLIPS
   // Wan clips start from a picture painted first, when this space can paint one
   const fromPicture = todo.some((s) => s.visual?.kind === 'aiVideo') && !!(await generationCapabilities(o.workspaceId)).video?.fromPicture
+  // Blender scenes: this computer's Blender or a rented RunPod card, opened on the first one and closed (the pod
+  // deleted) when the visuals are done; without one they're drawn in the 3D studio style instead
+  let drawing = o.drawing
+  let blender: BlenderRunner | undefined
+  let opened: BlenderRunner | undefined
+  if (drawing?.style === 'blender' && todo.some((s) => s.visual?.kind === 'drawn')) {
+    try {
+      blender = await openBlender(o.workspaceId)
+      opened = blender
+    } catch (err) {
+      const why = err instanceof HttpError ? err.message : 'Blender isn’t available'
+      notes.push(`Blender scenes were drawn in the 3D studio style instead: ${why}`)
+      drawing = { ...drawing, style: 'studio3d' }
+    }
+  }
   try {
     for (let i = 0; i < todo.length; i++) {
       const s = todo[i]
@@ -912,18 +928,27 @@ async function makeSceneVisuals(
       if (s.visual?.kind === 'drawn') {
         const v = s.visual
         const sub = subContext(jc, 0.6 + (i / todo.length) * 0.3, 0.6 + ((i + 1) / todo.length) * 0.3, `Drawing ${s.id}`)
-        if (!o.drawing || drawn >= MAX_DRAWN) {
-          if (o.drawing) notes.push(`${s.id}: only ${MAX_DRAWN} scenes are drawn per video`)
+        if (!drawing || drawn >= MAX_DRAWN) {
+          if (drawing) notes.push(`${s.id}: only ${MAX_DRAWN} scenes are drawn per video`)
           s.visual = { kind: 'motion', points: [] }
           continue
         }
         try {
-          const made = await makeDrawn(sub, { ...o, drawing: o.drawing, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work })
+          const made = await makeDrawn(sub, { ...o, drawing, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work, blender })
           drawn++
           generated.set(s.id, made.asset)
-          s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id, ...(o.drawing.style !== 'clean' ? { style: o.drawing.style } : {}) }
+          s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id, ...(drawing.style !== 'clean' ? { style: drawing.style } : {}) }
         } catch (err) {
           if (jc.signal.aborted) throw err
+          if (blender && err instanceof BlenderUnavailableError) {
+            // Blender can't be used for this video: this scene and the rest are drawn in the 3D studio style
+            notes.push(`Blender scenes from ${s.id} on were drawn in the 3D studio style instead: ${err.message}`)
+            await blender.close()
+            blender = undefined
+            drawing = { ...drawing, style: 'studio3d' }
+            i--
+            continue
+          }
           const why = err instanceof HttpError ? err.message : 'it could not be drawn'
           log.warn('drawn scene failed', { scene: s.id, err })
           notes.push(`${s.id}: ${why}`)
@@ -963,6 +988,11 @@ async function makeSceneVisuals(
       }
     }
   } finally {
+    if (opened) {
+      await opened.close()
+      const info = 'info' in opened ? (opened as { info?: { gpu?: string; costPerHr?: number } }).info : undefined
+      if (info) notes.push(`Blender scenes rendered on a rented ${info.gpu || 'graphics card'}${info.costPerHr ? ` ($${info.costPerHr.toFixed(2)} an hour)` : ''}, billed to your RunPod account; the card was given back when they were done`)
+    }
     fs.rm(work, { recursive: true, force: true }, () => undefined)
   }
   return { scenes, generated, illustrations, notes }
@@ -989,6 +1019,8 @@ async function makeDrawn(
     drawing: NonNullable<Parameters<typeof makeSceneVisuals>[1]['drawing']>
     last: boolean
     work: string
+    /** The 'blender' style: where its scripts are tried and rendered. */
+    blender?: BlenderRunner
   },
 ): Promise<{ asset: Asset; code: string }> {
   const voice = o.voices.get(o.scene.id)
@@ -1015,12 +1047,14 @@ async function makeDrawn(
   if (!code) {
     const ai = await requireProvider(o.workspaceId, 'animation')
     provider = ai.id
-    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, silent: o.drawing.silent, noWords: o.drawing.noWords, style: o.drawing.style, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m) })).code
+    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, silent: o.drawing.silent, noWords: o.drawing.noWords, style: o.drawing.style, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m), blender: o.blender })).code
   }
   jc.check()
-  jc.progress(0.6, 'Rendering the animation')
+  const rendering = o.blender ? (o.blender.where === 'runpod' ? 'Rendering in Blender on the graphics card' : 'Rendering in Blender') : 'Rendering the animation'
+  jc.progress(0.6, rendering)
   const file = path.join(o.work, `drawn-${o.scene.id.replace(/[^\w-]/g, '')}-${crypto.randomBytes(4).toString('hex')}.mp4`)
-  await renderDrawing(code, env, file, { signal: jc.signal, onProgress: (f) => jc.progress(0.6 + f * 0.3, 'Rendering the animation') })
+  if (o.blender) await o.blender.render(code, env, file, { signal: jc.signal, onProgress: (f) => jc.progress(0.6 + f * 0.3, rendering) })
+  else await renderDrawing(code, env, file, { signal: jc.signal, onProgress: (f) => jc.progress(0.6 + f * 0.3, rendering) })
   const row = await createAssetFromFile({
     workspaceId: o.workspaceId,
     userId: o.userId,
@@ -1030,7 +1064,7 @@ async function makeDrawn(
     mime: 'video/mp4',
     kind: 'video',
     origin: 'ai',
-    meta: { generated: { kind: 'drawn', prompt: drawnKey(code, env, wordsKey), provider, model: 'code' }, jobId: o.jobId },
+    meta: { generated: { kind: 'drawn', prompt: drawnKey(code, env, wordsKey), provider, model: o.blender ? 'blender' : 'code' }, jobId: o.jobId },
   })
   jc.progress(0.92, 'Preparing it for the editor')
   const ready = await processAsset(row.id, jc)

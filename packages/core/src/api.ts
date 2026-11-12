@@ -585,6 +585,9 @@ export interface ProduceCapabilities {
   maxAiClips: number
   /** AI clips made per video at most when the brief asks for full motion (every scene a clip). */
   maxAiClipsFullMotion?: number
+  /** Drawn scenes can be built in Blender: on this computer's Blender (desktop) or on a graphics card rented from
+   * RunPod with the space's own key (billed to that account). Absent: the Blender drawing style isn't offered. */
+  blender?: { where: 'computer' | 'runpod'; version?: string }
 }
 
 export interface AssistantMessage {
@@ -918,7 +921,7 @@ export type AiProviderId = 'anthropic-api' | 'anthropic-key' | 'openai' | 'gemin
 /** Providers configured with a user-supplied API key. */
 export type AiKeyProvider = 'openai' | 'gemini' | 'anthropic'
 /** Keys used only to make media (never a writing provider): fal.ai, which hosts Wan for AI video clips. */
-export type MediaKeyProvider = 'fal'
+export type MediaKeyProvider = 'fal' | 'runpod'
 /** Every provider whose key can be stored (PUT /api/ai/keys/:provider). */
 export type StoredKeyProvider = AiKeyProvider | MediaKeyProvider
 /** Who makes AI video clips when more than one stored key can (null in AiSettings = automatic: Gemini first). */

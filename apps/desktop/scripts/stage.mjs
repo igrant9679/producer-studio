@@ -6,6 +6,7 @@
 //   server/runtime.js          packages/core runtime bundle used by exports (no esbuild at runtime)
 //   server/vendor/anidoodle/   the AI-drawing sandbox's media bundle (Apache-2.0) with its LICENSE and NOTICE
 //   server/vendor/three/       three.js for the sandbox's 3D drawing styles (MIT) with its LICENSE
+//   server/blender/            the harness that runs Blender scene scripts on this computer's Blender
 //   web/                       apps/web/dist without sourcemaps
 //   tools/                     whisper.cpp + ggml-small.en, Kokoro-82M ONNX, chrome-headless-shell (from build/tools,
 //                              filled by scripts/fetch-tools.mjs)
@@ -71,6 +72,9 @@ for (const f of ['anidoodle.js', 'LICENSE', 'NOTICE', 'PROVENANCE.md']) fs.copyF
 // three.js (MIT) for the 3D drawing styles: the browser bundle with its licence
 fs.mkdirSync(path.join(out, 'vendor', 'three'), { recursive: true })
 for (const f of ['three.js', 'LICENSE', 'PROVENANCE.md']) fs.copyFileSync(path.join(serverSrc, 'vendor', 'three', f), path.join(out, 'vendor', 'three', f))
+// Blender scenes: the harness Blender runs the AI's scene scripts with (the RunPod files ride along, unused here)
+fs.mkdirSync(path.join(out, 'blender'), { recursive: true })
+for (const f of ['harness.py', 'pod.py', 'boot.sh']) fs.copyFileSync(path.join(serverSrc, 'blender', f), path.join(out, 'blender', f))
 await build({
   entryPoints: [path.join(repo, 'packages', 'core', 'src', 'runtime.ts')],
   outfile: path.join(out, 'runtime.js'),

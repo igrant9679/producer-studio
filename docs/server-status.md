@@ -198,6 +198,24 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   and `pricePerSecond` comes from fal's price list (only while it names the model in use). *Full motion*: a brief's
   `motion: 'full'` makes every scene a clip (the writer is told so, scenes of 12-24 words, about one per 8 s) and allows
   `MAX_AI_CLIPS_FULL_MOTION` (16) clips; the wizard shows an estimate of the clips and their cost before assembly.
+  **Blender scenes** (12 Nov 2026). A drawing style, `blender`: the space's animation model writes a Blender 5.2 Python
+  script (`def build(scene, env)`, `BLENDER_SYSTEM` in `ai/drawn.ts`) that builds, lights and keyframes the scene; the
+  same write, fix (2) and look (3) loop tries it as half-size test renders. `media/blender.ts` runs it on this
+  computer's Blender (desktop edition, or `BLENDER_LOCAL=1`; found at `BLENDER_PATH` or where Blender installs) and
+  `media/runpod.ts` on a graphics card rented from RunPod with the space's own media key (`runpod`, Settings → AI, web
+  edition; needs S3 storage): one pod per video (`RUNPOD_GPUS`, RunPod's CUDA image, Blender 5.2.4 from blender.org
+  checked against its SHA-256), deleted when the video's visuals are done; the pod deletes itself after 30 min without
+  a job or 4 h in all. The server never connects to the pod and gives it no key: one presigned manifest link, jobs
+  written to presigned slots in storage, results uploaded through presigned links (`blender/boot.sh`, `blender/pod.py`).
+  Blender always runs `blender/harness.py`: the script is parsed and refused if it imports anything beyond bpy, bmesh,
+  mathutils, math, random, colorsys, names exec/eval/open/getattr and the like, touches `_` attributes, file, path,
+  script, handler or driver-expression APIs, or bpy.ops outside modelling; while it runs an audit hook refuses files,
+  imports, processes and the network (processes and network stay refused while rendering); Blender starts with factory
+  settings, auto-run scripts off, a throwaway folder and no secrets in its environment. Renders: EEVEE, falling back to
+  Cycles (OptiX/CUDA, else CPU). Without Blender or a key the style is not offered (`ProduceCapabilities.blender`), and
+  a brief that asks for it is drawn in `studio3d` with a note. ⚠ Windows with Smart App Control on blocks the blender.org
+  zip (its `blender_cpu_check.dll` is unsigned) and blender.org's MSIX is unsigned too: install Blender from the Microsoft
+  Store there (found through its `WindowsApps\blender.exe` alias). Not yet run against a real Blender or a real RunPod key.
   **Music and sound effects** (3 Nov 2026): a brief's `music` (`'auto'` = a style that suits the tone, one of core's
   `MUSIC_STYLES`, or `'off'`/absent = none) and `soundEffects` (absent = none; the wizard defaults new briefs to `'auto'`
   and on). The music is composed for the video on its scene cuts by huashu-motion's score engine (MIT), vendored in

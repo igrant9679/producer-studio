@@ -14,7 +14,7 @@ import { type AiSettingsDoc, isMediaKey, keyMeta, loadDoc, readKey, removeKey, s
 
 export const aiSettingsRoutes = new Hono<AppEnv>()
 
-const Provider = z.enum(['openai', 'gemini', 'anthropic', 'fal'])
+const Provider = z.enum(['openai', 'gemini', 'anthropic', 'fal', 'runpod'])
 const Choice = z.enum(['builtin', 'openai', 'gemini', 'anthropic'])
 const ModelId = z
   .string()
@@ -38,7 +38,7 @@ const ownerOnly = (c: Context<AppEnv>, workspaceId: string | undefined) =>
 
 function providerParam(c: Context<AppEnv>): StoredKeyProvider {
   const r = Provider.safeParse(c.req.param('provider'))
-  if (!r.success) throw invalid('provider must be openai, gemini, anthropic or fal')
+  if (!r.success) throw invalid('provider must be openai, gemini, anthropic, fal or runpod')
   return r.data
 }
 

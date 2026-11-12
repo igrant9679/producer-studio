@@ -154,3 +154,39 @@ describe('what the AI clips will cost', () => {
     expect(aiClipEstimate(many, { ...falCaps, video: { ...falCaps.video!, pricePerSecond: undefined } })!.cost).toBeUndefined()
   })
 })
+
+describe('Blender scenes', () => {
+  it('the Blender style is offered only where scenes can render in Blender, and says where and what it costs', async () => {
+    vi.spyOn(api, 'produceCapabilities').mockResolvedValue(falCaps)
+    showIdea({ visualKinds: ['motion', 'drawn'] })
+    const pick = (await screen.findByLabelText('How AI-drawn scenes are drawn')) as HTMLSelectElement
+    await waitFor(() => expect(screen.queryByText('Checking…')).toBeNull())
+    expect(within(pick).queryByRole('option', { name: 'Blender (cinematic 3D)' })).toBeNull()
+    cleanup()
+    vi.spyOn(api, 'produceCapabilities').mockResolvedValue({ ...falCaps, blender: { where: 'runpod', version: 'Blender 5.2' } })
+    showIdea({ visualKinds: ['motion', 'drawn'] })
+    const again = (await screen.findByLabelText('How AI-drawn scenes are drawn')) as HTMLSelectElement
+    await waitFor(() => expect(within(again).getByRole('option', { name: 'Blender (cinematic 3D)' })).toBeTruthy())
+    fireEvent.change(again, { target: { value: 'blender' } })
+    expect(st().brief.drawingStyle).toBe('blender')
+    expect(screen.getByText(/rented from RunPod for this video \(about \$0\.70 an hour, billed to your RunPod account\)/)).toBeTruthy()
+  })
+
+  it('on the desktop it renders with this computer’s Blender', async () => {
+    vi.spyOn(api, 'produceCapabilities').mockResolvedValue({ ...falCaps, blender: { where: 'computer', version: 'Blender 5.2.4' } })
+    showIdea({ visualKinds: ['motion', 'drawn'], drawingStyle: 'blender' })
+    expect(await screen.findByText(/Rendered by Blender 5\.2\.4 on this computer/)).toBeTruthy()
+  })
+
+  it('a RunPod key is stored like the fal.ai key, on the web edition only', async () => {
+    vi.spyOn(systemApi, 'aiSettings').mockResolvedValue(settings({ media: { runpod: { hasKey: true, keyLast4: 'WXYZ', valid: true } } }))
+    render(<AiProviders desktop={false} renderBuiltin={() => null} />)
+    const card = await screen.findByLabelText('RunPod (Blender scenes)')
+    expect(within(card).getByText(/One card per video/)).toBeTruthy()
+    expect((within(card).getByLabelText('API key') as HTMLInputElement).placeholder).toContain('WXYZ')
+    cleanup()
+    render(<AiProviders desktop renderBuiltin={() => null} />)
+    await screen.findByLabelText('Default AI provider')
+    expect(screen.queryByLabelText('RunPod (Blender scenes)')).toBeNull()
+  })
+})

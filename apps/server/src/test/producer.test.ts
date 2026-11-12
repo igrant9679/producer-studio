@@ -199,6 +199,17 @@ describe('Producer AI assembly', () => {
     expect((again.p.ai!.script!.scenes[0].visual as { assetId?: string }).assetId).toBe(made.assetId)
   }, 240_000)
 
+  it('Blender scenes with no Blender here (no RunPod key, no Blender on the server) are drawn in the 3D studio style, and say why', async () => {
+    const id = await newProject('Blender')
+    const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes: [{ ...scenes[0], visual: { kind: 'drawn', prompt: 'A robot waves' } }], brief: { ...brief, source: 'idea', idea: 'Robots', drawingStyle: 'blender' } })
+    expect(r.status).toBe(200)
+    const job = (await getJob(r.body.id))!
+    const out = await produceAssemble(inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }))
+    expect(out.notes).toContain('Blender scenes were drawn in the 3D studio style instead: Blender scenes need a RunPod key in Settings → AI')
+    // and the capabilities don't offer it
+    expect((await client.json('GET', `/api/ai/produce/capabilities?workspaceId=${workspaceId}`)).body.blender).toBeUndefined()
+  }, 120_000)
+
   it('assembles your own image from the library, and never one from another space', async () => {
     const id = await newProject('From my photos')
     const me = (await client.json('GET', '/api/auth/me')).body.user.id as string

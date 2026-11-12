@@ -13,8 +13,8 @@ import type { AiScope } from './provider'
 import { openKey, sealKey } from './secrets'
 
 export const KEY_PROVIDERS: AiKeyProvider[] = ['anthropic', 'gemini', 'openai']
-/** Keys that only make media (never a writing provider): fal.ai for Wan clips. */
-export const MEDIA_KEY_PROVIDERS: MediaKeyProvider[] = ['fal']
+/** Keys that only make media (never a writing provider): fal.ai for Wan clips, RunPod for Blender scenes. */
+export const MEDIA_KEY_PROVIDERS: MediaKeyProvider[] = ['fal', 'runpod']
 const STORED: StoredKeyProvider[] = [...KEY_PROVIDERS, ...MEDIA_KEY_PROVIDERS]
 export const isMediaKey = (p: StoredKeyProvider): p is MediaKeyProvider => (MEDIA_KEY_PROVIDERS as string[]).includes(p)
 export const FEATURES: AiFeature[] = ['writer', 'script', 'assistant', 'animation']
@@ -37,7 +37,7 @@ const DocSchema = z.object({
   defaultProvider: Choice.nullable().catch(null),
   perFeature: z.object({ writer: Choice.optional(), script: Choice.optional(), assistant: Choice.optional(), animation: Choice.optional() }).catch({}),
   providers: z.object({ openai: ProviderDocSchema.optional(), gemini: ProviderDocSchema.optional(), anthropic: ProviderDocSchema.optional() }).catch({}),
-  media: z.object({ fal: MediaDocSchema.optional() }).catch({}).optional(),
+  media: z.object({ fal: MediaDocSchema.optional(), runpod: MediaDocSchema.optional() }).catch({}).optional(),
   videoProvider: z.enum(['gemini', 'fal']).nullable().optional().catch(undefined),
   animationModel: z.string().max(200).nullable().optional().catch(undefined),
 })

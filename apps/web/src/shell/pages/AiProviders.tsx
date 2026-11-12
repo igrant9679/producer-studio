@@ -29,6 +29,12 @@ const META: Record<StoredKeyProvider, ProviderMeta> = {
     keyUrl: 'https://fal.ai/dashboard/keys',
     placeholder: 'key id:secret',
   },
+  runpod: {
+    name: 'RunPod (Blender scenes)',
+    sub: 'Renders Blender scenes on a graphics card rented by the second, billed to your RunPod account. Used for Blender scenes only, never for writing.',
+    keyUrl: 'https://www.runpod.io/console/user/settings',
+    placeholder: 'rpa_…',
+  },
 }
 const ORDER: AiKeyProvider[] = ['anthropic', 'gemini', 'openai']
 const SHORT: Record<AiKeyProvider, string> = { anthropic: 'Claude (your key)', gemini: 'Gemini', openai: 'OpenAI' }
@@ -134,10 +140,10 @@ function ModelPicker({ provider, info, disabled, onSave }: { provider: AiKeyProv
 
 function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: StoredKeyProvider; s: AiSettings; desktop: boolean; workspaceId?: string; onSettings: (s: AiSettings) => void }) {
   const meta = META[provider]
-  const media = provider === 'fal'
-  const info = media ? s.media?.fal : s.providers[provider]
+  const media = provider === 'fal' || provider === 'runpod'
+  const info = media ? s.media?.[provider] : s.providers[provider]
   const textInfo = media ? undefined : s.providers[provider]
-  const okDetail = media ? `✓ valid${s.media?.fal?.price ? ` · ${s.media.fal.price}` : ''}` : `✓ valid · ${textInfo?.models?.length ?? 0} models`
+  const okDetail = media ? `✓ valid${s.media?.[provider]?.price ? ` · ${s.media[provider]?.price}` : ''}` : `✓ valid · ${textInfo?.models?.length ?? 0} models`
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState<'save' | 'test' | 'remove' | 'model'>()
   const [result, setResult] = useState<{ ok: boolean; detail: string }>()
@@ -145,7 +151,7 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
   const canEdit = s.canEdit
   const status = result ?? (info?.hasKey ? (info.valid === false ? { ok: false, detail: info.error || 'The key didn’t work' } : info.valid ? { ok: true, detail: okDetail } : undefined) : undefined)
   const isDefault = !media && s.defaultProvider === provider
-  const inUse = media ? clipMaker(s) === 'fal' : Object.values(s.effective).some((e) => e.provider === (provider === 'anthropic' ? 'anthropic-key' : provider))
+  const inUse = media ? provider === 'fal' && clipMaker(s) === 'fal' : Object.values(s.effective).some((e) => e.provider === (provider === 'anthropic' ? 'anthropic-key' : provider))
 
   async function run<T>(what: typeof busy, fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(what)
@@ -223,9 +229,14 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
             }}
           />
         )}
-        {media && (
+        {provider === 'fal' && (
           <div className="ps-hint" style={{ alignSelf: 'center' }}>
             Wan 2.2 at 720p, up to 10 seconds a clip. When fal.ai retires Wan 2.2 (it says 4 January 2027), clips move to Wan 2.7 by themselves.
+          </div>
+        )}
+        {provider === 'runpod' && (
+          <div className="ps-hint" style={{ alignSelf: 'center' }}>
+            One card per video (an RTX 4090 when RunPod has one, about $0.70 an hour), started for the first Blender scene and given back when the video is done. Needs a key with read and write access.
           </div>
         )}
       </div>
@@ -523,6 +534,7 @@ export function AiProviders({
       {s && ORDER.map((p) => <KeyCard key={`${workspaceId ?? ''}:${p}`} provider={p} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />)}
       {s && <ProviderSelectors key={workspaceId ?? ''} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
       {s && <KeyCard key={`${workspaceId ?? ''}:fal`} provider="fal" s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
+      {s && !desktop && <KeyCard key={`${workspaceId ?? ''}:runpod`} provider="runpod" s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
       {s && <AnimationModelChoice key={`${workspaceId ?? ''}:animation`} s={s} workspaceId={workspaceId} onSettings={apply} />}
       {s && <VideoClipChoice key={`${workspaceId ?? ''}:video`} s={s} workspaceId={workspaceId} onSettings={apply} />}
     </div>
