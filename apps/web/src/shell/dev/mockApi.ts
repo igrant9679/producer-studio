@@ -4,6 +4,7 @@
 // Disable:  delete localStorage.psMock; location.reload()      (or ?psmock=0)
 // Mode:     localStorage.psMockMode = 'desktop' | 'cloud'      (or ?psmockmode=desktop) — drives GET /api/system
 // Operator: localStorage.psMockOperator = '1'                  — the mock user gets the Operator page (P-10)
+// Clips:    localStorage.psMockClips = '1'                     — AI pictures and Wan clips (picture first) are on offer
 //
 // Intercepts window.fetch for /api/*, replaces EventSource for /api/events, fakes the upload PUT (XHR), and
 // rewrites /api/media/* and voice-sample URLs on <img>/<video>/<audio> to the bundled /public/demo media.
@@ -1005,7 +1006,21 @@ on('POST', '/api/ai/write', async (_m, _q, b) => {
   return writeStream(String(b.prompt ?? ''), String(b.kind ?? 'voiceover'))
 })
 // like the server for a space with no AI image/video key and no stock key: animated text and diagrams only
-on('GET', '/api/ai/produce/capabilities', () => json({ stock: false, kinds: ['motion', 'diagram'], maxAiClips: 3 }))
+// localStorage.psMockClips = '1': the space has Gemini (pictures) and fal.ai (Wan clips, picture first) keys
+on('GET', '/api/ai/produce/capabilities', () =>
+  json(
+    localStorage.getItem('psMockClips') === '1'
+      ? {
+          stock: false,
+          kinds: ['motion', 'diagram', 'drawn', 'image', 'aiVideo'],
+          maxAiClips: 3,
+          maxAiClipsFullMotion: 16,
+          image: { provider: 'gemini', model: 'gemini-3.1-flash-image' },
+          video: { provider: 'fal', model: 'fal-ai/wan/v2.2-a14b/text-to-video', maxSeconds: 10, fromPicture: true, pricePerSecond: 0.08 },
+        }
+      : { stock: false, kinds: ['motion', 'diagram'], maxAiClips: 3 },
+  ),
+)
 function fakeIdeaScenes(title: string): ScriptScene[] {
   const t = title || 'Your idea'
   return [

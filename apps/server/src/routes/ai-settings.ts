@@ -75,9 +75,10 @@ aiSettingsRoutes.put('/settings', async (c) => {
     z.object({
       workspaceId: z.string().max(100).optional(),
       defaultProvider: Choice.nullable().optional(),
-      perFeature: z.object({ writer: Choice.nullable().optional(), script: Choice.nullable().optional(), assistant: Choice.nullable().optional() }).optional(),
+      perFeature: z.object({ writer: Choice.nullable().optional(), script: Choice.nullable().optional(), assistant: Choice.nullable().optional(), animation: Choice.nullable().optional() }).optional(),
       models: z.object({ openai: ModelId.optional(), gemini: ModelId.optional(), anthropic: ModelId.optional() }).optional(),
       videoProvider: z.enum(['gemini', 'fal']).nullable().optional(),
+      animationModel: ModelId.nullable().optional(),
     }),
   )
   const { scope, canEdit } = await ownerOnly(c, b.workspaceId)
@@ -102,6 +103,7 @@ aiSettingsRoutes.put('/settings', async (c) => {
     if (b.videoProvider) usable(b.videoProvider)
     doc.videoProvider = b.videoProvider
   }
+  if (b.animationModel !== undefined) doc.animationModel = b.animationModel?.trim() || null
   for (const [p, m] of Object.entries(b.models ?? {}) as Array<[AiKeyProvider, string | undefined]>) {
     if (m === undefined) continue
     doc.providers[p] = { ...(doc.providers[p] ?? {}), model: m }

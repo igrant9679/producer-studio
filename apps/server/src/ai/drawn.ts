@@ -5,9 +5,10 @@
 // narration) and video-director (github.com/win4r/video-director: plan in numbers, draw from the clock alone, check
 // what you can't watch). The media the drawings can use (pencil, ink, watercolour, chalk, riso, paper, marks that draw
 // themselves) are anidoodle's (github.com/alexgreensh/anidoodle, Apache-2.0, vendored in vendor/anidoodle); the
-// drawing styles' recipes are ours.
+// drawing styles' recipes are ours. The 3D styles draw with three.js (MIT, vendored in vendor/three) on a lit stage the
+// sandbox builds (env.stage3d); THREE_GUIDE below is how the model is told to use it.
 import * as z from 'zod/v4'
-import { DRAWING_STYLES, type DrawingStyleId } from '@producer/core'
+import { DRAWING_STYLES, type DrawingStyleId, is3dDrawingStyle } from '@producer/core'
 import { HttpError } from '../http'
 import { log } from '../log'
 import { DrawingError, type DrawingEnv, testDrawing } from '../media/drawing'
@@ -129,7 +130,38 @@ export const DRAWING_RECIPES: Record<DrawingStyleId, { canvas?: string; ink?: st
     recipe:
       "A whiteboard explainer: everything drawn on stroke by stroke as it is named (env.marks.contour / d.pen with progress, the 'marker' medium), a black marker for everything and the accent marker for the key thing, short hand-lettered labels, simple stick-and-shape figures. No textures, no fills but quick marker scribbles.",
   },
+  clay3d: {
+    canvas: '#efe6d8',
+    ink: '#3b3330',
+    recipe:
+      "3D clay animation, like a stop-motion short. Use the 3D stage (env.stage3d) and env.material3d(colour, 'clay') for everything: soft, chunky, rounded forms (RoundedBoxGeometry with a generous radius, spheres, capsules, lathed shapes), a warm palette of three to five muted colours plus the accent for the hero. Paint a soft backdrop first (a vertical gradient from a lighter tint of the canvas colour to the canvas colour), then the stage. Characters are chunky toy figures with big heads that act with weight (squash on landing, anticipation, a happy bounce). A slow camera push or a gentle orbit.",
+  },
+  studio3d: {
+    canvas: '#e7eaef',
+    ink: '#1f2329',
+    recipe:
+      "A polished 3D product film. Use the 3D stage (env.stage3d) with env.material3d 'glossy', 'metal' and 'glass' materials, the accent glossy on the hero object and calm neutrals elsewhere. Paint a seamless studio backdrop first (a radial gradient, light in the middle, the canvas colour at the edges), keep the ground shadow soft (shadow 0.15). Few objects and generous space; they float, turn and assemble with elegant easing, and the camera moves slowly like a cinema dolly or orbit. A cool, clean, premium feel.",
+  },
+  isometric3d: {
+    canvas: '#eef3f6',
+    ink: '#1d2a33',
+    recipe:
+      "A tidy 3D isometric explainer world. Use the 3D stage (env.stage3d, { fov: 14 }) with the camera far up and to one side (about (14, 13, 14), looking at the middle of the scene) for an almost isometric view, and a low platform (a RoundedBoxGeometry slab) the scene sits on. Little buildings, devices, roads, arrows as tubes, people as simple capsule figures; 'matte' and 'plastic' materials in a fresh palette with the accent for what matters. Things pop up onto the platform on the words that name them (scale up from 0 with env.ease.back) and flows travel along paths. Paint a soft gradient backdrop first; 2D labels pinned to things with s.project.",
+  },
 }
+
+/** How to draw in 3D: given with the 3D styles' recipes only (the stage and three.js load for code that uses them). */
+export const THREE_GUIDE = `3D (THREE.JS ON A LIT STAGE)
+- const s = env.stage3d('main', (THREE, st) => { /* build once: meshes, groups */ return { /* the parts you pose */ } }, { fov, background, ground, shadow, groundY, environment, key, fill, rim, shadows }). It is built once (like env.memo) with a studio light: a soft key light with shadows, a fill, a rim light and soft reflections, a perspective camera at (0, 2.2, 9) looking at (0, 0.8, 0) (fov 35), and a ground at y = 0 that shows only shadows. Options are optional.
+- The 2D canvas is behind the 3D picture (its background is transparent): paint the background with ctx first (a gradient, a backdrop, the paper), then pose and s.render(ctx), then any 2D labels or marks on top.
+- Every frame, pose everything from t: positions, rotations, scales, the camera (s.camera.position.set(...); s.camera.lookAt(...)), any colour you change. Set each changing property every frame and never accumulate (no += from frame to frame): frames are drawn out of order.
+- st.add(obj, ...) adds things that cast and catch shadows; s.parts is what the build returned; s.project(objectOrPoint) gives { x, y } in frame pixels, for 2D labels pinned to 3D things; s.camera, s.scene, s.lights.{key, fill, rim} and s.ground are there too.
+- env.material3d(colour, kind) gives shared, good-looking materials: 'clay', 'plastic', 'glossy', 'metal', 'glass', 'matte', 'glow'. Use few colours: the accent for the hero, tints and calm natural colours for the rest.
+- Shapes (env.THREE = THREE): RoundedBoxGeometry(w, h, d, 4, radius), SphereGeometry(r, 32, 24), CapsuleGeometry(r, length, 8, 16), CylinderGeometry, ConeGeometry, TorusGeometry, LatheGeometry (a profile spun round: bottles, vases, bodies, trees), ExtrudeGeometry of a THREE.Shape with a bevel (icons, arrows, signs, a map's regions), TubeGeometry along a CatmullRomCurve3 (cables, paths, flows). Build objects and characters from THREE.Group, with each moving part on its own group whose origin is the pivot.
+- Characters: appealing toy-like figures: a capsule body, a big sphere head, small dot eyes, capsule arms and legs hung from shoulder and hip groups (rotate those groups to walk, wave, point, shrug), consistent proportions; animate with weight: anticipation before a move, overshoot and settle after, a little bob while idle.
+- Space: units are metres; at the default camera the frame is about 10 wide. Keep the subject within x -4..4 and y 0..4.5 (landscape; narrower for vertical) and out of the top 22% and bottom 16% of the frame.
+- Motion: ease everything (env.progress, env.ease.out / back / inOut); things enter on their words (scale up from 0 with env.ease.back, drop in and squash, slide in); the camera moves slowly and smoothly (a dolly in, a gentle orbit), never jerks.
+- Keep it light: under about 60 meshes and modest segments; no textures, images, loaders or 3D text (text is 2D, on top).`
 
 /** The palette a style is drawn in: its own paper and ink, the brand's accent ('clean' keeps the brand's). */
 export function drawingPalette(style: DrawingStyleId, brand: DrawingEnv['palette']): DrawingEnv['palette'] {
@@ -144,7 +176,7 @@ export function buildDrawingPrompt(o: { description: string; narration: string; 
 
 WHAT TO DRAW (the director's note)
 ${o.description.trim()}
-${style ? `\nDRAWING STYLE: ${style.label}. ${DRAWING_RECIPES[style.id].recipe}\n` : ''}
+${style ? `\nDRAWING STYLE: ${style.label}. ${DRAWING_RECIPES[style.id].recipe}\n` : ''}${style && is3dDrawingStyle(style.id) ? `\n${THREE_GUIDE}\n` : ''}
 ${o.silent ? `WHAT HAPPENS IN THIS SCENE (nobody speaks: the drawing has to tell it alone, so leave nothing to a voice)` : `THE NARRATION OF THIS SCENE (what the voice says while it plays)`}
 ${o.narration.trim()}
 
@@ -168,9 +200,14 @@ const fence = (code: string) =>
 /** Where frames are looked at: early, the middle, late, and the settled end. */
 export const LOOK_AT = [0.18, 0.45, 0.72, 0.97]
 
+/** Fixes asked for when the code fails to run, and looks at its frames (each look may fix what it sees). */
+export const MAX_FIXES = 2
+export const MAX_LOOKS = 3
+
 /**
- * The drawing code for one scene: written, run in the sandbox (one fix when it fails), then looked at once. Throws
- * HttpError when no working code came back.
+ * The drawing code for one scene: written, run in the sandbox (up to MAX_FIXES fixes when it fails), then looked at
+ * up to MAX_LOOKS times, each look fixing what it sees until the model finds nothing to change. Throws HttpError when
+ * no working code came back.
  */
 export async function writeDrawing(
   provider: AiProvider,
@@ -182,16 +219,19 @@ export async function writeDrawing(
   let code = fence(first.code).slice(0, MAX_CODE_CHARS)
   const plan = first.plan
   let frames: Buffer[]
-  o.progress?.(0.4, 'Trying the animation')
-  try {
-    frames = await testDrawing(code, o.env, times, o.signal)
-  } catch (err) {
-    if (!(err instanceof DrawingError)) throw err
-    log.info('drawing failed; asking for a fix', { error: err.message, at: err.at })
-    o.progress?.(0.5, 'Fixing the animation')
-    const fixed = await provider.structured({
-      system: DRAWN_SYSTEM,
-      prompt: `${buildDrawingPrompt(o)}
+  o.progress?.(0.3, 'Trying the animation')
+  for (let fix = 0; ; fix++) {
+    try {
+      frames = await testDrawing(code, o.env, times, o.signal)
+      break
+    } catch (err) {
+      if (!(err instanceof DrawingError)) throw err
+      if (fix >= MAX_FIXES) throw new HttpError(502, 'server', `the AI’s animation didn’t run (${err.message.slice(0, 120)})`)
+      log.info('drawing failed; asking for a fix', { error: err.message, at: err.at, fix: fix + 1 })
+      o.progress?.(0.35 + fix * 0.08, 'Fixing the animation')
+      const fixed = await provider.structured({
+        system: DRAWN_SYSTEM,
+        prompt: `${buildDrawingPrompt(o)}
 
 YOUR CODE FAILED${err.at !== undefined ? ` at t = ${err.at.toFixed(2)} s` : ''}: ${err.message}
 
@@ -199,49 +239,47 @@ THE CODE
 ${code}
 
 Fix it and return the plan and the full code.`,
-      images: [],
-      schema: DrawingSchema,
-      signal: o.signal,
-    })
-    code = fence(fixed.code).slice(0, MAX_CODE_CHARS)
-    try {
-      frames = await testDrawing(code, o.env, times, o.signal)
-    } catch (again) {
-      if (!(again instanceof DrawingError)) throw again
-      throw new HttpError(502, 'server', `the AI’s animation didn’t run (${again.message.slice(0, 120)})`)
+        images: [],
+        schema: DrawingSchema,
+        signal: o.signal,
+      })
+      code = fence(fixed.code).slice(0, MAX_CODE_CHARS)
     }
   }
-  // one look at its own frames, as a viewer would see them
-  o.progress?.(0.65, 'Checking the animation')
-  const images: ScriptImage[] = frames.map((data, i) => ({ label: `Frame at ${times[i].toFixed(1)} s:`, mediaType: 'image/jpeg', data: data.toString('base64') }))
-  try {
-    const review = await provider.structured({
-      system: DRAWN_SYSTEM,
-      prompt: `${buildDrawingPrompt(o)}
+  // looks at its own frames, as a viewer would see them; each fix that runs is kept, and the next look sees it
+  for (let look = 0; look < MAX_LOOKS; look++) {
+    o.progress?.(0.55 + look * 0.13, look ? 'Checking the animation again' : 'Checking the animation')
+    const images: ScriptImage[] = frames.map((data, i) => ({ label: `Frame at ${times[i].toFixed(1)} s:`, mediaType: 'image/jpeg', data: data.toString('base64') }))
+    try {
+      const review = await provider.structured({
+        system: DRAWN_SYSTEM,
+        prompt: `${buildDrawingPrompt(o)}
 
-THE CODE YOU WROTE
+THE CODE YOU WROTE${look ? ` (after ${look} round${look > 1 ? 's' : ''} of your own fixes)` : ''}
 ${code}
 
-The images that follow are frames of it at ${times.map((t) => `${t.toFixed(1)} s`).join(', ')}. Look at them as a viewer: is the scene clear, does it show the director's note, does something move between them, is anything cut off, cluttered, unreadable or inside the top 22% headline band or the bottom 16% caption band? If anything is wrong, fix it in the code; otherwise return the code unchanged with changed = false.`,
-      images,
-      schema: ReviewSchema,
-      signal: o.signal,
-    })
-    const next = fence(review.code).slice(0, MAX_CODE_CHARS)
-    if (review.changed && next && next !== code) {
+The images that follow are frames of it at ${times.map((t) => `${t.toFixed(1)} s`).join(', ')}. Look at them as a viewer and as a demanding art director: is the scene clear, does it show the director's note, does something meaningful move between them, does it look finished and polished (composition, depth, colour, line and shape quality, nothing crude or placeholder-like), is anything cut off, cluttered, unreadable or inside the top 22% headline band or the bottom 16% caption band? If anything can be clearly better, fix it in the code; otherwise return the code unchanged with changed = false.`,
+        images,
+        schema: ReviewSchema,
+        signal: o.signal,
+      })
+      const next = fence(review.code).slice(0, MAX_CODE_CHARS)
+      if (!review.changed || !next || next === code) break
       try {
         frames = await testDrawing(next, o.env, times, o.signal)
         code = next
       } catch (err) {
         // the fix broke it: the working version stays
         if (!(err instanceof DrawingError)) throw err
-        log.info('the reviewed drawing failed; keeping the first', { error: err.message })
+        log.info('the reviewed drawing failed; keeping the last working one', { error: err.message, look: look + 1 })
+        break
       }
+    } catch (err) {
+      if (o.signal?.aborted) throw err
+      // a review that fails costs nothing: the code already runs
+      log.warn('drawing review failed', { error: err instanceof Error ? err.message : String(err) })
+      break
     }
-  } catch (err) {
-    if (o.signal?.aborted) throw err
-    // a review that fails costs nothing: the code already runs
-    log.warn('drawing review failed', { error: err instanceof Error ? err.message : String(err) })
   }
   return { code, plan, frames }
 }

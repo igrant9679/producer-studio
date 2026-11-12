@@ -609,6 +609,11 @@ export interface ProducerMeta {
     lengthSec?: number
     /** How AI-drawn scenes are drawn (DRAWING_STYLES; absent: 'clean'). */
     drawingStyle?: string
+    /** The look of the video's AI pictures and clips (AI_LOOKS; absent or 'auto': each prompt's own). */
+    aiLook?: string
+    /** 'full': every scene is an AI video clip (source = idea; needs a key that makes clips). Absent: AI clips only
+     * where they matter most. */
+    motion?: 'full'
     /** Scene visuals the writer may use (source = idea); AI images and clips also need a key that can make them. Your
      * own clips and images (`media`) come with the script request's asset ids, not this list. */
     visualKinds?: VisualKind[]

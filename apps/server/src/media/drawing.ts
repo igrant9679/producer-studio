@@ -6,7 +6,9 @@
 // DOM, no network. `env` (below, `ENV_HELPERS`) holds the size, the brand palette and fonts, the narration's word
 // timings, Rough.js (hand-drawn shapes, MIT, roughjs.com), easing helpers, and anidoodle's art core (Apache-2.0,
 // vendor/anidoodle: pencil, ink, riso and chalk media, watercolour washes, shaded forms, paper textures, strokes that
-// draw themselves, hatching), with `env.memo` to build marks once per page.
+// draw themselves, hatching), with `env.memo` to build marks once per page. Drawings that use 3D (`env.stage3d`, the 3D
+// drawing styles) also get three.js (MIT, vendor/three) and a lit studio stage; their page renders WebGL on Chrome's
+// software renderer (SwiftShader), so no GPU is needed and every machine draws the same frames.
 //
 // The code is the model's, and the model read text a person typed, so it is treated as hostile:
 //   - the page has a CSP that allows inline script and nothing else (no fetch, no images or fonts from anywhere
@@ -14,7 +16,8 @@
 //   - Chrome is started with a proxy that goes nowhere (every request fails, loopback included) and WebRTC kept off
 //     UDP; every request the page makes is aborted as well;
 //   - Math.random is seeded and the clocks read the frame's time, so frames are the same every render;
-//   - a frame that takes longer than FRAME_TIMEOUT_MS (an endless loop) ends the run, and the browser is killed.
+//   - a frame that takes longer than FRAME_TIMEOUT_MS (an endless loop) ends the run, and the browser is killed;
+//   - WebGL (SwiftShader) is switched on only for a drawing whose code uses 3D: a smaller surface for all the rest.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
@@ -31,8 +34,12 @@ const require = createRequire(import.meta.url)
 
 /** A frame that takes longer than this (an endless loop, a huge fill) stops the drawing. */
 const FRAME_TIMEOUT_MS = 8_000
-/** The whole render of one scene. */
+/** A 3D drawing's frames: the first compiles its shaders and lights on the software renderer, which takes a while. */
+const FRAME_TIMEOUT_3D_MS = 90_000
+const frameTimeout = (code: string) => (uses3d(code) ? FRAME_TIMEOUT_3D_MS : FRAME_TIMEOUT_MS)
+/** The whole render of one scene (a 3D one draws about four frames a second at 1080p in software, after ~25 s to start). */
 const RENDER_TIMEOUT_MS = 6 * 60_000
+const RENDER_TIMEOUT_3D_MS = 15 * 60_000
 
 export interface DrawingEnv {
   width: number
@@ -72,6 +79,17 @@ function anidoodle(): string {
   doodleSource ??= fs.readFileSync(ANIDOODLE_JS(), 'utf8').replace(/<\/script/gi, '<\\/script')
   return doodleSource
 }
+
+/** three.js r186 with RoomEnvironment and RoundedBoxGeometry, bundled (vendor/three/three.js, scripts/build-three.mjs). */
+export const THREE_JS = () => path.join(SERVER_ROOT, 'vendor', 'three', 'three.js')
+let threeSource: string | undefined
+function three(): string {
+  threeSource ??= fs.readFileSync(THREE_JS(), 'utf8').replace(/<\/script/gi, '<\\/script')
+  return threeSource
+}
+
+/** The drawing uses 3D: its page loads three.js and its browser gets WebGL. */
+export const uses3d = (code: string) => /\benv\s*\.\s*(stage3d|THREE|material3d)\b/.test(code)
 
 /** @font-face rules for the look's fonts (Latin faces, inlined as data: URLs: the page loads nothing). */
 function fontCss(env: DrawingEnv, work: string): string {
@@ -139,10 +157,107 @@ const play = (ctx, inks, t, start, end) => {
     left -= m.cost;
   }
 };
+// 3D (window.THREE, three.js, only on pages of drawings that use it): one WebGL renderer for the page, stages built
+// once (env.memo) and posed from t every frame, rendered with a transparent background over the 2D frame
+const T3 = window.THREE;
+let R3;
+const renderer3d = () => {
+  if (R3) return R3;
+  if (!T3) throw new Error('3D is not loaded on this page: use env.stage3d in the code so the page loads it');
+  const c = document.createElement('canvas');
+  c.width = ENV.width; c.height = ENV.height;
+  let r;
+  try {
+    r = new T3.WebGLRenderer({ canvas: c, antialias: true, alpha: true, preserveDrawingBuffer: true });
+  } catch (e) {
+    throw new Error('3D (WebGL) is not available in this browser');
+  }
+  r.setPixelRatio(1);
+  r.setSize(ENV.width, ENV.height, false);
+  r.setClearColor(0x000000, 0);
+  r.outputColorSpace = T3.SRGBColorSpace;
+  r.toneMapping = T3.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1;
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = T3.PCFSoftShadowMap;
+  R3 = r;
+  return r;
+};
+const MATS = new Map();
+// a few good materials, shared: clay, plastic, glossy, metal, glass, matte, glow
+const material3d = (color, kind = 'plastic', extra = {}) => {
+  const k = String(color) + '|' + kind + '|' + JSON.stringify(extra);
+  if (MATS.has(k)) return MATS.get(k);
+  const c = new T3.Color(color);
+  const base = { color: c, ...extra };
+  const m =
+    kind === 'clay' ? new T3.MeshStandardMaterial({ roughness: 0.92, metalness: 0, ...base })
+    : kind === 'matte' ? new T3.MeshStandardMaterial({ roughness: 0.7, metalness: 0, ...base })
+    : kind === 'glossy' ? new T3.MeshPhysicalMaterial({ roughness: 0.18, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, ...base })
+    : kind === 'metal' ? new T3.MeshStandardMaterial({ roughness: 0.28, metalness: 1, ...base })
+    : kind === 'glass' ? new T3.MeshPhysicalMaterial({ roughness: 0.04, metalness: 0, transmission: 1, thickness: 0.6, ior: 1.45, transparent: true, ...base })
+    : kind === 'glow' ? new T3.MeshStandardMaterial({ roughness: 0.4, emissive: c, emissiveIntensity: 1.6, ...base })
+    : new T3.MeshPhysicalMaterial({ roughness: 0.38, metalness: 0, clearcoat: 0.5, clearcoatRoughness: 0.3, ...base });
+  MATS.set(k, m);
+  return m;
+};
+const stage3d = (name, build, opts = {}) => memo('stage3d:' + name, () => {
+  const renderer = renderer3d();
+  const scene = new T3.Scene();
+  const pmrem = new T3.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new T3.RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = opts.environment ?? 0.85;
+  if (opts.background) scene.background = new T3.Color(opts.background);
+  const camera = new T3.PerspectiveCamera(opts.fov ?? 35, ENV.width / ENV.height, 0.1, 300);
+  camera.position.set(0, 2.2, 9);
+  camera.lookAt(0, 0.8, 0);
+  const key = new T3.DirectionalLight(0xffffff, opts.key ?? 2.4);
+  key.position.set(4, 7, 5);
+  key.castShadow = opts.shadows !== false;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.radius = 5;
+  key.shadow.bias = -0.0004;
+  key.shadow.normalBias = 0.02;
+  Object.assign(key.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 0.5, far: 40 });
+  const fill = new T3.HemisphereLight(0xffffff, 0x8a8a8a, opts.fill ?? 0.55);
+  const rim = new T3.DirectionalLight(0xffffff, opts.rim ?? 1.3);
+  rim.position.set(-5, 4, -6);
+  scene.add(key, key.target, fill, rim);
+  let ground = null;
+  if (opts.ground !== false) {
+    ground = new T3.Mesh(new T3.PlaneGeometry(80, 80), new T3.ShadowMaterial({ opacity: opts.shadow ?? 0.2 }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = opts.groundY ?? 0;
+    ground.receiveShadow = true;
+    scene.add(ground);
+  }
+  const v = new T3.Vector3();
+  const stage = {
+    THREE: T3, scene, camera, renderer, lights: { key, fill, rim }, ground,
+    // add things that cast and catch shadows
+    add: (...objs) => { for (const o of objs) { o.traverse((n) => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; } }); scene.add(o); } return objs[0]; },
+    // where a 3D point (or object) is on the frame, in pixels: for 2D labels and marks over the 3D picture
+    project: (p) => { if (p.isObject3D) p.getWorldPosition(v); else v.set(p.x, p.y, p.z); v.project(camera); return { x: (v.x + 1) / 2 * ENV.width, y: (1 - v.y) / 2 * ENV.height, behind: v.z > 1 }; },
+    render: (ctx) => {
+      camera.aspect = ENV.width / ENV.height;
+      camera.updateProjectionMatrix();
+      renderer.render(scene, camera);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(renderer.domElement, 0, 0, ENV.width, ENV.height);
+      ctx.restore();
+    },
+  };
+  stage.parts = (build && build(T3, stage)) || {};
+  return stage;
+});
 const marks = Object.freeze({ stroke: M.stroke, hatch: M.hatch, contour: M.contour, sketchEllipse: M.sketchEllipse, guideLine: M.guideLine, scribbleDot: M.scribbleDot, polyR: M.polyR, ellR: M.ellR, union: M.union, minus: M.minus, inter: M.inter, edgeDist: M.edgeDist, ellipsePts: M.ellipsePts, lengthOf: M.lengthOf, play });
 `
 
 function page(code: string, env: DrawingEnv, fonts: string): string {
+  const with3d = uses3d(code)
   // JSON in a script: "<" escaped so nothing in it can close the tag
   const json = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
   return `<!doctype html><html><head><meta charset="utf-8">
@@ -152,10 +267,20 @@ html,body{margin:0;padding:0;overflow:hidden;background:${/^#[0-9a-f]{3,8}$/i.te
 <body><canvas id="c" width="${env.width}" height="${env.height}"></canvas>
 <script>${rough()}</script>
 <script>${anidoodle()}</script>
+${with3d ? `<script>${three()}</script>` : ''}
 <script>
 (() => {
   const ENV = ${json(env)};
   ${ENV_HELPERS}
+  // no WebGL for a drawing that doesn't use 3D (the browser flag alone doesn't hold in every Chrome build)
+  if (!window.THREE) {
+    for (const C of [window.HTMLCanvasElement, window.OffscreenCanvas]) {
+      if (!C) continue;
+      const get = C.prototype.getContext;
+      Object.defineProperty(C.prototype, 'getContext', { configurable: false, writable: false, value: function (kind, ...rest) { return /webgl|webgpu|bitmaprenderer/i.test(String(kind)) ? null : get.call(this, kind, ...rest); } });
+    }
+    try { Object.defineProperty(navigator, 'gpu', { value: undefined }); } catch (e) {}
+  }
   for (const k of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'RTCPeerConnection', 'webkitRTCPeerConnection', 'Worker', 'SharedWorker', 'open', 'importScripts']) {
     try { Object.defineProperty(window, k, { value: undefined, configurable: false, writable: false }); } catch (e) {}
   }
@@ -171,6 +296,7 @@ html,body{margin:0;padding:0;overflow:hidden;background:${/^#[0-9a-f]{3,8}$/i.te
   const env = Object.freeze({
     ...plain, W: ENV.width, H: ENV.height, rough: rough.canvas(canvas), clamp, lerp, ease, progress, wordAt, rand, memo, doodle, shapes, marks,
     image: (name) => IMAGES[name], surface, lib: AD, doodleEnv: DENV,
+    THREE: T3, stage3d, material3d,
   });
   let draw;
   try {
@@ -223,7 +349,7 @@ async function open(code: string, env: DrawingEnv, work: string): Promise<{ brow
   const browser = await puppeteer.launch({
     executablePath,
     headless: true,
-    protocolTimeout: FRAME_TIMEOUT_MS + 4_000,
+    protocolTimeout: frameTimeout(code) + 4_000,
     args: [
       ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
       '--disable-dev-shm-usage',
@@ -240,6 +366,8 @@ async function open(code: string, env: DrawingEnv, work: string): Promise<{ brow
       '--hide-scrollbars',
       '--font-render-hinting=none',
       `--window-size=${env.width},${env.height}`,
+      // 3D drawings: WebGL on the software renderer (no GPU needed, the same frames on every machine); none for the rest
+      ...(uses3d(code) ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] : ['--disable-3d-apis', '--disable-webgl', '--disable-webgl2']),
     ],
   })
   try {
@@ -265,13 +393,13 @@ async function close(browser: Browser) {
   if (proc && proc.exitCode === null) proc.kill('SIGKILL')
 }
 
-async function frame(p: Page, t: number, jpeg: boolean): Promise<Buffer | null> {
+async function frame(p: Page, t: number, jpeg: boolean, limitMs = FRAME_TIMEOUT_MS): Promise<Buffer | null> {
   let out: string
   try {
     out = (await p.evaluate((tt: number, j: boolean) => (window as unknown as { __frame: (t: number, j: boolean) => string }).__frame(tt, j), t, jpeg)) as string
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    throw new DrawingError(/timed out/i.test(msg) ? `A frame took longer than ${FRAME_TIMEOUT_MS / 1000} s to draw (an endless loop?)` : msg.slice(0, 300), t)
+    throw new DrawingError(/timed out/i.test(msg) ? `A frame took longer than ${limitMs / 1000} s to draw (an endless loop?)` : msg.slice(0, 300), t)
   }
   if (out.startsWith('error:')) throw new DrawingError(out.slice(6).slice(0, 400), t)
   return jpeg ? Buffer.from(out.slice(out.indexOf(',') + 1), 'base64') : null
@@ -288,14 +416,15 @@ export async function testDrawing(code: string, env: DrawingEnv, times: number[]
   signal?.addEventListener('abort', onAbort, { once: true })
   try {
     // every frame runs (an error anywhere shows up), and the asked-for ones are kept
-    const step = 1 / Math.min(env.fps, 10)
+    // (a 3D drawing at a lower rate: each of its frames costs a quarter of a second in software)
+    const step = 1 / Math.min(env.fps, uses3d(code) ? 4 : 10)
     const last = Math.max(0, Math.ceil(env.duration / step) - 1)
     const at = (t: number) => Math.min(last, Math.max(0, Math.round(t / step)))
     const want = new Set(times.map(at))
     const shots = new Map<number, Buffer>()
     for (let i = 0; i <= last; i++) {
       if (signal?.aborted) throw new CancelledError()
-      const shot = await frame(p, i * step, want.has(i))
+      const shot = await frame(p, i * step, want.has(i), frameTimeout(code))
       if (shot) shots.set(i, shot)
     }
     // one per time asked for, in that order
@@ -311,7 +440,7 @@ export async function testDrawing(code: string, env: DrawingEnv, times: number[]
 export async function renderDrawing(code: string, env: DrawingEnv, outFile: string, opts: { signal?: AbortSignal; onProgress?: (f: number) => void } = {}): Promise<void> {
   const work = tmpDir('drawing')
   const { browser, page: p } = await open(code, env, work)
-  const timer = setTimeout(() => void close(browser), RENDER_TIMEOUT_MS)
+  const timer = setTimeout(() => void close(browser), uses3d(code) ? RENDER_TIMEOUT_3D_MS : RENDER_TIMEOUT_MS)
   const onAbort = () => void close(browser)
   opts.signal?.addEventListener('abort', onAbort, { once: true })
   const frames = Math.max(1, Math.ceil(env.duration * env.fps))
@@ -323,7 +452,7 @@ export async function renderDrawing(code: string, env: DrawingEnv, outFile: stri
   try {
     for (let i = 0; i < frames; i++) {
       if (opts.signal?.aborted) throw new CancelledError()
-      const jpg = (await frame(p, i / env.fps, true))!
+      const jpg = (await frame(p, i / env.fps, true, frameTimeout(code)))!
       if (!enc.stdin.write(jpg)) await new Promise((r) => enc.stdin.once('drain', r))
       if (i % 15 === 0) opts.onProgress?.(i / frames)
     }

@@ -1,4 +1,4 @@
-import { DRAWING_STYLES, MUSIC_STYLES, PRODUCE_LIMITS, drawingStyleOf, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { AI_LOOKS, DRAWING_STYLES, MUSIC_STYLES, PRODUCE_LIMITS, aiLookOf, drawingStyleOf, is3dDrawingStyle, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -340,6 +340,22 @@ function kindStatus(k: Exclude<VisualKind, 'footage'>, caps: ProduceCapabilities
   return caps?.stockSources ? (caps.stockSources.video.length ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint}${fromLibraries(caps.stockSources.video)}.` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }) : caps?.stock ? { available: true, note: `${VISUAL_KIND_INFO.stock.hint}.` } : { available: false, note: 'Stock footage isn’t set up on this server yet' }
 }
 
+/**
+ * The AI clips a script will make and roughly what they cost: clips not made yet (one made before for the same shot
+ * is reused, free), each as long as its scene up to the model's longest clip, at the key's price a second when its
+ * price list gave one. The image painted first for each clip is billed to the image key and isn't counted.
+ */
+export function aiClipEstimate(scenes: ScriptScene[], caps: ProduceCapabilities | undefined, fullMotion = false): { clips: number; seconds: number; cost?: number } | undefined {
+  if (!caps?.video) return undefined
+  const max = fullMotion ? (caps.maxAiClipsFullMotion ?? caps.maxAiClips) : caps.maxAiClips
+  const todo = scenes.filter((sc) => sc.visual?.kind === 'aiVideo' && !sc.visual.assetId).slice(0, max)
+  if (!todo.length) return undefined
+  const seconds = todo.reduce((t, sc) => t + Math.min(caps.video!.maxSeconds, Math.max(2, Math.round(narrationSeconds(sc.narration) + 1))), 0)
+  return { clips: todo.length, seconds, ...(caps.video.pricePerSecond ? { cost: Math.round(seconds * caps.video.pricePerSecond * 100) / 100 } : {}) }
+}
+
+const money = (n: number) => `$${n < 10 ? n.toFixed(2) : Math.round(n)}`
+
 function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) {
   const patch = useWizard((st) => st.patch)
   const b = s.brief
@@ -402,7 +418,38 @@ function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
               <option key={d.id} value={d.id}>{d.label}</option>
             ))}
           </select>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{DRAWING_STYLES.find((d) => d.id === drawingStyleOf(b.drawingStyle))?.about}. Changing it redraws those scenes the next time the video is made.</div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            {DRAWING_STYLES.find((d) => d.id === drawingStyleOf(b.drawingStyle))?.about}.{is3dDrawingStyle(b.drawingStyle) ? ' 3D scenes take a few minutes each to render.' : ''} Changing it redraws those scenes the next time the video is made.
+          </div>
+        </div>
+      )}
+      {caps.data?.video && (
+        <label className={clsx('ps-kind', b.motion === 'full' && 'on')} style={{ marginTop: 12 }}>
+          <input
+            type="checkbox"
+            checked={b.motion === 'full'}
+            disabled={caps.loading}
+            onChange={() => set(b.motion === 'full' ? { motion: undefined } : { motion: 'full', visualKinds: kinds.includes('aiVideo') ? kinds : [...kinds, 'aiVideo'] })}
+          />
+          <span>
+            <strong>Full motion</strong>
+            <span>
+              Every scene becomes an AI video clip{caps.data.video.fromPicture ? ', each starting from a picture painted first' : ''}: a fully animated film. About {Math.max(3, Math.round(len / 8))} clips for this length
+              {caps.data.video.pricePerSecond ? `, roughly ${money(len * caps.data.video.pricePerSecond)}` : ''}, billed to your {caps.data.video.provider === 'fal' ? 'fal.ai' : caps.data.video.provider === 'openai' ? 'OpenAI' : 'Google'} account
+              {caps.data.video.fromPicture && caps.data.image ? ` (the pictures to your ${caps.data.image.provider === 'openai' ? 'OpenAI' : 'Google'} account)` : ''}. Takes a few minutes per clip.
+            </span>
+          </span>
+        </label>
+      )}
+      {(caps.data?.image || caps.data?.video) && (kinds.includes('image') || kinds.includes('aiVideo') || b.motion === 'full') && (
+        <div className="ps-field" style={{ marginTop: 12 }}>
+          <label className="label" htmlFor="ps-ai-look">Look of AI pictures and clips</label>
+          <select id="ps-ai-look" className="input" value={aiLookOf(b.aiLook)} onChange={(e) => set({ aiLook: e.target.value === 'auto' ? undefined : e.target.value })}>
+            {AI_LOOKS.map((l) => (
+              <option key={l.id} value={l.id}>{l.label}</option>
+            ))}
+          </select>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{AI_LOOKS.find((l) => l.id === aiLookOf(b.aiLook))?.about}. The same look for every generated picture and clip, so they belong to one film.</div>
         </div>
       )}
     </>
@@ -865,7 +912,7 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
           </span>
         </div>
       )}
-      {v.kind === 'aiVideo' && caps?.video && !made && <div className="muted ps-visual-hint">Made at assembly: a few minutes, billed per second to your {caps.video.provider === 'openai' ? 'OpenAI' : caps.video.provider === 'fal' ? 'fal.ai' : 'Google'} account.</div>}
+      {v.kind === 'aiVideo' && caps?.video && !made && <div className="muted ps-visual-hint">Made at assembly{caps.video.fromPicture ? ': a picture of the opening frame is painted first, then animated' : ''}: a few minutes, billed per second to your {caps.video.provider === 'openai' ? 'OpenAI' : caps.video.provider === 'fal' ? 'fal.ai' : 'Google'} account.</div>}
     </div>
   )
 }
@@ -1057,6 +1104,7 @@ function ReviewStep({ s, onRewrite, onRenarrate }: { s: WizardState; onRewrite: 
   const kinds: Array<Exclude<VisualKind, 'footage'>> = [...ALL_KINDS.filter((k) => kindStatus(k, caps.data).available), ...(idea && readyAssetIds(s).length ? (['media'] as const) : [])]
   const totalWords = s.scenes.reduce((t, sc) => t + sceneWords(sc.narration), 0)
   const totalSecs = s.scenes.reduce((t, sc) => t + Math.max(narrationSeconds(sc.narration), sc.footage.reduce((a, f) => a + Math.max(0, f.end - f.start), 0)), 0)
+  const clipCost = idea ? aiClipEstimate(s.scenes, caps.data, s.brief.motion === 'full') : undefined
   return (
     <div className="ps-wz-body">
       <div className="ps-wz-intro row" style={{ alignItems: 'flex-end' }}>
@@ -1068,6 +1116,12 @@ function ReviewStep({ s, onRewrite, onRenarrate }: { s: WizardState; onRewrite: 
           <div><strong>{s.scenes.length}</strong><span>scenes</span></div>
           <div><strong>{totalWords}</strong><span>words</span></div>
           <div><strong>{formatDuration(totalSecs)}</strong><span>est. length</span></div>
+          {clipCost && (
+            <div title={`${clipCost.clips} AI clip${clipCost.clips === 1 ? '' : 's'} to make, about ${clipCost.seconds} s of video${clipCost.cost !== undefined ? `, billed per second to your ${caps.data?.video?.provider === 'fal' ? 'fal.ai' : 'Google'} account` : ''}`}>
+              <strong>{clipCost.cost !== undefined ? `≈ ${money(clipCost.cost)}` : clipCost.clips}</strong>
+              <span>{clipCost.cost !== undefined ? `${clipCost.clips} AI clip${clipCost.clips === 1 ? '' : 's'}` : `AI clip${clipCost.clips === 1 ? '' : 's'}`}</span>
+            </div>
+          )}
         </div>
         {s.projectId && (
           <ScriptVersionsButton

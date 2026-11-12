@@ -5,6 +5,7 @@
 //   server/skill/              vendored producer-pipeline skill (looks + house rules)
 //   server/runtime.js          packages/core runtime bundle used by exports (no esbuild at runtime)
 //   server/vendor/anidoodle/   the AI-drawing sandbox's media bundle (Apache-2.0) with its LICENSE and NOTICE
+//   server/vendor/three/       three.js for the sandbox's 3D drawing styles (MIT) with its LICENSE
 //   web/                       apps/web/dist without sourcemaps
 //   tools/                     whisper.cpp + ggml-small.en, Kokoro-82M ONNX, chrome-headless-shell (from build/tools,
 //                              filled by scripts/fetch-tools.mjs)
@@ -67,6 +68,9 @@ fs.cpSync(path.join(serverSrc, 'sfx'), path.join(out, 'sfx'), { recursive: true 
 // the AI-drawing sandbox's media (anidoodle, Apache-2.0): the browser bundle, read from disk, with its licence
 fs.mkdirSync(path.join(out, 'vendor', 'anidoodle'), { recursive: true })
 for (const f of ['anidoodle.js', 'LICENSE', 'NOTICE', 'PROVENANCE.md']) fs.copyFileSync(path.join(serverSrc, 'vendor', 'anidoodle', f), path.join(out, 'vendor', 'anidoodle', f))
+// three.js (MIT) for the 3D drawing styles: the browser bundle with its licence
+fs.mkdirSync(path.join(out, 'vendor', 'three'), { recursive: true })
+for (const f of ['three.js', 'LICENSE', 'PROVENANCE.md']) fs.copyFileSync(path.join(serverSrc, 'vendor', 'three', f), path.join(out, 'vendor', 'three', f))
 await build({
   entryPoints: [path.join(repo, 'packages', 'core', 'src', 'runtime.ts')],
   outfile: path.join(out, 'runtime.js'),

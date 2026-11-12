@@ -1,7 +1,7 @@
 // Videos made from an idea: the writer's scene format, reveal timing, diagram/motion layouts and the timeline.
 import { beforeAll, describe, expect, it } from 'vitest'
-import { createProject, evaluate, itemEnd, projectDuration, type Asset, type Project, type ScriptScene, type VisualKind } from '@producer/core'
-import { buildProducerTimeline, syntheticTranscript } from '../ai/produce'
+import { AI_LOOKS, createProject, evaluate, withAiLook, itemEnd, projectDuration, type Asset, type Project, type ScriptScene, type VisualKind } from '@producer/core'
+import { buildProducerTimeline, firstFramePrompt, syntheticTranscript } from '../ai/produce'
 import { type IdeaMedia, type IdeaScriptOutput, VisualSchema, buildIdeaPrompt, normalizeIdeaScript } from '../ai/scenes'
 import { diagramItems, revealTimes, type SceneFrame } from '../ai/scene-layout'
 import { type Palette, getLook, lookPalette } from '../services/looks'
@@ -77,6 +77,37 @@ describe("the writer's scenes", () => {
     expect(without).not.toContain('YOUR MEDIA')
     expect(without).not.toContain('- media:')
     expect(without).toContain('There are no recordings')
+  })
+
+  it('full motion: every scene a clip, scenes as long as a clip, more of them; a look keeps style out of the prompts', () => {
+    const brief = { title: 'Fox', audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, source: 'idea' as const, idea: 'A fox finds its way home', lengthSec: 60 }
+    const kinds: VisualKind[] = ['motion', 'diagram', 'image', 'aiVideo']
+    const plain = buildIdeaPrompt({ brief, kinds, rules: '', example: '' })
+    expect(plain).toContain('use for at most 2 scenes')
+    expect(plain).not.toContain('FULL MOTION')
+    expect(plain).toContain('About 7 scenes')
+    // the same person, place or thing is described in the same words in every generated picture and clip
+    expect(plain).toContain('Continuity:')
+    const full = buildIdeaPrompt({ brief: { ...brief, motion: 'full' }, kinds, rules: '', example: '' })
+    expect(full).toContain('FULL MOTION: this is an animated film. Make EVERY scene an aiVideo')
+    expect(full).toContain('About 8 scenes')
+    expect(full).toContain('narration 12-24 words per scene')
+    expect(full).not.toContain('use for at most 2 scenes')
+    // full motion needs clips to be on offer
+    expect(buildIdeaPrompt({ brief: { ...brief, motion: 'full' }, kinds: ['motion'], rules: '', example: '' })).not.toContain('FULL MOTION')
+    const look = buildIdeaPrompt({ brief: { ...brief, aiLook: 'claymation' }, kinds, rules: '', example: '' })
+    expect(look).toContain('the video’s look (Claymation) is added to every picture and clip')
+    expect(look).not.toContain('(subject, setting, light, style)')
+    expect(buildIdeaPrompt({ brief: { ...brief, aiLook: 'nonsense' }, kinds, rules: '', example: '' })).not.toContain('video’s look')
+    expect(buildIdeaPrompt({ brief, kinds: ['motion', 'diagram'], rules: '', example: '' })).not.toContain('Continuity:')
+  })
+
+  it('adds the look to every generated prompt, and nothing for automatic', () => {
+    expect(withAiLook('A fox in snow', 'claymation')).toBe(`A fox in snow\n\nVisual style: ${AI_LOOKS.find((l) => l.id === 'claymation')!.prompt}`)
+    expect(withAiLook('A fox in snow', 'auto')).toBe('A fox in snow')
+    expect(withAiLook('A fox in snow', undefined)).toBe('A fox in snow')
+    expect(withAiLook('A fox in snow', 'made-up')).toBe('A fox in snow')
+    expect(firstFramePrompt('A fox runs')).toMatch(/^The opening frame of this shot, as one finished still picture[\s\S]*A fox runs$/)
   })
 
   it('refuses visuals the API must not store', () => {

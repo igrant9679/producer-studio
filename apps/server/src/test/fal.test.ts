@@ -8,6 +8,8 @@ import type { AiSettings } from '@producer/core'
 import { setKeyClients } from '../ai/keys'
 import { generateVideo, generationCapabilities } from '../ai/generate'
 import { type MediaInfo, setGenerateClients } from '../ai/generate/capabilities'
+import { pricePerSecond } from '../ai/generate/fal'
+import { firstFramePrompt, makeAiClip } from '../ai/produce'
 import { CancelledError } from '../jobs/worker'
 import { setup, signup, type TestEnv } from './helpers'
 
@@ -17,6 +19,11 @@ const WAN22 = 'fal-ai/wan/v2.2-a14b/text-to-video'
 const WAN27 = 'fal-ai/wan/v2.7/text-to-video'
 const CDN = 'https://v3.fal.media/files/zebra/clip.mp4'
 const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypmp42'), Buffer.alloc(32, 3)])
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24, 9)])
+const WAN22_I2V = 'fal-ai/wan/v2.2-a14b/image-to-video'
+const WAN27_I2V = 'fal-ai/wan/v2.7/image-to-video'
+/** Gemini's image model (a picture painted first); clips never go to Gemini in these tests. */
+const geminiImage = vi.fn()
 
 interface Call {
   method: string
@@ -95,7 +102,22 @@ beforeEach(() => {
   clock = 5_000_000
   handler = (c) => pricing(c) ?? json(404, {})
   probeResult = async () => ({ duration: 8.06, width: 1280, height: 720 })
+  geminiImage.mockReset()
+  geminiImage.mockResolvedValue({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: PNG.toString('base64') } }] }, finishReason: 'STOP' }] })
   setGenerateClients({
+    gemini: () =>
+      ({
+        models: { generateContent: geminiImage },
+        interactions: {
+          create: async () => {
+            throw new Error('no Gemini clips here')
+          },
+          get: async () => {
+            throw new Error('no Gemini clips here')
+          },
+          cancel: async () => undefined,
+        },
+      }) as never,
     fetch: fetchMock as unknown as typeof fetch,
     probe: (file) => probeResult(file),
     now: () => clock,
@@ -170,7 +192,7 @@ describe('the fal.ai key', () => {
 describe('who makes clips', () => {
   it('fal alone: Wan 2.2, up to 10 s', async () => {
     const A = await space({ fal: FAL_KEY })
-    expect((await generationCapabilities(A.workspaceId)).video).toEqual({ provider: 'fal', model: WAN22, maxSeconds: 10 })
+    expect((await generationCapabilities(A.workspaceId)).video).toEqual({ provider: 'fal', model: WAN22, maxSeconds: 10, pricePerSecond: 0.08 })
     expect((await generationCapabilities(A.workspaceId)).image).toBeUndefined()
   })
 
@@ -332,5 +354,68 @@ describe('a Wan clip', () => {
     expect(await failure(generateVideo({ workspaceId: A.workspaceId, prompt: 'x', aspect: '16:9', seconds: 8, outDir }))).toMatchObject({ status: 502 })
     handler = queue([{ status: 'COMPLETED', error: `GPU worker crashed for ${FAL_KEY}`, error_type: 'runner_error' }])
     expect(await failure(generateVideo({ workspaceId: A.workspaceId, prompt: 'x', aspect: '16:9', seconds: 8, outDir }))).toMatchObject({ status: 502, message: expect.stringContaining('[redacted]') })
+  })
+})
+
+describe('picture first: Wan animates a picture painted first', () => {
+  it('reads the price a second off fal’s price list', () => {
+    expect(pricePerSecond('Wan 2.2: $0.08 per second of video')).toBe(0.08)
+    expect(pricePerSecond('$0.1 per second of video')).toBe(0.1)
+    expect(pricePerSecond('$0.4 per clip')).toBeUndefined()
+    expect(pricePerSecond(undefined)).toBeUndefined()
+  })
+
+  it('is offered when the space can paint a picture as well as make a Wan clip', async () => {
+    const A = await space({ fal: FAL_KEY, gemini: GEMINI_KEY, videoProvider: 'fal' })
+    expect((await generationCapabilities(A.workspaceId)).video).toEqual({ provider: 'fal', model: WAN22, maxSeconds: 10, fromPicture: true, pricePerSecond: 0.08 })
+    // Gemini making the clips: words alone
+    const B = await space({ fal: FAL_KEY, gemini: GEMINI_KEY })
+    expect((await generationCapabilities(B.workspaceId)).video?.fromPicture).toBeUndefined()
+  })
+
+  it('paints the opening frame, then sends it to Wan’s image-to-video as a data URI', async () => {
+    const A = await space({ fal: FAL_KEY, gemini: GEMINI_KEY, videoProvider: 'fal' })
+    calls.length = 0
+    handler = queue([{ status: 'COMPLETED' }], { model: WAN22_I2V })
+    const progress: string[] = []
+    const r = await makeAiClip({ workspaceId: A.workspaceId, prompt: 'a fox runs through snow, camera tracking', aspect: '16:9', seconds: 6, outDir, fromPicture: true, signal: new AbortController().signal, progress: (_f, m) => progress.push(m) })
+    expect(r).toMatchObject({ provider: 'fal', model: WAN22_I2V, fromPicture: true })
+    expect(geminiImage).toHaveBeenCalledTimes(1)
+    const painted = geminiImage.mock.calls[0][0] as { contents: Array<{ parts: Array<{ text: string }> }>; config: { imageConfig: { aspectRatio: string } } }
+    expect(painted.contents[0].parts[0].text).toBe(firstFramePrompt('a fox runs through snow, camera tracking'))
+    expect(painted.config.imageConfig.aspectRatio).toBe('16:9')
+    const submit = calls.find((c) => c.method === 'POST')!
+    expect(submit.url).toBe(`https://queue.fal.run/${WAN22_I2V}`)
+    expect(submit.body).toMatchObject({ prompt: 'a fox runs through snow, camera tracking', aspect_ratio: '16:9', resolution: '720p', num_frames: 97, image_url: `data:image/png;base64,${PNG.toString('base64')}` })
+    expect(progress[0]).toBe('Painting the first frame')
+  })
+
+  it('when fal stops hosting Wan 2.2, Wan 2.7 animates the picture (whole seconds, its aspect from the picture)', async () => {
+    const A = await space({ fal: FAL_KEY, gemini: GEMINI_KEY, videoProvider: 'fal' })
+    const next = queue([{ status: 'COMPLETED' }], { model: WAN27_I2V })
+    handler = (c) => (c.method === 'POST' && c.url === `https://queue.fal.run/${WAN22_I2V}` ? json(404, { detail: 'Application not found' }) : next(c))
+    const r = await makeAiClip({ workspaceId: A.workspaceId, prompt: 'waves', aspect: '9:16', seconds: 12.4, outDir, fromPicture: true, signal: new AbortController().signal, progress: () => undefined })
+    expect(r.model).toBe(WAN27_I2V)
+    const body = calls.find((c) => c.method === 'POST' && c.url.endsWith(WAN27_I2V))!.body!
+    expect(body).toMatchObject({ duration: 12, resolution: '720p' })
+    expect(body.image_url).toMatch(/^data:image\/png;base64,/)
+    expect(body.aspect_ratio).toBeUndefined()
+  })
+
+  it('a picture that can’t be painted (refused) leaves the clip to the words alone', async () => {
+    const A = await space({ fal: FAL_KEY, gemini: GEMINI_KEY, videoProvider: 'fal' })
+    geminiImage.mockResolvedValue({ promptFeedback: { blockReason: 'SAFETY' } })
+    handler = queue([{ status: 'COMPLETED' }])
+    const r = await makeAiClip({ workspaceId: A.workspaceId, prompt: 'x', aspect: '16:9', seconds: 5, outDir, fromPicture: true, signal: new AbortController().signal, progress: () => undefined })
+    expect(r).toMatchObject({ model: WAN22 })
+    expect(r.fromPicture).toBeUndefined()
+    expect(calls.find((c) => c.method === 'POST')!.body?.image_url).toBeUndefined()
+  })
+
+  it('without picture-first, no picture is painted', async () => {
+    const A = await space({ fal: FAL_KEY, gemini: GEMINI_KEY, videoProvider: 'fal' })
+    handler = queue([{ status: 'COMPLETED' }])
+    await makeAiClip({ workspaceId: A.workspaceId, prompt: 'x', aspect: '16:9', seconds: 5, outDir, signal: new AbortController().signal, progress: () => undefined })
+    expect(geminiImage).not.toHaveBeenCalled()
   })
 })

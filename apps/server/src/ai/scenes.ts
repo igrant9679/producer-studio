@@ -3,7 +3,7 @@
 // (editable, on brand, identical in preview and export); AI stills, stock clips and photos, AI clips and the animations'
 // illustrations arrive as assets (ai/generate); the person's own clips and images (`media`) are library assets already.
 import * as z from 'zod/v4'
-import { videoParts, type AnimationStyle, type DiagramType, type SceneDiagram, type SceneVisual, type ScriptScene, type VisualKind } from '@producer/core'
+import { AI_LOOKS, MAX_AI_CLIPS_FULL_MOTION, aiLookOf, videoParts, type AnimationStyle, type DiagramType, type SceneDiagram, type SceneVisual, type ScriptScene, type VisualKind } from '@producer/core'
 import { HttpError } from '../http'
 
 export const VISUAL_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']
@@ -138,15 +138,33 @@ function mix(kinds: VisualKind[]): string {
   return want.length ? ` In a video of four or more scenes: ${want.join('; ')}${words}.` : ''
 }
 
+/** How the generated kinds are described when the brief sets a look, or asks for full motion. */
+function guideFor(k: VisualKind, o: { look: boolean; full: boolean; lookLabel?: string }): string {
+  const noStyle = o.look ? ` Don’t name an art style, medium or film look: the video’s look (${o.lookLabel}) is added to every picture and clip.` : ''
+  if (k === 'image') return (o.look ? '- image: a generated still image with a slow pan and zoom. Write a vivid, specific shot description (subject, setting, light, framing). No words, logos or UI in the image.' : KIND_GUIDE.image) + noStyle
+  if (k === 'aiVideo')
+    return (
+      (o.full
+        ? '- aiVideo: a generated, fully animated video clip of one continuous shot, about 5-10 seconds. Describe the subject, what happens (the action, start to finish), the camera move, the setting and the light. No words or logos.'
+        : KIND_GUIDE.aiVideo) + noStyle
+    )
+  return KIND_GUIDE[k]
+}
+
 export function buildIdeaPrompt(opts: { brief: NonNullable<import('@producer/core').ProducerMeta['brief']>; kinds: VisualKind[]; rules: string; example: string; media?: IdeaMedia[] }): string {
   const b = opts.brief
   const parts = videoParts(b)
   const vertical = b.aspect === '9:16'
   const seconds = Math.max(15, Math.min(600, b.lengthSec ?? 60))
   const words = Math.round(seconds * 2.6)
-  const scenes = Math.max(3, Math.min(14, Math.round(seconds / 9)))
   const media = opts.media ?? []
   const kinds = opts.kinds.filter((k) => k !== 'footage' && (k !== 'media' || media.length > 0))
+  // full motion: every scene a clip, so scenes are as long as a clip can be (about 8 s) and there are more of them
+  const full = b.motion === 'full' && kinds.includes('aiVideo')
+  const scenes = full ? Math.max(3, Math.min(MAX_AI_CLIPS_FULL_MOTION, Math.round(seconds / 8))) : Math.max(3, Math.min(14, Math.round(seconds / 9)))
+  const look = aiLookOf(b.aiLook)
+  const lookLabel = AI_LOOKS.find((l) => l.id === look)?.label
+  const generated = kinds.includes('image') || kinds.includes('aiVideo')
   const yours = media.length
     ? `
 YOUR MEDIA (the person's own clips and images, added for this video; their pictures follow the prompt, labelled with these m-numbers)
@@ -169,7 +187,11 @@ THE IDEA (a topic, an outline, or a full script — if it's a script, keep its w
 ${(b.idea ?? '').trim() || b.title}
 ${yours}
 VISUALS YOU MAY USE (only these kinds)
-${kinds.map((k) => KIND_GUIDE[k]).join('\n')}
+${kinds.map((k) => guideFor(k, { look: look !== 'auto', full, lookLabel })).join('\n')}${
+    full
+      ? `\nFULL MOTION: this is an animated film. Make EVERY scene an aiVideo${media.length ? ', except the scenes that show YOUR MEDIA' : ''}; at most one scene may be text or a diagram, and only where exact words or numbers must be read.`
+      : ''
+  }
 
 HOUSE RULES
 ${opts.rules}
@@ -184,7 +206,7 @@ REQUIREMENTS
       ? `Narration 15-60 words per scene at ~2.6 words/second (about ${words} words in total).`
       : `NOBODY SPEAKS IN THIS VIDEO: it is pictures${b.music && b.music !== 'off' ? ' and music' : ''} only. Write each scene's narration field as a plain description of what the viewer sees happen. It is never heard; its length sets how long the scene lasts, ~2.6 words/second (about ${words} words in total). The pictures have to tell the story alone.`
   }${parts.onScreenText ? '' : '\n- NO WORDS ON SCREEN: the viewer reads nothing, so headlines are only your working titles and animations get no labels. Show everything through what is drawn or moves.'}
-- Vary the visuals; pick the one that makes each line easiest to understand.${mix(kinds)} Never put a number on screen that the narration doesn't say, and don't invent statistics: use bars or stat only with figures from the idea, otherwise use another visual.
+${full ? `- Each scene is one clip of at most ~10 seconds: ${parts.narration ? 'narration 12-24 words per scene' : 'a description of 12-24 words per scene'}, so the clip lasts as long as the scene; use more scenes rather than longer ones.\n` : ''}${generated ? '- Continuity: when several generated pictures or clips show the same person, place or object, describe it in exactly the same words every time (age, build, hair, clothes and colours; the place’s look and light), so they look like one film.\n' : ''}- Vary the visuals; pick the one that makes each line easiest to understand.${full ? '' : mix(kinds)} Never put a number on screen that the narration doesn't say, and don't invent statistics: use bars or stat only with figures from the idea, otherwise use another visual.
 ${parts.narration ? '- Headlines are what the viewer reads (official spelling); narration is what the voice says (spoken spelling).\n' : ''}- Fill every visual field; use empty strings, empty lists and diagramType "none" for fields that don't apply to the chosen kind.`
 }
 

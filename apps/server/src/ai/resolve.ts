@@ -5,7 +5,7 @@
 // Key-backed providers are cached per scope + provider + model + key hash, so a changed key or model is picked up on
 // the next request and the SDK client is reused otherwise.
 import crypto from 'node:crypto'
-import type { AiChoice, AiFeature, AiKeyProvider, AiSettings } from '@producer/core'
+import { type AiChoice, type AiFeature, type AiKeyProvider, type AiSettings, strongestModel } from '@producer/core'
 import { ctx } from '../context'
 import { HttpError } from '../http'
 import { buildKeyProvider } from './keys'
@@ -39,10 +39,25 @@ export async function invalidateBuiltin() {
 const MAX_CACHED = 200
 const cache = new Map<string, AiProvider>()
 
-async function keyProvider(scope: AiScope, p: AiKeyProvider, doc: AiSettingsDoc): Promise<AiProvider | undefined> {
+/**
+ * The model a feature runs on with this provider's key: AI-drawn animation takes the model chosen for it, else the
+ * most capable on the key's list (drawing in code and judging the frames is where a stronger model shows most);
+ * everything else the provider's own model.
+ */
+export function featureModel(p: AiKeyProvider, doc: AiSettingsDoc, feature?: AiFeature): string {
+  const own = doc.providers[p]?.model ?? ''
+  if (feature !== 'animation') return own
+  const models = doc.providers[p]?.models
+  const chosen = doc.animationModel?.trim()
+  // a chosen model belongs to one provider: it applies when that provider's list has it (or there is no list yet)
+  if (chosen && (!models?.length || models.includes(chosen))) return chosen
+  return strongestModel(p, models) ?? own
+}
+
+async function keyProvider(scope: AiScope, p: AiKeyProvider, doc: AiSettingsDoc, feature?: AiFeature): Promise<AiProvider | undefined> {
   const key = await readKey(scope, p)
   if (!key) return undefined
-  const model = doc.providers[p]?.model ?? ''
+  const model = featureModel(p, doc, feature)
   const hash = crypto.createHash('sha256').update(key).digest('hex').slice(0, 16)
   const id = `${scope ?? 'local'}|${p}|${model}|${hash}`
   let prov = cache.get(id)
@@ -141,7 +156,7 @@ export async function resolveProvider(scope: AiScope, feature?: AiFeature, prelo
     if (!choice) continue
     if (choice === 'builtin') return { provider: await builtinFor(scoped), source, choice }
     if (!keys.has(choice)) continue
-    const p = await keyProvider(scoped, choice, doc)
+    const p = await keyProvider(scoped, choice, doc, feature)
     // a saved key that can't be opened stops here (503 with the reason), never falls through to the built-in key
     return { provider: p ?? new UnreadableKeyProvider(choice as AiProvider['id']), source, choice }
   }
@@ -198,6 +213,7 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
     providers,
     media,
     videoProvider: doc.videoProvider ?? null,
+    animationModel: doc.animationModel ?? null,
     builtin: { id: b.id, available: bs.available, detail: bs.detail, model: bs.model, ...(bs.cli ? { cli: bs.cli } : {}) },
     effective,
     canEdit,

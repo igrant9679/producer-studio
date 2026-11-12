@@ -3,7 +3,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import * as z from 'zod/v4'
-import { DRAWING_STYLES, MUSIC_STYLES, PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
+import { AI_LOOKS, DRAWING_STYLES, MAX_AI_CLIPS_FULL_MOTION, MUSIC_STYLES, PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { jobDto } from '../dto'
@@ -161,6 +161,8 @@ const BriefSchema = z.object({
   lengthSec: z.number().int().min(15).max(600).optional(),
   visualKinds: z.array(z.enum(['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo'])).max(9).optional(),
   drawingStyle: z.enum(DRAWING_STYLES.map((s) => s.id) as [string, ...string[]]).optional(),
+  aiLook: z.enum(AI_LOOKS.map((l) => l.id) as [string, ...string[]]).optional(),
+  motion: z.enum(['full']).optional(),
   brandKitId: z.string().max(80).optional(),
   music: z.enum(['off', 'auto', ...MUSIC_STYLES.map((m) => m.id)]).optional(),
   soundEffects: z.boolean().optional(),
@@ -229,7 +231,7 @@ aiRoutes.get('/produce/capabilities', async (c) => {
   if (!ws) throw new HttpError(400, 'invalid', 'workspaceId is required')
   await requireRole(u.id, ws, 'viewer')
   const caps = await generationCapabilities(ws)
-  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS } satisfies ProduceCapabilities)
+  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS, maxAiClipsFullMotion: MAX_AI_CLIPS_FULL_MOTION } satisfies ProduceCapabilities)
 })
 
 aiRoutes.post('/produce/assemble', async (c) => {

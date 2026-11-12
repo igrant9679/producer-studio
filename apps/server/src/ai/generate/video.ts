@@ -9,14 +9,16 @@
 // Not here: OpenAI (its Sora video API shut down on 24 Sep 2026, no replacement) and Veo (left the Gemini API on
 // 22 Oct 2026). Two request details only the docs vouch for, not a live key: background mode for this model (a 400
 // naming it → one synchronous call instead) and the duration format (a 400 naming it → the model's default length).
-// The seconds returned are measured from the file.
+// The seconds returned are measured from the file. A clip can start from a picture (`image`, a still made first): Wan
+// on fal animates it (image-to-video); Gemini is given the words alone, so its clips are made as before.
 import fs from 'node:fs'
 import { HttpError, invalid } from '../../http'
 import { CancelledError } from '../../jobs/worker'
 import { log } from '../../log'
 import { redact } from '../common'
 import { mapGeminiError } from '../gemini'
-import { FAL_VIDEO_MODELS, type FalVideoModel, falClip, falModelName, mapFalError } from './fal'
+import { FAL_IMAGE_VIDEO_MODELS, FAL_VIDEO_MODELS, type FalVideoModel, falClip, falModelName, mapFalError } from './fal'
+import { sniffImage } from './images'
 import {
   type GeminiMediaClient,
   type GeminiVideoModel,
@@ -67,9 +69,11 @@ export async function generateVideo(opts: {
   aspect: GenAspect
   seconds: number
   outDir: string
+  /** A still to start the clip from (a file); used by Wan on fal (image-to-video). */
+  image?: string
   signal?: AbortSignal
   onProgress?: (fraction: number, message: string) => void
-}): Promise<GeneratedFile & { seconds: number }> {
+}): Promise<GeneratedFile & { seconds: number; fromPicture?: boolean }> {
   if (opts.signal?.aborted) throw new CancelledError()
   const prompt = opts.prompt.trim()
   if (!prompt) throw invalid('Describe the clip to generate.')
@@ -112,19 +116,20 @@ export async function generateVideo(opts: {
 /** A clip from Wan on fal.ai, trying FAL_VIDEO_MODELS in order (one fal no longer hosts is skipped). */
 async function falVideo(
   k: GenKey,
-  opts: { prompt: string; aspect: GenAspect; seconds: number; outDir: string; signal?: AbortSignal },
+  opts: { prompt: string; aspect: GenAspect; seconds: number; outDir: string; image?: string; signal?: AbortSignal },
   say: (fraction: number, message: string) => void,
-): Promise<GeneratedFile & { seconds: number }> {
+): Promise<GeneratedFile & { seconds: number; fromPicture?: boolean }> {
   const deps = genDeps()
+  const image = opts.image ? await dataUri(opts.image) : undefined
   let clip: Awaited<ReturnType<typeof falClip>>
   let model: FalVideoModel
   try {
-    ;({ value: clip, model } = await tryModels(k, 'video', FAL_VIDEO_MODELS, (m) =>
+    ;({ value: clip, model } = await tryModels(k, 'video', image ? FAL_IMAGE_VIDEO_MODELS : FAL_VIDEO_MODELS, (m) =>
       falClip(
         deps,
         k.key,
         m,
-        { prompt: opts.prompt, aspect: opts.aspect, seconds: Number.isFinite(opts.seconds) && opts.seconds > 0 ? opts.seconds : DEFAULT_SECONDS, signal: opts.signal, timeoutMs: VIDEO_TIMEOUT_MS, pollFirstMs: POLL_FIRST_MS, pollMaxMs: POLL_MAX_MS, typicalMs: FAL_TYPICAL_MS, maxPollErrors: MAX_POLL_ERRORS },
+        { prompt: opts.prompt, ...(image ? { image } : {}), aspect: opts.aspect, seconds: Number.isFinite(opts.seconds) && opts.seconds > 0 ? opts.seconds : DEFAULT_SECONDS, signal: opts.signal, timeoutMs: VIDEO_TIMEOUT_MS, pollFirstMs: POLL_FIRST_MS, pollMaxMs: POLL_MAX_MS, typicalMs: FAL_TYPICAL_MS, maxPollErrors: MAX_POLL_ERRORS },
         say,
       ),
     ))
@@ -141,15 +146,25 @@ async function falVideo(
   await fs.promises.writeFile(file, clip.bytes)
   const info = await describeFile(file, opts.signal)
   say(1, 'Clip ready')
-  log.info('fal clip made', { model: falModelName(model.id), seconds: info.duration ?? clip.seconds })
+  log.info('fal clip made', { model: falModelName(model.id), seconds: info.duration ?? clip.seconds, fromPicture: !!image })
   return {
     file,
     mime: clip.mime,
     provider: 'fal',
     model: model.id,
+    ...(image ? { fromPicture: true } : {}),
     seconds: info.duration ?? clip.seconds,
     ...(info.width ? { width: info.width, height: info.height } : {}),
   }
+}
+
+/** A picture on disk as a data URI (what fal's image_url takes). Pictures are a few hundred KB to a few MB. */
+async function dataUri(file: string): Promise<string> {
+  const bytes = await fs.promises.readFile(file)
+  if (bytes.length > 15 * 1024 * 1024) throw invalid('The starting picture is too big to send (over 15 MB).')
+  const mime = sniffImage(bytes)
+  if (!mime) throw invalid('The starting picture isn’t a JPEG, PNG or WebP image.')
+  return `data:${mime};base64,${bytes.toString('base64')}`
 }
 
 /** One clip from one model: start it, wait for it, return its bytes. */

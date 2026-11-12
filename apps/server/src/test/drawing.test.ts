@@ -7,11 +7,12 @@ import type { AddressInfo } from 'node:net'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import * as z from 'zod/v4'
-import { buildDrawingPrompt, drawingPalette, writeDrawing } from '../ai/drawn'
+import { strongestModel } from '@producer/core'
+import { MAX_FIXES, MAX_LOOKS, THREE_GUIDE, buildDrawingPrompt, drawingPalette, writeDrawing } from '../ai/drawn'
 import type { AiProvider, StructuredRequest } from '../ai/provider'
 import { toSceneVisual, VisualSchema } from '../ai/scenes'
 import { ctx } from '../context'
-import { DrawingError, type DrawingEnv, renderDrawing, testDrawing } from '../media/drawing'
+import { DrawingError, type DrawingEnv, renderDrawing, testDrawing, uses3d } from '../media/drawing'
 import { probe } from '../media/process'
 import { setup } from './helpers'
 
@@ -174,7 +175,10 @@ describe('writing a drawing', () => {
     ])
     const r = await writeDrawing(model, { description: 'A disc grows on grow', narration: 'Plant it and watch it grow.', headline: 'Grow', env })
     expect(r.code).toContain('14 + 20 * k')
-    expect(model.calls).toHaveLength(3)
+    // write, fix, look (fixes it), look again (the scripted model has nothing more to say: the fix it made stays)
+    expect(model.calls).toHaveLength(4)
+    expect(model.calls[3].prompt).toMatch(/after 1 round of your own fixes/)
+    expect(model.calls[3].prompt).toContain('14 + 20 * k')
     // the fix request carries the error; the look carries four frames
     expect(model.calls[1].prompt).toMatch(/YOUR CODE FAILED at t = 0\.00 s: nope is not defined/)
     expect(model.calls[2].images).toHaveLength(4)
@@ -186,9 +190,24 @@ describe('writing a drawing', () => {
     if (!chrome) skip()
     const keep = await writeDrawing(scripted([{ plan: 'p', code: GOOD }, { problems: 'x', changed: true, code: 'function draw() { boom() }' }]), { description: 'd', narration: 'n', headline: 'h', env })
     expect(keep.code).toBe(GOOD)
-    const fails = writeDrawing(scripted([{ plan: 'p', code: 'function draw() { a() }' }, { plan: 'p', code: 'function draw() { b() }' }]), { description: 'd', narration: 'n', headline: 'h', env })
-    await expect(fails).rejects.toMatchObject({ status: 502, message: expect.stringContaining('b is not defined') })
+    // up to MAX_FIXES fixes, then it gives up with the last error
+    const fails = writeDrawing(scripted([{ plan: 'p', code: 'function draw() { a() }' }, { plan: 'p', code: 'function draw() { b() }' }, { plan: 'p', code: 'function draw() { zz() }' }]), { description: 'd', narration: 'n', headline: 'h', env })
+    await expect(fails).rejects.toMatchObject({ status: 502, message: expect.stringContaining('zz is not defined') })
+    expect(MAX_FIXES).toBe(2)
   }, 180_000)
+
+  it('looks again after each fix, up to MAX_LOOKS, and stops when it is happy', async ({ skip }) => {
+    if (!chrome) skip()
+    const v = (n: number) => GOOD.replace('10 + 20 * k', `${10 + n} + 20 * k`)
+    const happy = scripted([{ plan: 'p', code: GOOD }, { problems: 'small', changed: true, code: v(1) }, { problems: 'none', changed: false, code: v(1) }])
+    expect((await writeDrawing(happy, { description: 'd', narration: 'n', headline: 'h', env })).code).toBe(v(1))
+    expect(happy.calls).toHaveLength(3)
+    const picky = scripted([{ plan: 'p', code: GOOD }, ...[1, 2, 3, 4].map((n) => ({ problems: 'more', changed: true, code: v(n) }))])
+    expect((await writeDrawing(picky, { description: 'd', narration: 'n', headline: 'h', env })).code).toBe(v(MAX_LOOKS))
+    expect(picky.calls).toHaveLength(1 + MAX_LOOKS)
+    // each look sees the frames of the version it is judging
+    expect(picky.calls.slice(1).every((c) => c.images.length === 4)).toBe(true)
+  }, 240_000)
 })
 
 describe('the writer and the API', () => {
@@ -213,6 +232,27 @@ describe('drawing styles and the bundled media', () => {
     expect(styled).toMatch(/DRAWING STYLE: Pencil and watercolour\. Pencil and pan watercolour/)
   })
 
+  it('the 3D styles get the stage guide and their own backdrop colours; the others don’t', () => {
+    const brand = { canvas: '#101010', accent: '#ff5500', ink: '#ffffff' }
+    expect(drawingPalette('clay3d', brand)).toEqual({ canvas: '#efe6d8', ink: '#3b3330', accent: '#ff5500' })
+    const clay = buildDrawingPrompt({ description: 'A robot waves', narration: 'Meet Bolt.', headline: 'Bolt', env, style: 'clay3d' })
+    expect(clay).toMatch(/DRAWING STYLE: 3D clay\. 3D clay animation/)
+    expect(clay).toContain(THREE_GUIDE)
+    expect(buildDrawingPrompt({ description: 'x', narration: 'y', headline: 'z', env, style: 'watercolour' })).not.toContain('env.stage3d')
+    expect(uses3d("const s = env.stage3d('main', () => ({}))")).toBe(true)
+    expect(uses3d('const m = env . material3d("#fff")')).toBe(true)
+    expect(uses3d(GOOD)).toBe(false)
+  })
+
+  it('ships the three.js bundle built from the installed package, with its licence', async () => {
+    const dir = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', 'vendor', 'three')
+    // @ts-expect-error plain .mjs script without types
+    const { bundleThree } = await import('../../scripts/build-three.mjs')
+    expect(fs.readFileSync(path.join(dir, 'three.js'), 'utf8').replace(/\r\n/g, '\n')).toBe(await bundleThree())
+    expect(fs.readFileSync(path.join(dir, 'LICENSE'), 'utf8')).toMatch(/The MIT License/)
+    expect(fs.readFileSync(path.join(dir, 'PROVENANCE.md'), 'utf8')).toMatch(/three@0\.186\.1/)
+  }, 60_000)
+
   it('ships the anidoodle bundle built from the vendored sources, with its licence', async () => {
     const dir = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', 'vendor', 'anidoodle')
     // @ts-expect-error plain .mjs script without types
@@ -221,4 +261,50 @@ describe('drawing styles and the bundled media', () => {
     expect(fs.readFileSync(path.join(dir, 'LICENSE'), 'utf8')).toMatch(/Apache License/)
     expect(fs.readFileSync(path.join(dir, 'NOTICE'), 'utf8')).toMatch(/Alex Greenshpun/)
   }, 60_000)
+})
+
+/** A lit 3D scene: a glossy rounded box turning on its word, a clay ball, a 2D label pinned to the ball. */
+const CUBE = `function draw(ctx, t, env) {
+  const g = ctx.createLinearGradient(0, 0, 0, env.H); g.addColorStop(0, '#ffffff'); g.addColorStop(1, env.palette.canvas);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, env.W, env.H);
+  const s = env.stage3d('main', (THREE, st) => {
+    const box = st.add(new THREE.Mesh(new THREE.RoundedBoxGeometry(2, 2, 2, 4, 0.3), env.material3d(env.palette.accent, 'glossy')));
+    const ball = st.add(new THREE.Mesh(new THREE.SphereGeometry(0.7, 32, 24), env.material3d('#4a90e2', 'clay')));
+    ball.position.set(2.4, 0.7, 0);
+    return { box, ball };
+  });
+  s.parts.box.position.y = 1 + 0.3 * env.progress(t, env.wordAt('grow') ?? 0.5, 0.3, env.ease.back);
+  s.parts.box.rotation.y = t * 1.5;
+  s.render(ctx);
+  const p = s.project(s.parts.ball);
+  ctx.fillStyle = env.palette.ink; ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+}`
+
+describe('3D drawings', () => {
+  it('render lit three.js scenes over the 2D frame, from t alone, the same every time', async ({ skip }) => {
+    if (!chrome) skip()
+    const e = { ...env, palette: { canvas: '#efe6d8', accent: '#ff5500', ink: '#222222' } }
+    const [a, b] = await testDrawing(CUBE, e, [0.1, 1.0])
+    expect(a.subarray(0, 2).equals(Buffer.from([0xff, 0xd8]))).toBe(true)
+    expect(a.equals(b)).toBe(false)
+    const [again] = await testDrawing(CUBE, e, [0.1])
+    expect(again.equals(a)).toBe(true)
+  }, 300_000)
+
+  it('a drawing that doesn’t use 3D gets no WebGL at all, and a stage asked for in a roundabout way says why it can’t work', async ({ skip }) => {
+    if (!chrome) skip()
+    const probe = `function draw(ctx, t, env) { const c = document.createElement('canvas'); if (c.getContext('webgl') || c.getContext('webgl2')) throw new Error('webgl is on'); const stage = env['stage' + '3d']; if (window.THREE || !stage) throw new Error('three is loaded'); try { stage('x', () => ({})); } catch (e) { if (!/not loaded on this page/.test(e.message)) throw e; return; } throw new Error('stage3d worked'); }`
+    await expect(testDrawing(probe, env, [0.5])).resolves.toHaveLength(1)
+  }, 120_000)
+})
+
+describe('the animation model', () => {
+  it('is the most capable on the key’s list: tier first, then version; never an image, audio or mini model', () => {
+    expect(strongestModel('anthropic', ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-opus-4-1-20250805'])).toBe('claude-opus-5-5')
+    expect(strongestModel('gemini', ['gemini-3-flash', 'gemini-3.1-pro-preview', 'gemini-3-pro', 'gemini-3.1-flash-image', 'gemini-3-flash-lite'])).toBe('gemini-3.1-pro-preview')
+    expect(strongestModel('gemini', ['gemini-3-flash', 'gemini-3-flash-lite', 'gemini-2.5-pro-preview-tts'])).toBe('gemini-3-flash')
+    expect(strongestModel('openai', ['gpt-5.5-mini', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-pro', 'gpt-realtime', 'gpt-image-2', 'gpt-5.10'])).toBe('gpt-5.10')
+    expect(strongestModel('openai', ['text-embedding-3-small'])).toBeUndefined()
+    expect(strongestModel('gemini', undefined)).toBeUndefined()
+  })
 })

@@ -12,7 +12,7 @@ export interface GenCapabilities {
   /** AI stills, when the workspace has a key that can make them. */
   image?: { provider: Exclude<GenProvider, 'fal'>; model: string }
   /** AI video clips, when the workspace has a key that can make them. */
-  video?: { provider: GenProvider; model: string; maxSeconds: number }
+  video?: { provider: GenProvider; model: string; maxSeconds: number; fromPicture?: boolean; pricePerSecond?: number }
   /** Stock clips and photos (some free library is searched here). */
   stock: boolean
   /** Which libraries, in the order they are tried. */

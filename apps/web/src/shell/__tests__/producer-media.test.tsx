@@ -137,7 +137,7 @@ describe('how AI-drawn scenes are drawn', () => {
     const pick = (await screen.findByLabelText('How AI-drawn scenes are drawn')) as HTMLSelectElement
     // the clean look until another is chosen
     expect(pick.value).toBe('clean')
-    expect(pick.options.length).toBe(10)
+    expect(pick.options.length).toBe(13)
     fireEvent.change(pick, { target: { value: 'blueprint' } })
     expect(st().brief.drawingStyle).toBe('blueprint')
     expect(screen.getByText(/White lines on blue paper/)).toBeTruthy()

@@ -566,7 +566,15 @@ export interface ProduceCapabilities {
   /** AI stills: the workspace has an OpenAI or Gemini key that can make them (billed to that key). */
   image?: { provider: 'openai' | 'gemini'; model: string }
   /** AI video clips (billed per second to the workspace's key). */
-  video?: { provider: 'openai' | 'gemini' | 'fal'; model: string; maxSeconds: number }
+  video?: {
+    provider: 'openai' | 'gemini' | 'fal'
+    model: string
+    maxSeconds: number
+    /** Each clip starts from an AI picture painted first (fal.ai's Wan, with an OpenAI or Gemini key for the picture). */
+    fromPicture?: boolean
+    /** What a second of clip costs, from the provider's price list at the key's last test, e.g. 0.08 (USD). */
+    pricePerSecond?: number
+  }
   /** Stock footage search (always: Wikimedia Commons needs no key; Pexels and Pixabay when the server has their keys). */
   stock: boolean
   /** Where stock clips and photos are searched, in order (e.g. Pexels, Wikimedia Commons). */
@@ -575,6 +583,8 @@ export interface ProduceCapabilities {
   kinds: import('./types').VisualKind[]
   /** AI clips made per video at most. */
   maxAiClips: number
+  /** AI clips made per video at most when the brief asks for full motion (every scene a clip). */
+  maxAiClipsFullMotion?: number
 }
 
 export interface AssistantMessage {
@@ -915,7 +925,8 @@ export type StoredKeyProvider = AiKeyProvider | MediaKeyProvider
 export type VideoClipProvider = 'gemini' | 'fal'
 /** What a feature can be pointed at: the built-in provider (desktop: Claude CLI; cloud: the server's key) or a key. */
 export type AiChoice = 'builtin' | AiKeyProvider
-export type AiFeature = 'writer' | 'script' | 'assistant'
+/** 'animation': AI-drawn scenes (the model writes drawing code and checks its own frames). */
+export type AiFeature = 'writer' | 'script' | 'assistant' | 'animation'
 
 /** One Claude Code CLI option the desktop looks for in `claude --help` (Settings → AI lists them). */
 export interface ClaudeCliFlag {
@@ -981,6 +992,9 @@ export interface AiSettings {
   media?: Partial<Record<MediaKeyProvider, MediaKeySettings>>
   /** Who makes AI video clips when Gemini and fal.ai keys are both stored; null/absent = automatic. */
   videoProvider?: VideoClipProvider | null
+  /** The model AI-drawn scenes use on a key-backed provider; null/absent = automatic (the most capable on the key's
+   * list, strongestModel). Optional: older servers omit it. */
+  animationModel?: string | null
   /** The built-in provider for this edition and whether it's usable. */
   builtin: { id: AiProviderId; available: boolean; detail: string; model?: string; cli?: ClaudeCliInfo }
   /** Effective provider per feature after resolution. */
@@ -995,6 +1009,7 @@ export interface AiSettingsUpdate {
   perFeature?: Partial<Record<AiFeature, AiChoice | null>>
   models?: Partial<Record<AiKeyProvider, string>>
   videoProvider?: VideoClipProvider | null
+  animationModel?: string | null
 }
 
 export interface AiKeyTestResult {

@@ -35,7 +35,8 @@ sandboxed headless Chrome (`ai/drawn.ts`, `media/drawing.ts`), and free music co
 anidoodle's drawing media in the sandbox (Apache-2.0, `vendor/anidoodle`, rebuild with `scripts/build-anidoodle.mjs`),
 drawing styles for drawn scenes, and Sketch it in for pictures (`media/sketch.ts`) — "Drawing media and styles" and
 "Sketch it in" there. On 10 Nov: AI clips with Wan through a space's own fal.ai key (`ai/generate/fal.ts`) — "AI clips
-with Wan on fal.ai" there. Work on branches or worktrees off `main`; the
+with Wan on fal.ai" there. On 11 Nov: an animation model setting, more review rounds, 3D drawing styles (three.js,
+`vendor/three`), a look for AI pictures and clips, picture-first Wan clips and full motion — "Professional animation" there. Work on branches or worktrees off `main`; the
 `p5-*` and older feature branches are history, all merged.
 
 The phase 5 planning docs are in **`docs/phase5/`** (recovered on 2026-10-30 from an old session

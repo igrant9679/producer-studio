@@ -229,6 +229,15 @@ export async function generationCapabilities(workspaceId: string): Promise<GenCa
   if (!(video instanceof HttpError)) {
     const m = liveModels(video, 'video', candidates(video.provider, 'video') as GeminiVideoModel[])[0]
     out.video = { provider: video.provider, model: m.id, maxSeconds: m.maxSeconds }
+    // Wan starts each clip from a picture when this space can paint one; fal's price list says what a second costs
+    // (the price is the model's it names: none once clips have moved on to another model)
+    if (video.provider === 'fal') {
+      if (out.image) out.video.fromPicture = true
+      const { falModelName, pricePerSecond } = await import('./fal')
+      const price = loaded.doc.media?.fal?.price
+      const pps = price?.startsWith(`${falModelName(m.id)}:`) ? pricePerSecond(price) : undefined
+      if (pps) out.video.pricePerSecond = pps
+    }
   }
   return out
 }

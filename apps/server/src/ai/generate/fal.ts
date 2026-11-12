@@ -11,6 +11,9 @@
 // Checked on 2026-11-10 against fal's model pages and queue OpenAPI (fal.ai/models/fal-ai/wan/v2.2-a14b/text-to-video,
 // …/v2.7/text-to-video, fal.ai/docs/platform-apis/v1/models/pricing). fal says Wan 2.2 A14B will be removed on
 // 2027-01-04; when it answers 404 the next candidate (Wan 2.7) is used, like any model a key can't use.
+// Picture first (FAL_IMAGE_VIDEO_MODELS): a clip can start from a still the space's image AI painted, sent as a base64
+// data URI in `image_url` (fal's file inputs take data URIs as well as URLs); Wan animates it, keeping its composition
+// and look. Checked on 2026-11-11 against …/v2.2-a14b/image-to-video and …/v2.7/image-to-video (same prices as text).
 import { HttpError } from '../../http'
 import { CancelledError } from '../../jobs/worker'
 import { log } from '../../log'
@@ -23,8 +26,8 @@ export interface FalVideoModel {
   name: string
   minSeconds: number
   maxSeconds: number
-  /** The request body for one clip (seconds already clamped to the model's range). */
-  input(o: { prompt: string; aspect: GenAspect; seconds: number }): Record<string, unknown>
+  /** The request body for one clip (seconds already clamped to the model's range; image: a data URI, picture first). */
+  input(o: { prompt: string; aspect: GenAspect; seconds: number; image?: string }): Record<string, unknown>
 }
 
 /** What a clip must not show; the scene writer already asks for no words or logos, and Wan honours a negative prompt. */
@@ -69,7 +72,52 @@ export const FAL_VIDEO_MODELS: FalVideoModel[] = [
   },
 ]
 
-export const falModelName = (id: string) => FAL_VIDEO_MODELS.find((m) => m.id === id)?.name ?? id
+/** Clips that start from a picture: the same Wan models' image-to-video endpoints, in the same order. */
+export const FAL_IMAGE_VIDEO_MODELS: FalVideoModel[] = [
+  {
+    // the picture is resized and centre-cropped to the aspect asked for (it was painted at that aspect already)
+    id: 'fal-ai/wan/v2.2-a14b/image-to-video',
+    name: 'Wan 2.2',
+    minSeconds: 2,
+    maxSeconds: 10,
+    input: ({ prompt, aspect, seconds, image }) => ({
+      image_url: image,
+      prompt,
+      negative_prompt: NEGATIVE,
+      aspect_ratio: aspect,
+      resolution: '720p',
+      num_frames: Math.min(161, Math.max(17, Math.round(seconds * WAN22_FPS) + 1)),
+      frames_per_second: WAN22_FPS,
+      enable_prompt_expansion: false,
+      enable_safety_checker: true,
+    }),
+  },
+  {
+    // no aspect_ratio here: the clip follows the picture's
+    id: 'fal-ai/wan/v2.7/image-to-video',
+    name: 'Wan 2.7',
+    minSeconds: 2,
+    maxSeconds: 15,
+    input: ({ prompt, seconds, image }) => ({
+      image_url: image,
+      prompt: prompt.slice(0, 5000),
+      negative_prompt: NEGATIVE.slice(0, 500),
+      resolution: '720p',
+      duration: seconds,
+      enable_prompt_expansion: false,
+      enable_safety_checker: true,
+    }),
+  },
+]
+
+export const falModelName = (id: string) => [...FAL_VIDEO_MODELS, ...FAL_IMAGE_VIDEO_MODELS].find((m) => m.id === id)?.name ?? id
+
+/** The number in a price such as "Wan 2.2: $0.08 per second of video" (USD a second), or undefined. */
+export function pricePerSecond(price: string | undefined): number | undefined {
+  const m = /\$\s*(\d+(?:\.\d+)?)\s*(?:per|\/)\s*(?:video\s*)?s(?:ec(?:ond)?)?\b/i.exec(price ?? '')
+  const n = m ? Number(m[1]) : NaN
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
 
 const QUEUE = 'https://queue.fal.run'
 const PRICING = 'https://api.fal.ai/v1/models/pricing'
@@ -170,6 +218,8 @@ export function mapFalError(err: unknown): never {
 
 export interface FalClipOptions {
   prompt: string
+  /** Start from this picture (a data URI): for FAL_IMAGE_VIDEO_MODELS. */
+  image?: string
   aspect: GenAspect
   seconds: number
   signal?: AbortSignal
@@ -191,7 +241,7 @@ export async function falClip(
   const seconds = Math.min(m.maxSeconds, Math.max(m.minSeconds, Math.round(o.seconds)))
   const started = deps.now()
   const deadline = started + o.timeoutMs
-  const sub = (await call(deps, key, 'POST', `${QUEUE}/${m.id}`, o.signal, m.input({ prompt: o.prompt, aspect: o.aspect, seconds }))) as {
+  const sub = (await call(deps, key, 'POST', `${QUEUE}/${m.id}`, o.signal, m.input({ prompt: o.prompt, aspect: o.aspect, seconds, ...(o.image ? { image: o.image } : {}) }))) as {
     request_id?: unknown
     status_url?: unknown
     response_url?: unknown

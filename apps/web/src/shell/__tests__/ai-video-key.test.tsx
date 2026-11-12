@@ -16,7 +16,7 @@ const base = (patch: Partial<AiSettings> = {}): AiSettings => ({
   providers: {},
   media: {},
   videoProvider: null,
-  effective: { writer: eff, script: eff, assistant: eff },
+  effective: { writer: eff, script: eff, assistant: eff, animation: eff },
   ...patch,
 })
 const PRICE = 'Wan 2.2: $0.08 per second of video'

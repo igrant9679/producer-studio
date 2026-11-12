@@ -2,7 +2,7 @@
 // Anthropic, Google Gemini (AI Studio) and OpenAI, the default provider and per-feature overrides, then the media-only
 // fal.ai key (Wan video clips) and who makes clips when Gemini could too. Keys are write-only: the server returns
 // hasKey + last4, never the key.
-import type { AiChoice, AiFeature, AiKeyProvider, AiKeyProviderSettings, AiSettings, StoredKeyProvider, SystemInfo, VideoClipProvider } from '@producer/core'
+import { strongestModel, type AiChoice, type AiFeature, type AiKeyProvider, type AiKeyProviderSettings, type AiSettings, type StoredKeyProvider, type SystemInfo, type VideoClipProvider } from '@producer/core'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, ExternalLink, Info, KeyRound, Lock, Save, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -36,6 +36,7 @@ const FEATURES: Array<{ id: AiFeature; label: string; hint: string }> = [
   { id: 'writer', label: 'AI writer', hint: 'Voiceover, captions and headline suggestions' },
   { id: 'script', label: 'Producer script', hint: 'Turns recordings into a scripted video' },
   { id: 'assistant', label: 'Editor assistant', hint: 'Edits the timeline by chat' },
+  { id: 'animation', label: 'Animation', hint: 'Draws the AI-drawn scenes of videos made from an idea' },
 ]
 
 interface DesktopBridge {
@@ -292,6 +293,53 @@ function clipMaker(s: AiSettings): VideoClipProvider | undefined {
 }
 
 /** Shown when both a Gemini and a fal.ai key are stored: who makes the clips. */
+/** The key provider behind an effective provider id ('anthropic-key' → anthropic), or undefined for the built-in one. */
+const keyOf = (id: string): AiKeyProvider | undefined => (id === 'anthropic-key' ? 'anthropic' : id === 'openai' || id === 'gemini' ? id : undefined)
+
+/**
+ * Which model draws AI-drawn scenes: automatic (the most capable on the key's list) or one the owner picks. Shown when
+ * the animation feature runs on a key with a model list.
+ */
+function AnimationModelChoice({ s, workspaceId, onSettings }: { s: AiSettings; workspaceId?: string; onSettings: (s: AiSettings) => void }) {
+  const [busy, setBusy] = useState(false)
+  const p = keyOf(s.effective.animation?.provider ?? '')
+  const models = p ? (s.providers[p]?.models ?? []) : []
+  if (!p || !models.length) return null
+  const auto = strongestModel(p, models) ?? s.providers[p]?.model
+  const chosen = s.animationModel && models.includes(s.animationModel) ? s.animationModel : ''
+  return (
+    <div className="ps-set-row">
+      <div>
+        <strong>Animation model</strong>
+        <span>The model that draws AI-drawn scenes and checks its own frames. A more capable model draws noticeably better, at a higher price per scene.</span>
+      </div>
+      <select
+        className="input"
+        style={{ width: 'auto', minWidth: 240 }}
+        aria-label="Animation model"
+        value={chosen}
+        disabled={!s.canEdit || busy}
+        onChange={async (e) => {
+          setBusy(true)
+          try {
+            onSettings(await systemApi.saveAiSettings({ workspaceId, animationModel: e.target.value || null }))
+            toast('AI settings saved')
+          } catch (err) {
+            toastError(err)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        <option value="">Automatic (most capable{auto ? `: ${auto}` : ''})</option>
+        {models.map((m) => (
+          <option key={m} value={m}>{m}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 function VideoClipChoice({ s, workspaceId, onSettings }: { s: AiSettings; workspaceId?: string; onSettings: (s: AiSettings) => void }) {
   const [busy, setBusy] = useState(false)
   if (!s.media?.fal?.hasKey || !s.providers.gemini?.hasKey) return null
@@ -475,6 +523,7 @@ export function AiProviders({
       {s && ORDER.map((p) => <KeyCard key={`${workspaceId ?? ''}:${p}`} provider={p} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />)}
       {s && <ProviderSelectors key={workspaceId ?? ''} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
       {s && <KeyCard key={`${workspaceId ?? ''}:fal`} provider="fal" s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />}
+      {s && <AnimationModelChoice key={`${workspaceId ?? ''}:animation`} s={s} workspaceId={workspaceId} onSettings={apply} />}
       {s && <VideoClipChoice key={`${workspaceId ?? ''}:video`} s={s} workspaceId={workspaceId} onSettings={apply} />}
     </div>
   )

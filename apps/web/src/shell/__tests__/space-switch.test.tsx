@@ -94,7 +94,7 @@ describe('AI settings after a space switch', () => {
       perFeature: {},
       builtin: { id: 'anthropic-api', available: false, detail: '' },
       providers: { openai: { model: 'gpt-alpha', hasKey: true, keyLast4: 'AAAA', models: ['gpt-alpha'] } },
-      effective: { writer: eff, script: eff, assistant: eff },
+      effective: { writer: eff, script: eff, assistant: eff, animation: eff },
     }
     vi.spyOn(systemApi, 'aiSettings').mockImplementation(async (ws) => (ws === a.id ? settings : Promise.reject(new Error('offline'))))
     render(<AiProviders desktop={false} renderBuiltin={() => null} />)

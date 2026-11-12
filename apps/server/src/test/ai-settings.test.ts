@@ -173,7 +173,22 @@ describe('AI settings API (cloud)', () => {
     expect((await A.client.json('PUT', '/api/ai/settings', { workspaceId: ws, perFeature: { script: 'anthropic' } })).status).toBe(400)
     const set = await A.client.json('PUT', '/api/ai/settings', { workspaceId: ws, defaultProvider: 'gemini', perFeature: { writer: 'openai' }, models: { gemini: 'gemini-3-flash' } })
     expect(set.status).toBe(200)
-    expect(set.body.effective).toEqual({ writer: { provider: 'openai', model: 'gpt-5.5' }, script: { provider: 'gemini', model: 'gemini-3-flash' }, assistant: { provider: 'gemini', model: 'gemini-3-flash' } })
+    // animation (AI-drawn scenes) runs on the most capable model on the same key unless one is chosen for it
+    expect(set.body.effective).toEqual({
+      writer: { provider: 'openai', model: 'gpt-5.5' },
+      script: { provider: 'gemini', model: 'gemini-3-flash' },
+      assistant: { provider: 'gemini', model: 'gemini-3-flash' },
+      animation: { provider: 'gemini', model: 'gemini-3-pro' },
+    })
+    expect(set.body.animationModel).toBeNull()
+    const chosen = await A.client.json('PUT', '/api/ai/settings', { workspaceId: ws, animationModel: 'gemini-3-flash' })
+    expect(chosen.body).toMatchObject({ animationModel: 'gemini-3-flash', effective: { animation: { provider: 'gemini', model: 'gemini-3-flash' } } })
+    // a model chosen for one provider doesn't follow animation to another: the strongest there instead
+    const moved = await A.client.json('PUT', '/api/ai/settings', { workspaceId: ws, perFeature: { animation: 'openai' } })
+    expect(moved.body.effective.animation).toEqual({ provider: 'openai', model: 'gpt-5.5' })
+    const back = await A.client.json('PUT', '/api/ai/settings', { workspaceId: ws, perFeature: { animation: null }, animationModel: null })
+    expect(back.body).toMatchObject({ animationModel: null, effective: { animation: { provider: 'gemini', model: 'gemini-3-pro' } } })
+    expect((await A.client.json('PUT', '/api/ai/settings', { workspaceId: ws, animationModel: 'x'.repeat(300) })).status).toBe(400)
     expect((await getProvider(ws, 'writer')).id).toBe('openai')
     expect((await getProvider(ws, 'assistant')).id).toBe('gemini')
     expect((await getProvider(ws)).id).toBe('gemini')

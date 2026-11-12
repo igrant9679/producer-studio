@@ -173,6 +173,31 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   720p) then Wan 2.7 (2–15 s, 720p), used when fal answers 404 for 2.2 (fal says 2.2 goes on 4 Jan 2027). With Gemini and
   fal keys both stored, `AiSettings.videoProvider` (`PUT /api/ai/settings`, Settings → AI → "AI video clips") picks who
   makes clips; automatic is Gemini first, and a key whose last test failed hands clips to the other.
+  **Professional animation** (11 Nov 2026). *Animation model*: AI-drawn scenes are their own AI feature, `animation`
+  (`perFeature.animation`), and on a key-backed provider they run on `AiSettings.animationModel` (`PUT /api/ai/settings`,
+  Settings → AI → "Animation model"; must be on that provider's model list) or, when none is chosen, the most capable
+  model on the key's list (core `strongestModel`: the tier its name says, then the highest version; image, audio, mini
+  and similar ids passed over). Writing keeps the provider's own model. On the built-in provider nothing changes.
+  *Review rounds*: a drawing gets up to `MAX_FIXES` (2) fixes when it doesn't run and up to `MAX_LOOKS` (3) looks at its
+  own frames, each fixing what it sees, until the model says nothing more needs changing (a fix that breaks it keeps the
+  last working version). *3D*: three new drawing styles, `clay3d`, `studio3d` and `isometric3d`, draw with three.js r186
+  (MIT, vendored as `vendor/three/three.js`, rebuilt with `scripts/build-three.mjs`, a test checks it) on a lit stage the
+  sandbox builds (`env.stage3d`: key light with soft shadows, fill, rim, RoomEnvironment reflections, a shadow-only
+  ground, a camera; `env.material3d` for clay, plastic, glossy, metal, glass, matte and glow; `stage.project` pins 2D
+  labels to 3D things); `THREE_GUIDE` in `ai/drawn.ts` is what the model is told. Only code that uses it loads three.js
+  and gets WebGL, on Chrome's software renderer (`--use-angle=swiftshader --enable-unsafe-swiftshader`: no GPU, the same
+  frames everywhere); every other drawing has WebGL refused in the page as well as by flags. A 3D frame takes about a
+  quarter of a second at 1080p after ~25 s to start, so 3D pages get 90 s per frame, 15 min per render, and are tried at
+  4 frames a second. *Look*: a brief's `aiLook` (core `AI_LOOKS`: cinematic, 3D animated film, 2D cartoon, anime,
+  claymation, motion graphics, watercolour, paper cut-out; absent/`auto` = none) is added to every generated image and
+  clip prompt (`withAiLook`), so the scenes look like one film; the writer is told not to name a style, and to describe
+  a recurring person, place or thing in the same words every time. *Picture first*: when Wan on fal makes the clips and
+  the space has an image key, each clip starts from its opening frame painted by the image AI (`firstFramePrompt`),
+  sent to Wan's image-to-video (`FAL_IMAGE_VIDEO_MODELS`: 2.2 A14B, then 2.7) as a data URI; a picture that can't be
+  made leaves the clip to the words. Gemini clips stay text-to-video. `ProduceCapabilities.video.fromPicture` says so,
+  and `pricePerSecond` comes from fal's price list (only while it names the model in use). *Full motion*: a brief's
+  `motion: 'full'` makes every scene a clip (the writer is told so, scenes of 12-24 words, about one per 8 s) and allows
+  `MAX_AI_CLIPS_FULL_MOTION` (16) clips; the wizard shows an estimate of the clips and their cost before assembly.
   **Music and sound effects** (3 Nov 2026): a brief's `music` (`'auto'` = a style that suits the tone, one of core's
   `MUSIC_STYLES`, or `'off'`/absent = none) and `soundEffects` (absent = none; the wizard defaults new briefs to `'auto'`
   and on). The music is composed for the video on its scene cuts by huashu-motion's score engine (MIT), vendored in

@@ -13,11 +13,17 @@ export const DRAWING_STYLES = [
   { id: 'blueprint', label: 'Blueprint', about: 'White lines on blue paper, like a technical drawing' },
   { id: 'chalkboard', label: 'Chalkboard', about: 'Chalk on a dark slate' },
   { id: 'whiteboard', label: 'Whiteboard', about: 'Marker drawn on a whiteboard as it is explained' },
+  { id: 'clay3d', label: '3D clay', about: 'Soft, rounded 3D models like a clay or toy animation, warmly lit' },
+  { id: 'studio3d', label: '3D studio', about: 'Glossy, polished 3D objects in a lit studio, like a product film' },
+  { id: 'isometric3d', label: '3D isometric', about: 'A tidy little 3D world seen from above at an angle, for processes and systems' },
 ] as const
 
 export type DrawingStyleId = (typeof DRAWING_STYLES)[number]['id']
 
 export const DEFAULT_DRAWING_STYLE: DrawingStyleId = 'clean'
+
+/** The styles drawn in 3D (three.js in the drawing sandbox): slower to render, a lit, modelled look. */
+export const is3dDrawingStyle = (id: string | undefined) => id === 'clay3d' || id === 'studio3d' || id === 'isometric3d'
 
 /** A known style id, or the default (an old or mistyped value draws as before). */
 export function drawingStyleOf(v: unknown): DrawingStyleId {

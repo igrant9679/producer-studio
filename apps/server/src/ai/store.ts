@@ -17,7 +17,7 @@ export const KEY_PROVIDERS: AiKeyProvider[] = ['anthropic', 'gemini', 'openai']
 export const MEDIA_KEY_PROVIDERS: MediaKeyProvider[] = ['fal']
 const STORED: StoredKeyProvider[] = [...KEY_PROVIDERS, ...MEDIA_KEY_PROVIDERS]
 export const isMediaKey = (p: StoredKeyProvider): p is MediaKeyProvider => (MEDIA_KEY_PROVIDERS as string[]).includes(p)
-export const FEATURES: AiFeature[] = ['writer', 'script', 'assistant']
+export const FEATURES: AiFeature[] = ['writer', 'script', 'assistant', 'animation']
 
 const Choice = z.enum(['builtin', 'openai', 'gemini', 'anthropic'])
 const ProviderDocSchema = z.object({
@@ -35,10 +35,11 @@ const MediaDocSchema = z.object({
 })
 const DocSchema = z.object({
   defaultProvider: Choice.nullable().catch(null),
-  perFeature: z.object({ writer: Choice.optional(), script: Choice.optional(), assistant: Choice.optional() }).catch({}),
+  perFeature: z.object({ writer: Choice.optional(), script: Choice.optional(), assistant: Choice.optional(), animation: Choice.optional() }).catch({}),
   providers: z.object({ openai: ProviderDocSchema.optional(), gemini: ProviderDocSchema.optional(), anthropic: ProviderDocSchema.optional() }).catch({}),
   media: z.object({ fal: MediaDocSchema.optional() }).catch({}).optional(),
   videoProvider: z.enum(['gemini', 'fal']).nullable().optional().catch(undefined),
+  animationModel: z.string().max(200).nullable().optional().catch(undefined),
 })
 
 export type ProviderDoc = z.infer<typeof ProviderDocSchema>
@@ -51,6 +52,8 @@ export interface AiSettingsDoc {
   media?: Partial<Record<MediaKeyProvider, MediaDoc>>
   /** Who makes AI clips when both a Gemini and a fal.ai key are stored (absent/null = automatic). */
   videoProvider?: VideoClipProvider | null
+  /** The model AI-drawn scenes use on a key-backed provider (absent/null = the most capable on the key's list). */
+  animationModel?: string | null
 }
 export interface KeyMeta {
   last4: string
