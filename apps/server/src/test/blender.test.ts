@@ -311,6 +311,7 @@ describe('Blender on a rented RunPod graphics card', () => {
     expect(manifest.config).toMatchObject({ blenderUrl: BLENDER_LINUX.url, blenderSha256: BLENDER_LINUX.sha256, idleSeconds: IDLE_SECONDS })
     expect(manifest.config.slots).toHaveLength(SLOTS)
     expect(manifest.boot).toContain('sha256sum -c')
+    expect(manifest.boot + manifest.pod + manifest.harness).not.toContain(String.fromCharCode(13))
     expect(manifest.pod).toContain('def terminate')
     expect(manifest.harness).toContain('def check(code)')
     // each job: the code, the harness's settings (no secrets), upload links for its results

@@ -184,7 +184,8 @@ export class RunpodBlender implements BlenderRunner {
     const expiresSec = MAX_SECONDS + 600
     const slots = await Promise.all(Array.from({ length: SLOTS }, (_, n) => st.presignGet!(`${prefix}/job-${n}.json`, { expiresSec })))
     const bootUrl = await st.presignPut(`${prefix}/boot.json`, 'application/json', { expiresSec })
-    const read = (f: string) => fs.readFileSync(path.join(BLENDER_DIR(), f), 'utf8')
+    // Unix line endings whatever the checkout has (a Windows one would break bash on the pod)
+    const read = (f: string) => fs.readFileSync(path.join(BLENDER_DIR(), f), 'utf8').replace(/\r\n/g, '\n')
     const manifest = {
       config: { slots, bootUrl, blenderUrl: BLENDER_LINUX.url, blenderSha256: BLENDER_LINUX.sha256, idleSeconds: IDLE_SECONDS, maxSeconds: MAX_SECONDS },
       boot: read('boot.sh'),
