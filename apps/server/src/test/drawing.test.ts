@@ -301,6 +301,7 @@ describe('3D drawings', () => {
 describe('the animation model', () => {
   it('is the most capable on the key’s list: tier first, then version; never an image, audio or mini model', () => {
     expect(strongestModel('anthropic', ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-opus-4-1-20250805'])).toBe('claude-opus-5-5')
+    expect(strongestModel('anthropic', ['claude-opus-5-5', 'claude-fable-5-2', 'claude-fable-5-1', 'claude-sonnet-5-5'])).toBe('claude-fable-5-2')
     expect(strongestModel('gemini', ['gemini-3-flash', 'gemini-3.1-pro-preview', 'gemini-3-pro', 'gemini-3.1-flash-image', 'gemini-3-flash-lite'])).toBe('gemini-3.1-pro-preview')
     expect(strongestModel('gemini', ['gemini-3-flash', 'gemini-3-flash-lite', 'gemini-2.5-pro-preview-tts'])).toBe('gemini-3-flash')
     expect(strongestModel('openai', ['gpt-5.5-mini', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-pro', 'gpt-realtime', 'gpt-image-2', 'gpt-5.10'])).toBe('gpt-5.10')

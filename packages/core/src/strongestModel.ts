@@ -1,6 +1,6 @@
 // The most capable model on a key's live model list, for work where quality matters more than speed or price (AI-drawn
 // animation: the model writes drawing code and judges its own frames). A heuristic on the model ids each provider
-// publishes, not a benchmark: the tier its name says (Opus / Fable over Sonnet over Haiku; Pro over Flash over Lite;
+// publishes, not a benchmark: the tier its name says (Fable over Opus over Sonnet over Haiku; Pro over Flash over Lite;
 // a full GPT over mini and nano), then the highest version. Ids for audio, images, embeddings, search or realtime
 // aren't writing models and are passed over. Settings → AI shows the pick and lets an owner choose another.
 import type { AiKeyProvider } from './api'
@@ -13,7 +13,8 @@ const SKIP: Record<AiKeyProvider, RegExp> = {
 
 function tier(p: AiKeyProvider, id: string): number {
   const s = id.toLowerCase()
-  if (p === 'anthropic') return /(opus|fable)/.test(s) ? 3 : /sonnet/.test(s) ? 2 : /haiku/.test(s) ? 1 : 0
+  // Fable sits above Opus (Anthropic's most capable widely released line), so Fable 5.2 beats Opus 5.5 despite the lower number
+  if (p === 'anthropic') return /(fable|mythos)/.test(s) ? 4 : /opus/.test(s) ? 3 : /sonnet/.test(s) ? 2 : /haiku/.test(s) ? 1 : 0
   if (p === 'gemini') return /lite/.test(s) ? 1 : /pro/.test(s) ? 3 : /flash/.test(s) ? 2 : 0
   return /^(gpt-\d|o\d)/.test(s) ? 3 : 0
 }
