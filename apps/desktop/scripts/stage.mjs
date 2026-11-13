@@ -7,6 +7,8 @@
 //   server/vendor/anidoodle/   the AI-drawing sandbox's media bundle (Apache-2.0) with its LICENSE and NOTICE
 //   server/vendor/three/       three.js for the sandbox's 3D drawing styles (MIT) with its LICENSE
 //   server/blender/            the harness that runs Blender scene scripts on this computer's Blender
+//   server/sandbox/            the drawing sandbox's add-ons (rigged characters, Lottie motion graphics, Open Peeps)
+//   server/vendor/lottie/      lottie-web's light canvas build (MIT); server/vendor/peeps/ the Open Peeps art (CC0)
 //   web/                       apps/web/dist without sourcemaps
 //   tools/                     whisper.cpp + ggml-small.en, Kokoro-82M ONNX, chrome-headless-shell (from build/tools,
 //                              filled by scripts/fetch-tools.mjs)
@@ -72,6 +74,13 @@ for (const f of ['anidoodle.js', 'LICENSE', 'NOTICE', 'PROVENANCE.md']) fs.copyF
 // three.js (MIT) for the 3D drawing styles: the browser bundle with its licence
 fs.mkdirSync(path.join(out, 'vendor', 'three'), { recursive: true })
 for (const f of ['three.js', 'LICENSE', 'PROVENANCE.md']) fs.copyFileSync(path.join(serverSrc, 'vendor', 'three', f), path.join(out, 'vendor', 'three', f))
+// the drawing sandbox's add-ons: the 3D rigged character, Lottie motion graphics (with lottie-web) and Open Peeps people
+fs.mkdirSync(path.join(out, 'sandbox'), { recursive: true })
+for (const f of ['rig.js', 'lottie-mg.js', 'peeps.js']) fs.copyFileSync(path.join(serverSrc, 'sandbox', f), path.join(out, 'sandbox', f))
+for (const [dir, files] of [['lottie', ['lottie.js', 'LICENSE', 'PROVENANCE.md']], ['peeps', ['peeps.json', 'LICENSE', 'PROVENANCE.md']]]) {
+  fs.mkdirSync(path.join(out, 'vendor', dir), { recursive: true })
+  for (const f of files) fs.copyFileSync(path.join(serverSrc, 'vendor', dir, f), path.join(out, 'vendor', dir, f))
+}
 // Blender scenes: the harness Blender runs the AI's scene scripts with (the RunPod files ride along, unused here)
 fs.mkdirSync(path.join(out, 'blender'), { recursive: true })
 for (const f of ['harness.py', 'pod.py', 'boot.sh']) fs.copyFileSync(path.join(serverSrc, 'blender', f), path.join(out, 'blender', f))

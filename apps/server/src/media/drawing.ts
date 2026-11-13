@@ -88,8 +88,39 @@ function three(): string {
   return threeSource
 }
 
-/** The drawing uses 3D: its page loads three.js and its browser gets WebGL. */
-export const uses3d = (code: string) => /\benv\s*\.\s*(stage3d|THREE|material3d)\b/.test(code)
+/** Our sandbox add-ons (apps/server/sandbox, shipped like the vendored bundles): the 3D rigged character (three.js),
+ * the Lottie motion-graphics builder (with lottie-web, vendor/lottie) and the Open Peeps 2D characters (vendor/peeps).
+ * Each loads only on pages whose code uses it. */
+export const SANDBOX_DIR = () => path.join(SERVER_ROOT, 'sandbox')
+let rigSource: string | undefined
+function rigJs(): string {
+  rigSource ??= fs.readFileSync(path.join(SANDBOX_DIR(), 'rig.js'), 'utf8').replace(/<\/script/gi, '<\\/script')
+  return rigSource
+}
+let lottieSource: string | undefined
+function lottieJs(): string {
+  lottieSource ??= [path.join(SERVER_ROOT, 'vendor', 'lottie', 'lottie.js'), path.join(SANDBOX_DIR(), 'lottie-mg.js')]
+    .map((f) => `<script>${fs.readFileSync(f, 'utf8').replace(/<\/script/gi, '<\\/script')}</script>`)
+    .join('\n')
+  return lottieSource
+}
+let peepsSource: string | undefined
+function peepsJs(): string {
+  if (peepsSource === undefined) {
+    // the art is JSON: "<" can't occur in it, but escape it anyway so nothing in it can close the tag
+    const data = fs.readFileSync(path.join(SERVER_ROOT, 'vendor', 'peeps', 'peeps.json'), 'utf8').replace(/</g, '\\u003c')
+    const rig = fs.readFileSync(path.join(SANDBOX_DIR(), 'peeps.js'), 'utf8').replace(/<\/script/gi, '<\\/script')
+    peepsSource = `<script>window.__peepsData = ${data};</script>\n<script>${rig}</script>`
+  }
+  return peepsSource
+}
+
+/** The drawing uses 3D: its page loads three.js and its browser gets WebGL (env.character needs the 3D stage too). */
+export const uses3d = (code: string) => /\benv\s*\.\s*(stage3d|THREE|material3d|character)\b/.test(code)
+/** The drawing uses the Lottie motion-graphics engine: its page loads that bundle. */
+export const usesLottie = (code: string) => /\benv\s*\.\s*(motionGraphics|lottie)\b/.test(code)
+/** The drawing uses Open Peeps characters: its page loads their art and the 2D rig. */
+export const usesPeeps = (code: string) => /\benv\s*\.\s*(peep|peeps)\b/.test(code)
 
 /** @font-face rules for the look's fonts (Latin faces, inlined as data: URLs: the page loads nothing). */
 function fontCss(env: DrawingEnv, work: string): string {
@@ -254,10 +285,40 @@ const stage3d = (name, build, opts = {}) => memo('stage3d:' + name, () => {
   return stage;
 });
 const marks = Object.freeze({ stroke: M.stroke, hatch: M.hatch, contour: M.contour, sketchEllipse: M.sketchEllipse, guideLine: M.guideLine, scribbleDot: M.scribbleDot, polyR: M.polyR, ellR: M.ellR, union: M.union, minus: M.minus, inter: M.inter, edgeDist: M.edgeDist, ellipsePts: M.ellipsePts, lengthOf: M.lengthOf, play });
+// rigged characters (window.__psRig, rig.js, only on 3D pages that use env.character): built once, posed from t
+const character = (name, opts) => memo('character:' + name, () => {
+  if (!T3) throw new Error('characters need a 3D stage: call env.stage3d first, then env.character inside its build');
+  if (!window.__psRig) throw new Error('the character system is not loaded on this page');
+  window.__rigMat = material3d;
+  return window.__psRig.build(T3, opts || {});
+});
+// Lottie motion graphics (window.__psLottie, lottie-mg.js): a scene built once, rendered onto the 2D canvas from t
+const motionGraphics = (name, build) => memo('mg:' + name, () => {
+  if (!window.__psLottie) throw new Error('motion graphics are not loaded on this page: use env.motionGraphics in the code');
+  const scene = new window.__psLottie.Scene({ width: ENV.width, height: ENV.height, fps: ENV.fps, duration: ENV.duration, fonts: ENV.fonts });
+  if (build) build(scene);
+  const json = scene.toLottie();
+  const p = window.__psLottie.player(json);
+  return { lottie: json, scene, anim: p.anim, render: (ctx, t) => p.render(ctx, Math.max(0, t)) };
+});
+// Open Peeps characters (window.__psPeeps, peeps.js): a rigged 2D person built once (named), drawn from t
+const peep = (name, opts) => memo('peep:' + name, () => {
+  if (!window.__psPeeps) throw new Error('characters are not loaded on this page: use env.peep in the code');
+  return window.__psPeeps.Peep({ W: ENV.width, H: ENV.height, duration: ENV.duration, words: ENV.words, palette: ENV.palette }, opts || {});
+});
+const peeps = Object.freeze({
+  get faces() { return window.__psPeeps ? window.__psPeeps.names('face') : []; },
+  get hair() { return window.__psPeeps ? window.__psPeeps.names('hair') : []; },
+  get standing() { return window.__psPeeps ? window.__psPeeps.names('standing') : []; },
+  get sitting() { return window.__psPeeps ? window.__psPeeps.names('sitting') : []; },
+  get bust() { return window.__psPeeps ? window.__psPeeps.names('bust') : []; },
+});
 `
 
 function page(code: string, env: DrawingEnv, fonts: string): string {
   const with3d = uses3d(code)
+  const withLottie = usesLottie(code)
+  const withPeeps = usesPeeps(code)
   // JSON in a script: "<" escaped so nothing in it can close the tag
   const json = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
   return `<!doctype html><html><head><meta charset="utf-8">
@@ -267,7 +328,9 @@ html,body{margin:0;padding:0;overflow:hidden;background:${/^#[0-9a-f]{3,8}$/i.te
 <body><canvas id="c" width="${env.width}" height="${env.height}"></canvas>
 <script>${rough()}</script>
 <script>${anidoodle()}</script>
-${with3d ? `<script>${three()}</script>` : ''}
+${with3d ? `<script>${three()}</script><script>${rigJs()}</script>` : ''}
+${withLottie ? lottieJs() : ''}
+${withPeeps ? peepsJs() : ''}
 <script>
 (() => {
   const ENV = ${json(env)};
@@ -296,7 +359,7 @@ ${with3d ? `<script>${three()}</script>` : ''}
   const env = Object.freeze({
     ...plain, W: ENV.width, H: ENV.height, rough: rough.canvas(canvas), clamp, lerp, ease, progress, wordAt, rand, memo, doodle, shapes, marks,
     image: (name) => IMAGES[name], surface, lib: AD, doodleEnv: DENV,
-    THREE: T3, stage3d, material3d,
+    THREE: T3, stage3d, material3d, character, motionGraphics, peep, peeps,
   });
   let draw;
   try {

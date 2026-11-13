@@ -216,6 +216,23 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   a brief that asks for it is drawn in `studio3d` with a note. ⚠ Windows with Smart App Control on blocks the blender.org
   zip (its `blender_cpu_check.dll` is unsigned) and blender.org's MSIX is unsigned too: install Blender from the Microsoft
   Store there (found through its `WindowsApps\blender.exe` alias). Not yet run against a real Blender or a real RunPod key.
+  **Lottie motion graphics and rigged characters** (13 Nov 2026). *Lottie*: a drawing style, `lottie`; the AI builds the
+  scene with `env.motionGraphics(name, s => ...)` (`sandbox/lottie-mg.js`: text, rect, ellipse, circle, path and group
+  layers with fadeIn, slideIn, move, pop, scaleTo, spin, drawOn and keyframes), compiled to standard Lottie (bodymovin
+  v5) JSON and rendered frame by frame by lottie-web 5.13 (MIT, `vendor/lottie`, the light canvas build: no
+  expressions, so an animation can't run code). lottie-web's canvas renderer only draws text from exported glyphs, so
+  text layers stay in the JSON as real text layers but are drawn by the sandbox in the brand's fonts, in their place in
+  the stacking order. `LOTTIE_GUIDE` is what the model is told. *2D people*: Open Peeps (Pablo Stanley, CC0) from
+  react-peeps (MIT), built into `vendor/peeps/peeps.json` by `scripts/build-peeps.mjs` (33 faces, 51 hairstyles, 16
+  facial hair, 9 accessories, 26 standing, 10 sitting and 28 bust poses; the bike pose left out). `env.peep(name,
+  opts)` (`sandbox/peeps.js`) is a cut-out puppet: body pose swaps with a squash, a head on a neck pivot (nod, shake,
+  tilt, idle life), expressions, a drawn mouth that opens and shuts on the narration's words (on faces with a no-mouth
+  version; others swap to an open-mouth face), enter/exit/move/walk; heads are placed on each body at its shoulders,
+  measured once from the art (react-peeps never aligned standing and sitting bodies with heads). Every 2D style's
+  prompt carries `PEEPS_GUIDE`. *3D characters*: `env.character(name, opts)` (`sandbox/rig.js`) on the 3D stage, a
+  jointed toy figure with a motion library (walk, run, idle, talk, dance, sit, wave, nod, shake, point, jump, cheer,
+  clap, shrug, turn); the 3D styles' prompts carry `CHARACTER_GUIDE`. Each add-on loads only on pages whose code uses
+  it (`usesLottie`, `usesPeeps`, `uses3d`).
   **Music and sound effects** (3 Nov 2026): a brief's `music` (`'auto'` = a style that suits the tone, one of core's
   `MUSIC_STYLES`, or `'off'`/absent = none) and `soundEffects` (absent = none; the wizard defaults new briefs to `'auto'`
   and on). The music is composed for the video on its scene cuts by huashu-motion's score engine (MIT), vendored in

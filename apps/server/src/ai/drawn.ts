@@ -8,7 +8,7 @@
 // drawing styles' recipes are ours. The 3D styles draw with three.js (MIT, vendored in vendor/three) on a lit stage the
 // sandbox builds (env.stage3d); THREE_GUIDE below is how the model is told to use it.
 import * as z from 'zod/v4'
-import { DRAWING_STYLES, type DrawingStyleId, is3dDrawingStyle } from '@producer/core'
+import { DRAWING_STYLES, type DrawingStyleId, is3dDrawingStyle, isLottieStyle } from '@producer/core'
 import { HttpError } from '../http'
 import { log } from '../log'
 import type { BlenderRunner } from '../media/blender'
@@ -54,7 +54,7 @@ DIRECTION
 - Add secondary motion so nothing is ever frozen: idle bob or breathing, sway, a blink, drifting particles, a soft parallax on the background.
 - Text in the drawing is rare and short (labels of 1-3 words, at least H*0.04 tall, in env.palette.ink); the headline and captions are added by the editor, don't repeat them.
 - No flashes, no strobing, nothing faster than the eye can follow, no jarring cuts; ease in and out; end on a settled, readable frame.
-- Draw people and objects simply and charmingly (round heads, simple bodies, expressive poses), never photorealistic, never logos or brand marks.
+- People: use the illustrated characters (env.peep, see PEOPLE below) whenever a person appears, rather than drawing one; draw objects simply and charmingly yourself. Never photorealistic, never logos or brand marks.
 
 MEDIA AND MARKS (anidoodle: for drawn looks such as pencil, ink, watercolour, chalk and print)
 - const d = env.doodle(ctx, t, medium) is this frame's drawing surface; medium 'pencil' | 'ink' | 'riso' | 'chalk' | 'marker'. It owns ctx's transform: place things with d.push(x, y, scale, rotationRadians) ... d.pop() rather than ctx.translate, and call ctx.setTransform(1, 0, 0, 1, 0, 0) before plain ctx drawing after it.
@@ -151,6 +151,12 @@ export const DRAWING_RECIPES: Record<DrawingStyleId, { canvas?: string; ink?: st
   },
   // Blender scenes follow BLENDER_SYSTEM, not a canvas recipe; this sets their backdrop and ink
   blender: { canvas: '#e8e3da', ink: '#26252c', recipe: 'A cinematic 3D scene built, lit and animated in Blender.' },
+  lottie: {
+    canvas: '#ffffff',
+    ink: '#141414',
+    recipe:
+      "Clean, modern flat motion graphics, built as a real Lottie animation with env.motionGraphics (see the MOTION GRAPHICS guide). Bold geometric shapes, icons drawn from paths, and short text that slide in, pop on and draw on; a limited modern palette (two or three colours plus the accent), generous space, smooth eased design-led motion, no photographic textures and no 3D. Paint the background with ctx first (a flat fill or a soft gradient), then m.render(ctx, t).",
+  },
 }
 
 /** How to draw in 3D: given with the 3D styles' recipes only (the stage and three.js load for code that uses them). */
@@ -161,10 +167,39 @@ export const THREE_GUIDE = `3D (THREE.JS ON A LIT STAGE)
 - st.add(obj, ...) adds things that cast and catch shadows; s.parts is what the build returned; s.project(objectOrPoint) gives { x, y } in frame pixels, for 2D labels pinned to 3D things; s.camera, s.scene, s.lights.{key, fill, rim} and s.ground are there too.
 - env.material3d(colour, kind) gives shared, good-looking materials: 'clay', 'plastic', 'glossy', 'metal', 'glass', 'matte', 'glow'. Use few colours: the accent for the hero, tints and calm natural colours for the rest.
 - Shapes (env.THREE = THREE): RoundedBoxGeometry(w, h, d, 4, radius), SphereGeometry(r, 32, 24), CapsuleGeometry(r, length, 8, 16), CylinderGeometry, ConeGeometry, TorusGeometry, LatheGeometry (a profile spun round: bottles, vases, bodies, trees), ExtrudeGeometry of a THREE.Shape with a bevel (icons, arrows, signs, a map's regions), TubeGeometry along a CatmullRomCurve3 (cables, paths, flows). Build objects and characters from THREE.Group, with each moving part on its own group whose origin is the pivot.
-- Characters: appealing toy-like figures: a capsule body, a big sphere head, small dot eyes, capsule arms and legs hung from shoulder and hip groups (rotate those groups to walk, wave, point, shrug), consistent proportions; animate with weight: anticipation before a move, overshoot and settle after, a little bob while idle.
+- Characters: prefer the rigged character (see RIGGED CHARACTERS below) over building a figure by hand; build your own only for a creature the rig can't be.
 - Space: units are metres; at the default camera the frame is about 10 wide. Keep the subject within x -4..4 and y 0..4.5 (landscape; narrower for vertical) and out of the top 22% and bottom 16% of the frame.
 - Motion: ease everything (env.progress, env.ease.out / back / inOut); things enter on their words (scale up from 0 with env.ease.back, drop in and squash, slide in); the camera moves slowly and smoothly (a dolly in, a gentle orbit), never jerks.
 - Keep it light: under about 60 meshes and modest segments; no textures, images, loaders or 3D text (text is 2D, on top).`
+
+/** How to use the Open Peeps characters, given with the 2D styles' recipes (their art loads for pages that use it). */
+export const PEEPS_GUIDE = `PEOPLE (env.peep: illustrated, rigged characters)
+- Real illustrator-drawn people (Open Peeps): ink line art with flat fills, in many outfits and poses, rigged as cut-out puppets. Use them for every person: they look far better than anything drawn from shapes.
+- const sam = env.peep('sam', { pose: 'standing', body: 'Resting', face: 'Smile', hair: 'ShortVolumed', x, y, height, ink: env.palette.ink, paper: '#ffffff' }); then every frame sam.draw(ctx, t). x, y are where the feet are (pixels; for a bust, the bottom of the chest); height is the whole figure in pixels (about 0.6 to 0.8 of env.H for one hero, smaller for a group). Named: built once, the same every frame. Schedule its actions once, right after creating it, behind a flag: if (!sam.o.ready) { sam.o.ready = true; sam.enter(0.2, 'pop').talk(0.5, 4) }.
+- pose: 'standing' (bodies: Resting, Easing, CrossedArms, PointingFinger, RoboDance, Shirt, ShirtPants, Blazer, BlazerPants, Walking, PolkaDots, Doc, DocStethoscope, DocProtectiveClothe), 'sitting' (ClosedLeg, CrossedLegs, HandsBack, Medium, OneLegUp, Wheelchair) or 'bust' (head and shoulders: Explaining, PointingUp, ArmsCrossed, Coffee, Device, Paper, Gaming, Hoodie, Shirt, Sweater, Turtleneck, Dress ...). Most outfits come in BW (dark top, light trousers) and WB (the other way round): 'RestingBW', or plain 'Resting'.
+- faces: Smile, Calm, SmileBig, SmileTeeth, SmileLol, Explaining, Awe, Cheeky, Cute, Driven, Serious, Solemn, Concerned, ConcernedFear, Fear, Suspicious, Tired, Angry, Rage, VeryAngry, Contempt, EyesClosed, LoveGrin, OldAged. hair: ShortVolumed, ShortWavy, Afro, LongAfro, BantuKnots, CornRows, Twists, Bun, BunCurly, Long, LongCurly, LongBangs, Medium, MediumBangs, MediumStraight, Pomp, FlatTop, Mohawk, GrayShort, GrayBun, Hijab, Turban, Beanie, Bald and more (env.peeps.hair lists them); facialHair (Full, FullMedium, Goatee, Chin, MoustacheThin, Handlebars ...) and accessory (GlassRound, GlassAviator, GlassClubmaster, SunglassWayfarer ...) are optional. env.peeps.faces / .standing / .sitting / .bust list every name. Vary hair, outfit and colourway so several people look different.
+- Actions, chained, times in seconds: .enter(t, 'pop' | 'fade' | 'left' | 'right' | 'bottom') · .exit(t, 'fade' | 'pop' | 'left' | 'right' | 'bottom') · .walk(t0, t1, x) (walks there in the walking pose, facing that way) · .moveTo(t0, t1, x, y) · .body(t, 'PointingFinger') (changes pose with a little squash) · .face(t, 'SmileBig') (expression) · .talk(t0, t1) (the mouth moves on the narration's words: use it while the voice speaks for this person) · .nod(t) · .shake(t) · .tilt(t, degrees). It breathes and moves its head a little by itself.
+- Ink and paper set the line and fill colours (env.palette.ink and white suit most styles; a chalkboard wants white ink on the slate's colour). Put people on the ground line, give them room, and let one person act at a time while the others react (a nod, a face change).`
+
+/** How to use the rigged character, given with the 3D styles' recipes (loads with three.js on pages that use it). */
+export const CHARACTER_GUIDE = `RIGGED CHARACTERS (env.character)
+- An appealing, posable human figure with a real skeleton and a library of natural motions, so you never hand-key joints. Build it once inside the stage build, add it, and schedule motions; then pose it from t every frame.
+- const s = env.stage3d('main', (THREE, st) => { const hero = env.character('hero', { height: 1.7, color: '#4a90d9', skin: '#e8b88f' }); st.add(hero.group); hero.group.position.x = -1.2; hero.group.rotation.y = 0.3; hero.walk(0).wave(2.0, { dur: 1.5 }); return { hero }; }); ... then each frame: s.parts.hero.update(t); s.render(ctx);
+- Options: height (metres, ~1.7), color (body), skin, shoe. The figure stands with its feet at the group's origin; move/rotate hero.group to place and face it. env.character('name', opts) is built once (named), so call it in the stage build.
+- Schedule motions by name and time (seconds): base motions set the figure's ongoing action until the next one — stand, idle (default), walk, run, talk, dance, sit; gestures play once over { dur } on top — wave, nod, shake, point ({ arm: 'A'|'B', dir }), jump ({ height }), cheer, clap, shrug, turn ({ to: radians, dur }). hero.walk(0), hero.wave(2, { dur: 1.5 }), hero.play('nod', 3), hero.face(angle). Chain them. The motions have weight (anticipation, overshoot, a breathing idle) built in.
+- Scale a character to the scene with hero.group.scale.setScalar(k); several characters each need their own name. Keep them within the safe frame like any 3D subject.`
+
+/** How to build Lottie motion graphics, given with the 'lottie' style's recipe (that bundle loads for pages that use it). */
+export const LOTTIE_GUIDE = `MOTION GRAPHICS (env.motionGraphics — real Lottie)
+- Build one motion-graphics scene once and render it from t every frame. const m = env.motionGraphics('main', (s) => { /* add layers, animate them */ }); then in draw: paint the background with ctx, then m.render(ctx, t).
+- The frame is env.W x env.H; positions are in pixels from the top-left; times are in seconds. Colours are '#rrggbb'. The build callback gets the scene s:
+  - s.background('#fff') — optional flat background layer.
+  - s.text('Headline', { x, y, size, color, font: env.fonts.headline, weight: 700, align: 'center' })
+  - s.rect({ x, y, w, h, radius, fill, stroke, strokeWidth }) · s.ellipse({ x, y, w, h, ... }) · s.circle({ x, y, r, ... })
+  - s.path([[x,y],[x,y],...], { fill, stroke, strokeWidth, closed }) — icons and shapes from points.
+  - Layers added first sit behind later ones. Set fill or stroke (or both); omit fill for an outline.
+- Animate each layer by chaining (times in seconds): .fadeIn(start, dur) · .fadeOut(start, dur) · .move(t0, [x,y], t1, [x,y], ease) · .slideIn(start, dur, dx, dy) · .pop(atWord, { from: 0, dur, ease: 'back' }) (scale on) · .scaleTo(t0, s0, t1, s1) · .spin(t0, t1, degrees) · .drawOn(t0, t1) (a stroked shape or path draws itself on, like a pen) · .at(t, { x, y, scale, rotation, opacity }, ease). Eases: 'out' (default), 'in', 'inOut', 'back', 'linear'.
+- Make things enter on their words (env.wordAt('word')): text slides or fades in, shapes pop with 'back', lines and icons draw on; move smoothly, hold, and keep it clean and uncluttered. No photos, no 3D.`
 
 /** The 'blender' drawing style: the model writes a Blender script instead of canvas code (media/blender.ts runs it). */
 export const BlenderSchema = z.object({
@@ -221,6 +256,15 @@ export function drawingPalette(style: DrawingStyleId, brand: DrawingEnv['palette
   return { canvas: r.canvas ?? brand.canvas, ink: r.ink ?? brand.ink, accent: brand.accent }
 }
 
+/** The guides a style's prompt carries: 3D (and its rigged character), Lottie motion graphics, or the 2D people. */
+export function guidesFor(style: DrawingStyleId | undefined): string {
+  const id = style ?? 'clean'
+  if (is3dDrawingStyle(id)) return `\n${THREE_GUIDE}\n\n${CHARACTER_GUIDE}\n`
+  if (isLottieStyle(id)) return `\n${LOTTIE_GUIDE}\n`
+  if (id === 'blender') return ''
+  return `\n${PEEPS_GUIDE}\n`
+}
+
 export function buildDrawingPrompt(o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; style?: DrawingStyleId }): string {
   const words = o.env.words.map((w) => `${w.w}@${w.start.toFixed(2)}`).join(' ')
   const style = o.style && o.style !== 'clean' ? DRAWING_STYLES.find((s) => s.id === o.style) : undefined
@@ -228,7 +272,7 @@ export function buildDrawingPrompt(o: { description: string; narration: string; 
 
 WHAT TO DRAW (the director's note)
 ${o.description.trim()}
-${style ? `\nDRAWING STYLE: ${style.label}. ${DRAWING_RECIPES[style.id].recipe}\n` : ''}${style && is3dDrawingStyle(style.id) ? `\n${THREE_GUIDE}\n` : ''}
+${style ? `\nDRAWING STYLE: ${style.label}. ${DRAWING_RECIPES[style.id].recipe}\n` : ''}${guidesFor(o.style)}
 ${o.silent ? `WHAT HAPPENS IN THIS SCENE (nobody speaks: the drawing has to tell it alone, so leave nothing to a voice)` : `THE NARRATION OF THIS SCENE (what the voice says while it plays)`}
 ${o.narration.trim()}
 

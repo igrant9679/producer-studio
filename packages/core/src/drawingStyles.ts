@@ -17,6 +17,7 @@ export const DRAWING_STYLES = [
   { id: 'studio3d', label: '3D studio', about: 'Glossy, polished 3D objects in a lit studio, like a product film' },
   { id: 'isometric3d', label: '3D isometric', about: 'A tidy little 3D world seen from above at an angle, for processes and systems' },
   { id: 'blender', label: 'Blender (cinematic 3D)', about: 'Full 3D scenes the AI builds, lights and animates in Blender, rendered on a graphics card: the most polished look, and the slowest' },
+  { id: 'lottie', label: 'Motion graphics (Lottie)', about: 'Clean flat motion graphics — shapes, icons and text that slide, pop and draw on — built as real Lottie animations' },
 ] as const
 
 export type DrawingStyleId = (typeof DRAWING_STYLES)[number]['id']
@@ -28,6 +29,9 @@ export const is3dDrawingStyle = (id: string | undefined) => id === 'clay3d' || i
 
 /** Drawn in Blender (the AI writes a Blender script; this computer's Blender or a rented RunPod graphics card renders it). */
 export const isBlenderStyle = (id: string | undefined) => id === 'blender'
+
+/** Lottie motion graphics (the AI builds a Lottie animation, rendered in the drawing sandbox). */
+export const isLottieStyle = (id: string | undefined) => id === 'lottie'
 
 /** A known style id, or the default (an old or mistyped value draws as before). */
 export function drawingStyleOf(v: unknown): DrawingStyleId {

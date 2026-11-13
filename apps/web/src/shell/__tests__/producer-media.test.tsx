@@ -137,7 +137,9 @@ describe('how AI-drawn scenes are drawn', () => {
     const pick = (await screen.findByLabelText('How AI-drawn scenes are drawn')) as HTMLSelectElement
     // the clean look until another is chosen
     expect(pick.value).toBe('clean')
-    expect(pick.options.length).toBe(13)
+    // every style but Blender (offered only where Blender can render), Lottie motion graphics included
+    expect(pick.options.length).toBe(14)
+    expect([...pick.options].map((o) => o.textContent)).toContain('Motion graphics (Lottie)')
     fireEvent.change(pick, { target: { value: 'blueprint' } })
     expect(st().brief.drawingStyle).toBe('blueprint')
     expect(screen.getByText(/White lines on blue paper/)).toBeTruthy()
