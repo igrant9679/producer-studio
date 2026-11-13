@@ -995,7 +995,28 @@ async function makeSceneVisuals(
     }
     fs.rm(work, { recursive: true, force: true }, () => undefined)
   }
-  return { scenes, generated, illustrations, notes }
+  return { scenes, generated, illustrations, notes: sameReasonTogether(notes) }
+}
+
+/** "s01: why", "s02: why" → "s01, s02: why": one line per reason, in the order they first came. */
+export function sameReasonTogether(notes: string[]): string[] {
+  const out: Array<{ ids: string[]; why: string } | string> = []
+  const byWhy = new Map<string, { ids: string[]; why: string }>()
+  for (const n of notes) {
+    const m = /^(s[\w-]+): ([\s\S]+)$/.exec(n)
+    if (!m) {
+      out.push(n)
+      continue
+    }
+    const g = byWhy.get(m[2])
+    if (g) g.ids.push(m[1])
+    else {
+      const ng = { ids: [m[1]], why: m[2] }
+      byWhy.set(m[2], ng)
+      out.push(ng)
+    }
+  }
+  return out.map((o) => (typeof o === 'string' ? o : `${o.ids.join(', ')}: ${o.why}`))
 }
 
 /** What a drawn clip was made from: the code, its length and frame (the same → the clip is reused). */

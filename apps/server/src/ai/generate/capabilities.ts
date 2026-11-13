@@ -62,7 +62,20 @@ export const GEMINI_IMAGE_MODELS: GeminiImageModel[] = [
  * Gemini Omni Flash, Interactions API. One generation is 3–10 s at 24 fps (Google's Omni page doesn't state the range;
  * third-party docs quoting Google do); longer clips need extensions, not used here.
  */
-export const GEMINI_VIDEO_MODELS: GeminiVideoModel[] = [{ id: 'gemini-omni-1.1-flash', minSeconds: 3, maxSeconds: 10 }]
+// Omni 1.2 first (Google's current model, 3-15 s); 1.1 (3-10 s) after it: Google routes 1.1 to 1.2 from 3 Dec 2026
+export const GEMINI_VIDEO_MODELS: GeminiVideoModel[] = [
+  { id: 'gemini-omni-1.2-flash', minSeconds: 3, maxSeconds: 15 },
+  { id: 'gemini-omni-1.1-flash', minSeconds: 3, maxSeconds: 10 },
+]
+
+/**
+ * Google accepted the clip, then stopped it with its generic "There was a problem processing your request" (AI Studio
+ * logs those as 403: seen when the key's project isn't allowed to use the model). Treated as "this key can't use this
+ * model": the next model is tried and the key is passed over for clips for a while (another key takes them).
+ */
+export class GeminiVideoRefused extends Error {
+  readonly status = 403
+}
 
 /** How long a model the key couldn't use is skipped (and the one that worked is tried first). */
 const MEMO_MS = 10 * 60_000
@@ -146,6 +159,7 @@ export function setGenerateClients(c: Partial<GenerateDeps> | undefined) {
   deps = c ? { ...realDeps, ...c } : realDeps
   dead.clear()
   working.clear()
+  refusedModels.clear()
 }
 
 // ---------------- the workspace's key ----------------
@@ -255,6 +269,9 @@ function remember<V>(map: Map<string, V>, k: string, v: V) {
   map.set(k, v)
 }
 
+/** Video models Google stopped with its generic failure lately (the reason shown when none is left to try). */
+const refusedModels = new Set<string>()
+
 /** Candidates the key may still be able to use, the one that last worked first. */
 export function liveModels<M extends { id: string }>(k: GenKey, kind: GenKind, list: M[]): M[] {
   const now = deps.now()
@@ -272,6 +289,7 @@ export function modelUnavailable(provider: GenProvider, err: unknown): boolean {
   if (err instanceof HttpError) return false
   // fal: a model it doesn't host (any more) is a 404; 403 there means the account (balance, key scope), not the model
   if (provider === 'fal') return err instanceof FalError && (err.status === 404 || err.status === 410)
+  if (err instanceof GeminiVideoRefused) return true
   const status = statusOf(err)
   const msg = messageOf(err)
   if (provider === 'openai') {
@@ -309,6 +327,12 @@ export function withoutKey(err: unknown, key: string): unknown {
 
 function noModels(p: GenProvider, kind: GenKind, tried: string[], last?: unknown): HttpError {
   if (p === 'openai' && /verif/i.test(messageOf(last))) return unverified()
+  if (last instanceof GeminiVideoRefused || (p === 'gemini' && kind === 'video' && tried.length && tried.every((id) => refusedModels.has(id))))
+    return new HttpError(
+      503,
+      'server',
+      'Google won’t run Gemini’s video models for this key: it takes each clip, then stops it with “There was a problem processing your request”. That usually means the key’s Google project isn’t allowed to use Gemini Omni video yet. Open Google AI Studio → Logs: a 403 on these requests confirms it; check billing is on for the project. Or add a fal.ai key in Settings → AI to make clips with Wan instead.',
+    )
   const what = kind === 'image' ? 'image' : 'video'
   const where = p === 'openai' ? 'your OpenAI account' : p === 'fal' ? 'your fal.ai account' : 'Google AI Studio'
   return new HttpError(503, 'server', `This ${LABEL[p]} key can’t use any of the ${what} models Producer Studio works with (${tried.join(', ')}). Check the key’s access in ${where}, or add another provider’s key in Settings → AI.`)
@@ -329,6 +353,7 @@ export async function tryModels<M extends { id: string }, T>(k: GenKey, kind: Ge
     } catch (err) {
       if (!modelUnavailable(k.provider, err)) throw err
       remember(dead, `${k.id}|${m.id}`, deps.now() + MEMO_MS)
+      if (err instanceof GeminiVideoRefused) refusedModels.add(m.id)
       tried.push(m.id)
       last = err
       log.warn('media model not available to this key, trying the next', {

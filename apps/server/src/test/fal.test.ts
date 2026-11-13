@@ -9,7 +9,7 @@ import { setKeyClients } from '../ai/keys'
 import { generateVideo, generationCapabilities } from '../ai/generate'
 import { type MediaInfo, setGenerateClients } from '../ai/generate/capabilities'
 import { pricePerSecond } from '../ai/generate/fal'
-import { firstFramePrompt, makeAiClip } from '../ai/produce'
+import { firstFramePrompt, makeAiClip, sameReasonTogether } from '../ai/produce'
 import { CancelledError } from '../jobs/worker'
 import { setup, signup, type TestEnv } from './helpers'
 
@@ -216,6 +216,41 @@ describe('who makes clips', () => {
     expect((await generationCapabilities(A.workspaceId)).video?.provider).toBe('gemini')
   })
 
+  it('when Google stops every Gemini clip for this key, a stored fal key makes them instead', async () => {
+    const A = await space({ fal: FAL_KEY, gemini: GEMINI_KEY })
+    const tried: string[] = []
+    setGenerateClients({
+      gemini: () =>
+        ({
+          models: { generateContent: geminiImage },
+          interactions: {
+            create: async (b: { model: string }) => {
+              tried.push(b.model)
+              return { id: 'int-9', status: 'in_progress' }
+            },
+            get: async () => ({ id: 'int-9', status: 'failed', errors: [{ message: 'There was a problem processing your request. You will only be charged for tokens successfully generated.' }] }),
+            cancel: async () => undefined,
+          },
+        }) as never,
+      fetch: fetchMock as unknown as typeof fetch,
+      probe: (file) => probeResult(file),
+      now: () => clock,
+      sleep: async (ms) => {
+        sleeps.push(ms)
+        clock += ms
+      },
+    })
+    handler = queue([{ status: 'COMPLETED' }])
+    const r = await generateVideo({ workspaceId: A.workspaceId, prompt: 'a lighthouse', aspect: '16:9', seconds: 8, outDir })
+    expect(tried).toEqual(['gemini-omni-1.2-flash', 'gemini-omni-1.1-flash'])
+    expect(r).toMatchObject({ provider: 'fal', model: WAN22 })
+    // and the next clip goes straight to fal
+    expect((await generationCapabilities(A.workspaceId)).video?.provider).toBe('fal')
+    tried.length = 0
+    expect((await generateVideo({ workspaceId: A.workspaceId, prompt: 'a boat', aspect: '16:9', seconds: 8, outDir })).provider).toBe('fal')
+    expect(tried).toEqual([])
+  })
+
   it('without a clip key, the message names both providers', async () => {
     const A = await space()
     expect((await failure(generateVideo({ workspaceId: A.workspaceId, prompt: 'x', aspect: '16:9', seconds: 8, outDir }))).message).toBe(
@@ -417,5 +452,11 @@ describe('picture first: Wan animates a picture painted first', () => {
     handler = queue([{ status: 'COMPLETED' }])
     await makeAiClip({ workspaceId: A.workspaceId, prompt: 'x', aspect: '16:9', seconds: 5, outDir, signal: new AbortController().signal, progress: () => undefined })
     expect(geminiImage).not.toHaveBeenCalled()
+  })
+})
+
+describe('notes about scenes', () => {
+  it('scenes that failed for the same reason share one line, in order', () => {
+    expect(sameReasonTogether(['s01: no key', 's02: no key', 'Blender was off', 's03: too long', 's04: no key'])).toEqual(['s01, s02, s04: no key', 'Blender was off', 's03: too long'])
   })
 })

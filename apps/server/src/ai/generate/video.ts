@@ -25,6 +25,7 @@ import {
   type GenInteraction,
   type GenKey,
   GEMINI_VIDEO_MODELS,
+  GeminiVideoRefused,
   accountProblem,
   describeFile,
   genDeps,
@@ -81,6 +82,25 @@ export async function generateVideo(opts: {
   const say = opts.onProgress ?? (() => undefined)
   say(0, 'Starting the AI clip')
   if (k.provider === 'fal') return falVideo(k, { ...opts, prompt }, say)
+  try {
+    return await geminiVideo(k, { ...opts, prompt }, say)
+  } catch (err) {
+    // Google refused every video model for this key: a stored fal.ai key makes this clip (and, while Gemini is passed
+    // over, the next ones) instead
+    if (!(err instanceof HttpError) || err.status !== 503) throw err
+    const next = await requireKey(opts.workspaceId, 'video').catch(() => undefined)
+    if (next?.provider !== 'fal') throw err
+    log.info('gemini clips refused for this key; making the clip with fal.ai instead')
+    return falVideo(next, { ...opts, prompt }, say)
+  }
+}
+
+async function geminiVideo(
+  k: GenKey,
+  opts: { prompt: string; aspect: GenAspect; seconds: number; outDir: string; signal?: AbortSignal },
+  say: (fraction: number, message: string) => void,
+): Promise<GeneratedFile & { seconds: number; fromPicture?: boolean }> {
+  const prompt = opts.prompt
   const client = genDeps().gemini(k.key)
   let clip: Awaited<ReturnType<typeof omniClip>>
   let model: GeminiVideoModel
@@ -263,12 +283,14 @@ async function cancelRemote(client: GeminiMediaClient, id: string) {
 }
 
 /** Why a finished interaction has no clip, in words for people. */
-function failure(it: GenInteraction): HttpError {
+function failure(it: GenInteraction): Error {
   const msg = (it.errors ?? [])
     .map((e) => e.message || e.code || '')
     .filter(Boolean)
     .join('; ')
   if (REFUSAL.test(msg)) return refused()
+  // Google's generic stop: not this model for this key (tryModels moves on, then says what it usually means)
+  if (it.status === 'failed' && /problem processing your request/i.test(msg)) return new GeminiVideoRefused(msg)
   if (it.status === 'budget_exceeded') return new HttpError(429, 'quota', 'This Gemini key reached its spending cap. Raise it in Google AI Studio, then try again.')
   if (/(quota|rate limit|resource.?exhausted)/i.test(msg)) return new HttpError(429, 'quota', 'Gemini quota or rate limit reached for this key. Try again in a moment, or check your plan in Google AI Studio.')
   if (it.status === 'cancelled') return new HttpError(502, 'server', 'Gemini cancelled the clip before it finished. Try again.')

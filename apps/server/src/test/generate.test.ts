@@ -159,7 +159,7 @@ describe('generationCapabilities', () => {
     const ws = await space({ gemini: GEMINI_KEY })
     expect(await generationCapabilities(ws)).toEqual({
       image: { provider: 'gemini', model: 'gemini-nano-banana-2.1' },
-      video: { provider: 'gemini', model: 'gemini-omni-1.1-flash', maxSeconds: 10 },
+      video: { provider: 'gemini', model: 'gemini-omni-1.2-flash', maxSeconds: 15 },
       stock: false,
       stockSources: NONE,
     })
@@ -381,14 +381,14 @@ describe('generateVideo', () => {
     gemini.get.mockResolvedValueOnce(running('queued')).mockResolvedValueOnce(running()).mockResolvedValueOnce(running()).mockResolvedValueOnce(done())
     const progress: Array<[number, string]> = []
     const r = await generateVideo({ workspaceId: ws, prompt: 'waves at sunset', aspect: '9:16', seconds: 30, outDir, onProgress: (f, m) => progress.push([f, m]) })
-    expect(r).toMatchObject({ mime: 'video/mp4', provider: 'gemini', model: 'gemini-omni-1.1-flash', seconds: 9.96, width: 720, height: 1280 })
+    expect(r).toMatchObject({ mime: 'video/mp4', provider: 'gemini', model: 'gemini-omni-1.2-flash', seconds: 9.96, width: 720, height: 1280 })
     expect(fs.readFileSync(r.file).equals(MP4)).toBe(true)
     expect(keysSeen).toEqual([GEMINI_KEY])
-    // 30 s asked for, 10 s is the model's most
+    // 30 s asked for, 15 s is Omni 1.2's most
     expect(gemini.create.mock.calls[0][0]).toEqual({
-      model: 'gemini-omni-1.1-flash',
+      model: 'gemini-omni-1.2-flash',
       input: 'waves at sunset',
-      response_format: { type: 'video', aspect_ratio: '9:16', resolution: '720p', duration: '10s' },
+      response_format: { type: 'video', aspect_ratio: '9:16', resolution: '720p', duration: '15s' },
       background: true,
     })
     expect(gemini.get).toHaveBeenCalledTimes(4)
@@ -460,7 +460,7 @@ describe('generateVideo', () => {
     gemini.create.mockResolvedValue(running())
     gemini.get.mockRejectedValueOnce(geminiError(503, 'The service is currently unavailable.')).mockRejectedValueOnce(new TypeError('fetch failed')).mockResolvedValueOnce(done())
     const r = await generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '16:9', seconds: 8, outDir })
-    expect(r.model).toBe('gemini-omni-1.1-flash')
+    expect(r.model).toBe('gemini-omni-1.2-flash')
   })
 
   it('a safety failure is a readable 422; other failures are plain and redacted', async () => {
@@ -478,11 +478,30 @@ describe('generateVideo', () => {
 
   it('a video model the key can’t use → a plain 503 naming it, and capabilities stops offering clips', async () => {
     const ws = await space({ gemini: GEMINI_KEY })
-    gemini.create.mockRejectedValue(geminiError(404, 'models/gemini-omni-1.1-flash is not found for API version v1beta'))
+    gemini.create.mockRejectedValue(geminiError(404, 'models/gemini-omni-1.x-flash is not found for API version v1beta'))
     const err = await failure(generateVideo({ workspaceId: ws, prompt: 'x', aspect: '16:9', seconds: 8, outDir }))
-    expect(err).toMatchObject({ status: 503, message: expect.stringContaining('can’t use any of the video models Producer Studio works with (gemini-omni-1.1-flash)') })
+    expect(err).toMatchObject({ status: 503, message: expect.stringContaining('can’t use any of the video models Producer Studio works with (gemini-omni-1.2-flash, gemini-omni-1.1-flash)') })
     expect((await generationCapabilities(ws)).video).toBeUndefined()
     expect((await generationCapabilities(ws)).image?.provider).toBe('gemini')
+  })
+})
+
+describe('Google’s generic stop on a clip (“There was a problem processing your request”)', () => {
+  it('tries the other Omni model, then says what it usually means, and passes the key over for clips a while', async () => {
+    const ws = await space({ gemini: GEMINI_KEY })
+    gemini.create.mockResolvedValue(running())
+    gemini.get.mockResolvedValue({ id: 'int-1', status: 'failed', errors: [{ message: 'There was a problem processing your request. You will only be charged for tokens successfully generated.' }] })
+    const err = await failure(generateVideo({ workspaceId: ws, prompt: 'x', aspect: '16:9', seconds: 8, outDir }))
+    expect(gemini.create.mock.calls.map((c) => c[0].model)).toEqual(['gemini-omni-1.2-flash', 'gemini-omni-1.1-flash'])
+    expect(err).toMatchObject({ status: 503, message: expect.stringContaining('Google won’t run Gemini’s video models for this key') })
+    expect(err.message).toMatch(/AI Studio → Logs: a 403 on these requests confirms it/)
+    expect(err.message).toMatch(/add a fal\.ai key in Settings → AI/)
+    // the next scene doesn't ask Google again: it gets the same reason at once
+    gemini.create.mockClear()
+    const again = await failure(generateVideo({ workspaceId: ws, prompt: 'y', aspect: '16:9', seconds: 8, outDir }))
+    expect(again.message).toBe(err.message)
+    expect(gemini.create).not.toHaveBeenCalled()
+    expect((await generationCapabilities(ws)).video).toBeUndefined()
   })
 })
 
