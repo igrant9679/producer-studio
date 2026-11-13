@@ -1,0 +1,3 @@
+# vendored third-party files stay byte for byte as published (their checksums are tested)
+apps/server/vendor/lottie/lottie.js -text
+apps/server/vendor/peeps/peeps.json -text
