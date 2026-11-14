@@ -83,7 +83,7 @@ usageRoutes.get('/', async (c) => {
     .db.select({ n: sql<number>`count(*)::int` })
     .from(jobs)
     .where(and(eq(jobs.workspaceId, workspaceId), inArray(jobs.status, ['queued', 'running']), inArray(jobs.kind, QUEUED_KINDS)))
-  const limits: UsageLimitView[] = [
+  const everyLimit: UsageLimitView[] = [
     { label: 'Your AI requests today', used: await windowCount(`ai:day:${u.id}`, now), limit: off(l.aiPerDay), unit: 'requests' },
     { label: 'This space’s AI requests today', used: await windowCount(`ai:ws-day:${workspaceId}`, now), limit: off(l.aiPerDayPerWorkspace), unit: 'requests' },
     { label: 'This space’s AI tokens this month', used: await sumUsage({ workspaceId, metrics: [...tokens], fromDay: month }), limit: off(l.aiTokensPerMonthPerWorkspace), unit: 'tokens' },
@@ -91,7 +91,10 @@ usageRoutes.get('/', async (c) => {
     { label: 'Processing minutes this month', used: Math.round((await sumUsage({ workspaceId, metrics: ['job.ms'], fromDay: month })) / 6000) / 10, limit: off(l.jobMinutesPerMonthPerWorkspace), unit: 'minutes' },
     { label: 'Exports, voiceovers and AI runs waiting', used: Number(waiting?.n ?? 0), limit: off(l.queuedJobsPerWorkspace), unit: 'jobs' },
     { label: 'Storage', used: here?.bytes ?? 0, limit: off(l.storageBytesPerWorkspace), unit: 'bytes' },
+    // a request window is only counted while it has a limit (limits.ts `hit`): without one there is no number to show,
+    // and "0 · no limit" beside a counted "2 of 200" read as if the space had made no requests
   ]
+  const limits = everyLimit.filter((x) => x.unit !== 'requests' || x.limit > 0)
 
   const b = await builtinProvider()
   const summary: UsageSummary = {

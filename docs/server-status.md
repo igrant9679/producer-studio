@@ -233,6 +233,39 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   jointed toy figure with a motion library (walk, run, idle, talk, dance, sit, wave, nod, shake, point, jump, cheer,
   clap, shrug, turn); the 3D styles' prompts carry `CHARACTER_GUIDE`. Each add-on loads only on pages whose code uses
   it (`usesLottie`, `usesPeeps`, `uses3d`).
+  **Animated videos that actually get made** (14 Nov 2026, found by a real video on production). *Room to answer*: a
+  structured answer on an Anthropic key (the script, every AI-drawn scene's code, its fixes and reviews) was asked for
+  with `max_tokens: 16000`, which the model's thinking shares: on the strongest models every drawn scene came back
+  "cut off" and the film was text cards. `AnthropicApiProvider.structured` now streams the request with
+  `STRUCTURED_MAX_TOKENS` (64,000); a model that allows less refuses with a 400 naming `max_tokens` and is asked again
+  within `STRUCTURED_MIN_TOKENS` (16,000) from then on. An answer that still runs out says so in plain words
+  (`CUT_OFF`, all three providers). *Instead of a text card*: a scene whose visual can't be made is no longer left as
+  animated text while something else can show it (`makeSceneVisuals` → `instead`): an AI clip that fails or is over the
+  clip limit is drawn by the animation AI from the clip's own description, in the brief's drawing style (always in a
+  full-motion film; otherwise when the brief's kinds include drawn), and a scene that can't be drawn becomes an AI
+  picture when the brief's kinds include images; only then is it text. The note says what stands in and why
+  ("s01, s02: The AI drew this scene because its clip couldn’t be made. …"). *The writer knows the drawing style*:
+  the script prompt's `drawn` line (`drawnGuide` in `ai/scenes.ts`) names the brief's style and what it can show (2D
+  styles: illustrated people who act; 3D styles: jointed 3D characters and a camera; Lottie: no characters; Blender),
+  and tells the writer not to name a style of its own, so a 3D video is no longer described as "soft flat
+  illustration". *Tone*: a new brief's tone follows the idea (`toneForIdea` in the wizard: calm, playful, energetic,
+  professional, friendly, else confident), so a gentle story no longer gets the product-pitch voice and music.
+  *Settings documents*: `normalizeDoc` returns a copy of its own; before, every space that had saved nothing shared one
+  `providers` / `perFeature` object in memory, so one space's first key test or per-feature choice showed in the others.
+  **Shared AI keys** (13 Nov 2026, migration v19). An owner of two spaces can let one use a key stored in the other:
+  `PUT /api/ai/keys/:provider/shares/:toWorkspaceId {workspaceId}` and `DELETE …?workspaceId=` (every stored key: the
+  three writing keys, fal.ai and RunPod; cloud only, 404 on the desktop). Only owners, and only between spaces the
+  caller owns (403 otherwise, 404 for a space they aren't in): the receiving space's work goes through the key's
+  provider account. The share is a row in `ai_key_shares` (to, provider → from), never a copy: `keyMeta` and `readKey`
+  in `ai/store.ts` follow it when the space has no key of its own, so replacing the key reaches every space that uses
+  it and removing the key or the share ends their use at once. `AiSettings` shows it as `sharedWith` on the key (owners
+  of the sharing space) and `shared` (whose key it is, no `keyLast4`) in the space that uses it. The receiving space
+  keeps its own model and provider choices, gets the key's model list and last test (`ai/shares.ts`: `seedRecipient`,
+  `mirrorTest`), and takes the key as its default when it had no AI at all. There, `DELETE /api/ai/keys/:provider`
+  stops using it and saving a key of its own replaces it. A shared key can't be passed on (409), a space with its own
+  key isn't overridden (409), and one key goes to at most `MAX_KEY_SHARES` (50) spaces. Both spaces get an audit entry
+  (`ai.key.shared`, `ai.key.unshared`). Use is metered on the space that made the request; the provider bills the
+  key's account. Settings → AI: "Shared with" on each key's card, "Shared by" on the card of a space that uses one.
   **Music and sound effects** (3 Nov 2026): a brief's `music` (`'auto'` = a style that suits the tone, one of core's
   `MUSIC_STYLES`, or `'off'`/absent = none) and `soundEffects` (absent = none; the wizard defaults new briefs to `'auto'`
   and on). The music is composed for the video on its scene cuts by huashu-motion's score engine (MIT), vendored in

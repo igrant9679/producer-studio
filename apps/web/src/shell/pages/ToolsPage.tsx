@@ -22,6 +22,7 @@ import {
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useCreateAndOpen, type EditorTab } from '../actions'
+import { setProducerHandoff } from '../producer/handoff'
 import { useIsDesktop } from '../system'
 import { useEditGate, usePageTitle } from '../ui'
 import { AMBER, CYAN, GREEN, QuickCard, VIOLET } from './HomePage'
@@ -30,7 +31,7 @@ interface Tool {
   title: string
   body: string
   icon: ReactNode
-  go?: { tab?: EditorTab; route?: string; name?: string }
+  go?: { tab?: EditorTab; route?: string; name?: string; /** Producer AI, starting from an idea (no recording). */ idea?: boolean }
   soon?: boolean
   /** Runs on the VoiceStudio engine: the desktop app only (on the web the card says so and still opens the tab). */
   desktop?: boolean
@@ -45,7 +46,7 @@ const GROUPS: Array<{ title: string; blurb: string; tools: Tool[] }> = [
       { title: 'Producer AI', body: 'Recording in, scripted, narrated, branded video out.', icon: <Sparkles size={20} />, go: { route: '/producer/new' }, tint: VIOLET },
       { title: 'Text to speech', body: '24 natural voices with an AI script writer.', icon: <AudioLines size={20} />, go: { route: '/voice' }, tint: GREEN },
       { title: 'AI editing assistant', body: 'Ask for edits in plain English — “tighten the intro”.', icon: <Wand2 size={20} />, go: { tab: 'ai', name: 'AI-assisted edit' }, tint: VIOLET },
-      { title: 'Prompt to video', body: 'Generate footage from a text description.', icon: <Film size={20} />, soon: true },
+      { title: 'Video from an idea', body: 'Describe it: AI writes, narrates and animates it, with drawn scenes or generated clips.', icon: <Film size={20} />, go: { route: '/producer/new', idea: true }, tint: AMBER },
       { title: 'Design studio', body: 'Covers, thumbnails and social graphics from a prompt.', icon: <Palette size={20} />, soon: true },
     ],
   },
@@ -62,7 +63,7 @@ const GROUPS: Array<{ title: string; blurb: string; tools: Tool[] }> = [
       { title: 'Resize video', body: 'Reframe for 16:9, 9:16, 1:1 and more.', icon: <Crop size={20} />, go: { tab: 'media' }, tint: CYAN },
       { title: 'Speed & freeze frame', body: 'Speed changes and ramps, smooth slow motion, the pitch toggle and held frames.', icon: <Gauge size={20} />, go: { tab: 'media' } },
       { title: 'Remove background', body: 'Cut out people without a green screen.', icon: <Eraser size={20} />, soon: true },
-      { title: 'Stabilize', body: 'Smooth shaky handheld footage.', icon: <Zap size={20} />, soon: true },
+      { title: 'Stabilise', body: 'Smooth shaky handheld footage: select a clip, then its Smart tab.', icon: <Zap size={20} />, go: { tab: 'media', name: 'Stabilise' } },
       { title: 'Batch edit', body: 'Apply one edit to many videos at once.', icon: <Scissors size={20} />, soon: true },
     ],
   },
@@ -114,6 +115,7 @@ export default function ToolsPage() {
                 {...(t.tint ?? {})}
                 onClick={() => {
                   if (!t.go) return
+                  if (t.go.idea) setProducerHandoff({ prompt: '', aspect: '16:9', files: [], source: 'idea' })
                   if (t.go.route) navigate(t.go.route)
                   else void create({ tab: t.go.tab, name: t.go.name ?? 'Untitled project' })
                 }}

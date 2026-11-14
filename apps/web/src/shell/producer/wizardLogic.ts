@@ -35,6 +35,8 @@ export interface WizardState {
   scenes: ScriptScene[]
   /** The brief the script was written from: changing what only the writer reads leaves the script stale. */
   scriptBrief?: Brief
+  /** The idea text the tone was last picked from (toneForIdea): the same idea isn't asked twice, so a tone chosen by hand stays. */
+  toneFor?: string
   /** Asset ids already transcribed for this project. */
   transcribed: string[]
   run: {
@@ -55,11 +57,35 @@ export interface WizardState {
   assembledVersion?: number
   /** draftKey() of what the last assembly was made from: later edits aren't in the video until it's assembled again. */
   assembledFrom?: string
-  /** Scenes whose visual couldn't be made at assembly (they used animated text instead), with why. */
+  /** What assembly did differently from the script (a visual that couldn't be made and what stands in for it), with why. */
   assembleNotes?: string[]
 }
 
 export const TONES = ['Confident', 'Friendly', 'Professional', 'Energetic', 'Calm', 'Playful']
+export const DEFAULT_TONE = 'Confident'
+
+/** Words in an idea that point at a tone (whole words, any case); the tone with the most of them wins. */
+const TONE_WORDS: Array<[string, RegExp]> = [
+  ['Calm', /\b(calm|gentle|gently|heart-?warming|bedtime|lullaby|peaceful|quiet|soothing|relax\w*|meditat\w*|mindful\w*|forest|nature|friendship|kind(ness)?|tender|cozy|cosy|soft|slow|sleep\w*|wellness|memorial|remembrance)\b/gi],
+  ['Playful', /\b(kids?|child(ren)?|toddlers?|fun|funny|silly|playful|cartoon|cute|quirky|whimsical|games?|party|birthday|puppy|kitten|toys?|jokes?|goofy)\b/gi],
+  ['Energetic', /\b(launch\w*|race|racing|speed\w*|fast|sports?|fitness|workout|gym|hype|exciting|action|energy|energetic|sale|countdown|trailer|teaser|epic|adrenaline|festival|concert)\b/gi],
+  ['Professional', /\b(report|quarterly|annual|compliance|investors?|finance|financial|legal|policy|policies|audit|enterprise|b2b|board|shareholders?|regulat\w*|clinical|medical|insurance|procurement|governance)\b/gi],
+  ['Friendly', /\b(welcome|how to|how-to|tutorial|guide|walk-?through|explainer?|explains?|onboarding|community|family|neighbou?rs?|tips?|recipe|learn\w*|teach\w*|lesson|introduc\w*|getting started)\b/gi],
+]
+
+/** The tone an idea most likely wants (a gentle story is not narrated like a product pitch); the default when it says nothing. */
+export function toneForIdea(idea: string): string {
+  let best = DEFAULT_TONE
+  let most = 0
+  for (const [tone, re] of TONE_WORDS) {
+    const n = idea.match(re)?.length ?? 0
+    if (n > most) {
+      most = n
+      best = tone
+    }
+  }
+  return best
+}
 
 export function briefTitleFromPrompt(prompt: string): string {
   const clean = prompt.replace(/\s+/g, ' ').trim().replace(/[.?!]+$/, '')
@@ -74,7 +100,7 @@ export function defaultBrief(opts: { prompt?: string; aspect?: Brief['aspect']; 
     title: briefTitleFromPrompt(opts.prompt ?? ''),
     audience: '',
     goal: opts.prompt?.trim() ?? '',
-    tone: 'Confident',
+    tone: toneForIdea(opts.prompt ?? ''),
     template: opts.template ?? '',
     voice: opts.voice ?? 'af_heart',
     aspect: opts.aspect ?? '16:9',

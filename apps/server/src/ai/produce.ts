@@ -759,7 +759,8 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   // 3. generated visuals (videos made from an idea): AI stills, stock clips, AI clips
   const frameSize = sizeForAspect(brief.aspect || getLook(brief.template).aspect)
   const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand), silent: !parts.narration, noWords: !parts.onScreenText, style: drawingStyleOf(brief.drawingStyle) }
-  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing, look: brief.aiLook, fullMotion: brief.motion === 'full' })
+  const allowed = await allowedVisualKinds(row.workspaceId, brief.visualKinds, { fullMotion: brief.motion === 'full' })
+  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing, look: brief.aiLook, fullMotion: brief.motion === 'full', allowed })
   // 3b. music composed on the cuts, and sound effects where things move (both free: made on this server)
   const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand })
   const sounded = await makeSound(subContext(jc, 0.9, 0.92, 'Adding music and sound'), { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, jobId: jc.job.id, brief, scenes: made.scenes, voices, probe, seed: brand?.name || row.id })
@@ -769,13 +770,15 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   jc.progress(0.92, 'Assembling timeline')
   jc.check()
   const scenes = made.scenes.map((s) => ({ ...s, voice: voices.has(s.id) ? { assetId: voices.get(s.id)!.asset.id, duration: voices.get(s.id)!.duration } : undefined }))
+  // the timeline shows text where nothing else could be made; the script keeps what it asked for there
+  const script = scenes.map((s) => (made.asked.has(s.id) ? { ...s, visual: made.asked.get(s.id) } : s))
   const build = (cur: Project) => {
     const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, sound: sounded.sound })
-    built.ai = { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes }, status: 'assembled', assembled: { fingerprint: timelineFingerprint(built), at: Date.now() } }
+    built.ai = { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes: script }, status: 'assembled', assembled: { fingerprint: timelineFingerprint(built), at: Date.now() } }
     return built
   }
   const notes = made.notes.length ? { notes: made.notes } : {}
-  const done = made.notes.length ? `Assembled · ${made.notes.length} scene${made.notes.length === 1 ? '' : 's'} used animated text instead` : 'Assembled'
+  const done = made.notes.length ? `Assembled · ${made.notes.length} thing${made.notes.length === 1 ? '' : 's'} to know about it` : 'Assembled'
   try {
     const saved = await saveOnLatest(
       row.id,
@@ -867,8 +870,9 @@ const MAKING: Record<MadeKind, string> = { image: 'Making an image', stock: 'Fin
 
 /**
  * Make (or reuse) each scene's AI still / stock clip or photo / AI clip, and find the illustrations of its animations.
- * Something made earlier for the same prompt is reused (no second bill); a scene whose visual can't be made falls back
- * to animated text, and says why in `notes`.
+ * Something made earlier for the same prompt is reused (no second bill); a scene whose visual can't be made is drawn
+ * or painted instead where the video may use those kinds (`instead` below), else falls back to animated text, and says
+ * why in `notes`.
  */
 async function makeSceneVisuals(
   jc: JobContext,
@@ -885,14 +889,20 @@ async function makeSceneVisuals(
     look?: string
     /** Every scene a clip: more AI clips allowed (MAX_AI_CLIPS_FULL_MOTION). */
     fullMotion?: boolean
+    /** The visual kinds this video may use (the brief's, as this space can make them): what a failed visual may become. */
+    allowed?: VisualKind[]
   },
-): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[] }> {
+): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[]; asked: Map<string, NonNullable<ScriptScene['visual']>> }> {
   const generated = new Map<string, Asset>()
   const illustrations = new Map<string, Asset>()
   const notes: string[] = []
+  // what the script asked for, of the scenes only text could show this time: the script keeps it, so the next
+  // assembly tries again (a failure is not the script's to remember)
+  const asked = new Map<string, NonNullable<ScriptScene['visual']>>()
+  const written = new Map(o.scenes.map((s) => [s.id, s.visual]))
   const scenes = o.scenes.map((s) => ({ ...s }))
   const todo = scenes.filter((s) => s.visual && (s.visual.kind === 'image' || s.visual.kind === 'stock' || s.visual.kind === 'photo' || s.visual.kind === 'aiVideo' || s.visual.kind === 'animation' || s.visual.kind === 'drawn'))
-  if (!todo.length) return { scenes, generated, illustrations, notes }
+  if (!todo.length) return { scenes, generated, illustrations, notes, asked }
   const work = tmpDir('scene-visuals')
   let clips = 0
   let drawn = 0
@@ -904,6 +914,38 @@ async function makeSceneVisuals(
   let drawing = o.drawing
   let blender: BlenderRunner | undefined
   let opened: BlenderRunner | undefined
+  // A scene whose visual can't be made is not left a bare text card while something else can show it: a clip that
+  // can't be made (or is over the limit) is drawn in the video's drawing style, and a scene that can't be drawn is
+  // painted as an AI picture, when the video may use those kinds. Only then does it become animated text.
+  const first = new Map<string, { what: string; why: string }>()
+  let canDraw: boolean | undefined
+  const instead = async (s: ScriptScene, from: 'aiVideo' | 'drawn', prompt: string, why: string): Promise<boolean> => {
+    if (!first.has(s.id)) first.set(s.id, { what: from === 'aiVideo' ? 'its clip couldn’t be made' : 'it couldn’t be drawn', why })
+    if (from === 'aiVideo' && drawing && drawn < MAX_DRAWN) {
+      // a film asked for in full motion is animation: drawing is the nearest thing to the clip, whatever kinds were ticked
+      canDraw ??= o.fullMotion ? (await allowedVisualKinds(o.workspaceId, ['drawn'])).includes('drawn') : !!o.allowed?.includes('drawn')
+      if (canDraw) {
+        if (drawing.style === 'blender' && !blender) drawing = { ...drawing, style: 'studio3d' }
+        s.visual = { kind: 'drawn', prompt }
+        return true
+      }
+    }
+    if (!o.allowed?.includes('image')) return false
+    s.visual = { kind: 'image', prompt }
+    return true
+  }
+  /** The note of a scene that ended up as something else than it was written as. */
+  const stoodIn = (s: ScriptScene, as: 'drawn' | 'image') => {
+    const f = first.get(s.id)
+    if (f) notes.push(`${s.id}: ${as === 'drawn' ? 'The AI drew this scene' : 'An AI picture stands in'} because ${f.what}. ${f.why.charAt(0).toUpperCase()}${f.why.slice(1)}`)
+  }
+  /** Nothing could show it: animated text, and why (the first reason: what the scene was meant to be). */
+  const asText = (s: ScriptScene, why: string) => {
+    notes.push(`${s.id}: ${first.get(s.id)?.why ?? why}`)
+    const was = written.get(s.id)
+    if (was) asked.set(s.id, was)
+    s.visual = { kind: 'motion', points: [] }
+  }
   if (drawing?.style === 'blender' && todo.some((s) => s.visual?.kind === 'drawn')) {
     try {
       blender = await openBlender(o.workspaceId)
@@ -929,8 +971,13 @@ async function makeSceneVisuals(
         const v = s.visual
         const sub = subContext(jc, 0.6 + (i / todo.length) * 0.3, 0.6 + ((i + 1) / todo.length) * 0.3, `Drawing ${s.id}`)
         if (!drawing || drawn >= MAX_DRAWN) {
-          if (drawing) notes.push(`${s.id}: only ${MAX_DRAWN} scenes are drawn per video`)
-          s.visual = { kind: 'motion', points: [] }
+          if (!drawing) {
+            s.visual = { kind: 'motion', points: [] }
+            continue
+          }
+          const why = `only ${MAX_DRAWN} scenes are drawn per video`
+          if (await instead(s, 'drawn', v.prompt, why)) i--
+          else asText(s, why)
           continue
         }
         try {
@@ -938,6 +985,7 @@ async function makeSceneVisuals(
           drawn++
           generated.set(s.id, made.asset)
           s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id, ...(drawing.style !== 'clean' ? { style: drawing.style } : {}) }
+          stoodIn(s, 'drawn')
         } catch (err) {
           if (jc.signal.aborted) throw err
           if (blender && err instanceof BlenderUnavailableError) {
@@ -951,8 +999,8 @@ async function makeSceneVisuals(
           }
           const why = err instanceof HttpError ? err.message : 'it could not be drawn'
           log.warn('drawn scene failed', { scene: s.id, err })
-          notes.push(`${s.id}: ${why}`)
-          s.visual = { kind: 'motion', points: [] }
+          if (await instead(s, 'drawn', v.prompt, why)) i--
+          else asText(s, why)
         }
         continue
       }
@@ -969,8 +1017,9 @@ async function makeSceneVisuals(
         }
       }
       if (v.kind === 'aiVideo' && clips >= maxClips) {
-        notes.push(`${s.id}: only ${maxClips} AI clips are made per video`)
-        s.visual = { kind: 'motion', points: [] }
+        const why = `only ${maxClips} AI clips are made per video`
+        if (await instead(s, 'aiVideo', v.prompt, why)) i--
+        else asText(s, why)
         continue
       }
       const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
@@ -979,12 +1028,13 @@ async function makeSceneVisuals(
         if (v.kind === 'aiVideo') clips++
         generated.set(s.id, made.asset)
         s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
+        if (v.kind === 'image') stoodIn(s, 'image')
       } catch (err) {
         if (jc.signal.aborted) throw err
         const why = err instanceof HttpError ? err.message : 'it could not be made'
         log.warn('scene visual failed', { scene: s.id, kind: v.kind, err })
-        notes.push(`${s.id}: ${why}`)
-        s.visual = { kind: 'motion', points: [] }
+        if (v.kind === 'aiVideo' && (await instead(s, 'aiVideo', v.prompt, why))) i--
+        else asText(s, why)
       }
     }
   } finally {
@@ -995,7 +1045,7 @@ async function makeSceneVisuals(
     }
     fs.rm(work, { recursive: true, force: true }, () => undefined)
   }
-  return { scenes, generated, illustrations, notes: sameReasonTogether(notes) }
+  return { scenes, generated, illustrations, notes: sameReasonTogether(notes), asked }
 }
 
 /** "s01: why", "s02: why" → "s01, s02: why": one line per reason, in the order they first came. */

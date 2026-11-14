@@ -9,7 +9,8 @@ import OpenAI from 'openai'
 import { ApiError } from '@google/genai'
 import type { GenerateContentParameters, GenerateContentResponse, Model } from '@google/genai'
 import type { Response, ResponseCreateParamsStreaming, ResponseOutputItem, ResponseStreamEvent } from 'openai/resources/responses/responses'
-import { AnthropicApiProvider } from '../ai/anthropic'
+import Anthropic from '@anthropic-ai/sdk'
+import { AnthropicApiProvider, STRUCTURED_MAX_TOKENS, STRUCTURED_MIN_TOKENS } from '../ai/anthropic'
 import { adaptJsonSchema, filterGeminiModels, filterOpenAiModels, jsonSchemaFor, pickDefaultModel, redact, validateStructured } from '../ai/common'
 import { GeminiProvider, listGeminiModels, mapGeminiError } from '../ai/gemini'
 import { OpenAiProvider, listOpenAiModels, mapOpenAiError, type OpenAiClientLike } from '../ai/openai'
@@ -296,9 +297,8 @@ describe('Gemini provider', () => {
 
 // ---------------- Anthropic (user key) ----------------
 
-function fakeAnthropic(stream: Array<{ content: Array<Record<string, unknown>>; stop_reason: string }>, parse: Array<unknown> = []) {
+function fakeAnthropic(stream: Array<{ content: Array<Record<string, unknown>>; stop_reason: string; parsed_output?: unknown } | Error>) {
   const streamReqs: unknown[] = []
-  const parseReqs: unknown[] = []
   const client = {
     beta: {
       messages: {
@@ -307,17 +307,15 @@ function fakeAnthropic(stream: Array<{ content: Array<Record<string, unknown>>; 
           const msg = stream.shift()!
           return {
             on(ev: string, cb: (d: string) => void) {
-              if (ev === 'text') for (const b of msg.content) if (b.type === 'text') cb(b.text as string)
+              if (ev === 'text' && !(msg instanceof Error)) for (const b of msg.content) if (b.type === 'text') cb(b.text as string)
               return this
             },
-            finalMessage: async () => msg,
+            // a request the API refuses, or an answer the SDK can't parse, rejects here
+            finalMessage: async () => {
+              if (msg instanceof Error) throw msg
+              return msg
+            },
           }
-        },
-        async parse(params: unknown) {
-          parseReqs.push(params)
-          const r = parse.shift()
-          if (r instanceof Error) throw r
-          return r
         },
       },
     },
@@ -327,7 +325,7 @@ function fakeAnthropic(stream: Array<{ content: Array<Record<string, unknown>>; 
       },
     },
   }
-  return { client, streamReqs, parseReqs }
+  return { client, streamReqs }
 }
 
 describe('Anthropic key provider', () => {
@@ -360,11 +358,41 @@ describe('Anthropic key provider', () => {
   })
 
   it('structured retries once when the SDK parse/validation fails locally', async () => {
-    const f = fakeAnthropic([], [new SyntaxError('Unexpected token'), { stop_reason: 'end_turn', content: [], parsed_output: { title: 'a', n: 1 } }])
+    const f = fakeAnthropic([new SyntaxError('Unexpected token'), { stop_reason: 'end_turn', content: [], parsed_output: { title: 'a', n: 1 } }])
     const p = new AnthropicApiProvider({ client: f.client as never, model: 'claude-opus-5' })
     expect(await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out })).toEqual({ title: 'a', n: 1 })
-    expect(f.parseReqs).toHaveLength(2)
-    expect(JSON.stringify(f.parseReqs[1])).toMatch(/did not match the required JSON schema/)
+    expect(f.streamReqs).toHaveLength(2)
+    expect(JSON.stringify(f.streamReqs[1])).toMatch(/did not match the required JSON schema/)
+  })
+
+  it('structured answers are streamed with room for the thinking and a long answer (an animation’s code)', async () => {
+    const f = fakeAnthropic([{ stop_reason: 'end_turn', content: [], parsed_output: { title: 'a', n: 1 } }])
+    const p = new AnthropicApiProvider({ client: f.client as never, model: 'claude-fable-5-1' })
+    await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out })
+    expect(f.streamReqs[0]).toMatchObject({ model: 'claude-fable-5-1', max_tokens: STRUCTURED_MAX_TOKENS, thinking: { type: 'adaptive' }, output_config: { format: { type: 'json_schema' } } })
+    expect(STRUCTURED_MAX_TOKENS).toBeGreaterThanOrEqual(64000)
+  })
+
+  it('a model that allows less output is asked again within its limit, and from then on', async () => {
+    const tooMuch = Anthropic.APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens: 64000 > 32000, which is the maximum allowed number of output tokens for claude-opus-4-1' } }, undefined, new Headers())
+    const ok = { stop_reason: 'end_turn', content: [], parsed_output: { title: 'a', n: 1 } }
+    const f = fakeAnthropic([tooMuch, ok, ok])
+    const p = new AnthropicApiProvider({ client: f.client as never, model: 'claude-opus-4-1' })
+    expect(await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out })).toEqual({ title: 'a', n: 1 })
+    await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out })
+    expect((f.streamReqs as Array<{ max_tokens: number }>).map((r) => r.max_tokens)).toEqual([STRUCTURED_MAX_TOKENS, STRUCTURED_MIN_TOKENS, STRUCTURED_MIN_TOKENS])
+    // any other refused request is the person's to read, not retried
+    const bad = Anthropic.APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: 'messages: text content blocks must be non-empty' } }, undefined, new Headers())
+    const g = fakeAnthropic([bad])
+    await expect(new AnthropicApiProvider({ client: g.client as never, model: 'claude-opus-5-5' }).structured({ system: 'S', prompt: 'P', images: [], schema: Out })).rejects.toMatchObject({ status: 400 })
+    expect(g.streamReqs).toHaveLength(1)
+  })
+
+  it('an answer that still runs out of room says so in plain words', async () => {
+    const f = fakeAnthropic([{ stop_reason: 'max_tokens', content: [], parsed_output: null }])
+    const p = new AnthropicApiProvider({ client: f.client as never, model: 'claude-opus-5-5' })
+    await expect(p.structured({ system: 'S', prompt: 'P', images: [], schema: Out })).rejects.toMatchObject({ status: 502, message: 'The AI’s answer was cut off before it finished (it ran out of room). Try again, or ask for something shorter.' })
+    expect(f.streamReqs).toHaveLength(1)
   })
 
   it('the env provider keeps the anthropic-api id and default model', async () => {

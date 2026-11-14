@@ -8,6 +8,7 @@ import { type AudioItem, createShapeItem, type Project, type ProjectDocResponse,
 import { ctx } from '../context'
 import { assets } from '../db/schema'
 import { editedSinceAssembly, produceAssemble, sceneSpans, timelineFingerprint } from '../ai/produce'
+import { type AiProvider, setProvider } from '../ai/provider'
 import { MUSIC_DUCK_DB, sfxManifest } from '../ai/soundtrack'
 import { tts } from '../ai/tts'
 import { getJob } from '../jobs/queue'
@@ -192,12 +193,70 @@ describe('Producer AI assembly', () => {
     const row = (await ctx().db.select().from(assets).where(eq(assets.id, made.assetId!)))[0]
     expect(row).toMatchObject({ origin: 'ai', kind: 'video', status: 'ready' })
     expect(row.meta.generated).toMatchObject({ kind: 'drawn', model: 'code' })
-    expect(p.ai!.script!.scenes[1].visual?.kind).toBe('motion')
+    // the scene that couldn't be drawn is text in this video (its headline stands in), and the script still asks for the
+    // drawing, so the next assembly tries again
+    expect(p.ai!.script!.scenes[1].visual).toEqual(drawn[1].visual)
+    expect(p.tracks.flatMap((t) => t.items).some((i) => i.type === 'text' && i.name === 's02 headline')).toBe(true)
+    expect(p.tracks.find((t) => t.main)!.items.filter((i) => i.type === 'video')).toHaveLength(1)
     expect(out.notes?.[0]).toMatch(/^s02: /)
     // again, unchanged: the same clip
     const again = await run(p.ai!.script!.scenes.map((s, i) => (i === 0 ? s : drawn[1])))
     expect((again.p.ai!.script!.scenes[0].visual as { assetId?: string }).assetId).toBe(made.assetId)
   }, 240_000)
+
+  it('a clip that can’t be made is drawn by the AI instead of left a text card; with nothing to draw it with, text and the reason', async ({ skip }) => {
+    if (!ctx().config.chromePath || !fs.existsSync(ctx().config.chromePath!)) skip()
+    const code = 'function draw(ctx, t, env) { ctx.fillStyle = env.palette.accent; ctx.fillRect(40 + t * 50, env.H / 2 - 40, 80, 80); }'
+    // no clip key in this space: every clip fails with the same reason
+    const film: ScriptScene[] = [
+      { ...scenes[0], visual: { kind: 'aiVideo', prompt: 'A red race car speeds down a city street at night' } },
+      { ...scenes[1], visual: { kind: 'aiVideo', prompt: 'It crosses the finish line under a shower of sparks' } },
+    ]
+    const run = async (id: string, extra: Record<string, unknown>) => {
+      const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes: film, brief: { ...brief, source: 'idea', idea: 'A race', ...extra } })
+      expect(r.status).toBe(200)
+      const job = (await getJob(r.body.id))!
+      const out = await produceAssemble(inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }))
+      return { out, p: (await load(id)).project }
+    }
+    // the space's animation AI: writes the drawing, then finds nothing to change in its frames
+    const asked: string[] = []
+    setProvider({
+      id: 'anthropic-key',
+      status: async () => ({ available: true, detail: 'fake', model: 'fake' }),
+      write: async () => '',
+      runAgent: async () => ({ text: '' }),
+      structured: async (req: { prompt: string; images: unknown[] }) => {
+        asked.push(req.prompt)
+        return req.images.length ? { problems: 'none', changed: false, code } : { plan: 'A square slides across', code }
+      },
+    } as unknown as AiProvider)
+    try {
+      // a film asked for in full motion: each scene is drawn from its clip's own description
+      const { out, p } = await run(await newProject('Clip fallback'), { motion: 'full' })
+      const visuals = p.ai!.script!.scenes.map((s) => s.visual)
+      expect(visuals.map((v) => v?.kind)).toEqual(['drawn', 'drawn'])
+      expect(visuals[0]).toMatchObject({ kind: 'drawn', prompt: film[0].visual!.kind === 'aiVideo' ? film[0].visual.prompt : '', code, assetId: expect.any(String) })
+      expect(asked.some((a) => a.includes('A red race car speeds down a city street at night'))).toBe(true)
+      expect(asked.some((a) => a.includes('It crosses the finish line under a shower of sparks'))).toBe(true)
+      expect(p.tracks.find((t) => t.main)!.items.filter((i) => i.type === 'video')).toHaveLength(2)
+      // one line for both scenes: what stands in, and why the clip wasn't made
+      const lines = (out.notes ?? []).filter((n) => /^s0/.test(n))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toMatch(/^s01, s02: The AI drew this scene because its clip couldn’t be made\. \S/)
+    } finally {
+      setProvider(undefined)
+    }
+    // no AI to draw with (and drawn scenes weren't asked for): animated text, with the clip's reason and nothing else
+    const { out, p } = await run(await newProject('Clip fallback, no AI'), {})
+    // the video shows text; the script keeps asking for the clips, for the next assembly
+    expect(p.ai!.script!.scenes.map((s) => s.visual?.kind)).toEqual(['aiVideo', 'aiVideo'])
+    expect(p.tracks.find((t) => t.main)!.items.filter((i) => i.type === 'video')).toHaveLength(0)
+    const lines = (out.notes ?? []).filter((n) => /^s0/.test(n))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/^s01, s02: /)
+    expect(lines[0]).not.toMatch(/The AI drew|stands in/)
+  }, 300_000)
 
   it('Blender scenes with no Blender here (no RunPod key, no Blender on the server) are drawn in the 3D studio style, and say why', async () => {
     const id = await newProject('Blender')

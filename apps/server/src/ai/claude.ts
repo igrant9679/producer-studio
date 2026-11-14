@@ -60,10 +60,13 @@ export function mapAiError(err: unknown, opts: { keyed?: boolean; model?: string
   throw err
 }
 
+/** What a person reads when an answer ran out of room before it ended. */
+export const CUT_OFF = 'The AI’s answer was cut off before it finished (it ran out of room). Try again, or ask for something shorter.'
+
 /** Throw a readable error for stop reasons that mean the content is unusable. */
 export function checkStop(msg: { stop_reason: string | null }, what: string) {
   if (msg.stop_reason === 'refusal') throw new HttpError(422, 'invalid', `The AI declined to ${what}. Try rephrasing the request.`)
-  if (msg.stop_reason === 'max_tokens') throw new HttpError(502, 'server', `The AI response for ${what} was cut off (too long).`)
+  if (msg.stop_reason === 'max_tokens') throw new HttpError(502, 'server', CUT_OFF)
 }
 
 export function textOf(content: Array<{ type: string }>): string {

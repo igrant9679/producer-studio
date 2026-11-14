@@ -3,7 +3,7 @@
 // (editable, on brand, identical in preview and export); AI stills, stock clips and photos, AI clips and the animations'
 // illustrations arrive as assets (ai/generate); the person's own clips and images (`media`) are library assets already.
 import * as z from 'zod/v4'
-import { AI_LOOKS, MAX_AI_CLIPS_FULL_MOTION, aiLookOf, videoParts, type AnimationStyle, type DiagramType, type SceneDiagram, type SceneVisual, type ScriptScene, type VisualKind } from '@producer/core'
+import { AI_LOOKS, DRAWING_STYLES, MAX_AI_CLIPS_FULL_MOTION, aiLookOf, drawingStyleOf, is3dDrawingStyle, isBlenderStyle, isLottieStyle, videoParts, type AnimationStyle, type DiagramType, type SceneDiagram, type SceneVisual, type ScriptScene, type VisualKind } from '@producer/core'
 import { HttpError } from '../http'
 
 export const VISUAL_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']
@@ -138,8 +138,27 @@ function mix(kinds: VisualKind[]): string {
   return want.length ? ` In a video of four or more scenes: ${want.join('; ')}${words}.` : ''
 }
 
+/**
+ * What a drawn scene is in the video's drawing style: the writer describes what that style can show (a 3D scene has
+ * jointed 3D figures and a camera, motion graphics have no people) and never names a style of its own.
+ */
+export function drawnGuide(style: unknown): string {
+  const id = drawingStyleOf(style)
+  const st = DRAWING_STYLES.find((s) => s.id === id)
+  const named = st ? `“${st.label}” (${st.about.replace(/\.$/, '')})` : 'the video’s own'
+  const what = isBlenderStyle(id)
+    ? `a custom 3D scene built, lit and animated in Blender for this scene, in this video’s drawing style, ${named}: objects and simple characters built from shapes, real materials and light, a moving camera`
+    : is3dDrawingStyle(id)
+      ? `a custom 3D animated scene built in code for this scene, in this video’s drawing style, ${named}: simple jointed 3D characters that walk, wave, point, jump and react, 3D objects that move, turn and come together, a camera that moves`
+      : isLottieStyle(id)
+        ? `a custom motion-graphics animation made for this scene, in this video’s drawing style, ${named}: flat shapes, icons, charts, arrows and lines that draw themselves, and words that slide and pop. It has no characters: show people as simple icons, and ideas with shapes`
+        : `a custom animated illustration drawn in code for this scene, in this video’s drawing style, ${named}: illustrated people who act (stand, sit, walk in, point, talk, react), objects that move, a process unfolding, a map, a chart that builds, a metaphor in motion`
+  return `- drawn: ${what}. Write the director’s note in prompt: what is seen, what moves, and on which words of the narration. Describe what happens, not how it looks: don’t name an art style, a medium or 2D/3D (the drawing style is set). Best for the scenes that most need showing rather than telling; use it for up to 6 scenes.`
+}
+
 /** How the generated kinds are described when the brief sets a look, or asks for full motion. */
-function guideFor(k: VisualKind, o: { look: boolean; full: boolean; lookLabel?: string }): string {
+function guideFor(k: VisualKind, o: { look: boolean; full: boolean; lookLabel?: string; drawingStyle?: unknown }): string {
+  if (k === 'drawn') return drawnGuide(o.drawingStyle)
   const noStyle = o.look ? ` Don’t name an art style, medium or film look: the video’s look (${o.lookLabel}) is added to every picture and clip.` : ''
   if (k === 'image') return (o.look ? '- image: a generated still image with a slow pan and zoom. Write a vivid, specific shot description (subject, setting, light, framing). No words, logos or UI in the image.' : KIND_GUIDE.image) + noStyle
   if (k === 'aiVideo')
@@ -187,7 +206,7 @@ THE IDEA (a topic, an outline, or a full script — if it's a script, keep its w
 ${(b.idea ?? '').trim() || b.title}
 ${yours}
 VISUALS YOU MAY USE (only these kinds)
-${kinds.map((k) => guideFor(k, { look: look !== 'auto', full, lookLabel })).join('\n')}${
+${kinds.map((k) => guideFor(k, { look: look !== 'auto', full, lookLabel, drawingStyle: b.drawingStyle })).join('\n')}${
     full
       ? `\nFULL MOTION: this is an animated film. Make EVERY scene an aiVideo${media.length ? ', except the scenes that show YOUR MEDIA' : ''}; at most one scene may be text or a diagram, and only where exact words or numbers must be read.`
       : ''

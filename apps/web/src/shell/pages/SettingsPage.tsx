@@ -494,7 +494,7 @@ export default function SettingsPage() {
             id="ai"
             icon={<Cpu size={18} />}
             title="AI"
-            sub={desktop ? 'Use Claude through the Claude Code CLI on this computer, or bring your own Anthropic, Gemini or OpenAI key.' : 'Use Producer Studio’s built-in Claude, or bring your own Anthropic, Gemini or OpenAI key for this workspace.'}
+            sub={desktop ? 'Use Claude through the Claude Code CLI on this computer, or bring your own Anthropic, Gemini or OpenAI key.' : 'Use Producer Studio’s built-in Claude, or bring your own Anthropic, Gemini or OpenAI key for this space.'}
           >
             <AiInfo />
             <div style={{ height: 14 }} />

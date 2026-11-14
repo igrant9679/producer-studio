@@ -2,7 +2,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { AI_LOOKS, createProject, evaluate, withAiLook, itemEnd, projectDuration, type Asset, type Project, type ScriptScene, type VisualKind } from '@producer/core'
 import { buildProducerTimeline, firstFramePrompt, syntheticTranscript } from '../ai/produce'
-import { type IdeaMedia, type IdeaScriptOutput, VisualSchema, buildIdeaPrompt, normalizeIdeaScript } from '../ai/scenes'
+import { type IdeaMedia, type IdeaScriptOutput, VisualSchema, buildIdeaPrompt, drawnGuide, normalizeIdeaScript } from '../ai/scenes'
 import { diagramItems, revealTimes, type SceneFrame } from '../ai/scene-layout'
 import { type Palette, getLook, lookPalette } from '../services/looks'
 import { setup } from './helpers'
@@ -392,6 +392,38 @@ describe('animation scenes and stock photos', () => {
     expect(credit?.text).toBe('Photo: Kim · CC BY 2.0 · Openverse')
     const plain = build({ kind: 'photo', query: 'field', assetId: 'as_ph', credit: { author: 'Pat', url: 'https://www.pexels.com/photo/1/', source: 'Pexels' } }, [], photo)
     expect(plain.tracks.flatMap((t) => t.items).some((i) => i.name === 's01 credit')).toBe(false)
+  })
+})
+
+describe('drawn scenes in the video’s drawing style', () => {
+  const brief = { title: 'Fox and bird', audience: '', goal: '', tone: 'Calm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, source: 'idea' as const, idea: 'A fox helps a bird' }
+  const drawnLine = (style?: string) =>
+    buildIdeaPrompt({ brief: { ...brief, ...(style ? { drawingStyle: style } : {}) } as never, kinds: ['motion', 'drawn'], rules: '', example: '' })
+      .split('\n')
+      .find((l) => l.startsWith('- drawn:'))!
+
+  it('the writer is told which style the scenes are drawn in, and what that style can show', () => {
+    // 3D: figures and a camera, never "flat"
+    const studio = drawnLine('studio3d')
+    expect(studio).toContain('“3D studio”')
+    expect(studio).toMatch(/jointed 3D characters/)
+    expect(studio).not.toMatch(/flat|hand-drawn/)
+    expect(drawnLine('clay3d')).toContain('“3D clay”')
+    expect(drawnLine('blender')).toMatch(/Blender/)
+    // motion graphics have no people
+    const mg = drawnLine('lottie')
+    expect(mg).toContain('“Motion graphics (Lottie)”')
+    expect(mg).toMatch(/no characters/)
+    // the 2D styles have illustrated people; no style chosen is the clean one
+    expect(drawnLine('whiteboard')).toContain('“Whiteboard”')
+    expect(drawnLine('whiteboard')).toMatch(/illustrated people who act/)
+    expect(drawnLine()).toContain('“Clean and simple”')
+    expect(drawnLine('not-a-style')).toContain('“Clean and simple”')
+  })
+
+  it('and never to name a style of its own', () => {
+    for (const style of ['clean', 'studio3d', 'lottie', 'blender']) expect(drawnLine(style)).toMatch(/don’t name an art style, a medium or 2D\/3D/)
+    expect(drawnGuide('isometric3d')).toMatch(/^- drawn: a custom 3D animated scene/)
   })
 })
 

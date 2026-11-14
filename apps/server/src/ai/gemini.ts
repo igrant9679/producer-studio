@@ -12,7 +12,7 @@ import type { WriteRequest } from '@producer/core'
 import { HttpError } from '../http'
 import { log } from '../log'
 import { noteTokens } from '../services/metering'
-import { writePrompt } from './claude'
+import { CUT_OFF, writePrompt } from './claude'
 import { adaptJsonSchema, filterGeminiModels, formatMismatch, jsonSchemaFor, redact, repairPrompt, validateStructured } from './common'
 import type { AgentRequest, AiProvider, ProviderStatus, StructuredRequest } from './provider'
 
@@ -129,7 +129,7 @@ export class GeminiProvider implements AiProvider {
     }
     const calls = parts.map((p) => p.functionCall).filter((c): c is FunctionCall => Boolean(c?.name))
     if (finishReason && BLOCKED.has(finishReason)) throw new HttpError(422, 'invalid', `The AI declined to ${what}. Try rephrasing the request.`)
-    if (finishReason === 'MAX_TOKENS' && !calls.length) throw new HttpError(502, 'server', `The AI response for ${what} was cut off (too long).`)
+    if (finishReason === 'MAX_TOKENS' && !calls.length) throw new HttpError(502, 'server', CUT_OFF)
     return { parts: mergeParts(parts), text, calls, finishReason }
   }
 

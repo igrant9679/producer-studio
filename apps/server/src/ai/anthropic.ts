@@ -23,6 +23,10 @@ export interface AnthropicProviderOptions {
   client?: Anthropic
 }
 
+/** Output room of a structured answer (thinking included), streamed; and what a model that allows less is asked for. */
+export const STRUCTURED_MAX_TOKENS = 64000
+export const STRUCTURED_MIN_TOKENS = 16000
+
 export class AnthropicApiProvider implements AiProvider {
   readonly id: 'anthropic-api' | 'anthropic-key'
   readonly model: string
@@ -73,6 +77,14 @@ export class AnthropicApiProvider implements AiProvider {
     }
   }
 
+  /**
+   * The output room of a structured answer. The model's thinking and its answer share it, and an animation's code with
+   * the reasoning behind it does not fit in the 16,000 a request that isn't streamed is held to: every AI-drawn scene
+   * came back "cut off" on the strongest models. So the request is streamed and given STRUCTURED_MAX_TOKENS; a model
+   * that allows less says so (400), and is asked again within STRUCTURED_MIN_TOKENS from then on.
+   */
+  private structuredMax = STRUCTURED_MAX_TOKENS
+
   async structured<T>(req: StructuredRequest<T>): Promise<T> {
     const client = this.getClient()
     const content: Anthropic.Beta.BetaContentBlockParam[] = []
@@ -85,25 +97,37 @@ export class AnthropicApiProvider implements AiProvider {
     for (let attempt = 0; attempt < 2; attempt++) {
       let parsed: T | null = null
       try {
-        const msg = await client.beta.messages.parse(
-          {
-            model: this.model,
-            max_tokens: 16000,
-            thinking: { type: 'adaptive' },
-            betas: BETAS,
-            // @ts-expect-error SDK 0.110 types `fallbacks` as an array only; the "default" scalar form (beta server-side-fallback-2026-07-01) routes refusals by category server-side.
-            fallbacks: 'default',
-            system: req.system,
-            messages: [
+        const ask = (maxTokens: number) =>
+          client.beta.messages
+            .stream(
               {
-                role: 'user',
-                content: attempt ? [...content, { type: 'text', text: 'Your previous answer did not match the required JSON schema. Answer again with JSON that matches it exactly.' }] : content,
+                model: this.model,
+                max_tokens: maxTokens,
+                thinking: { type: 'adaptive' },
+                betas: BETAS,
+                // @ts-expect-error SDK 0.110 types `fallbacks` as an array only; the "default" scalar form (beta server-side-fallback-2026-07-01) routes refusals by category server-side.
+                fallbacks: 'default',
+                system: req.system,
+                messages: [
+                  {
+                    role: 'user',
+                    content: attempt ? [...content, { type: 'text', text: 'Your previous answer did not match the required JSON schema. Answer again with JSON that matches it exactly.' }] : content,
+                  },
+                ],
+                output_config: { format: betaZodOutputFormat(req.schema) },
               },
-            ],
-            output_config: { format: betaZodOutputFormat(req.schema) },
-          },
-          { signal: req.signal },
-        )
+              { signal: req.signal },
+            )
+            .finalMessage()
+        let msg: Awaited<ReturnType<typeof ask>>
+        try {
+          msg = await ask(this.structuredMax)
+        } catch (err) {
+          // an older model with a smaller output limit refuses the request outright and names the parameter
+          if (!(err instanceof Anthropic.BadRequestError) || !/max_tokens/.test(err.message) || this.structuredMax <= STRUCTURED_MIN_TOKENS) throw err
+          this.structuredMax = STRUCTURED_MIN_TOKENS
+          msg = await ask(this.structuredMax)
+        }
         noteUsage(msg.usage)
         checkStop(msg, 'complete this request')
         parsed = (msg.parsed_output as T | null | undefined) ?? null

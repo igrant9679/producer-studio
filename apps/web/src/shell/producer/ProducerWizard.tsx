@@ -59,7 +59,9 @@ import {
   stepFromSearch,
   storageKey,
   type WizardAsset,
+  DEFAULT_TONE,
   TONES,
+  toneForIdea,
   unsavedDraft,
   updateScene,
   validateBrief,
@@ -1259,7 +1261,7 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
       {done && !!s.assembleNotes?.length && (
         <div className="ps-alert info" style={{ textAlign: 'left', maxWidth: 560, margin: '0 auto 8px' }}>
           <div>
-            <strong>Some scenes use animated text instead:</strong>
+            <strong>Worth knowing about this video:</strong>
             <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
               {s.assembleNotes.map((n) => (
                 <li key={n}>{n}</li>
@@ -1526,6 +1528,13 @@ export default function ProducerWizard() {
     if (!adv.ok) return
     if (s.step === 'upload') {
       if (isIdea(s) && !s.brief.title.trim()) patch((st) => ({ brief: { ...st.brief, title: briefTitleFromPrompt(st.brief.idea ?? '') } }))
+      // a tone nobody has chosen yet follows the idea (once per idea: a tone picked by hand afterwards stays)
+      if (isIdea(s))
+        patch((st) => {
+          const idea = (st.brief.idea ?? '').trim()
+          if (!idea || st.toneFor === idea) return {}
+          return st.brief.tone === DEFAULT_TONE && !st.scenes.length ? { toneFor: idea, brief: { ...st.brief, tone: toneForIdea(idea) } } : { toneFor: idea }
+        })
       go('brief')
     } else if (s.step === 'brief') {
       // Script already exists and nothing new to transcribe → go straight to review.

@@ -3,6 +3,8 @@ import { createProject } from '@producer/core'
 import { describe, expect, it } from 'vitest'
 import {
   briefTitleFromPrompt,
+  defaultBrief,
+  toneForIdea,
   canAdvance,
   initialState,
   insertScene,
@@ -91,6 +93,21 @@ describe('persistence & resume', () => {
     expect(s.transcribed).toEqual(['a1'])
     expect(s.brief.voice).toBe('am_eric')
     expect(stateFromProject({ ...res, project: { ...project, ai: { ...project.ai, status: 'assembled' } } }).step).toBe('assemble')
+  })
+
+  it('picks the tone an idea asks for, and the usual one when it says nothing', () => {
+    expect(toneForIdea('A heartwarming story of a fox who finds a friend in the forest')).toBe('Calm')
+    expect(toneForIdea('Race car speeding down a busy city street')).toBe('Energetic')
+    expect(toneForIdea('A fun cartoon for kids about a silly puppy')).toBe('Playful')
+    expect(toneForIdea('Our quarterly compliance report for investors')).toBe('Professional')
+    expect(toneForIdea('How to set up your account: a welcome guide')).toBe('Friendly')
+    expect(toneForIdea('Show the new dashboard to ops managers')).toBe('Confident')
+    expect(toneForIdea('')).toBe('Confident')
+    // whole words only: "funding" is not "fun", "kindle" is not "kind"
+    expect(toneForIdea('Funding update for our Kindle app')).toBe('Confident')
+    // a prompt typed on Home sets the tone the brief starts with
+    expect(defaultBrief({ prompt: 'A gentle bedtime story' }).tone).toBe('Calm')
+    expect(defaultBrief().tone).toBe('Confident')
   })
 
   it('derives a short title from the Home prompt', () => {
