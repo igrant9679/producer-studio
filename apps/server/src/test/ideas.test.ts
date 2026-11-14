@@ -433,12 +433,14 @@ describe('the length asked for', () => {
 
   it('is what the words are counted for, less each scene’s pauses and the title and close cards', () => {
     // 30 s, 3 scenes: 5.7 s of pauses and 6.5 s of cards leave 17.8 s of words
-    expect(prompt()).toContain('about 46 words in total')
+    expect(prompt()).toContain('no more than 46 words in total')
+    // and a scene of a 30-second film is a sentence: 9 to 20 words, not "15-60"
+    expect(prompt()).toContain('Narration 9-20 words per scene')
     // no cards: 24.3 s of words
-    expect(prompt({ cards: false })).toContain('about 63 words in total')
-    expect(prompt({ narration: false, captions: false, onScreenText: false, cards: false })).toContain('about 63 words in total')
+    expect(prompt({ cards: false })).toContain('no more than 63 words in total')
+    expect(prompt({ narration: false, captions: false, onScreenText: false, cards: false })).toContain('13-27 words per scene and no more than 63 words in total')
     // never fewer than half the length in words, however many scenes
-    expect(prompt({ lengthSec: 15 })).toContain(`about ${Math.round(7.5 * 2.6)} words in total`)
+    expect(prompt({ lengthSec: 15 })).toContain(`no more than ${Math.round(7.5 * 2.6)} words in total`)
   })
 })
 
@@ -447,11 +449,11 @@ describe('a script for a video nobody speaks in', () => {
   const prompt = (over: object, kinds: VisualKind[] = ['animation', 'drawn']) => buildIdeaPrompt({ brief: { ...brief, ...over }, kinds, rules: '', example: '' })
 
   it('says so, and says what the narration field is for instead', () => {
-    expect(prompt({})).toMatch(/Narration 15-60 words/)
+    expect(prompt({})).toMatch(/Narration \d+-\d+ words per scene/)
     expect(prompt({})).not.toMatch(/NOBODY SPEAKS/)
     const silent = prompt({ narration: false, music: 'auto' })
     expect(silent).toMatch(/NOBODY SPEAKS IN THIS VIDEO: it is pictures and music only/)
-    expect(silent).not.toMatch(/Narration 15-60 words/)
+    expect(silent).not.toMatch(/Narration \d+-\d+ words per scene/)
     expect(silent).not.toMatch(/what the voice says/)
   })
 

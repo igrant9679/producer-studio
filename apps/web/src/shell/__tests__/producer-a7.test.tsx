@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
 import { brandApi } from '../../lib/brandApi'
 import { useSession } from '../../lib/session'
-import { estimateAssemble, estimateDrawnCost, estimateWrite, formatEstimate, remainingSeconds } from '../producer/estimates'
+import { assembleRemaining, estimateAssemble, estimateDrawnCost, estimateWrite, formatEstimate, remainingSeconds } from '../producer/estimates'
 import { FootagePicker, clampWindow } from '../producer/FootagePicker'
 import ProducerWizard from '../producer/ProducerWizard'
 import { NarratorControl, producerApi } from '../producer/sceneTools'
@@ -76,6 +76,15 @@ describe('time estimates', () => {
     expect(estimateAssemble([drawnScene('s01')], { drawingStyle: 'studio3d' })).toBeGreaterThan(one * 1.5)
     expect(estimateAssemble([drawnScene('s01')], { drawingStyle: 'lottie' })).toBeLessThan(one)
     expect(estimateAssemble([drawnScene('s01', true)])).toBeLessThan(60)
+    // time left follows where the time goes: at 60% (voices done, drawings starting) nearly all of a drawn video is still ahead
+    const film = [drawnScene('s01'), drawnScene('s02'), drawnScene('s03')]
+    const opts = { drawingStyle: 'studio3d' }
+    const whole = estimateAssemble(film, opts)
+    expect(assembleRemaining(film, opts, 0.6)).toBeGreaterThan(whole * 0.9)
+    expect(assembleRemaining(film, opts, 0.75)).toBeGreaterThan(whole * 0.4)
+    expect(assembleRemaining(film, opts, 0.75)).toBeLessThan(whole * 0.6)
+    expect(assembleRemaining(film, opts, 0.95)).toBeLessThan(60)
+    expect(assembleRemaining(film, opts, undefined)).toBe(whole)
     // and what they roughly cost on the animation model, said before assembling: only drawings still to make count
     const cost = estimateDrawnCost([drawnScene('s01'), drawnScene('s02'), drawnScene('s03', true)], { drawingStyle: 'studio3d', provider: 'anthropic-key', model: 'claude-fable-5-2' })
     expect(cost.scenes).toBe(2)

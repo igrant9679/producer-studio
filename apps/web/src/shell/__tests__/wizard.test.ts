@@ -103,6 +103,9 @@ describe('persistence & resume', () => {
     expect(toneForIdea('How to set up your account: a welcome guide')).toBe('Friendly')
     expect(toneForIdea('Show the new dashboard to ops managers')).toBe('Confident')
     expect(toneForIdea('')).toBe('Confident')
+    // an explainer for customers is friendly, even when it ends on "her calm, happy shop"
+    expect(toneForIdea('A friendly 30-second animated explainer: how a small neighbourhood bakery starts taking orders online. Her customers order the night before. End on Maya smiling at her calm, happy shop. Warm and encouraging, for small-business owners.')).toBe('Friendly')
+    expect(toneForIdea('An upbeat teaser for our product launch')).toBe('Energetic')
     // whole words only: "funding" is not "fun", "kindle" is not "kind"
     expect(toneForIdea('Funding update for our Kindle app')).toBe('Confident')
     // a prompt typed on Home sets the tone the brief starts with

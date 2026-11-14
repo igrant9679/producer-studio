@@ -68,9 +68,9 @@ export const DEFAULT_TONE = 'Confident'
 const TONE_WORDS: Array<[string, RegExp]> = [
   ['Calm', /\b(calm|gentle|gently|heart-?warming|bedtime|lullaby|peaceful|quiet|soothing|relax\w*|meditat\w*|mindful\w*|forest|nature|friendship|kind(ness)?|tender|cozy|cosy|soft|slow|sleep\w*|wellness|memorial|remembrance)\b/gi],
   ['Playful', /\b(kids?|child(ren)?|toddlers?|fun|funny|silly|playful|cartoon|cute|quirky|whimsical|games?|party|birthday|puppy|kitten|toys?|jokes?|goofy)\b/gi],
-  ['Energetic', /\b(launch\w*|race|racing|speed\w*|fast|sports?|fitness|workout|gym|hype|exciting|action|energy|energetic|sale|countdown|trailer|teaser|epic|adrenaline|festival|concert)\b/gi],
-  ['Professional', /\b(report|quarterly|annual|compliance|investors?|finance|financial|legal|policy|policies|audit|enterprise|b2b|board|shareholders?|regulat\w*|clinical|medical|insurance|procurement|governance)\b/gi],
-  ['Friendly', /\b(welcome|how to|how-to|tutorial|guide|walk-?through|explainer?|explains?|onboarding|community|family|neighbou?rs?|tips?|recipe|learn\w*|teach\w*|lesson|introduc\w*|getting started)\b/gi],
+  ['Energetic', /\b(upbeat|launch\w*|race|racing|speed\w*|fast|sports?|fitness|workout|gym|hype|exciting|action|energy|energetic|sale|countdown|trailer|teaser|epic|adrenaline|festival|concert)\b/gi],
+  ['Professional', /\b(professional|report|quarterly|annual|compliance|investors?|finance|financial|legal|policy|policies|audit|enterprise|b2b|board|shareholders?|regulat\w*|clinical|medical|insurance|procurement|governance)\b/gi],
+  ['Friendly', /\b(welcome|how to|how-to|tutorial|guide|walk-?through|explainer?|explains?|onboarding|community|family|neighbou?r\w*|friendly|encouraging|customers?|small-business|tips?|recipe|learn\w*|teach\w*|lesson|introduc\w*|getting started)\b/gi],
 ]
 
 /** The tone an idea most likely wants (a gentle story is not narrated like a product pitch); the default when it says nothing. */

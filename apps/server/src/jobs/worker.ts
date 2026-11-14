@@ -100,8 +100,12 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'asset.copy': 'Copying the clip',
 }
 
-/** Short jobs people wait on in the editor: they get slots long exports can't take (QUICK_JOB_CONCURRENCY). */
-export const QUICK_KINDS: readonly JobKind[] = ['asset.process', 'ai.transcribe', 'ai.tts', 'media.scenes', 'asset.copy']
+/**
+ * Short jobs people wait on: they get slots long exports and assemblies can't take (QUICK_JOB_CONCURRENCY). Writing a
+ * script is one of them: it is one AI answer (under a minute) the person watches a progress screen for, and it used to
+ * wait behind two half-hour assemblies.
+ */
+export const QUICK_KINDS: readonly JobKind[] = ['asset.process', 'ai.transcribe', 'ai.tts', 'media.scenes', 'asset.copy', 'ai.produce.script']
 
 /** The longest a job of this kind may run: renders long, processing medium, voice short. */
 export function maxRunMs(kind: string): number {

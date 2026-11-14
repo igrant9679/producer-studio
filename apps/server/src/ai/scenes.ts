@@ -186,6 +186,8 @@ export function buildIdeaPrompt(opts: { brief: NonNullable<import('@producer/cor
   // a video is longer than its words: every scene breathes before and after (about 1.9 s), and the title and close
   // cards take 6.5 s. The words are counted for what is left, so "30 seconds" comes out near 30, not 45.
   const words = Math.round(Math.max(seconds * 0.5, seconds - scenes * 1.9 - (parts.cards ? 6.5 : 0)) * 2.6)
+  // each scene's share of them, with room either way (a short film's scenes are a sentence, not a paragraph)
+  const perScene = [Math.max(8, Math.round((words / scenes) * 0.6)), Math.max(14, Math.round((words / scenes) * 1.3))]
   const look = aiLookOf(b.aiLook)
   const lookLabel = AI_LOOKS.find((l) => l.id === look)?.label
   const generated = kinds.includes('image') || kinds.includes('aiVideo')
@@ -227,8 +229,8 @@ REQUIREMENTS
 - Value-first story: the hook speaks the viewer's language, the message lands by scene 2, every later scene earns its place. Do not open with a rhetorical question.
 - About ${scenes} scenes, ids s01..sNN in order; the last scene is the close. ${
     parts.narration
-      ? `Narration 15-60 words per scene at ~2.6 words/second (about ${words} words in total).`
-      : `NOBODY SPEAKS IN THIS VIDEO: it is pictures${b.music && b.music !== 'off' ? ' and music' : ''} only. Write each scene's narration field as a plain description of what the viewer sees happen. It is never heard; its length sets how long the scene lasts, ~2.6 words/second (about ${words} words in total). The pictures have to tell the story alone.`
+      ? `Narration ${perScene[0]}-${perScene[1]} words per scene at ~2.6 words/second, and no more than ${words} words in total: the length was asked for, so count your words and cut until they fit.`
+      : `NOBODY SPEAKS IN THIS VIDEO: it is pictures${b.music && b.music !== 'off' ? ' and music' : ''} only. Write each scene's narration field as a plain description of what the viewer sees happen. It is never heard; its length sets how long the scene lasts, ~2.6 words/second: ${perScene[0]}-${perScene[1]} words per scene and no more than ${words} words in total (the length was asked for, so count your words and cut until they fit). The pictures have to tell the story alone.`
   }${parts.onScreenText ? '' : '\n- NO WORDS ON SCREEN: the viewer reads nothing, so headlines are only your working titles and animations get no labels. Show everything through what is drawn or moves.'}
 ${full ? `- Each scene is one clip of at most ~10 seconds: ${parts.narration ? 'narration 12-24 words per scene' : 'a description of 12-24 words per scene'}, so the clip lasts as long as the scene; use more scenes rather than longer ones.\n` : ''}${generated ? '- Continuity: when several generated pictures or clips show the same person, place or object, describe it in exactly the same words every time (age, build, hair, clothes and colours; the place’s look and light), so they look like one film.\n' : ''}- Vary the visuals; pick the one that makes each line easiest to understand.${full ? '' : mix(kinds)} Never put a number on screen that the narration doesn't say, and don't invent statistics: use bars or stat only with figures from the idea, otherwise use another visual.
 ${parts.narration ? '- Headlines are what the viewer reads (official spelling); narration is what the voice says (spoken spelling).\n' : ''}- Fill every visual field; use empty strings, empty lists and diagramType "none" for fields that don't apply to the chosen kind.`

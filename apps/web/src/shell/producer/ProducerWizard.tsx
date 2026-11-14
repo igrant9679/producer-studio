@@ -86,7 +86,7 @@ import {
   uploadToWizard,
   useWizard,
 } from './wizardStore'
-import { estimateAssemble, estimateDrawnCost, estimateWrite, formatEstimate, remainingSeconds } from './estimates'
+import { assembleRemaining, estimateAssemble, estimateDrawnCost, estimateWrite, formatEstimate, remainingSeconds } from './estimates'
 import { FootagePicker } from './FootagePicker'
 import { NarratorControl, ScriptVersionsButton } from './sceneTools'
 import { brandApi } from '../../lib/brandApi'
@@ -639,8 +639,8 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
 }
 
 /** How long a step should take (an estimate), and while it runs about how long is left. */
-function TimeEstimate({ total, running, progress }: { total: number; running: boolean; progress?: number }) {
-  const left = remainingSeconds(total, progress)
+function TimeEstimate({ total, running, progress, left: leftNow }: { total: number; running: boolean; progress?: number; /** What is left, when the caller knows better than total × what's undone. */ left?: number }) {
+  const left = leftNow ?? remainingSeconds(total, progress)
   return (
     <p className="muted ps-estimate" style={{ fontSize: '0.8125rem', margin: '0 0 12px' }}>
       {running ? `Estimated time left: ${formatEstimate(left)}.` : `This usually takes ${formatEstimate(total)}.`} You can leave this page: it keeps going.
@@ -652,7 +652,7 @@ function TimeEstimate({ total, running, progress }: { total: number; running: bo
  * Before a video with AI-drawn scenes is assembled: what the drawings will roughly cost on the space's animation model.
  * A drawing is minutes of a strong model's work, so it is said before the button is pressed, not found on the bill.
  */
-function DrawnCost({ scenes, drawingStyle, workspaceId }: { scenes: ScriptScene[]; drawingStyle?: string; workspaceId?: string }) {
+function DrawnCost({ scenes, drawingStyle, workspaceId, compact }: { scenes: ScriptScene[]; drawingStyle?: string; workspaceId?: string; /** One short line, for beside the Assemble button. */ compact?: boolean }) {
   const desktop = useIsDesktop()
   const [ai, setAi] = useState<{ provider: string; model?: string }>()
   const sessionWs = useSession((st) => st.workspaceId)
@@ -672,6 +672,12 @@ function DrawnCost({ scenes, drawingStyle, workspaceId }: { scenes: ScriptScene[
   if (!ai?.model) return null
   const c = estimateDrawnCost(scenes, { drawingStyle, provider: ai.provider, model: ai.model })
   if (!c.scenes || c.total < 0.5) return null
+  if (compact)
+    return (
+      <span className="muted" role="note" style={{ fontSize: '0.7812rem', maxWidth: 360, textAlign: 'right' }} title={`${c.scenes} AI-drawn scene${c.scenes === 1 ? '' : 's'} on ${ai.model}. A lighter model in Settings → AI → Animation model draws faster and for less.`}>
+        {c.scenes} AI-drawn scene{c.scenes === 1 ? '' : 's'}: about {formatEstimate(estimateAssemble(scenes, { drawingStyle }))} and roughly {money(c.total)} of AI credit
+      </span>
+    )
   return (
     <p className="muted ps-estimate" role="note" style={{ fontSize: '0.8125rem', margin: '0 0 12px' }}>
       {c.scenes} AI-drawn scene{c.scenes === 1 ? '' : 's'} on {ai.model}: roughly {money(c.total)} of your AI key’s credit{c.scenes > 1 ? ` (about ${money(c.each)} a scene)` : ''}. A lighter model in Settings → AI → Animation model draws faster and for less.
@@ -1235,6 +1241,7 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
   const whisper = useSystem((st) => st.info?.capabilities?.transcribe)
   const r = s.run
   const done = r.status === 'done' && r.phase === 'assemble'
+  const assembleOpts = { drawingStyle: s.brief.drawingStyle, renarrate: r.renarrate, whisper, music: !!musicStyleFor(s.brief.music, s.brief.tone), narration: videoParts(s.brief).narration }
   // assembled before (this session or a saved one): another assembly can go into a copy, leaving this video as it is
   const assembledBefore = s.assembledVersion !== undefined || s.scenes.some((sc) => !!sc.voice)
   if (r.confirm === 'edited' && r.status !== 'running') {
@@ -1307,7 +1314,14 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
           <div className="muted" style={{ textAlign: 'center', fontSize: '0.75rem', marginTop: 8 }}>{r.progress && r.progress > 0 ? `${Math.round(r.progress * 100)}%` : 'Starting…'}</div>
         </div>
       )}
-      {!done && r.status !== 'error' && <TimeEstimate total={estimateAssemble(s.scenes, { drawingStyle: s.brief.drawingStyle, renarrate: r.renarrate, whisper, music: !!musicStyleFor(s.brief.music, s.brief.tone), narration: videoParts(s.brief).narration })} running={r.status === 'running'} progress={r.progress} />}
+      {!done && r.status !== 'error' && (
+        <TimeEstimate
+          total={estimateAssemble(s.scenes, assembleOpts)}
+          left={r.status === 'running' ? assembleRemaining(s.scenes, assembleOpts, r.progress) : undefined}
+          running={r.status === 'running'}
+          progress={r.progress}
+        />
+      )}
       {!done && r.status !== 'error' && r.status !== 'running' && <DrawnCost scenes={s.scenes} drawingStyle={s.brief.drawingStyle} workspaceId={s.workspaceId} />}
       <div className="row" style={{ justifyContent: 'center', marginTop: 20 }}>
         {done ? (
@@ -1681,6 +1695,7 @@ export default function ProducerWizard() {
                   <RefreshCw size={14} /> Regenerate
                 </button>
               ))}
+            {s.step === 'review' && adv.ok && <DrawnCost scenes={s.scenes} drawingStyle={s.brief.drawingStyle} workspaceId={s.workspaceId ?? workspaceId} compact />}
             {primaryLabel && (
               <button className="btn primary" disabled={!adv.ok || needsWriter} onClick={next}>
                 {primaryLabel} <ArrowRight size={15} />

@@ -167,7 +167,7 @@ describe('queue visibility (A-9)', () => {
     const r = replayQueue({
       running: [{ kind: 'export.render', workspaceId: 'A', elapsedMs: 0 }],
       queued: [
-        { id: 'x', kind: 'ai.produce.script', workspaceId: 'A' },
+        { id: 'x', kind: 'ai.produce.assemble', workspaceId: 'A' },
         { id: 'q', kind: 'ai.transcribe', workspaceId: 'A' },
         { id: 'y', kind: 'export.render', workspaceId: 'A' },
       ],
@@ -178,8 +178,24 @@ describe('queue visibility (A-9)', () => {
     })
     expect(r.get('q')).toMatchObject({ startMs: 0 })
     expect(r.get('x')).toMatchObject({ startMs: 10 * 60_000 })
-    // after the script, whose run time isn't known yet
+    // after the assembly, whose run time isn't known yet
     expect(r.get('y')).toMatchObject({ startMs: null })
+  })
+
+  it('writing a script is a quick job: it doesn’t wait behind long assemblies and exports', () => {
+    expect(QUICK_KINDS).toContain('ai.produce.script')
+    const r = replayQueue({
+      running: [
+        { kind: 'ai.produce.assemble', workspaceId: 'A', elapsedMs: 0 },
+        { kind: 'export.render', workspaceId: 'A', elapsedMs: 0 },
+      ],
+      queued: [{ id: 's', kind: 'ai.produce.script', workspaceId: 'A' }],
+      workers: 1,
+      concurrency: 2,
+      quick: 1,
+      durations,
+    })
+    expect(r.get('s')).toMatchObject({ startMs: 0 })
   })
 
   it('the jobs list gets each queued job’s place, wait and reason', async () => {
