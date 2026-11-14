@@ -11,7 +11,7 @@ import { ClaudeCliProvider } from '../ai/cli'
 import { drawingPalette, writeDrawing } from '../ai/drawn'
 import { drawingStyleOf } from '@producer/core'
 import { syntheticTranscript } from '../ai/produce'
-import { type DrawingEnv, renderDrawing } from '../media/drawing'
+import { type DrawingEnv, renderDrawing, testDrawing } from '../media/drawing'
 import { ffmpeg } from '../media/proc'
 import { setup } from './helpers'
 
@@ -41,7 +41,7 @@ const SCENES = [
   },
 ]
 
-describe.skipIf(!REAL)('AI-drawn scenes, drawn and rendered', () => {
+describe.skipIf(!REAL || process.env.DRAWN_FILM === '1')('AI-drawn scenes, drawn and rendered', () => {
   const style = drawingStyleOf(process.env.DRAWN_STYLE)
   for (const sc of SCENES.filter((s) => !process.env.DRAWN_ONLY || s.name === process.env.DRAWN_ONLY)) {
     it(`draws “${sc.name}”`, async () => {
@@ -100,17 +100,22 @@ describe.skipIf(!REAL || process.env.DRAWN_FILM !== '1')('two scenes of one film
         palette: drawingPalette(style, { canvas: '#14161f', accent: '#ff6b4a', ink: '#f4f1ea' }),
         fonts: { headline: 'Montserrat', body: 'Inter' },
       }
-      const made = await writeDrawing(new ClaudeCliProvider(), { description: sc.description, narration: sc.narration, headline: '', env, style, silent: true, noWords: true, reference, progress: (_f, m) => console.log(sc.name, m) })
+      // a scene written on an earlier run (its code saved next to the sheets) is rendered again as it is
+      const saved = process.env.DRAWN_SHEET ? path.join(process.env.DRAWN_SHEET, `${sc.name}.js`) : ''
+      const made =
+        saved && fs.existsSync(saved)
+          ? { code: fs.readFileSync(saved, 'utf8'), plan: '(saved code)' }
+          : await writeDrawing(new ClaudeCliProvider(), { description: sc.description, narration: sc.narration, headline: '', env, style, silent: true, noWords: true, reference, progress: (_f, m) => console.log(sc.name, m) })
       reference ??= made.code
-      fs.writeFileSync(path.join(dir, `${sc.name}.js`), made.code)
-      const file = path.join(dir, `${sc.name}.mp4`)
-      await renderDrawing(made.code, env, file)
+      fs.writeFileSync(saved || path.join(dir, `${sc.name}.js`), made.code)
+      // six frames across the scene are enough to look at (a whole 3D clip is more than a small machine renders)
       const shots = [0.08, 0.26, 0.44, 0.62, 0.8, 0.97].map((k) => k * env.duration)
-      for (const [i, at] of shots.entries()) await ffmpeg(['-y', '-ss', at.toFixed(2), '-i', file, '-frames:v', '1', '-vf', 'scale=480:-2', path.join(dir, `${sc.name}-${i}.png`)])
+      const frames = await testDrawing(made.code, env, shots)
+      for (const [i, jpg] of frames.entries()) fs.writeFileSync(path.join(dir, `${sc.name}-${i}.jpg`), jpg)
       const sheet = path.join(process.env.DRAWN_SHEET || dir, `drawn-${sc.name}-${style}.png`)
-      await ffmpeg(['-y', '-framerate', '1', '-i', path.join(dir, `${sc.name}-%d.png`), '-vf', 'tile=3x2:padding=6:color=white', '-frames:v', '1', sheet])
-      console.log(JSON.stringify({ plan: made.plan, clip: file, sheet }))
-      expect(fs.statSync(file).size).toBeGreaterThan(10_000)
+      await ffmpeg(['-y', '-framerate', '1', '-i', path.join(dir, `${sc.name}-%d.jpg`), '-vf', 'scale=480:-2,tile=3x2:padding=6:color=white', '-frames:v', '1', sheet])
+      console.log(JSON.stringify({ plan: made.plan, sheet }))
+      expect(fs.statSync(sheet).size).toBeGreaterThan(10_000)
     }
   }, 3_600_000)
 })

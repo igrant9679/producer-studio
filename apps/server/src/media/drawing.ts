@@ -527,7 +527,13 @@ export async function renderDrawing(code: string, env: DrawingEnv, outFile: stri
     }
   } catch (err) {
     enc.kill('SIGKILL')
-    fs.rmSync(outFile, { force: true })
+    // the half-written file goes, if it can: on Windows the encoder may still hold it for a moment, and failing to
+    // delete it must not replace the reason the render failed
+    try {
+      fs.rmSync(outFile, { force: true })
+    } catch {
+      fs.rm(outFile, { force: true, maxRetries: 5, retryDelay: 200 }, () => undefined)
+    }
     if (opts.signal?.aborted) throw new CancelledError()
     throw err
   } finally {
