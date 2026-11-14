@@ -1,7 +1,8 @@
 // AI-drawn scenes, for real: the locally signed-in Claude Code CLI (the desktop edition's provider) writes the drawing
 // code, the sandbox renders it, and a contact sheet of the clip is written for a person to look at (DRAWN_SHEET=<file>).
 // Runs only with REAL_DRAW=1 (it uses the CLI's subscription and takes a few minutes). DRAWN_STYLE=<id> draws them in a
-// drawing style (core's DRAWING_STYLES), DRAWN_ONLY=<name> draws one scene.
+// drawing style (core's DRAWING_STYLES), DRAWN_ONLY=<name> draws one scene. DRAWN_FILM=1 draws two scenes of one silent
+// story instead, the second shown the first's code, to look at whether its characters and colours stay the same.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -67,4 +68,49 @@ describe.skipIf(!REAL)('AI-drawn scenes, drawn and rendered', () => {
       expect(fs.statSync(file).size).toBeGreaterThan(10_000)
     }, 1_200_000)
   }
+})
+
+// Two scenes of one story (the scenes a real video on production was made from), nobody speaking, no words on screen.
+const FILM = [
+  {
+    name: 'film-1-meeting',
+    narration: 'A small orange fox wanders alone through a glowing forest. Beneath a tall tree sits a tiny blue bird, head down. The fox steps closer, tilts its head, and smiles.',
+    description:
+      "A forest floor with rounded trees and soft beams of light. On 'wanders alone', a small orange fox walks in from the left, the camera tracking beside it at its eye level. On 'tiny blue bird', the camera eases ahead to reveal a little blue bird sitting still beneath a large tree, its head drooping. On 'steps closer', the fox slows and takes three careful steps toward the bird. On 'tilts its head', the fox tilts its head to one side; the camera pushes into a gentle close-up of both faces as the fox's mouth curves into a smile and the bird lifts its head to look up.",
+  },
+  {
+    name: 'film-2-storm',
+    narration: 'Dark clouds roll in and heavy rain falls. The little bird struggles to fly. The fox runs to a great tree and curls around its friend, keeping it dry.',
+    description:
+      "The meadow from a wide angle. On 'dark clouds roll in', heavy grey clouds slide across the sky and the light dims. On 'heavy rain falls', streaks of rain sweep down across the scene. On 'struggles to fly', the blue bird flaps hard, rises a little, then drops low, wings drooping. On 'runs to a great tree', the fox dashes toward a huge tree with a wide canopy and the camera follows low and fast. On 'curls around its friend', the fox settles beneath the branches and wraps its body and tail around the bird; the camera slowly moves in as rain keeps falling just beyond the canopy's edge.",
+  },
+]
+
+describe.skipIf(!REAL || process.env.DRAWN_FILM !== '1')('two scenes of one film', () => {
+  const style = drawingStyleOf(process.env.DRAWN_STYLE)
+  it('the second scene is shown the first, and keeps its characters', async () => {
+    let reference: string | undefined
+    for (const sc of FILM) {
+      const env: DrawingEnv = {
+        width: 1280,
+        height: 720,
+        fps: 30,
+        duration: sc.narration.split(/\s+/).length / 2.6 + 2.1,
+        words: [],
+        palette: drawingPalette(style, { canvas: '#14161f', accent: '#ff6b4a', ink: '#f4f1ea' }),
+        fonts: { headline: 'Montserrat', body: 'Inter' },
+      }
+      const made = await writeDrawing(new ClaudeCliProvider(), { description: sc.description, narration: sc.narration, headline: '', env, style, silent: true, noWords: true, reference, progress: (_f, m) => console.log(sc.name, m) })
+      reference ??= made.code
+      fs.writeFileSync(path.join(dir, `${sc.name}.js`), made.code)
+      const file = path.join(dir, `${sc.name}.mp4`)
+      await renderDrawing(made.code, env, file)
+      const shots = [0.08, 0.26, 0.44, 0.62, 0.8, 0.97].map((k) => k * env.duration)
+      for (const [i, at] of shots.entries()) await ffmpeg(['-y', '-ss', at.toFixed(2), '-i', file, '-frames:v', '1', '-vf', 'scale=480:-2', path.join(dir, `${sc.name}-${i}.png`)])
+      const sheet = path.join(process.env.DRAWN_SHEET || dir, `drawn-${sc.name}-${style}.png`)
+      await ffmpeg(['-y', '-framerate', '1', '-i', path.join(dir, `${sc.name}-%d.png`), '-vf', 'tile=3x2:padding=6:color=white', '-frames:v', '1', sheet])
+      console.log(JSON.stringify({ plan: made.plan, clip: file, sheet }))
+      expect(fs.statSync(file).size).toBeGreaterThan(10_000)
+    }
+  }, 3_600_000)
 })

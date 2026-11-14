@@ -210,7 +210,8 @@ describe('Producer AI assembly', () => {
     // no clip key in this space: every clip fails with the same reason
     const film: ScriptScene[] = [
       { ...scenes[0], visual: { kind: 'aiVideo', prompt: 'A red race car speeds down a city street at night' } },
-      { ...scenes[1], visual: { kind: 'aiVideo', prompt: 'It crosses the finish line under a shower of sparks' } },
+      { ...scenes[1], id: 's02', title: 'Finish', narration: 'It crosses the line first.', visual: { kind: 'aiVideo', prompt: 'It crosses the finish line under a shower of sparks' } },
+      { ...scenes[1], id: 's03', visual: { kind: 'aiVideo', prompt: 'The driver climbs out and waves to the crowd' } },
     ]
     const run = async (id: string, extra: Record<string, unknown>) => {
       const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes: film, brief: { ...brief, source: 'idea', idea: 'A race', ...extra } })
@@ -242,28 +243,38 @@ describe('Producer AI assembly', () => {
       // a film asked for in full motion: each scene is drawn from its clip's own description
       const { out, p } = await run(await newProject('Clip fallback'), { motion: 'full' })
       const visuals = p.ai!.script!.scenes.map((s) => s.visual)
-      expect(visuals.map((v) => v?.kind)).toEqual(['drawn', 'drawn'])
+      expect(visuals.map((v) => v?.kind)).toEqual(['drawn', 'drawn', 'drawn'])
       expect(visuals[0]).toMatchObject({ kind: 'drawn', prompt: film[0].visual!.kind === 'aiVideo' ? film[0].visual.prompt : '', code, assetId: expect.any(String) })
       expect(asked.some((a) => a.includes('A red race car speeds down a city street at night'))).toBe(true)
       expect(asked.some((a) => a.includes('It crosses the finish line under a shower of sparks'))).toBe(true)
-      expect(p.tracks.find((t) => t.main)!.items.filter((i) => i.type === 'video')).toHaveLength(2)
-      // drawings wait on the model for minutes, so two are drawn at a time
+      expect(p.tracks.find((t) => t.main)!.items.filter((i) => i.type === 'video')).toHaveLength(3)
+      // the first scene leads: the others are shown its code (the same car is the same car), and never the other way
+      const SAME_FILM = 'THE SAME FILM, AN EARLIER SCENE'
+      const writes = asked.filter((a) => !a.includes('THE CODE YOU WROTE'))
+      expect(writes).toHaveLength(3)
+      expect(writes[0]).not.toContain(SAME_FILM)
+      expect(writes[0]).toContain('A red race car speeds down a city street at night')
+      for (const w of writes.slice(1)) {
+        expect(w).toContain(SAME_FILM)
+        expect(w).toContain(code)
+      }
+      // drawings wait on the model for minutes, so the ones after the first are drawn two at a time
       expect(together).toBe(2)
       // one line for both scenes: what stands in, and why the clip wasn't made
       const lines = (out.notes ?? []).filter((n) => /^s0/.test(n))
       expect(lines).toHaveLength(1)
-      expect(lines[0]).toMatch(/^s01, s02: The AI drew this scene because its clip couldn’t be made\. \S/)
+      expect(lines[0]).toMatch(/^s01, s02, s03: The AI drew this scene because its clip couldn’t be made\. \S/)
     } finally {
       setProvider(undefined)
     }
     // no AI to draw with (and drawn scenes weren't asked for): animated text, with the clip's reason and nothing else
     const { out, p } = await run(await newProject('Clip fallback, no AI'), {})
     // the video shows text; the script keeps asking for the clips, for the next assembly
-    expect(p.ai!.script!.scenes.map((s) => s.visual?.kind)).toEqual(['aiVideo', 'aiVideo'])
+    expect(p.ai!.script!.scenes.map((s) => s.visual?.kind)).toEqual(['aiVideo', 'aiVideo', 'aiVideo'])
     expect(p.tracks.find((t) => t.main)!.items.filter((i) => i.type === 'video')).toHaveLength(0)
     const lines = (out.notes ?? []).filter((n) => /^s0/.test(n))
     expect(lines).toHaveLength(1)
-    expect(lines[0]).toMatch(/^s01, s02: /)
+    expect(lines[0]).toMatch(/^s01, s02, s03: /)
     expect(lines[0]).not.toMatch(/The AI drew|stands in/)
   }, 300_000)
 

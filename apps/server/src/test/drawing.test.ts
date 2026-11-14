@@ -8,7 +8,7 @@ import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import * as z from 'zod/v4'
 import { strongestModel } from '@producer/core'
-import { MAX_FIXES, MAX_LOOKS, THREE_GUIDE, buildDrawingPrompt, drawingPalette, stepReporter, writeDrawing } from '../ai/drawn'
+import { DRAWN_SYSTEM, MAX_FIXES, MAX_LOOKS, THREE_GUIDE, buildDrawingPrompt, drawingPalette, stepReporter, writeDrawing } from '../ai/drawn'
 import type { AiProvider, StructuredRequest } from '../ai/provider'
 import { toSceneVisual, VisualSchema } from '../ai/scenes'
 import { ctx } from '../context'
@@ -165,6 +165,29 @@ function scripted(answers: unknown[]): AiProvider & { calls: Array<StructuredReq
   }
 }
 
+describe('one film, many scenes', () => {
+  const o = { description: 'The fox curls round the bird', narration: 'n', headline: 'h', env: { width: 1280, height: 720, fps: 30, duration: 5, words: [], palette: { canvas: '#fff', ink: '#111', accent: '#f60' }, fonts: { headline: 'A', body: 'B' } } }
+
+  it('a later scene is shown an earlier scene’s code and told to keep what appears again the same', () => {
+    const plain = buildDrawingPrompt(o as never)
+    expect(plain).not.toContain('THE SAME FILM')
+    const later = buildDrawingPrompt({ ...o, reference: 'function draw(ctx, t, env) { /* the fox */ }' } as never)
+    expect(later).toContain('THE SAME FILM, AN EARLIER SCENE')
+    expect(later).toContain('/* the fox */')
+    expect(later).toMatch(/must look the same/)
+    expect(later).toMatch(/never copy its action or its camera/)
+    // a very long scene is cut, not sent whole
+    expect(buildDrawingPrompt({ ...o, reference: 'x'.repeat(40_000) } as never).length).toBeLessThan(plain.length + 17_500)
+  })
+
+  it('the note’s own colours win over the palette, and characters stay big', () => {
+    const p = buildDrawingPrompt({ ...o, style: 'studio3d' } as never)
+    expect(p).toMatch(/an orange fox is orange, never the accent/)
+    expect(p).toMatch(/at least a quarter of the frame's height/)
+    expect(DRAWN_SYSTEM).toMatch(/A colour the director's note names is the note's to choose/)
+  })
+})
+
 describe('writing a drawing', () => {
   it('fixes code that fails once, then looks at its frames and keeps a fix that runs', async ({ skip }) => {
     if (!chrome) skip()
@@ -173,8 +196,11 @@ describe('writing a drawing', () => {
       { plan: 'a disc', code: '```js\n' + GOOD + '\n```' },
       { problems: 'too small', changed: true, code: GOOD.replace('10 + 20 * k', '14 + 20 * k') },
     ])
-    const r = await writeDrawing(model, { description: 'A disc grows on grow', narration: 'Plant it and watch it grow.', headline: 'Grow', env })
+    const working: string[] = []
+    const r = await writeDrawing(model, { description: 'A disc grows on grow', narration: 'Plant it and watch it grow.', headline: 'Grow', env, onWorking: (c) => working.push(c) })
     expect(r.code).toContain('14 + 20 * k')
+    // the first code that runs is announced once (the video's other scenes start from it), before the looks change it
+    expect(working).toEqual([GOOD])
     // write, fix, look (fixes it), look again (the scripted model has nothing more to say: the fix it made stays)
     expect(model.calls).toHaveLength(4)
     expect(model.calls[3].prompt).toMatch(/after 1 round of your own fixes/)

@@ -427,6 +427,21 @@ describe('drawn scenes in the video’s drawing style', () => {
   })
 })
 
+describe('the length asked for', () => {
+  const brief = { title: 'Fox and bird', audience: '', goal: '', tone: 'Calm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, source: 'idea' as const, idea: 'A fox helps a bird', lengthSec: 30 }
+  const prompt = (over: object = {}) => buildIdeaPrompt({ brief: { ...brief, ...over } as never, kinds: ['motion', 'drawn'], rules: '', example: '' })
+
+  it('is what the words are counted for, less each scene’s pauses and the title and close cards', () => {
+    // 30 s, 3 scenes: 5.7 s of pauses and 6.5 s of cards leave 17.8 s of words
+    expect(prompt()).toContain('about 46 words in total')
+    // no cards: 24.3 s of words
+    expect(prompt({ cards: false })).toContain('about 63 words in total')
+    expect(prompt({ narration: false, captions: false, onScreenText: false, cards: false })).toContain('about 63 words in total')
+    // never fewer than half the length in words, however many scenes
+    expect(prompt({ lengthSec: 15 })).toContain(`about ${Math.round(7.5 * 2.6)} words in total`)
+  })
+})
+
 describe('a script for a video nobody speaks in', () => {
   const brief = { title: 'T', audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' as const, source: 'idea' as const, idea: 'A rocket' }
   const prompt = (over: object, kinds: VisualKind[] = ['animation', 'drawn']) => buildIdeaPrompt({ brief: { ...brief, ...over }, kinds, rules: '', example: '' })

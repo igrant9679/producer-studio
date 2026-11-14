@@ -131,7 +131,10 @@ function mediaLine(m: IdeaMedia): string {
 /** What a good mix looks like with the kinds on offer (a writer left alone leans on text and diagrams). */
 function mix(kinds: VisualKind[]): string {
   const want: string[] = []
-  if (kinds.includes('drawn')) want.push('draw (drawn) the one or two scenes that most need showing: a process, a change, a cause and effect, a character doing something')
+  if (kinds.includes('drawn'))
+    want.push(
+      'draw (drawn) the scenes that most need showing: a process, a change, a cause and effect, a character doing something. A story, or anything that follows the same characters from scene to scene, is drawn in every one of its scenes (up to 6), described with the same words for the same character each time, so it looks like one film: never put an emoji animation or a stock picture between the drawn scenes of a story',
+    )
   if (kinds.includes('photo') || kinds.includes('stock')) want.push(`show real people, places and things with ${kinds.includes('photo') && kinds.includes('stock') ? 'a stock photo or clip' : kinds.includes('photo') ? 'a stock photo' : 'a stock clip'} at least once`)
   if (kinds.includes('animation')) want.push('use animation for lists of things and simple journeys')
   const words = kinds.includes('motion') || kinds.includes('diagram') ? '; keep text and diagrams for the points that are words or numbers' : ''
@@ -175,12 +178,14 @@ export function buildIdeaPrompt(opts: { brief: NonNullable<import('@producer/cor
   const parts = videoParts(b)
   const vertical = b.aspect === '9:16'
   const seconds = Math.max(15, Math.min(600, b.lengthSec ?? 60))
-  const words = Math.round(seconds * 2.6)
   const media = opts.media ?? []
   const kinds = opts.kinds.filter((k) => k !== 'footage' && (k !== 'media' || media.length > 0))
   // full motion: every scene a clip, so scenes are as long as a clip can be (about 8 s) and there are more of them
   const full = b.motion === 'full' && kinds.includes('aiVideo')
   const scenes = full ? Math.max(3, Math.min(MAX_AI_CLIPS_FULL_MOTION, Math.round(seconds / 8))) : Math.max(3, Math.min(14, Math.round(seconds / 9)))
+  // a video is longer than its words: every scene breathes before and after (about 1.9 s), and the title and close
+  // cards take 6.5 s. The words are counted for what is left, so "30 seconds" comes out near 30, not 45.
+  const words = Math.round(Math.max(seconds * 0.5, seconds - scenes * 1.9 - (parts.cards ? 6.5 : 0)) * 2.6)
   const look = aiLookOf(b.aiLook)
   const lookLabel = AI_LOOKS.find((l) => l.id === look)?.label
   const generated = kinds.includes('image') || kinds.includes('aiVideo')

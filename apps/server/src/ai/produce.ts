@@ -1007,12 +1007,15 @@ async function makeSceneVisuals(
 
   /** One AI-drawn scene. False: it couldn't be drawn (why is kept for what stands in). */
   const couldNotDraw = new Map<string, string>()
-  const draw = async (s: ScriptScene): Promise<void> => {
+  // one scene's code, shown to the scenes drawn after it, so the same fox is the same fox in every scene
+  let reference: string | undefined
+  const draw = async (s: ScriptScene, onWorking?: (code: string) => void): Promise<void> => {
     const v = s.visual as Extract<SceneVisual, { kind: 'drawn' }>
     for (;;) {
       const style = drawing!.style
       try {
-        const made = await makeDrawn(slot(s, `Drawing ${s.id}`), { ...o, drawing: drawing!, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work, blender })
+        const made = await makeDrawn(slot(s, `Drawing ${s.id}`), { ...o, drawing: drawing!, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work, blender, reference, onWorking })
+        reference ??= made.code
         generated.set(s.id, made.asset)
         s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id, ...(style !== 'clean' ? { style } : {}) }
         stoodIn(s, 'drawn')
@@ -1052,14 +1055,28 @@ async function makeSceneVisuals(
     else if (toDraw.length) {
       const now = toDraw.slice(0, MAX_DRAWN)
       for (const s of toDraw.slice(MAX_DRAWN)) couldNotDraw.set(s.id, `only ${MAX_DRAWN} scenes are drawn per video`)
-      let next = 0
+      // a scene drawn before in this style (an earlier assembly) already shows how the film's characters look
+      const style = drawing.style
+      reference = now.map((s) => s.visual).find((v): v is Extract<SceneVisual, { kind: 'drawn' }> & { code: string } => v?.kind === 'drawn' && !!v.code && drawingStyleOf(v.style) === style)?.code
+      // else the first scene leads: the others start as soon as its code first runs (its looks go on meanwhile)
+      let lead: Promise<void> | undefined
+      if (!reference && !blender && now.length > 1) {
+        let started!: () => void
+        const working = new Promise<void>((r) => (started = r))
+        lead = draw(now[0], (code) => {
+          reference ??= code
+          started()
+        }).finally(started)
+        await working
+      }
+      let next = lead ? 1 : 0
       const lane = async () => {
         while (next < now.length) {
           jc.check()
           await draw(now[next++])
         }
       }
-      const lanes = await Promise.allSettled(Array.from({ length: Math.min(blender ? 1 : DRAWN_AT_ONCE, now.length) }, lane))
+      const lanes = await Promise.allSettled([...(lead ? [lead] : []), ...Array.from({ length: Math.min(blender ? 1 : DRAWN_AT_ONCE, now.length - next) }, lane)])
       const broke = lanes.find((l) => l.status === 'rejected')
       if (broke) throw (broke as PromiseRejectedResult).reason
       // 3. what couldn't be drawn: an AI picture where the video may have one, else text
@@ -1127,6 +1144,10 @@ async function makeDrawn(
     work: string
     /** The 'blender' style: where its scripts are tried and rendered. */
     blender?: BlenderRunner
+    /** An earlier scene's drawing code of this video (same style): what appears again is drawn the same. */
+    reference?: string
+    /** Called with the first code that runs, when this scene's code is being written. */
+    onWorking?: (code: string) => void
   },
 ): Promise<{ asset: Asset; code: string }> {
   const voice = o.voices.get(o.scene.id)
@@ -1153,7 +1174,7 @@ async function makeDrawn(
   if (!code) {
     const ai = await requireProvider(o.workspaceId, 'animation')
     provider = ai.id
-    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, silent: o.drawing.silent, noWords: o.drawing.noWords, style: o.drawing.style, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m), blender: o.blender })).code
+    code = (await writeDrawing(ai, { description: o.visual.prompt, narration: o.scene.narration, headline: o.scene.headline, env, silent: o.drawing.silent, noWords: o.drawing.noWords, style: o.drawing.style, signal: jc.signal, progress: (f, m) => jc.progress(f * 0.6, m), blender: o.blender, reference: o.blender ? undefined : o.reference, onWorking: o.onWorking })).code
   }
   jc.check()
   const rendering = o.blender ? (o.blender.where === 'runpod' ? 'Rendering in Blender on the graphics card' : 'Rendering in Blender') : 'Rendering the animation'

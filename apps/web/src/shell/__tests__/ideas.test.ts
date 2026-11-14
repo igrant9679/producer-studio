@@ -145,6 +145,10 @@ describe('a video without some of its parts', () => {
     const only = animationOnly(b)
     expect(videoParts(only)).toEqual({ narration: false, captions: false, onScreenText: false, cards: false })
     expect(only.visualKinds).toEqual(['animation', 'drawn'])
+    // a kind the person had unticked isn't ticked again: of the two animated kinds, theirs stay
+    expect(animationOnly({ ...b, visualKinds: ['drawn', 'image', 'stock'] }).visualKinds).toEqual(['drawn'])
+    expect(animationOnly({ ...b, visualKinds: ['animation', 'motion'] }).visualKinds).toEqual(['animation'])
+    expect(animationOnly({ ...b, visualKinds: ['image'] }).visualKinds).toEqual(['animation', 'drawn'])
     expect(only.music).toBe('auto')
     const back = everything(only)
     expect(videoParts(back)).toEqual({ narration: true, captions: true, onScreenText: true, cards: true })

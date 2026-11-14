@@ -159,7 +159,9 @@ export function validateScenes(scenes: ScriptScene[], silent = false): string | 
 
 /** Pictures and music only: what “Just the animation” sets on a brief made from an idea. */
 export function animationOnly(b: Brief): Brief {
-  return { ...b, narration: false, captions: false, onScreenText: false, cards: false, visualKinds: ['animation', 'drawn'] }
+  // of the two animated kinds, the ones the person had ticked stay their choice (one unticked isn't ticked again)
+  const kept = (b.visualKinds ?? []).filter((k) => k === 'animation' || k === 'drawn')
+  return { ...b, narration: false, captions: false, onScreenText: false, cards: false, visualKinds: kept.length ? kept : ['animation', 'drawn'] }
 }
 
 /** Undoes it: every part back, and the visuals to the usual choice. */

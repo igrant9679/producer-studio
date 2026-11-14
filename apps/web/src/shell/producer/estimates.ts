@@ -56,10 +56,11 @@ export function estimateDrawnCost(scenes: ScriptScene[], o: { drawingStyle?: str
 export function estimateAssemble(scenes: ScriptScene[], opts: { renarrate?: string[]; whisper?: boolean; music?: boolean; narration?: boolean; drawingStyle?: string } = {}): number {
   let t = 8
   let length = 6.5
-  // drawings not made yet: one takes its full time, more are drawn two at a time (one already drawn is only re-rendered if its timing changed)
+  // drawings not made yet: one takes its full time (one already drawn is only re-rendered if its timing changed)
   const drawn = scenes.filter((sc) => sc.visual?.kind === 'drawn')
   const fresh = freshDrawings(scenes)
-  t += (drawn.length - fresh) * 20 + (fresh <= 1 ? fresh : Math.ceil(fresh / 2)) * drawnSeconds(opts.drawingStyle)
+  // the first leads (the others copy its characters and start once its code runs, about half way), then two at a time
+  t += (drawn.length - fresh) * 20 + (fresh <= 1 ? fresh : 0.5 + Math.ceil((fresh - 1) / 2)) * drawnSeconds(opts.drawingStyle)
   for (const sc of scenes) {
     const spoken = narrationSeconds(sc.narration) / (sc.narrator?.speed ?? 1)
     length += spoken + 2

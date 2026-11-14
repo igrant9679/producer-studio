@@ -257,6 +257,16 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   no-progress watchdog doesn't stop a long answer; the wizard's estimate counts 5 / 9 / 17 minutes a drawing (Lottie /
   2D / 3D, `drawnSeconds`), two at a time, where it used to say 75 seconds. Where only text could stand in, the script
   keeps the visual it asked for (`asked`), so the next assembly tries again.
+  *One film*: what the first real video showed (a coral "orange fox", built differently in every scene, small in pale
+  studio sets, with an emoji scene between the 3D ones) is now said to the models. The drawing AI: a colour the
+  director's note names is that thing's colour (the palette is for what the note leaves open), a named place is
+  built in its own colours, the main character is at least a quarter of the frame's height, and a later scene is
+  shown an earlier scene's code and told to build what appears again the same way (`reference` in
+  `buildDrawingPrompt`; in `makeSceneVisuals` the first drawing leads and the others start when its code first runs,
+  `onWorking`, or from a scene drawn in an earlier assembly). The script writer: a story is drawn in every scene, never
+  an emoji animation between drawn scenes; and the word budget subtracts each scene's pauses (1.9 s) and the cards
+  (6.5 s), so "30 seconds" comes out near 30 instead of 49. The wizard's "Just the animation" keeps whichever of the
+  two animated kinds the person had ticked.
   *Settings documents*: `normalizeDoc` returns a copy of its own; before, every space that had saved nothing shared one
   `providers` / `perFeature` object in memory, so one space's first key test or per-feature choice showed in the others.
   **Shared AI keys** (13 Nov 2026, migration v19). An owner of two spaces can let one use a key stored in the other:

@@ -39,7 +39,7 @@ THE CONTRACT
 
 ENV
 - env.W, env.H, env.duration, env.fps
-- env.palette.canvas (background), env.palette.ink (lines, text), env.palette.accent (the one highlight colour). Derive tints with rgba/alpha; use no other hues except small, natural touches (skin, sky, leaves) when the subject needs them.
+- env.palette.canvas (background), env.palette.ink (lines, text), env.palette.accent (the one highlight colour). Derive tints with rgba/alpha; use no other hues except small, natural touches (skin, sky, leaves) when the subject needs them. A colour the director's note names is the note's to choose: an orange fox is orange, a blue bird blue, a red car red, the grass green. Give those things those colours, clear and saturated; the palette is for everything the note leaves open.
 - env.fonts.headline, env.fonts.body: font family names, e.g. ctx.font = '700 64px "' + env.fonts.body + '"'.
 - env.words: [{ w, start }] the narration's words with their start times in seconds. env.wordAt('word', after?) gives the time a word is first said (after an optional time), or undefined: time each entrance to the word that names it, with a fallback time when it is undefined.
 - env.rough: Rough.js for a hand-drawn look: env.rough.line(x1,y1,x2,y2,opts), .rectangle(x,y,w,h,opts), .circle(cx,cy,d,opts), .ellipse(cx,cy,w,h,opts), .linearPath([[x,y],...],opts), .polygon([[x,y],...],opts), .arc(x,y,w,h,start,stop,closed,opts), .curve([[x,y],...],opts), .path(svgPathString,opts). opts: { stroke, strokeWidth, roughness (0.5-2), bowing, fill, fillStyle ('hachure'|'solid'|'zigzag'|'cross-hatch'|'dots'), fillWeight, hachureGap, seed }. ALWAYS pass a seed: the same seed draws the same wobble; seed: 1 + Math.floor(t * 6) % 3 makes lines gently "boil" like hand-drawn animation. Plain ctx paths are fine too (and faster) for a clean flat look.
@@ -165,10 +165,11 @@ export const THREE_GUIDE = `3D (THREE.JS ON A LIT STAGE)
 - The 2D canvas is behind the 3D picture (its background is transparent): paint the background with ctx first (a gradient, a backdrop, the paper), then pose and s.render(ctx), then any 2D labels or marks on top.
 - Every frame, pose everything from t: positions, rotations, scales, the camera (s.camera.position.set(...); s.camera.lookAt(...)), any colour you change. Set each changing property every frame and never accumulate (no += from frame to frame): frames are drawn out of order.
 - st.add(obj, ...) adds things that cast and catch shadows; s.parts is what the build returned; s.project(objectOrPoint) gives { x, y } in frame pixels, for 2D labels pinned to 3D things; s.camera, s.scene, s.lights.{key, fill, rim} and s.ground are there too.
-- env.material3d(colour, kind) gives shared, good-looking materials: 'clay', 'plastic', 'glossy', 'metal', 'glass', 'matte', 'glow'. Use few colours: the accent for the hero, tints and calm natural colours for the rest.
+- env.material3d(colour, kind) gives shared, good-looking materials: 'clay', 'plastic', 'glossy', 'metal', 'glass', 'matte', 'glow'. Use few colours. A colour the note names for a thing is that thing's colour (an orange fox is orange, never the accent); where it names none, the accent for the hero, tints and calm natural colours for the rest. A place the note names (a forest, a meadow, a street, a room, a night sky) is built and painted in its own colours, rich enough to read as that place: deep green leaves and grass, brown trunks, a blue or stormy or sunset sky painted behind. The pale studio backdrop is for objects shown on their own.
 - Shapes (env.THREE = THREE): RoundedBoxGeometry(w, h, d, 4, radius), SphereGeometry(r, 32, 24), CapsuleGeometry(r, length, 8, 16), CylinderGeometry, ConeGeometry, TorusGeometry, LatheGeometry (a profile spun round: bottles, vases, bodies, trees), ExtrudeGeometry of a THREE.Shape with a bevel (icons, arrows, signs, a map's regions), TubeGeometry along a CatmullRomCurve3 (cables, paths, flows). Build objects and characters from THREE.Group, with each moving part on its own group whose origin is the pivot.
 - Characters: prefer the rigged character (see RIGGED CHARACTERS below) over building a figure by hand; build your own only for a creature the rig can't be.
 - Space: units are metres; at the default camera the frame is about 10 wide. Keep the subject within x -4..4 and y 0..4.5 (landscape; narrower for vertical) and out of the top 22% and bottom 16% of the frame.
+- Keep the characters big: the camera stays close enough that the main character is at least a quarter of the frame's height (a third when it is alone). A wide shot that establishes the place lasts two seconds at most before the camera moves in.
 - Motion: ease everything (env.progress, env.ease.out / back / inOut); things enter on their words (scale up from 0 with env.ease.back, drop in and squash, slide in); the camera moves slowly and smoothly (a dolly in, a gentle orbit), never jerks.
 - Keep it light: under about 60 meshes and modest segments; no textures, images, loaders or 3D text (text is 2D, on top).`
 
@@ -265,7 +266,10 @@ export function guidesFor(style: DrawingStyleId | undefined): string {
   return `\n${PEEPS_GUIDE}\n`
 }
 
-export function buildDrawingPrompt(o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; style?: DrawingStyleId }): string {
+/** The most of an earlier scene's code a later scene is shown (its builders come first; a scene's code is rarely longer). */
+export const MAX_REFERENCE_CHARS = 16_000
+
+export function buildDrawingPrompt(o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; style?: DrawingStyleId; reference?: string }): string {
   const words = o.env.words.map((w) => `${w.w}@${w.start.toFixed(2)}`).join(' ')
   const style = o.style && o.style !== 'clean' ? DRAWING_STYLES.find((s) => s.id === o.style) : undefined
   return `Draw this scene.
@@ -282,7 +286,16 @@ FRAME: ${o.env.width} x ${o.env.height} px (${o.env.height > o.env.width ? 'vert
 PALETTE: canvas ${o.env.palette.canvas}, ink ${o.env.palette.ink}, accent ${o.env.palette.accent}
 FONTS: headline "${o.env.fonts.headline}", body "${o.env.fonts.body}"
 WORD TIMES (word@seconds from the scene's start): ${words || '(no timings: spread the beats over the scene)'}
+${
+  o.reference?.trim()
+    ? `
+THE SAME FILM, AN EARLIER SCENE (its code, for continuity)
+${o.reference.trim().slice(0, MAX_REFERENCE_CHARS)}
 
+This scene belongs to the same film. Whoever and whatever appears again must look the same: build them the same way as above (the same shapes, proportions, materials and colours: copy those builders, then pose them for this scene), and keep the same treatment of light and background unless this scene's note moves to another place or time. Everything else is this scene's own; never copy its action or its camera.
+`
+    : ''
+}
 Return the plan and the code.`
 }
 
@@ -325,7 +338,22 @@ export const MAX_LOOKS = 3
  */
 export async function writeDrawing(
   provider: AiProvider,
-  o: { description: string; narration: string; headline: string; env: DrawingEnv; silent?: boolean; noWords?: boolean; style?: DrawingStyleId; signal?: AbortSignal; progress?: (f: number, msg: string) => void; blender?: BlenderRunner },
+  o: {
+    description: string
+    narration: string
+    headline: string
+    env: DrawingEnv
+    silent?: boolean
+    noWords?: boolean
+    style?: DrawingStyleId
+    signal?: AbortSignal
+    progress?: (f: number, msg: string) => void
+    blender?: BlenderRunner
+    /** An earlier scene's code of the same video: this scene keeps its characters and things looking the same. */
+    reference?: string
+    /** Called once, with the first code that runs (before the looks polish it): the video's later scenes can start from it. */
+    onWorking?: (code: string) => void
+  },
 ): Promise<{ code: string; plan: string; frames: Buffer[] }> {
   const times = LOOK_AT.map((k) => k * o.env.duration)
   // canvas code tried in the drawing sandbox, or (the 'blender' style) a Blender script tried in Blender
@@ -346,6 +374,7 @@ export async function writeDrawing(
   for (let fix = 0; ; fix++) {
     try {
       frames = await tryIt(code)
+      o.onWorking?.(code)
       break
     } catch (err) {
       if (!(err instanceof DrawingError)) throw err
