@@ -106,6 +106,22 @@ describe('sharing a key with other spaces', () => {
   })
 })
 
+describe('a model that isn’t on the key’s list', () => {
+  it('is pointed out, since requests with it are likely to fail', async () => {
+    vi.spyOn(systemApi, 'aiSettings').mockResolvedValue(base({ providers: { anthropic: { ...claude, model: 'claude-opus-5.5-...' } } }))
+    render(<AiProviders desktop={false} renderBuiltin={() => null} />)
+    await waitFor(() => expect(card()).toBeTruthy())
+    expect(within(card()).getByRole('alert').textContent).toMatch(/“claude-opus-5\.5-\.\.\.” isn’t on this key’s list of models/)
+  })
+
+  it('a listed model, or a key with no list yet, gets no warning', async () => {
+    vi.spyOn(systemApi, 'aiSettings').mockResolvedValue(base({ providers: { anthropic: claude, openai: { model: 'gpt-typed-by-hand', hasKey: true, keyLast4: 'abcd' } } }))
+    render(<AiProviders desktop={false} renderBuiltin={() => null} />)
+    await waitFor(() => expect(card()).toBeTruthy())
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
 describe('a space that uses a shared key', () => {
   const lent = base({ defaultProvider: 'anthropic', providers: { anthropic: { model: 'claude-opus-5-5', hasKey: true, valid: true, models: ['claude-opus-5-5'], shared: { workspaceId: 'ws_a', name: 'Home' } } } })
 

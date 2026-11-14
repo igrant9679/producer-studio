@@ -17,6 +17,9 @@ describe('estimated AI cost (A-18)', () => {
     expect(estimateCost('anthropic-key', 'claude-opus-5-5', 200, 100)).toBeCloseTo(0.0028)
     expect(estimateCost('claude-cli', 'claude-opus-5-5', 1_000_000, 0)).toBe(0)
     expect(estimateCost('none', '', 10, 10)).toBe(0)
+    // Fable 5.2 costs less than the Fable models before it
+    expect(estimateCost('anthropic-key', 'claude-fable-5-2', 1_000_000, 1_000_000)).toBe(48)
+    expect(estimateCost('anthropic-key', 'claude-fable-5-1', 1_000_000, 1_000_000)).toBe(60)
     expect(rateFamily('anthropic-key')).toBe('anthropic')
   })
 })

@@ -864,6 +864,8 @@ async function makeSound(
 export const MAX_AI_CLIPS = 3
 /** At most this many AI-drawn scenes per video: each is a few calls to the space's AI and a minute of rendering. */
 export const MAX_DRAWN = 6
+/** AI-drawn scenes drawn at the same time (each waits minutes on the model; its test and final renders are short). */
+export const DRAWN_AT_ONCE = 2
 
 type MadeKind = 'image' | 'stock' | 'photo' | 'aiVideo'
 const MAKING: Record<MadeKind, string> = { image: 'Making an image', stock: 'Finding footage', photo: 'Finding a photo', aiVideo: 'Making a video clip' }
@@ -905,7 +907,6 @@ async function makeSceneVisuals(
   if (!todo.length) return { scenes, generated, illustrations, notes, asked }
   const work = tmpDir('scene-visuals')
   let clips = 0
-  let drawn = 0
   const maxClips = o.fullMotion ? MAX_AI_CLIPS_FULL_MOTION : MAX_AI_CLIPS
   // Wan clips start from a picture painted first, when this space can paint one
   const fromPicture = todo.some((s) => s.visual?.kind === 'aiVideo') && !!(await generationCapabilities(o.workspaceId)).video?.fromPicture
@@ -921,7 +922,7 @@ async function makeSceneVisuals(
   let canDraw: boolean | undefined
   const instead = async (s: ScriptScene, from: 'aiVideo' | 'drawn', prompt: string, why: string): Promise<boolean> => {
     if (!first.has(s.id)) first.set(s.id, { what: from === 'aiVideo' ? 'its clip couldn’t be made' : 'it couldn’t be drawn', why })
-    if (from === 'aiVideo' && drawing && drawn < MAX_DRAWN) {
+    if (from === 'aiVideo' && drawing && todo.filter((x) => x.visual?.kind === 'drawn').length < MAX_DRAWN) {
       // a film asked for in full motion is animation: drawing is the nearest thing to the clip, whatever kinds were ticked
       canDraw ??= o.fullMotion ? (await allowedVisualKinds(o.workspaceId, ['drawn'])).includes('drawn') : !!o.allowed?.includes('drawn')
       if (canDraw) {
@@ -956,84 +957,118 @@ async function makeSceneVisuals(
       drawing = { ...drawing, style: 'studio3d' }
     }
   }
-  try {
-    for (let i = 0; i < todo.length; i++) {
-      const s = todo[i]
-      jc.check()
-      if (s.visual?.kind === 'animation') {
-        jc.progress(0.6 + (i / todo.length) * 0.3, `Drawing the animation for ${s.id}`)
-        const { visual, missing } = await findIllustrations(jc, { ...o, jobId: jc.job.id, visual: s.visual, work, into: illustrations })
-        s.visual = visual
-        if (missing.length) notes.push(`${s.id}: no illustration found for ${missing.map((m) => `“${m}”`).join(', ')}, so a labelled circle stands in`)
-        continue
-      }
-      if (s.visual?.kind === 'drawn') {
-        const v = s.visual
-        const sub = subContext(jc, 0.6 + (i / todo.length) * 0.3, 0.6 + ((i + 1) / todo.length) * 0.3, `Drawing ${s.id}`)
-        if (!drawing || drawn >= MAX_DRAWN) {
-          if (!drawing) {
-            s.visual = { kind: 'motion', points: [] }
-            continue
-          }
-          const why = `only ${MAX_DRAWN} scenes are drawn per video`
-          if (await instead(s, 'drawn', v.prompt, why)) i--
-          else asText(s, why)
-          continue
-        }
-        try {
-          const made = await makeDrawn(sub, { ...o, drawing, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work, blender })
-          drawn++
-          generated.set(s.id, made.asset)
-          s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id, ...(drawing.style !== 'clean' ? { style: drawing.style } : {}) }
-          stoodIn(s, 'drawn')
-        } catch (err) {
-          if (jc.signal.aborted) throw err
-          if (blender && err instanceof BlenderUnavailableError) {
-            // Blender can't be used for this video: this scene and the rest are drawn in the 3D studio style
-            notes.push(`Blender scenes from ${s.id} on were drawn in the 3D studio style instead: ${err.message}`)
-            await blender.close()
-            blender = undefined
-            drawing = { ...drawing, style: 'studio3d' }
-            i--
-            continue
-          }
-          const why = err instanceof HttpError ? err.message : 'it could not be drawn'
-          log.warn('drawn scene failed', { scene: s.id, err })
-          if (await instead(s, 'drawn', v.prompt, why)) i--
-          else asText(s, why)
-        }
-        continue
-      }
+  // progress never goes back, whichever scene reports it (two drawings report in turn)
+  let high = 0
+  const up: JobContext = { ...jc, progress: (f, m) => jc.progress(f < 0 ? f : (high = Math.max(high, f)), m) }
+  const slot = (s: ScriptScene, label: string) => {
+    const i = todo.indexOf(s)
+    return subContext(up, 0.6 + (i / todo.length) * 0.3, 0.6 + ((i + 1) / todo.length) * 0.3, label)
+  }
+
+  /**
+   * A scene's AI still, stock clip or photo, or AI clip: reused, made, or stood in for. A clip that can't be made may
+   * leave here as a drawn scene (drawn with the others, below) or be made again as an AI picture.
+   */
+  const make = async (s: ScriptScene): Promise<void> => {
+    for (;;) {
       const v = s.visual as Extract<NonNullable<ScriptScene['visual']>, { kind: MadeKind }>
       // generated pictures and clips in the video's look (the reuse below compares the whole request)
       const ask = v.kind === 'stock' || v.kind === 'photo' ? v.query : withAiLook(v.prompt, o.look)
-      const sub = subContext(jc, 0.6 + (i / todo.length) * 0.3, 0.6 + ((i + 1) / todo.length) * 0.3, `${MAKING[v.kind]} for ${s.id}`)
       // reuse what was made for this scene before, while the request is the same
       if (v.assetId) {
         const prev = (await ctx().db.select().from(assets).where(and(eq(assets.id, v.assetId), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
         if (prev && prev.status === 'ready' && prev.meta?.generated?.kind === v.kind && prev.meta.generated.prompt === ask) {
           generated.set(s.id, assetDoc(prev))
-          continue
+          return
         }
       }
-      if (v.kind === 'aiVideo' && clips >= maxClips) {
-        const why = `only ${maxClips} AI clips are made per video`
-        if (await instead(s, 'aiVideo', v.prompt, why)) i--
-        else asText(s, why)
-        continue
+      let why: string
+      if (v.kind === 'aiVideo' && clips >= maxClips) why = `only ${maxClips} AI clips are made per video`
+      else {
+        const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
+        try {
+          const made = await makeOne(slot(s, `${MAKING[v.kind]} for ${s.id}`), { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work, fromPicture })
+          if (v.kind === 'aiVideo') clips++
+          generated.set(s.id, made.asset)
+          s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
+          if (v.kind === 'image') stoodIn(s, 'image')
+          return
+        } catch (err) {
+          if (jc.signal.aborted) throw err
+          why = err instanceof HttpError ? err.message : 'it could not be made'
+          log.warn('scene visual failed', { scene: s.id, kind: v.kind, err })
+        }
       }
-      const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
+      if (v.kind !== 'aiVideo' || !(await instead(s, 'aiVideo', v.prompt, why))) return asText(s, why)
+      // drawn with the other drawings; an AI picture is made right here
+      if (s.visual?.kind === 'drawn') return
+    }
+  }
+
+  /** One AI-drawn scene. False: it couldn't be drawn (why is kept for what stands in). */
+  const couldNotDraw = new Map<string, string>()
+  const draw = async (s: ScriptScene): Promise<void> => {
+    const v = s.visual as Extract<SceneVisual, { kind: 'drawn' }>
+    for (;;) {
+      const style = drawing!.style
       try {
-        const made = await makeOne(sub, { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work, fromPicture })
-        if (v.kind === 'aiVideo') clips++
+        const made = await makeDrawn(slot(s, `Drawing ${s.id}`), { ...o, drawing: drawing!, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work, blender })
         generated.set(s.id, made.asset)
-        s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
-        if (v.kind === 'image') stoodIn(s, 'image')
+        s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id, ...(style !== 'clean' ? { style } : {}) }
+        stoodIn(s, 'drawn')
+        return
       } catch (err) {
         if (jc.signal.aborted) throw err
-        const why = err instanceof HttpError ? err.message : 'it could not be made'
-        log.warn('scene visual failed', { scene: s.id, kind: v.kind, err })
-        if (v.kind === 'aiVideo' && (await instead(s, 'aiVideo', v.prompt, why))) i--
+        if (blender && err instanceof BlenderUnavailableError) {
+          // Blender can't be used for this video: this scene and the rest are drawn in the 3D studio style
+          notes.push(`Blender scenes from ${s.id} on were drawn in the 3D studio style instead: ${err.message}`)
+          await blender.close()
+          blender = undefined
+          drawing = { ...drawing!, style: 'studio3d' }
+          continue
+        }
+        log.warn('drawn scene failed', { scene: s.id, err })
+        couldNotDraw.set(s.id, err instanceof HttpError ? err.message : 'it could not be drawn')
+        return
+      }
+    }
+  }
+
+  try {
+    // 1. everything but the drawings, in order
+    for (const s of todo) {
+      jc.check()
+      if (s.visual?.kind === 'animation') {
+        up.progress(0.6 + (todo.indexOf(s) / todo.length) * 0.3, `Drawing the animation for ${s.id}`)
+        const { visual, missing } = await findIllustrations(jc, { ...o, jobId: jc.job.id, visual: s.visual, work, into: illustrations })
+        s.visual = visual
+        if (missing.length) notes.push(`${s.id}: no illustration found for ${missing.map((m) => `“${m}”`).join(', ')}, so a labelled circle stands in`)
+      } else if (s.visual?.kind !== 'drawn') await make(s)
+    }
+    // 2. the drawings (the script's, and clips that became one). A drawing takes minutes, nearly all of it waiting for
+    // the model, so DRAWN_AT_ONCE are drawn at a time; Blender has one card and takes them one by one.
+    const toDraw = todo.filter((s) => s.visual?.kind === 'drawn')
+    if (!drawing) for (const s of toDraw) s.visual = { kind: 'motion', points: [] }
+    else if (toDraw.length) {
+      const now = toDraw.slice(0, MAX_DRAWN)
+      for (const s of toDraw.slice(MAX_DRAWN)) couldNotDraw.set(s.id, `only ${MAX_DRAWN} scenes are drawn per video`)
+      let next = 0
+      const lane = async () => {
+        while (next < now.length) {
+          jc.check()
+          await draw(now[next++])
+        }
+      }
+      const lanes = await Promise.allSettled(Array.from({ length: Math.min(blender ? 1 : DRAWN_AT_ONCE, now.length) }, lane))
+      const broke = lanes.find((l) => l.status === 'rejected')
+      if (broke) throw (broke as PromiseRejectedResult).reason
+      // 3. what couldn't be drawn: an AI picture where the video may have one, else text
+      for (const s of toDraw) {
+        const why = couldNotDraw.get(s.id)
+        if (why === undefined) continue
+        jc.check()
+        const v = s.visual as Extract<SceneVisual, { kind: 'drawn' }>
+        if (await instead(s, 'drawn', v.prompt, why)) await make(s)
         else asText(s, why)
       }
     }

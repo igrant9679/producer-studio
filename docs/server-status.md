@@ -250,6 +250,13 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   and tells the writer not to name a style of its own, so a 3D video is no longer described as "soft flat
   illustration". *Tone*: a new brief's tone follows the idea (`toneForIdea` in the wizard: calm, playful, energetic,
   professional, friendly, else confident), so a gentle story no longer gets the product-pitch voice and music.
+  *Time*: a drawing takes 5 to 17 minutes on a strong model, nearly all of it waiting for the model, so
+  `makeSceneVisuals` now runs in three passes: everything but the drawings in order, then the drawings
+  `DRAWN_AT_ONCE` (2) at a time (Blender one by one), then what couldn't be drawn. While an answer streams in, its step
+  is reported again every 20 s (`StructuredRequest.onActivity` → `stepReporter` in `ai/drawn.ts`), so the 20-minute
+  no-progress watchdog doesn't stop a long answer; the wizard's estimate counts 5 / 9 / 17 minutes a drawing (Lottie /
+  2D / 3D, `drawnSeconds`), two at a time, where it used to say 75 seconds. Where only text could stand in, the script
+  keeps the visual it asked for (`asked`), so the next assembly tries again.
   *Settings documents*: `normalizeDoc` returns a copy of its own; before, every space that had saved nothing shared one
   `providers` / `perFeature` object in memory, so one space's first key test or per-feature choice showed in the others.
   **Shared AI keys** (13 Nov 2026, migration v19). An owner of two spaces can let one use a key stored in the other:

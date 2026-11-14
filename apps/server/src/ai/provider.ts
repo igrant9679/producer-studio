@@ -35,6 +35,11 @@ export interface StructuredRequest<T> {
   /** zod schema of the expected JSON (providers may convert with z.toJSONSchema). */
   schema: z.ZodType<T>
   signal?: AbortSignal
+  /**
+   * Called as the answer arrives (often, unthrottled), by providers that stream it: a long answer is alive, not
+   * stalled. A job passes its progress tick here so the no-progress watchdog doesn't stop it mid-answer.
+   */
+  onActivity?: () => void
 }
 
 export interface ToolSpec {

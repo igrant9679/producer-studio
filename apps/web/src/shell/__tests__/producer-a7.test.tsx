@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
 import { brandApi } from '../../lib/brandApi'
 import { useSession } from '../../lib/session'
-import { estimateAssemble, estimateWrite, formatEstimate, remainingSeconds } from '../producer/estimates'
+import { estimateAssemble, estimateDrawnCost, estimateWrite, formatEstimate, remainingSeconds } from '../producer/estimates'
 import { FootagePicker, clampWindow } from '../producer/FootagePicker'
 import ProducerWizard from '../producer/ProducerWizard'
 import { NarratorControl, producerApi } from '../producer/sceneTools'
@@ -63,6 +63,23 @@ describe('time estimates', () => {
     expect(estimateWrite(s)).toBe(8 + 60 + 20 + 16)
     expect(estimateWrite({ ...s, transcribed: ['as_1'] })).toBe(36)
     expect(estimateWrite(wizard({ brief: { ...s.brief, source: 'idea' } }))).toBe(30)
+    // AI-drawn scenes take minutes each (two at a time), and far longer in 3D; one already drawn is quick
+    const drawnScene = (id: string, done = false) => scene(id, { visual: { kind: 'drawn', prompt: 'x', ...(done ? { code: 'c', assetId: 'a' } : {}) } as never })
+    const one = estimateAssemble([drawnScene('s01')])
+    expect(one).toBeGreaterThan(8 * 60)
+    expect(estimateAssemble([drawnScene('s01'), drawnScene('s02')])).toBeLessThan(one + 60)
+    expect(estimateAssemble([drawnScene('s01'), drawnScene('s02'), drawnScene('s03')])).toBeGreaterThan(one * 1.8)
+    expect(estimateAssemble([drawnScene('s01')], { drawingStyle: 'studio3d' })).toBeGreaterThan(one * 1.5)
+    expect(estimateAssemble([drawnScene('s01')], { drawingStyle: 'lottie' })).toBeLessThan(one)
+    expect(estimateAssemble([drawnScene('s01', true)])).toBeLessThan(60)
+    // and what they roughly cost on the animation model, said before assembling: only drawings still to make count
+    const cost = estimateDrawnCost([drawnScene('s01'), drawnScene('s02'), drawnScene('s03', true)], { drawingStyle: 'studio3d', provider: 'anthropic-key', model: 'claude-fable-5-2' })
+    expect(cost.scenes).toBe(2)
+    expect(cost.each).toBeCloseTo((80_000 * 8 + 90_000 * 40) / 1_000_000, 2)
+    expect(cost.total).toBeCloseTo(cost.each * 2, 5)
+    expect(estimateDrawnCost([drawnScene('s01')], { provider: 'anthropic-key', model: 'claude-opus-5-5' }).each).toBeLessThan(cost.each / 3)
+    // the Claude app's own plan has no price per token
+    expect(estimateDrawnCost([drawnScene('s01')], { provider: 'claude-cli', model: 'claude-opus-5-5' }).total).toBe(0)
     const fresh = estimateAssemble([scene('s01'), scene('s02', { visual: { kind: 'aiVideo', prompt: 'x' } as never })])
     const voiced = estimateAssemble([scene('s01', { voice: { assetId: 'v', duration: 3 } }), scene('s02', { visual: { kind: 'aiVideo', prompt: 'x' } as never })])
     expect(fresh).toBeGreaterThan(voiced)

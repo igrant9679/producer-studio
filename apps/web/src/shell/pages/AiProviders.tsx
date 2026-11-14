@@ -135,6 +135,11 @@ function ModelPicker({ provider, info, disabled, onSave }: { provider: AiKeyProv
         </div>
       )}
       <div className="ps-hint">{models.length ? `${models.length} models available to this key.` : 'Save & test the key to load the models it can use, or type a model id.'}</div>
+      {models.length > 0 && current && !models.includes(current) && (
+        <div className="ps-hint" role="alert" style={{ color: 'var(--amber)' }}>
+          “{current}” isn’t on this key’s list of models, so requests with it are likely to fail. Choose one from the list (press List), or check the id.
+        </div>
+      )}
     </div>
   )
 }

@@ -297,6 +297,24 @@ const fence = (code: string) =>
 export const LOOK_AT = [0.18, 0.45, 0.72, 0.97]
 
 /** Fixes asked for when the code fails to run, and looks at its frames (each look may fix what it sees). */
+/** While an answer streams in, how often its step is reported again (the job watchdog stops a job silent for 20 min). */
+const ALIVE_EVERY_MS = 20_000
+
+/** Reports a job's steps (`say`), and the current step again when told the work is alive, at most every `everyMs`. */
+export function stepReporter(report: ((f: number, msg: string) => void) | undefined, everyMs = ALIVE_EVERY_MS, now: () => number = Date.now) {
+  let at: [number, string] = [0, '']
+  let said = 0
+  const say = (f: number, msg: string) => {
+    at = [f, msg]
+    said = now()
+    report?.(f, msg)
+  }
+  const alive = () => {
+    if (now() - said >= everyMs) say(...at)
+  }
+  return { say, alive }
+}
+
 export const MAX_FIXES = 2
 export const MAX_LOOKS = 3
 
@@ -316,12 +334,15 @@ export async function writeDrawing(
   const schema = blender ? BlenderSchema : DrawingSchema
   const brief = () => (blender ? buildBlenderPrompt(o) : buildDrawingPrompt(o))
   const tryIt = (c: string) => (blender ? blender.test(c, o.env, times, o.signal) : testDrawing(c, o.env, times, o.signal))
-  o.progress?.(0.05, blender ? 'Writing the Blender scene' : 'Writing the animation')
-  const first = await provider.structured({ system, prompt: brief(), images: [], schema, signal: o.signal })
+  // each step says where it is; while the model's answer streams in, the same step is said again now and then, so a
+  // long answer (minutes of thinking and code) isn't taken for a job that has stopped making progress
+  const { say, alive: onActivity } = stepReporter(o.progress)
+  say(0.05, blender ? 'Writing the Blender scene' : 'Writing the animation')
+  const first = await provider.structured({ system, prompt: brief(), images: [], schema, signal: o.signal, onActivity })
   let code = fence(first.code).slice(0, MAX_CODE_CHARS)
   const plan = first.plan
   let frames: Buffer[]
-  o.progress?.(0.3, 'Trying the animation')
+  say(0.3, 'Trying the animation')
   for (let fix = 0; ; fix++) {
     try {
       frames = await tryIt(code)
@@ -330,7 +351,7 @@ export async function writeDrawing(
       if (!(err instanceof DrawingError)) throw err
       if (fix >= MAX_FIXES) throw new HttpError(502, 'server', `the AI’s animation didn’t run (${err.message.slice(0, 120)})`)
       log.info('drawing failed; asking for a fix', { error: err.message, at: err.at, fix: fix + 1 })
-      o.progress?.(0.35 + fix * 0.08, 'Fixing the animation')
+      say(0.35 + fix * 0.08, 'Fixing the animation')
       const fixed = await provider.structured({
         system,
         prompt: `${brief()}
@@ -344,13 +365,14 @@ Fix it and return the plan and the full code.`,
         images: [],
         schema,
         signal: o.signal,
+        onActivity,
       })
       code = fence(fixed.code).slice(0, MAX_CODE_CHARS)
     }
   }
   // looks at its own frames, as a viewer would see them; each fix that runs is kept, and the next look sees it
   for (let look = 0; look < MAX_LOOKS; look++) {
-    o.progress?.(0.55 + look * 0.13, look ? 'Checking the animation again' : 'Checking the animation')
+    say(0.55 + look * 0.13, look ? 'Checking the animation again' : 'Checking the animation')
     const images: ScriptImage[] = frames.map((data, i) => ({ label: `Frame at ${times[i].toFixed(1)} s:`, mediaType: 'image/jpeg', data: data.toString('base64') }))
     try {
       const review = await provider.structured({
@@ -364,6 +386,7 @@ The images that follow are frames of it at ${times.map((t) => `${t.toFixed(1)} s
         images,
         schema: ReviewSchema,
         signal: o.signal,
+        onActivity,
       })
       const next = fence(review.code).slice(0, MAX_CODE_CHARS)
       if (!review.changed || !next || next === code) break

@@ -308,6 +308,8 @@ function fakeAnthropic(stream: Array<{ content: Array<Record<string, unknown>>; 
           return {
             on(ev: string, cb: (d: string) => void) {
               if (ev === 'text' && !(msg instanceof Error)) for (const b of msg.content) if (b.type === 'text') cb(b.text as string)
+              // three events of an answer arriving
+              if (ev === 'streamEvent') for (let i = 0; i < 3; i++) cb('')
               return this
             },
             // a request the API refuses, or an answer the SDK can't parse, rejects here
@@ -371,6 +373,14 @@ describe('Anthropic key provider', () => {
     await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out })
     expect(f.streamReqs[0]).toMatchObject({ model: 'claude-fable-5-1', max_tokens: STRUCTURED_MAX_TOKENS, thinking: { type: 'adaptive' }, output_config: { format: { type: 'json_schema' } } })
     expect(STRUCTURED_MAX_TOKENS).toBeGreaterThanOrEqual(64000)
+  })
+
+  it('says so while a structured answer arrives', async () => {
+    const f = fakeAnthropic([{ stop_reason: 'end_turn', content: [], parsed_output: { title: 'a', n: 1 } }])
+    const p = new AnthropicApiProvider({ client: f.client as never, model: 'claude-fable-5-2' })
+    let alive = 0
+    await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out, onActivity: () => alive++ })
+    expect(alive).toBe(3)
   })
 
   it('a model that allows less output is asked again within its limit, and from then on', async () => {

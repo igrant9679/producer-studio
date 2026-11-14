@@ -97,9 +97,8 @@ export class AnthropicApiProvider implements AiProvider {
     for (let attempt = 0; attempt < 2; attempt++) {
       let parsed: T | null = null
       try {
-        const ask = (maxTokens: number) =>
-          client.beta.messages
-            .stream(
+        const ask = (maxTokens: number) => {
+          const stream = client.beta.messages.stream(
               {
                 model: this.model,
                 max_tokens: maxTokens,
@@ -118,7 +117,10 @@ export class AnthropicApiProvider implements AiProvider {
               },
               { signal: req.signal },
             )
-            .finalMessage()
+          // a long answer (thinking, then thousands of lines of code) says it is still coming
+          if (req.onActivity) stream.on('streamEvent', req.onActivity)
+          return stream.finalMessage()
+        }
         let msg: Awaited<ReturnType<typeof ask>>
         try {
           msg = await ask(this.structuredMax)

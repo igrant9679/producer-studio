@@ -221,6 +221,8 @@ describe('Producer AI assembly', () => {
     }
     // the space's animation AI: writes the drawing, then finds nothing to change in its frames
     const asked: string[] = []
+    let writing = 0
+    let together = 0
     setProvider({
       id: 'anthropic-key',
       status: async () => ({ available: true, detail: 'fake', model: 'fake' }),
@@ -228,7 +230,12 @@ describe('Producer AI assembly', () => {
       runAgent: async () => ({ text: '' }),
       structured: async (req: { prompt: string; images: unknown[] }) => {
         asked.push(req.prompt)
-        return req.images.length ? { problems: 'none', changed: false, code } : { plan: 'A square slides across', code }
+        if (req.images.length) return { problems: 'none', changed: false, code }
+        // the model takes a while to write a drawing: the next scene's is asked for meanwhile
+        together = Math.max(together, ++writing)
+        await new Promise((r) => setTimeout(r, 400))
+        writing--
+        return { plan: 'A square slides across', code }
       },
     } as unknown as AiProvider)
     try {
@@ -240,6 +247,8 @@ describe('Producer AI assembly', () => {
       expect(asked.some((a) => a.includes('A red race car speeds down a city street at night'))).toBe(true)
       expect(asked.some((a) => a.includes('It crosses the finish line under a shower of sparks'))).toBe(true)
       expect(p.tracks.find((t) => t.main)!.items.filter((i) => i.type === 'video')).toHaveLength(2)
+      // drawings wait on the model for minutes, so two are drawn at a time
+      expect(together).toBe(2)
       // one line for both scenes: what stands in, and why the clip wasn't made
       const lines = (out.notes ?? []).filter((n) => /^s0/.test(n))
       expect(lines).toHaveLength(1)

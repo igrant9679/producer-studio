@@ -32,7 +32,7 @@ import { api, mediaUrl } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { toastError } from '../../lib/toast'
 import { filterVoices, useVoices, VoiceCard, VOICE_FILTERS, type VoiceFilter } from '../components/VoiceCard'
-import { sysFetch, useIsDesktop, useSystem } from '../system'
+import { sysFetch, systemApi, useIsDesktop, useSystem } from '../system'
 import { Modal, Popover, Progress, RadioCards, Spinner, Thumb, useAsync, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes, formatDuration, formatTime, ssGet } from '../util'
 import { ANIMATION_INFO, DIAGRAM_INFO, VISUAL_KIND_INFO, defaultVisual, diagramFromText, diagramToText, objectsFromText, objectsToText, withPrompt } from './sceneVisuals'
@@ -86,7 +86,7 @@ import {
   uploadToWizard,
   useWizard,
 } from './wizardStore'
-import { estimateAssemble, estimateWrite, formatEstimate, remainingSeconds } from './estimates'
+import { estimateAssemble, estimateDrawnCost, estimateWrite, formatEstimate, remainingSeconds } from './estimates'
 import { FootagePicker } from './FootagePicker'
 import { NarratorControl, ScriptVersionsButton } from './sceneTools'
 import { brandApi } from '../../lib/brandApi'
@@ -644,6 +644,37 @@ function TimeEstimate({ total, running, progress }: { total: number; running: bo
   return (
     <p className="muted ps-estimate" style={{ fontSize: '0.8125rem', margin: '0 0 12px' }}>
       {running ? `Estimated time left: ${formatEstimate(left)}.` : `This usually takes ${formatEstimate(total)}.`} You can leave this page: it keeps going.
+    </p>
+  )
+}
+
+/**
+ * Before a video with AI-drawn scenes is assembled: what the drawings will roughly cost on the space's animation model.
+ * A drawing is minutes of a strong model's work, so it is said before the button is pressed, not found on the bill.
+ */
+function DrawnCost({ scenes, drawingStyle, workspaceId }: { scenes: ScriptScene[]; drawingStyle?: string; workspaceId?: string }) {
+  const desktop = useIsDesktop()
+  const [ai, setAi] = useState<{ provider: string; model?: string }>()
+  const sessionWs = useSession((st) => st.workspaceId)
+  const ws = workspaceId ?? sessionWs
+  const has = scenes.some((sc) => sc.visual?.kind === 'drawn')
+  useEffect(() => {
+    if (!has || (!desktop && !ws)) return
+    let alive = true
+    systemApi
+      .aiSettings(desktop ? undefined : ws)
+      .then((x) => alive && setAi(x.effective.animation))
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [has, desktop, ws])
+  if (!ai?.model) return null
+  const c = estimateDrawnCost(scenes, { drawingStyle, provider: ai.provider, model: ai.model })
+  if (!c.scenes || c.total < 0.5) return null
+  return (
+    <p className="muted ps-estimate" role="note" style={{ fontSize: '0.8125rem', margin: '0 0 12px' }}>
+      {c.scenes} AI-drawn scene{c.scenes === 1 ? '' : 's'} on {ai.model}: roughly {money(c.total)} of your AI key’s credit{c.scenes > 1 ? ` (about ${money(c.each)} a scene)` : ''}. A lighter model in Settings → AI → Animation model draws faster and for less.
     </p>
   )
 }
@@ -1276,7 +1307,8 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
           <div className="muted" style={{ textAlign: 'center', fontSize: '0.75rem', marginTop: 8 }}>{r.progress && r.progress > 0 ? `${Math.round(r.progress * 100)}%` : 'Starting…'}</div>
         </div>
       )}
-      {!done && r.status !== 'error' && <TimeEstimate total={estimateAssemble(s.scenes, { renarrate: r.renarrate, whisper, music: !!musicStyleFor(s.brief.music, s.brief.tone), narration: videoParts(s.brief).narration })} running={r.status === 'running'} progress={r.progress} />}
+      {!done && r.status !== 'error' && <TimeEstimate total={estimateAssemble(s.scenes, { drawingStyle: s.brief.drawingStyle, renarrate: r.renarrate, whisper, music: !!musicStyleFor(s.brief.music, s.brief.tone), narration: videoParts(s.brief).narration })} running={r.status === 'running'} progress={r.progress} />}
+      {!done && r.status !== 'error' && r.status !== 'running' && <DrawnCost scenes={s.scenes} drawingStyle={s.brief.drawingStyle} workspaceId={s.workspaceId} />}
       <div className="row" style={{ justifyContent: 'center', marginTop: 20 }}>
         {done ? (
           <>

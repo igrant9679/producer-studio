@@ -8,7 +8,7 @@ import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import * as z from 'zod/v4'
 import { strongestModel } from '@producer/core'
-import { MAX_FIXES, MAX_LOOKS, THREE_GUIDE, buildDrawingPrompt, drawingPalette, writeDrawing } from '../ai/drawn'
+import { MAX_FIXES, MAX_LOOKS, THREE_GUIDE, buildDrawingPrompt, drawingPalette, stepReporter, writeDrawing } from '../ai/drawn'
 import type { AiProvider, StructuredRequest } from '../ai/provider'
 import { toSceneVisual, VisualSchema } from '../ai/scenes'
 import { ctx } from '../context'
@@ -184,7 +184,30 @@ describe('writing a drawing', () => {
     expect(model.calls[2].images).toHaveLength(4)
     expect(model.calls[2].images[0]).toMatchObject({ mediaType: 'image/jpeg' })
     expect(z.toJSONSchema(model.calls[0].schema as z.ZodType)).toBeTruthy()
+    // every request to the model can say its answer is still arriving (the job's no-progress watchdog listens)
+    expect(model.calls.every((c) => typeof c.onActivity === 'function')).toBe(true)
   }, 180_000)
+
+  it('while a long answer streams in, the step is reported again, but not on every chunk', () => {
+    const said: string[] = []
+    let now = 1_000_000
+    const r = stepReporter((_f, m) => said.push(m), 20_000, () => now)
+    r.say(0.05, 'Writing the animation')
+    // the answer takes a minute to arrive, a chunk every second
+    for (let i = 0; i < 60; i++) {
+      now += 1000
+      r.alive()
+    }
+    expect(said).toEqual(['Writing the animation', 'Writing the animation', 'Writing the animation', 'Writing the animation'])
+    // the next step replaces it, and is what gets repeated from then on
+    r.say(0.3, 'Trying the animation')
+    now += 25_000
+    r.alive()
+    r.alive()
+    expect(said.slice(4)).toEqual(['Trying the animation', 'Trying the animation'])
+    // nobody listening: nothing to do
+    expect(() => stepReporter(undefined).alive()).not.toThrow()
+  })
 
   it('keeps the working code when the reviewed version breaks; gives up when the fix fails too', async ({ skip }) => {
     if (!chrome) skip()
