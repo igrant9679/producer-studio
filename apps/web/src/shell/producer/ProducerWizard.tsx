@@ -675,7 +675,7 @@ function DrawnCost({ scenes, drawingStyle, workspaceId, compact }: { scenes: Scr
   if (compact)
     return (
       <span className="muted" role="note" style={{ fontSize: '0.7812rem', maxWidth: 360, textAlign: 'right' }} title={`${c.scenes} AI-drawn scene${c.scenes === 1 ? '' : 's'} on ${ai.model}. A lighter model in Settings → AI → Animation model draws faster and for less.`}>
-        {c.scenes} AI-drawn scene{c.scenes === 1 ? '' : 's'}: about {formatEstimate(estimateAssemble(scenes, { drawingStyle }))} and roughly {money(c.total)} of AI credit
+        {c.scenes} AI-drawn scene{c.scenes === 1 ? '' : 's'}: {formatEstimate(estimateAssemble(scenes, { drawingStyle }))} and roughly {money(c.total)} of AI credit
       </span>
     )
   return (

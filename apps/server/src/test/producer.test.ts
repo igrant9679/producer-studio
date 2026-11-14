@@ -204,6 +204,29 @@ describe('Producer AI assembly', () => {
     expect((again.p.ai!.script!.scenes[0].visual as { assetId?: string }).assetId).toBe(made.assetId)
   }, 240_000)
 
+  it('a scene drawn in another style is reused on the next assembly too, not drawn again', async ({ skip }) => {
+    if (!ctx().config.chromePath || !fs.existsSync(ctx().config.chromePath!)) skip()
+    const id = await newProject('Drawn in a style')
+    const code = 'function draw(ctx, t, env) { ctx.fillStyle = env.palette.ink; ctx.fillRect(40 + t * 50, env.H / 2 - 40, 80, 80); }'
+    const styled = { ...brief, source: 'idea', idea: 'Shapes', drawingStyle: 'sketchbook' }
+    const run = async (sc: ScriptScene[]) => {
+      const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes: sc, brief: styled })
+      expect(r.status).toBe(200)
+      const job = (await getJob(r.body.id))!
+      const out = await produceAssemble(inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }))
+      return { out, p: (await load(id)).project }
+    }
+    const first = await run([{ ...scenes[0], visual: { kind: 'drawn', prompt: 'A square slides right', code, style: 'sketchbook' } as never }, scenes[1]])
+    const made = first.p.ai!.script!.scenes[0].visual as { kind: string; style?: string; assetId?: string; code?: string }
+    expect(made).toMatchObject({ kind: 'drawn', style: 'sketchbook', code, assetId: expect.any(String) })
+    // the saved scenes go back as they are: there is no AI in this space, so a scene taken for another style's would
+    // lose its code, fail to be written again and leave the video without its clip
+    const again = await run(first.p.ai!.script!.scenes)
+    expect(again.out.notes ?? []).toEqual([])
+    expect(again.p.tracks.find((t) => t.main)!.items.find((i) => i.type === 'video')).toMatchObject({ assetId: made.assetId })
+    expect((again.p.ai!.script!.scenes[0].visual as { assetId?: string }).assetId).toBe(made.assetId)
+  }, 240_000)
+
   it('a clip that can’t be made is drawn by the AI instead of left a text card; with nothing to draw it with, text and the reason', async ({ skip }) => {
     if (!ctx().config.chromePath || !fs.existsSync(ctx().config.chromePath!)) skip()
     const code = 'function draw(ctx, t, env) { ctx.fillStyle = env.palette.accent; ctx.fillRect(40 + t * 50, env.H / 2 - 40, 80, 80); }'

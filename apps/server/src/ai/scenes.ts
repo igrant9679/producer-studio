@@ -52,7 +52,15 @@ export const VisualSchema: z.ZodType<SceneVisual> = z.union([
       .max(5),
   }),
   z.object({ kind: z.literal('aiVideo'), prompt: short(1000), assetId: z.string().max(80).optional() }),
-  z.object({ kind: z.literal('drawn'), prompt: short(1500), code: z.string().max(60_000).optional(), assetId: z.string().max(80).optional() }),
+  // `style` is the drawing style the code was written in: without it a re-assembly took every scene of a 3D, Lottie or
+  // sketch video for one written in another style, threw its code away and paid to draw it again
+  z.object({
+    kind: z.literal('drawn'),
+    prompt: short(1500),
+    code: z.string().max(60_000).optional(),
+    assetId: z.string().max(80).optional(),
+    style: z.enum(DRAWING_STYLES.map((s) => s.id) as [string, ...string[]]).optional(),
+  }),
   z.object({ kind: z.literal('media'), assetId: z.string().min(1).max(80), start: z.number().finite().min(0).optional(), end: z.number().finite().min(0).optional() }),
 ]) as z.ZodType<SceneVisual>
 

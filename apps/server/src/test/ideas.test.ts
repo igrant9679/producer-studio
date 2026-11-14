@@ -110,6 +110,13 @@ describe("the writer's scenes", () => {
     expect(firstFramePrompt('A fox runs')).toMatch(/^The opening frame of this shot, as one finished still picture[\s\S]*A fox runs$/)
   })
 
+  it('a drawn scene keeps the style its code was written in (else every re-assembly would draw it again)', () => {
+    const v = { kind: 'drawn', prompt: 'A fox walks in', code: 'function draw() {}', assetId: 'as_1', style: 'studio3d' }
+    expect(VisualSchema.parse(v)).toEqual(v)
+    expect(VisualSchema.parse({ kind: 'drawn', prompt: 'x' })).toEqual({ kind: 'drawn', prompt: 'x' })
+    expect(VisualSchema.safeParse({ ...v, style: 'oil-painting' }).success).toBe(false)
+  })
+
   it('refuses visuals the API must not store', () => {
     expect(VisualSchema.safeParse({ kind: 'diagram', diagram: { type: 'steps', items: Array(9).fill('x') } }).success).toBe(false)
     expect(VisualSchema.safeParse({ kind: 'stock', query: 'city', credit: { author: 'A', url: 'javascript:alert(1)' } }).success).toBe(false)
