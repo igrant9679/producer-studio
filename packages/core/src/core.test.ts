@@ -279,6 +279,23 @@ describe('canvas size', () => {
 })
 
 describe('compile', () => {
+  it('leaves the making-of out of the page: the brief, the script and the AI-drawn scenes’ code', () => {
+    const p = twoClips()
+    // a 3D drawn scene's code names THREE: in the page it made the composition lint refuse the export
+    p.ai = {
+      status: 'assembled',
+      brief: { title: 'T', audience: '', goal: '', tone: 'Calm', template: 't', voice: 'v', aspect: '16:9', idea: 'A SECRET-IDEA about a fox' },
+      script: { scenes: [{ id: 's01', title: 'a', headline: '', narration: 'n', footage: [], visual: { kind: 'drawn', prompt: 'a fox', code: 'function draw(ctx, t, env) { var s = env.stage3d("x", function (THREE, st) { return new THREE.Mesh() }) }' } }] },
+    } as never
+    const html = compileToHyperFrames(p, { assetPath: (id) => `assets/${id}.mp4`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '' })
+    expect(html).not.toContain('THREE')
+    expect(html).not.toContain('SECRET-IDEA')
+    expect(html).not.toContain('stage3d')
+    // and the timeline is all there
+    expect(html).toContain('data-composition-id="main"')
+    expect(p.ai).toBeTruthy()
+  })
+
   it('emits timed media and a registered timeline', () => {
     const p = twoClips()
     const html = compileToHyperFrames(p, { assetPath: (id) => `assets/${id}.mp4`, runtimePath: 'runtime.js', gsapPath: 'gsap.min.js', fontFaceCss: '' })

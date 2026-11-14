@@ -133,7 +133,10 @@ export function compileToHyperFrames(p: Project, opts: CompileOptions): string {
     for (const span of trackSpans(p, track)) audio.push(audioTag(p, span, audioTrack + (track.items.indexOf(span.item) % 2 ? 1000 : 0), opts.assetPath(span.item.assetId), solo, opts.pitchShiftPath?.(span.item.id)))
   }
   // captions and text layers are created by the renderer at runtime (no media)
-  const projectJson = JSON.stringify(p).replace(/</g, '\\u003c')
+  // The page gets what it renders, not the video's making-of: `ai` (the brief, the idea, the script and every AI-drawn
+  // scene's drawing code) stays out. It is large, it isn't the viewer's, and a 3D scene's code naming THREE made the
+  // composition lint refuse the whole export ("uses Three.js but no Three.js script is loaded").
+  const projectJson = JSON.stringify({ ...p, ai: undefined }).replace(/</g, '\\u003c')
   // goes into a <style> block: only a checked colour, never the raw document string
   const background = safeColor(p.background, '#000000')
   const assetMap: Record<string, string> = {}
