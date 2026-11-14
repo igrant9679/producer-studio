@@ -84,6 +84,8 @@ export class AnthropicApiProvider implements AiProvider {
    * that allows less says so (400), and is asked again within STRUCTURED_MIN_TOKENS from then on.
    */
   private structuredMax = STRUCTURED_MAX_TOKENS
+  /** This model refused an effort setting (older models do): it isn't sent again. */
+  private noEffort = false
 
   async structured<T>(req: StructuredRequest<T>): Promise<T> {
     const client = this.getClient()
@@ -97,38 +99,56 @@ export class AnthropicApiProvider implements AiProvider {
     for (let attempt = 0; attempt < 2; attempt++) {
       let parsed: T | null = null
       try {
-        const ask = (maxTokens: number) => {
+        const ask = (maxTokens: number, effort: StructuredRequest<T>['effort']) => {
           const stream = client.beta.messages.stream(
-              {
-                model: this.model,
-                max_tokens: maxTokens,
-                thinking: { type: 'adaptive' },
-                betas: BETAS,
-                // @ts-expect-error SDK 0.110 types `fallbacks` as an array only; the "default" scalar form (beta server-side-fallback-2026-07-01) routes refusals by category server-side.
-                fallbacks: 'default',
-                system: req.system,
-                messages: [
-                  {
-                    role: 'user',
-                    content: attempt ? [...content, { type: 'text', text: 'Your previous answer did not match the required JSON schema. Answer again with JSON that matches it exactly.' }] : content,
-                  },
-                ],
-                output_config: { format: betaZodOutputFormat(req.schema) },
-              },
-              { signal: req.signal },
-            )
+            {
+              model: this.model,
+              max_tokens: maxTokens,
+              thinking: { type: 'adaptive' },
+              betas: BETAS,
+              // @ts-expect-error SDK 0.110 types `fallbacks` as an array only; the "default" scalar form (beta server-side-fallback-2026-07-01) routes refusals by category server-side.
+              fallbacks: 'default',
+              system: req.system,
+              messages: [
+                {
+                  role: 'user',
+                  content: attempt ? [...content, { type: 'text', text: 'Your previous answer did not match the required JSON schema. Answer again with JSON that matches it exactly.' }] : content,
+                },
+              ],
+              output_config: { format: betaZodOutputFormat(req.schema), ...(effort && !this.noEffort ? { effort } : {}) },
+            },
+            { signal: req.signal },
+          )
           // a long answer (thinking, then thousands of lines of code) says it is still coming
           if (req.onActivity) stream.on('streamEvent', req.onActivity)
           return stream.finalMessage()
         }
         let msg: Awaited<ReturnType<typeof ask>>
-        try {
-          msg = await ask(this.structuredMax)
-        } catch (err) {
-          // an older model with a smaller output limit refuses the request outright and names the parameter
-          if (!(err instanceof Anthropic.BadRequestError) || !/max_tokens/.test(err.message) || this.structuredMax <= STRUCTURED_MIN_TOKENS) throw err
-          this.structuredMax = STRUCTURED_MIN_TOKENS
-          msg = await ask(this.structuredMax)
+        let effort = req.effort
+        for (let tries = 0; ; tries++) {
+          try {
+            msg = await ask(this.structuredMax, effort)
+          } catch (err) {
+            if (!(err instanceof Anthropic.BadRequestError) || tries >= 3) throw err
+            // an older model with a smaller output limit refuses the request outright and names the parameter
+            if (/max_tokens/.test(err.message) && this.structuredMax > STRUCTURED_MIN_TOKENS) {
+              this.structuredMax = STRUCTURED_MIN_TOKENS
+              continue
+            }
+            // so does one that takes no effort setting: asked again without it, from then on
+            if (effort && !this.noEffort && /effort/.test(err.message)) {
+              this.noEffort = true
+              continue
+            }
+            throw err
+          }
+          // the answer ran out of room, nearly always spent on thinking: once more, thinking less
+          if (msg.stop_reason === 'max_tokens' && !this.noEffort && effort !== 'low' && tries < 3) {
+            noteUsage(msg.usage)
+            effort = 'low'
+            continue
+          }
+          break
         }
         noteUsage(msg.usage)
         checkStop(msg, 'complete this request')

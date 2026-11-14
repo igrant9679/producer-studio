@@ -310,6 +310,12 @@ const fence = (code: string) =>
 export const LOOK_AT = [0.18, 0.45, 0.72, 0.97]
 
 /** Fixes asked for when the code fails to run, and looks at its frames (each look may fix what it sees). */
+/**
+ * How hard the model thinks about a drawing (where the provider takes the setting). At the strongest models' own
+ * default one scene's code took 15 to 25 minutes, cost several dollars and sometimes spent the whole answer on thinking.
+ */
+export const DRAWING_EFFORT = 'medium' as const
+
 /** While an answer streams in, how often its step is reported again (the job watchdog stops a job silent for 20 min). */
 const ALIVE_EVERY_MS = 20_000
 
@@ -366,7 +372,7 @@ export async function writeDrawing(
   // long answer (minutes of thinking and code) isn't taken for a job that has stopped making progress
   const { say, alive: onActivity } = stepReporter(o.progress)
   say(0.05, blender ? 'Writing the Blender scene' : 'Writing the animation')
-  const first = await provider.structured({ system, prompt: brief(), images: [], schema, signal: o.signal, onActivity })
+  const first = await provider.structured({ system, prompt: brief(), images: [], schema, signal: o.signal, onActivity, effort: DRAWING_EFFORT })
   let code = fence(first.code).slice(0, MAX_CODE_CHARS)
   const plan = first.plan
   let frames: Buffer[]
@@ -395,6 +401,7 @@ Fix it and return the plan and the full code.`,
         schema,
         signal: o.signal,
         onActivity,
+        effort: DRAWING_EFFORT,
       })
       code = fence(fixed.code).slice(0, MAX_CODE_CHARS)
     }
@@ -416,6 +423,7 @@ The images that follow are frames of it at ${times.map((t) => `${t.toFixed(1)} s
         schema: ReviewSchema,
         signal: o.signal,
         onActivity,
+        effort: DRAWING_EFFORT,
       })
       const next = fence(review.code).slice(0, MAX_CODE_CHARS)
       if (!review.changed || !next || next === code) break

@@ -383,6 +383,34 @@ describe('Anthropic key provider', () => {
     expect(alive).toBe(3)
   })
 
+  it('thinks as hard as it is asked to, and once more with less when the answer runs out of room', async () => {
+    const ok = { stop_reason: 'end_turn', content: [], parsed_output: { title: 'a', n: 1 } }
+    const cut = { stop_reason: 'max_tokens', content: [], parsed_output: null }
+    // no effort asked: none sent (the model's own default)
+    const plain = fakeAnthropic([ok])
+    await new AnthropicApiProvider({ client: plain.client as never, model: 'claude-fable-5-2' }).structured({ system: 'S', prompt: 'P', images: [], schema: Out })
+    expect((plain.streamReqs[0] as { output_config: { effort?: string } }).output_config.effort).toBeUndefined()
+    // asked for medium; the answer is cut off; asked again at low, and that one is the answer
+    const f = fakeAnthropic([cut, ok])
+    const p = new AnthropicApiProvider({ client: f.client as never, model: 'claude-fable-5-2' })
+    expect(await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out, effort: 'medium' })).toEqual({ title: 'a', n: 1 })
+    expect((f.streamReqs as Array<{ output_config: { effort?: string } }>).map((r) => r.output_config.effort)).toEqual(['medium', 'low'])
+    // cut off at low too: said plainly, not asked for ever
+    const g = fakeAnthropic([cut, cut])
+    await expect(new AnthropicApiProvider({ client: g.client as never, model: 'claude-fable-5-2' }).structured({ system: 'S', prompt: 'P', images: [], schema: Out, effort: 'medium' })).rejects.toMatchObject({ status: 502 })
+    expect(g.streamReqs).toHaveLength(2)
+  })
+
+  it('a model that takes no effort setting is asked again without it, and not sent one again', async () => {
+    const noEffort = Anthropic.APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.effort: this model does not support the effort parameter' } }, undefined, new Headers())
+    const ok = { stop_reason: 'end_turn', content: [], parsed_output: { title: 'a', n: 1 } }
+    const f = fakeAnthropic([noEffort, ok, ok])
+    const p = new AnthropicApiProvider({ client: f.client as never, model: 'claude-haiku-4-5' })
+    await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out, effort: 'medium' })
+    await p.structured({ system: 'S', prompt: 'P', images: [], schema: Out, effort: 'medium' })
+    expect((f.streamReqs as Array<{ output_config: { effort?: string } }>).map((r) => r.output_config.effort)).toEqual(['medium', undefined, undefined])
+  })
+
   it('a model that allows less output is asked again within its limit, and from then on', async () => {
     const tooMuch = Anthropic.APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens: 64000 > 32000, which is the maximum allowed number of output tokens for claude-opus-4-1' } }, undefined, new Headers())
     const ok = { stop_reason: 'end_turn', content: [], parsed_output: { title: 'a', n: 1 } }
@@ -399,10 +427,11 @@ describe('Anthropic key provider', () => {
   })
 
   it('an answer that still runs out of room says so in plain words', async () => {
-    const f = fakeAnthropic([{ stop_reason: 'max_tokens', content: [], parsed_output: null }])
+    const f = fakeAnthropic([{ stop_reason: 'max_tokens', content: [], parsed_output: null }, { stop_reason: 'max_tokens', content: [], parsed_output: null }])
     const p = new AnthropicApiProvider({ client: f.client as never, model: 'claude-opus-5-5' })
     await expect(p.structured({ system: 'S', prompt: 'P', images: [], schema: Out })).rejects.toMatchObject({ status: 502, message: 'The AI’s answer was cut off before it finished (it ran out of room). Try again, or ask for something shorter.' })
-    expect(f.streamReqs).toHaveLength(1)
+    // asked once more, thinking less, before giving up
+    expect(f.streamReqs).toHaveLength(2)
   })
 
   it('the env provider keeps the anthropic-api id and default model', async () => {

@@ -212,6 +212,8 @@ describe('writing a drawing', () => {
     expect(z.toJSONSchema(model.calls[0].schema as z.ZodType)).toBeTruthy()
     // every request to the model can say its answer is still arriving (the job's no-progress watchdog listens)
     expect(model.calls.every((c) => typeof c.onActivity === 'function')).toBe(true)
+    // and asks for medium thinking: the strongest models' default made one scene a 20-minute, several-dollar answer
+    expect(model.calls.every((c) => c.effort === 'medium')).toBe(true)
   }, 180_000)
 
   it('while a long answer streams in, the step is reported again, but not on every chunk', () => {

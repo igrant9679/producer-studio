@@ -40,6 +40,12 @@ export interface StructuredRequest<T> {
    * stalled. A job passes its progress tick here so the no-progress watchdog doesn't stop it mid-answer.
    */
   onActivity?: () => void
+  /**
+   * How hard the model should think before answering, for providers that take it (absent: the model's own default,
+   * which on the strongest models is long and dear). A drawing asks for 'medium': at the default one scene's code
+   * took 15 to 25 minutes and sometimes used the whole answer on thinking.
+   */
+  effort?: 'low' | 'medium' | 'high'
 }
 
 export interface ToolSpec {
