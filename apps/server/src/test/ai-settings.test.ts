@@ -139,6 +139,26 @@ describe('AI settings API (cloud)', () => {
     expect(await res.text()).toContain('From OpenAI')
   })
 
+  it('a space that has saved nothing never shows another space’s models or choices', async () => {
+    // both start with no settings saved; the first writes into its (new) document
+    const A = await signup(t.app, 'First')
+    const before = await signup(t.app, 'Bystander')
+    await A.client.json('PUT', '/api/ai/keys/openai', { workspaceId: A.workspaceId, key: OPENAI_KEY })
+    await A.client.json('PUT', '/api/ai/keys/gemini', { workspaceId: A.workspaceId, key: GEMINI_KEY })
+    const C = await signup(t.app, 'Chooser')
+    expect((await C.client.json('PUT', '/api/ai/settings', { workspaceId: C.workspaceId, perFeature: { writer: 'builtin' }, models: { openai: 'gpt-x' } })).status).toBe(200)
+    for (const who of [before, await signup(t.app, 'Newcomer')]) {
+      const s = (await who.client.json('GET', `/api/ai/settings?workspaceId=${who.workspaceId}`)).body
+      expect(s.providers).toEqual({})
+      expect(s.perFeature).toEqual({})
+      expect(s.media ?? {}).toEqual({})
+      expect(s.defaultProvider).toBeNull()
+    }
+    // and each space still has its own
+    expect((await A.client.json('GET', `/api/ai/settings?workspaceId=${A.workspaceId}`)).body.providers.openai).toMatchObject({ hasKey: true, model: 'gpt-5.5' })
+    expect((await C.client.json('GET', `/api/ai/settings?workspaceId=${C.workspaceId}`)).body).toMatchObject({ perFeature: { writer: 'builtin' }, providers: { openai: { model: 'gpt-x', hasKey: false } } })
+  })
+
   it('an invalid key is stored masked with a clean error and is not made the default', async () => {
     const A = await signup(t.app, 'Owner2')
     const put = await A.client.json('PUT', '/api/ai/keys/openai', { workspaceId: A.workspaceId, key: BAD_KEY })

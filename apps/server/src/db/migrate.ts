@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 18
+export const SCHEMA_VERSION = 19
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -704,6 +704,23 @@ BEGIN
 END $$;
 `
 
+/**
+ * v19 — AI keys shared between spaces. An owner of two spaces lets one use the other's stored key: a pointer to the
+ * key's row (never a copy), so replacing or removing the key reaches every space that uses it. One source per
+ * receiving space and provider. Like ai_keys, never part of the sync change feed.
+ */
+export const DDL_V19 = `
+CREATE TABLE IF NOT EXISTS ai_key_shares (
+  to_workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  provider text NOT NULL,
+  from_workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  created_by text,
+  created_at double precision NOT NULL,
+  PRIMARY KEY (to_workspace_id, provider)
+);
+CREATE INDEX IF NOT EXISTS ai_key_shares_from_idx ON ai_key_shares(from_workspace_id, provider);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -726,4 +743,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [16, DDL_V16],
   [17, DDL_V17],
   [18, DDL_V18],
+  [19, DDL_V19],
 ]

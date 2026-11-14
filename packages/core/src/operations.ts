@@ -43,6 +43,8 @@ export type AuditKind =
   | 'member.left'
   | 'ai.key.set'
   | 'ai.key.removed'
+  | 'ai.key.shared'
+  | 'ai.key.unshared'
   | 'ai.builtin'
   | 'workspace.deleted'
   | 'account.deleted'
@@ -82,6 +84,8 @@ export const SPACE_AUDIT_KINDS: readonly AuditKind[] = [
   'member.left',
   'ai.key.set',
   'ai.key.removed',
+  'ai.key.shared',
+  'ai.key.unshared',
   'ai.builtin',
   'workspace.deleted',
 ]
@@ -138,6 +142,10 @@ export function auditSentence(e: AuditEntry): string {
       return `${who} saved a ${str(d.provider)} AI key (…${str(d.last4)})`
     case 'ai.key.removed':
       return `${who} removed the ${str(d.provider)} AI key`
+    case 'ai.key.shared':
+      return d.direction === 'in' ? `${who} set this space to use the ${str(d.provider)} AI key of ${t || 'another space'}` : `${who} shared the ${str(d.provider)} AI key with ${t || 'another space'}`
+    case 'ai.key.unshared':
+      return d.direction === 'in' ? `${who} stopped this space using the ${str(d.provider)} AI key of ${t || 'another space'}` : `${who} stopped sharing the ${str(d.provider)} AI key with ${t || 'another space'}`
     case 'ai.builtin':
       return `${who} turned the server’s built-in AI ${d.enabled ? 'on' : 'off'}`
     case 'workspace.deleted':

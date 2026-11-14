@@ -1,5 +1,7 @@
 // Where AI provider settings and keys live.
 //   cloud   — per workspace: `workspace_ai_settings` (non-secret JSON) + `ai_keys` (AES-256-GCM, SECRETS_KEY).
+//             A key can be shared with other spaces (`ai_key_shares`, ai/shares.ts): the receiving space reads the
+//             sharing space's row through the pointer; its own key, when it has one, always wins.
 //   desktop — one local scope inside the desktop settings file; keys sealed with the OS-keystore-protected key
 //             (Electron safeStorage → DESKTOP_SECRET_KEY, see desktop/secrets.ts). Local only, never synced.
 // Plaintext keys only exist in memory while a provider is built or a key is tested.
@@ -7,7 +9,7 @@ import { and, eq } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import type { AiChoice, AiFeature, AiKeyProvider, MediaKeyProvider, StoredKeyProvider, VideoClipProvider } from '@producer/core'
 import { ctx } from '../context'
-import { aiKeys, workspaceAiSettings } from '../db/schema'
+import { aiKeyShares, aiKeys, workspaceAiSettings } from '../db/schema'
 import { invalid } from '../http'
 import type { AiScope } from './provider'
 import { openKey, sealKey } from './secrets'
@@ -58,13 +60,20 @@ export interface AiSettingsDoc {
 export interface KeyMeta {
   last4: string
   updatedAt: number
+  /** The key is this other space's, shared with the space asked about (cloud). */
+  sharedFrom?: string
 }
 
 export const emptyDoc = (): AiSettingsDoc => ({ defaultProvider: null, perFeature: {}, providers: {} })
 
+/**
+ * A settings document of the caller's own. Always a fresh copy: zod's `.catch({})` hands every document with a missing
+ * part the SAME object, and callers write into what they get (`doc.providers[p] = …`), so without the copy one space's
+ * first key test or per-feature choice showed up in every space that had saved nothing yet.
+ */
 export function normalizeDoc(raw: unknown): AiSettingsDoc {
   const r = DocSchema.safeParse(raw ?? {})
-  return r.success ? (r.data as AiSettingsDoc) : emptyDoc()
+  return r.success ? (structuredClone(r.data) as AiSettingsDoc) : emptyDoc()
 }
 
 const desktop = () => ctx().config.mode === 'desktop'
@@ -111,6 +120,16 @@ export async function keyMeta(scope: AiScope): Promise<Partial<Record<StoredKeyP
   if (!scope) return out
   const rows = await ctx().db.select({ provider: aiKeys.provider, last4: aiKeys.last4, updatedAt: aiKeys.updatedAt }).from(aiKeys).where(eq(aiKeys.workspaceId, scope))
   for (const r of rows) if (STORED.includes(r.provider as StoredKeyProvider)) out[r.provider as StoredKeyProvider] = { last4: r.last4, updatedAt: r.updatedAt }
+  // keys other spaces share with this one (while they still have them); this space's own key wins
+  const lent = await ctx()
+    .db.select({ provider: aiKeyShares.provider, from: aiKeyShares.fromWorkspaceId, last4: aiKeys.last4, updatedAt: aiKeys.updatedAt })
+    .from(aiKeyShares)
+    .innerJoin(aiKeys, and(eq(aiKeys.workspaceId, aiKeyShares.fromWorkspaceId), eq(aiKeys.provider, aiKeyShares.provider)))
+    .where(eq(aiKeyShares.toWorkspaceId, scope))
+  for (const r of lent) {
+    const p = r.provider as StoredKeyProvider
+    if (STORED.includes(p) && !out[p]) out[p] = { last4: r.last4, updatedAt: r.updatedAt, sharedFrom: r.from }
+  }
   return out
 }
 
@@ -124,7 +143,16 @@ export async function readKey(scope: AiScope, provider: StoredKeyProvider): Prom
   if (!scope) return undefined
   const rows = await ctx().db.select().from(aiKeys).where(and(eq(aiKeys.workspaceId, scope), eq(aiKeys.provider, provider))).limit(1)
   const r = rows[0]
-  return r ? openKey({ ciphertext: r.ciphertext, iv: r.iv, tag: r.tag }, aad(scope, provider)) : undefined
+  if (r) return openKey({ ciphertext: r.ciphertext, iv: r.iv, tag: r.tag }, aad(scope, provider))
+  // no key of its own: the one another space shares with it (sealed for that space, so opened as that space's)
+  const lent = await ctx()
+    .db.select({ from: aiKeys.workspaceId, ciphertext: aiKeys.ciphertext, iv: aiKeys.iv, tag: aiKeys.tag })
+    .from(aiKeyShares)
+    .innerJoin(aiKeys, and(eq(aiKeys.workspaceId, aiKeyShares.fromWorkspaceId), eq(aiKeys.provider, aiKeyShares.provider)))
+    .where(and(eq(aiKeyShares.toWorkspaceId, scope), eq(aiKeyShares.provider, provider)))
+    .limit(1)
+  const s = lent[0]
+  return s ? openKey({ ciphertext: s.ciphertext, iv: s.iv, tag: s.tag }, aad(s.from, provider)) : undefined
 }
 
 export async function writeKey(scope: AiScope, provider: StoredKeyProvider, key: string): Promise<KeyMeta> {
@@ -143,6 +171,10 @@ export async function writeKey(scope: AiScope, provider: StoredKeyProvider, key:
     .db.insert(aiKeys)
     .values(row)
     .onConflictDoUpdate({ target: [aiKeys.workspaceId, aiKeys.provider], set: { ...s, ...meta } })
+  // a key of its own replaces one another space shared with it
+  await ctx()
+    .db.delete(aiKeyShares)
+    .where(and(eq(aiKeyShares.toWorkspaceId, ws), eq(aiKeyShares.provider, provider)))
   return meta
 }
 

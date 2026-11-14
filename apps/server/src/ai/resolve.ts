@@ -5,10 +5,11 @@
 // Key-backed providers are cached per scope + provider + model + key hash, so a changed key or model is picked up on
 // the next request and the SDK client is reused otherwise.
 import crypto from 'node:crypto'
-import { type AiChoice, type AiFeature, type AiKeyProvider, type AiSettings, strongestModel } from '@producer/core'
+import { type AiChoice, type AiFeature, type AiKeyProvider, type AiSettings, type StoredKeyProvider, strongestModel } from '@producer/core'
 import { ctx } from '../context'
 import { HttpError } from '../http'
 import { buildKeyProvider } from './keys'
+import { sharedFrom, sharedWith } from './shares'
 import type { AiProvider, AiScope } from './provider'
 import { type AiSettingsDoc, FEATURES, KEY_PROVIDERS, MEDIA_KEY_PROVIDERS, keyMeta, loadDoc, readKey } from './store'
 
@@ -171,6 +172,17 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
   const keys = new Set(Object.keys(meta) as AiKeyProvider[])
   const b = await builtinProvider()
   const bs = await (await builtinFor(scoped)).status()
+  // shared keys (cloud): where a key in use comes from (everyone sees it) and where this space's keys go (owners)
+  const cloud = ctx().config.mode !== 'desktop' && Boolean(scoped)
+  const lentBy = cloud && Object.values(meta).some((m) => m?.sharedFrom) ? await sharedFrom(scoped!) : []
+  const lentTo = cloud && canEdit ? await sharedWith(scoped!) : []
+  const keyFacts = (p: StoredKeyProvider) => {
+    const m = meta[p]
+    if (!m) return {}
+    if (m.sharedFrom) return { shared: { workspaceId: m.sharedFrom, name: lentBy.find((s) => s.provider === p)?.name ?? 'another space' } }
+    const to = lentTo.filter((s) => s.provider === p).map((s) => ({ workspaceId: s.workspaceId, name: s.name }))
+    return { keyLast4: m.last4, updatedAt: m.updatedAt, ...(to.length ? { sharedWith: to } : {}) }
+  }
   const providers: AiSettings['providers'] = {}
   for (const p of KEY_PROVIDERS) {
     const d = doc.providers[p]
@@ -179,7 +191,7 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
     providers[p] = {
       model: d?.model ?? '',
       hasKey: Boolean(m),
-      ...(m ? { keyLast4: m.last4, updatedAt: m.updatedAt } : {}),
+      ...keyFacts(p),
       ...(d?.models ? { models: d.models } : {}),
       ...(d?.valid !== undefined ? { valid: d.valid } : {}),
       ...(d?.error ? { error: d.error } : {}),
@@ -193,8 +205,7 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
     if (!m) continue
     media[p] = {
       hasKey: true,
-      keyLast4: m.last4,
-      updatedAt: m.updatedAt,
+      ...keyFacts(p),
       ...(d?.valid !== undefined ? { valid: d.valid } : {}),
       ...(d?.error ? { error: d.error } : {}),
       ...(d?.price ? { price: d.price } : {}),

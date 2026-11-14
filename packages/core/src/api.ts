@@ -916,6 +916,11 @@ export interface SyncChanges {
 //        :provider is a StoredKeyProvider: openai, gemini, anthropic, or fal (media only: AI clips with Wan)
 // DELETE /api/ai/keys/:provider?workspaceId=                  -> AiSettings            (owner)
 // POST   /api/ai/keys/:provider/test {workspaceId?, key?}     -> AiKeyTestResult       (owner; given key or the stored one)
+// Sharing a key with another space (cloud; an owner of BOTH spaces; the other space uses the key, never sees it):
+// PUT    /api/ai/keys/:provider/shares/:toWorkspaceId {workspaceId} -> AiSettings      (of the sharing space)
+// DELETE /api/ai/keys/:provider/shares/:toWorkspaceId?workspaceId=  -> AiSettings      (owner of the sharing space)
+//        In the receiving space, DELETE /api/ai/keys/:provider stops using the shared key, and saving a key of its
+//        own replaces it. Removing the key in the sharing space ends every share of it.
 /** Provider implementations: server Anthropic key, workspace/user Anthropic key, OpenAI, Gemini, local Claude CLI. */
 export type AiProviderId = 'anthropic-api' | 'anthropic-key' | 'openai' | 'gemini' | 'claude-cli' | 'none'
 /** Providers configured with a user-supplied API key. */
@@ -957,11 +962,21 @@ export interface ClaudeCliInfo {
   flags: ClaudeCliFlag[]
 }
 
+/** A space on the other side of a shared key. */
+export interface AiKeyShare {
+  workspaceId: string
+  name: string
+}
+
 export interface AiKeyProviderSettings {
   /** Model id sent to the provider (free text; defaults picked from the live model list). */
   model: string
   hasKey: boolean
   keyLast4?: string
+  /** The key in use is this other space's, shared with this one (then there is no keyLast4: it isn't this space's key). */
+  shared?: AiKeyShare
+  /** Spaces this space's own key is shared with (owners only). */
+  sharedWith?: AiKeyShare[]
   /** Model ids the key could use at the last successful test. */
   models?: string[]
   /** Result of the last key test (undefined = never tested). */
@@ -976,6 +991,10 @@ export interface AiKeyProviderSettings {
 export interface MediaKeySettings {
   hasKey: boolean
   keyLast4?: string
+  /** The key in use is this other space's, shared with this one. */
+  shared?: AiKeyShare
+  /** Spaces this space's own key is shared with (owners only). */
+  sharedWith?: AiKeyShare[]
   /** Result of the last key test (undefined = never tested). */
   valid?: boolean
   /** User-facing reason when the last test failed. */

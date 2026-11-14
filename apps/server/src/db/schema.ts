@@ -515,4 +515,17 @@ export const uploadSessions = pgTable('upload_sessions', {
   updatedAt: ms('updated_at').notNull(),
 })
 
-export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings, authTokens, syncHorizon, auditLog, presenceRows, uploadSessions }
+/** v19: a space's stored AI key lent to another space: a pointer, never a copy. One source per space and provider. */
+export const aiKeyShares = pgTable(
+  'ai_key_shares',
+  {
+    toWorkspaceId: text('to_workspace_id').notNull(),
+    provider: text('provider').notNull(),
+    fromWorkspaceId: text('from_workspace_id').notNull(),
+    createdBy: text('created_by'),
+    createdAt: ms('created_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.toWorkspaceId, t.provider] })],
+)
+
+export const schema = { users, sessions, workspaces, memberships, invites, projects, assets, jobs, exportsTable, shareLinks, comments, activity, brandKits, voiceProfiles, tombstones, devices, workspaceAiSettings, aiKeys, aiKeyShares, userPreferences, projectVersions, idempotencyKeys, rateWindows, usageDaily, workspaceUsageSettings, extraBrandKits, brandFonts, spaceSettings, memberSettings, authTokens, syncHorizon, auditLog, presenceRows, uploadSessions }

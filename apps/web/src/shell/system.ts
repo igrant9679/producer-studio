@@ -60,6 +60,10 @@ export const systemApi = {
   saveAiKey: (provider: StoredKeyProvider, key: string, workspaceId?: string) => sysFetch<AiKeyTestResult>('PUT', `/ai/keys/${provider}`, { workspaceId, key }),
   deleteAiKey: (provider: StoredKeyProvider, workspaceId?: string) => sysFetch<AiSettings>('DELETE', `/ai/keys/${provider}${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   testAiKey: (provider: StoredKeyProvider, workspaceId?: string, key?: string) => sysFetch<AiKeyTestResult>('POST', `/ai/keys/${provider}/test`, { workspaceId, key }),
+  // sharing a space's key with another space the person owns (web edition); both answer with the sharing space's settings
+  shareAiKey: (provider: StoredKeyProvider, to: string, workspaceId: string) => sysFetch<AiSettings>('PUT', `/ai/keys/${provider}/shares/${encodeURIComponent(to)}`, { workspaceId }),
+  unshareAiKey: (provider: StoredKeyProvider, to: string, workspaceId: string) =>
+    sysFetch<AiSettings>('DELETE', `/ai/keys/${provider}/shares/${encodeURIComponent(to)}?workspaceId=${encodeURIComponent(workspaceId)}`),
 }
 
 /** /api/system for the current workspace (cloud: its effective AI provider). */

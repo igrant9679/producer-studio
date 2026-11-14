@@ -1,10 +1,11 @@
 // Settings → AI: the built-in provider (desktop: Claude CLI; cloud: the server's Claude), bring-your-own-key cards for
 // Anthropic, Google Gemini (AI Studio) and OpenAI, the default provider and per-feature overrides, then the media-only
 // fal.ai key (Wan video clips) and who makes clips when Gemini could too. Keys are write-only: the server returns
-// hasKey + last4, never the key.
+// hasKey + last4, never the key. On the web an owner can share a key with other spaces they own: those spaces use it
+// without seeing it ("Shared with" on the key's card there, "Shared by" on the card of the space that uses it).
 import { strongestModel, type AiChoice, type AiFeature, type AiKeyProvider, type AiKeyProviderSettings, type AiSettings, type StoredKeyProvider, type SystemInfo, type VideoClipProvider } from '@producer/core'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, ExternalLink, Info, KeyRound, Lock, Save, Sparkles, Trash2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ExternalLink, Info, KeyRound, Lock, Save, Share2, Sparkles, Trash2, X } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { HttpError } from '../../lib/api'
 import { useSession } from '../../lib/session'
@@ -145,10 +146,17 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
   const textInfo = media ? undefined : s.providers[provider]
   const okDetail = media ? `✓ valid${s.media?.[provider]?.price ? ` · ${s.media[provider]?.price}` : ''}` : `✓ valid · ${textInfo?.models?.length ?? 0} models`
   const [key, setKey] = useState('')
-  const [busy, setBusy] = useState<'save' | 'test' | 'remove' | 'model'>()
+  const [busy, setBusy] = useState<'save' | 'test' | 'remove' | 'model' | 'share'>()
   const [result, setResult] = useState<{ ok: boolean; detail: string }>()
   const [confirm, setConfirm] = useState(false)
   const canEdit = s.canEdit
+  // sharing (web): this space's own key can be lent to other spaces the person owns; a key lent to this space says whose it is
+  const shared = info?.shared
+  const sharedWith = info?.sharedWith ?? []
+  const spaces = useSession((st) => st.workspaces)
+  const canShare = !desktop && canEdit && Boolean(info?.hasKey) && !shared && Boolean(workspaceId)
+  const targets = canShare ? spaces.filter((w) => w.role === 'owner' && w.id !== workspaceId && !sharedWith.some((x) => x.workspaceId === w.id)) : []
+  const shortName = meta.name.split(' (')[0].replace(/ API key$/, '')
   const status = result ?? (info?.hasKey ? (info.valid === false ? { ok: false, detail: info.error || 'The key didn’t work' } : info.valid ? { ok: true, detail: okDetail } : undefined) : undefined)
   const isDefault = !media && s.defaultProvider === provider
   const inUse = media ? provider === 'fal' && clipMaker(s) === 'fal' : Object.values(s.effective).some((e) => e.provider === (provider === 'anthropic' ? 'anthropic-key' : provider))
@@ -184,6 +192,7 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
           <strong>{meta.name}</strong>
           <span>{meta.sub}</span>
         </div>
+        {shared && <span className="ps-ai-badge">Shared</span>}
         {isDefault && <span className="ps-ai-badge on">Default</span>}
         {!isDefault && inUse && <span className="ps-ai-badge">In use</span>}
         <KeyLink url={meta.keyUrl} />
@@ -200,18 +209,20 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
               spellCheck={false}
               value={key}
               disabled={!canEdit || busy === 'save'}
-              placeholder={info?.hasKey ? `•••• •••• •••• ${info.keyLast4 ?? ''}` : meta.placeholder}
+              placeholder={shared ? `Shared by “${shared.name}”` : info?.hasKey ? `•••• •••• •••• ${info.keyLast4 ?? ''}` : meta.placeholder}
               onChange={(e) => setKey(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void save()
               }}
             />
             <button className="btn primary sm" disabled={!canEdit || !key.trim() || !!busy} onClick={() => void save()}>
-              {busy === 'save' ? <Spinner size={13} /> : <Save size={13} />} {info?.hasKey ? 'Replace & test' : 'Save & test'}
+              {busy === 'save' ? <Spinner size={13} /> : <Save size={13} />} {info?.hasKey && !shared ? 'Replace & test' : 'Save & test'}
             </button>
           </div>
           <div className="ps-hint">
-            {info?.hasKey
+            {shared
+              ? `This space uses the key “${shared.name}” shares with it. The key is never shown here, and what this space uses is billed to that key’s account. Saving a key of your own here replaces it.`
+              : info?.hasKey
               ? `Stored encrypted${info.keyLast4 ? ` · ends in ${info.keyLast4}` : ''}. ${desktop ? 'It stays on this computer and is never synced.' : 'The key never leaves the server.'}`
               : desktop
                 ? 'Stored encrypted on this computer (protected by your Windows account); it’s never shown again or synced.'
@@ -273,21 +284,78 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
                     if (!next) return
                     setResult(undefined)
                     onSettings(next)
-                    toast('Key removed')
+                    toast(shared ? 'This space no longer uses the shared key' : 'Key removed')
                   }}
                 >
-                  {busy === 'remove' && <Spinner size={13} />} Remove key
+                  {busy === 'remove' && <Spinner size={13} />} {shared ? 'Stop using it' : sharedWith.length ? `Remove key (ends sharing with ${sharedWith.length} space${sharedWith.length === 1 ? '' : 's'})` : 'Remove key'}
                 </button>
                 <button className="btn ghost sm" onClick={() => setConfirm(false)}>Cancel</button>
               </span>
             ) : (
               <button className="btn ghost sm" disabled={!!busy} onClick={() => setConfirm(true)}>
-                <Trash2 size={13} /> Remove key
+                <Trash2 size={13} /> {shared ? 'Stop using shared key' : 'Remove key'}
               </button>
             )}
           </>
         )}
       </div>
+      {canShare && workspaceId && (
+        <div className="ps-ai-share" role="group" aria-label={`Share the ${shortName} key`}>
+          <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+            <Share2 size={13} style={{ flex: 'none', color: 'var(--text-3)' }} />
+            <strong>Shared with</strong>
+            {sharedWith.length === 0 && <span className="muted">no other space</span>}
+            {sharedWith.map((w) => (
+              <span key={w.workspaceId} className="ps-ai-share-chip">
+                {w.name}
+                <button
+                  type="button"
+                  aria-label={`Stop sharing the ${shortName} key with ${w.name}`}
+                  title="Stop sharing"
+                  disabled={!!busy}
+                  onClick={async () => {
+                    const next = await run('share', () => systemApi.unshareAiKey(provider, w.workspaceId, workspaceId))
+                    if (!next) return
+                    onSettings(next)
+                    toast(`“${w.name}” no longer uses this key`)
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+            <span className="spacer" />
+            {busy === 'share' && <Spinner size={13} />}
+            {targets.length > 0 && (
+              <select
+                className="input"
+                style={{ width: 'auto', minWidth: 200 }}
+                aria-label={`Share the ${shortName} key with a space`}
+                value=""
+                disabled={!!busy}
+                onChange={async (e) => {
+                  const to = targets.find((w) => w.id === e.target.value)
+                  if (!to) return
+                  const next = await run('share', () => systemApi.shareAiKey(provider, to.id, workspaceId))
+                  if (!next) return
+                  setResult(undefined)
+                  onSettings(next)
+                  toast(`“${to.name}” can now use this key`)
+                }}
+              >
+                <option value="">Share with a space…</option>
+                {targets.map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="ps-hint">
+            Other spaces you own can use this key without ever seeing it; what they use is billed to this key’s account. Only owners can share a key.
+            {targets.length === 0 && sharedWith.length === 0 ? ' You don’t own another space yet.' : ''}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -528,7 +596,7 @@ export function AiProviders({
       {!s && !err && <div className="skeleton" style={{ height: 160, borderRadius: 14 }} />}
       {s && !s.canEdit && (
         <div className="ps-alert info" role="note">
-          <Lock size={15} style={{ flex: 'none' }} /> Your workspace owner manages AI keys. You can see which providers are set up here.
+          <Lock size={15} style={{ flex: 'none' }} /> An owner of this space manages its AI keys. You can see which providers are set up here.
         </div>
       )}
       {s && ORDER.map((p) => <KeyCard key={`${workspaceId ?? ''}:${p}`} provider={p} s={s} desktop={desktop} workspaceId={workspaceId} onSettings={apply} />)}

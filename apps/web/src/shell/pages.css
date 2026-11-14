@@ -311,6 +311,12 @@
 .ps-ai-card-head .ps-set-icon { width: 32px; height: 32px; border-radius: 9px; }
 .ps-ai-card-head strong { display: block; font-size: 0.875rem; }
 .ps-ai-card-head span:not(.ps-set-icon):not(.ps-ai-badge) { display: block; font-size: 0.75rem; color: var(--text-3); }
+.ps-ai-share { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 0.7812rem; }
+.ps-ai-share strong { font-size: 0.7812rem; }
+.ps-ai-share .ps-hint { margin-top: 8px; }
+.ps-ai-share-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 4px 0 10px; border-radius: 999px; background: var(--control); border: 1px solid var(--border); color: var(--text); font-size: 0.75rem; font-weight: 600; max-width: 100%; overflow-wrap: anywhere; }
+.ps-ai-share-chip button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; border: 0; border-radius: 999px; background: transparent; color: var(--text-3); cursor: pointer; }
+.ps-ai-share-chip button:hover:not(:disabled), .ps-ai-share-chip button:focus-visible { background: var(--surface-3); color: var(--text); }
 .ps-ai-badge { font-size: 0.6875rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); letter-spacing: .02em; }
 .ps-ai-badge.on { color: var(--cyan); border-color: var(--cyan-line); background: var(--cyan-soft); }
 .ps-ai-adv { margin-top: 10px; }
