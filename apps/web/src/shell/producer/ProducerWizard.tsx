@@ -80,6 +80,7 @@ import {
   removeWizardAsset,
   resumeDraft,
   resumeProcessingAssets,
+  resumeRun,
   runAssemble,
   runGenerate,
   saveDraft,
@@ -1288,7 +1289,7 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
             : r.status === 'running'
               ? r.message
               : r.interrupted
-                ? 'Assembly was interrupted — resume to finish.'
+                ? (r.jobId && r.message) || 'Assembly was interrupted — resume to finish.'
                 : isIdea(s)
                   ? `Producer will narrate ${s.scenes.length} scenes, make their visuals and apply your look and captions.`
                   : `Producer will narrate ${s.scenes.length} scenes, cut the footage and apply your template look and captions.`}
@@ -1484,6 +1485,9 @@ export default function ProducerWizard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.step])
 
+  // the new project's address keeps the step, so it isn't read as Back to the first one
+  const onProjectCreated = (id: string) => navigate(`/producer/${id}?step=${useWizard.getState().s.step}`, { replace: true })
+
   // Load / resume wizard state for this URL.
   useEffect(() => {
     const cur = useWizard.getState().s
@@ -1495,6 +1499,8 @@ export default function ProducerWizard() {
         replace(sanitizeForResume(saved))
         resumeProcessingAssets()
         void resumeDraft()
+        // a script or video that was being made when the tab went away kept going: follow it, or show how it ended
+        void resumeRun({ workspaceId: saved.workspaceId ?? sessionWorkspaceId, onProject: onProjectCreated })
         return
       }
       setLoading(true)
@@ -1556,8 +1562,6 @@ export default function ProducerWizard() {
   const adv = useMemo(() => canAdvance(s), [s])
   const idx = ORDER.indexOf(s.step)
 
-  // the new project's address keeps the step, so it isn't read as Back to the first one
-  const onProjectCreated = (id: string) => navigate(`/producer/${id}?step=${useWizard.getState().s.step}`, { replace: true })
   const generate = () => workspaceId && void runGenerate(workspaceId, onProjectCreated)
   const assemble = (opts: { replace?: boolean; intoCopy?: boolean; renarrate?: string[] } = {}) => void runAssemble({ ...opts, onProject: onProjectCreated })
   const rewrite = () => {

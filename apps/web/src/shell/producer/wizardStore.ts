@@ -199,15 +199,41 @@ export function removeWizardAsset(localId: string) {
 
 // ---------------- runs ----------------
 
+/**
+ * A job this tab was following before it went away couldn't be asked about (offline, the server restarting). The job
+ * may well still be going, or be finished: it stays the wizard's job to pick up, and is never started a second time.
+ */
+class LostTouch extends Error {
+  constructor(readonly jobId: string) {
+    super('Lost touch with the job')
+  }
+}
+
+/** A run left behind by a reload that could not be checked on: Resume asks about the same job again. */
+const lostTouch = (phase: NonNullable<WizardState['run']['phase']>, jobId: string, message: string): WizardState['run'] => ({ status: 'idle', phase, jobId, interrupted: true, message })
+
 async function runJob<R>(patch: (p: Patch) => void, start: () => Promise<Job<R>>, onUpdate: (j: Job<R>) => void, existingJobId?: string): Promise<Job<R>> {
   const id = existingJobId ?? (await start()).id
   patch((s) => ({ run: { ...s.run, jobId: id } }))
   const signal = abort?.signal
-  const j = await waitForJob<R>(id, (u) => {
-    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
-    trackJob(u as Job)
-    onUpdate(u)
-  })
+  let last: Job<R> | undefined
+  let j: Job<R>
+  try {
+    j = await waitForJob<R>(id, (u) => {
+      if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+      last = u
+      trackJob(u as Job)
+      onUpdate(u)
+    })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e
+    // stopped by someone (here before the reload, or from the jobs list): not a failure
+    if (last?.status === 'cancelled') throw new DOMException('Stopped', 'AbortError')
+    // picking up a job from before a reload, and the question itself failed (the job didn't): it stays resumable,
+    // unless the server no longer knows the job at all
+    if (existingJobId && last?.status !== 'error' && !(e instanceof HttpError && e.status === 404)) throw new LostTouch(id)
+    throw e
+  }
   patch((s) => ({ run: { ...s.run, jobId: undefined } }))
   return j
 }
@@ -256,12 +282,13 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
     if (signal.aborted) throw new DOMException('Cancelled', 'AbortError')
     s = get()
     const writing = isIdea(s) ? 'Planning the scenes and writing your script…' : 'Writing your script…'
-    patch({ run: { status: 'running', phase: 'script', message: writing, progress: -1 } })
+    const following = resumePhase === 'script' ? resumeJob : undefined
+    patch({ run: { status: 'running', phase: 'script', message: following ? 'Checking on your script…' : writing, progress: -1 } })
     const job = await runJob(
       patch,
       () => api.produceScript({ projectId: s.projectId!, assetIds: isIdea(s) ? media : ids, brief: s.brief }),
       (j) => patch((st) => ({ run: { ...st.run, message: j.message || writing, progress: j.progress } })),
-      resumePhase === 'script' ? resumeJob : undefined,
+      following,
     )
     const scenes = job.result?.script?.scenes ?? []
     if (!scenes.length) throw new Error('The script came back empty. Try adding more detail to the brief.')
@@ -269,11 +296,26 @@ export async function runGenerate(workspaceId: string, onProjectCreated?: (id: s
     markDraftSaved({ ...get(), scenes, scriptBrief: s.brief })
     patch({ scenes, scriptBrief: s.brief, step: 'review', run: { status: 'done', phase: 'script', message: `Script ready — ${scenes.length} scenes` } })
   } catch (e) {
-    if (e instanceof DOMException && e.name === 'AbortError') {
-      // Only the run that was cancelled reports it; a run superseded by a newer one stays silent.
-      if (abort?.signal === signal) patch((st) => ({ run: { ...st.run, status: 'idle', message: 'Stopped', jobId: undefined, interrupted: false } }))
-    } else if (abort?.signal === signal) patch((st) => ({ run: { ...st.run, status: 'error', error: errMsg(e) } }))
+    if (abort?.signal !== signal) return // superseded by a newer run, which reports for itself
+    if (e instanceof DOMException && e.name === 'AbortError') patch((st) => ({ run: { ...st.run, status: 'idle', message: 'Stopped', jobId: undefined, interrupted: false } }))
+    else if (e instanceof LostTouch) patch((st) => ({ run: lostTouch(st.run.phase ?? 'script', e.jobId, `Couldn’t check on ${st.run.phase === 'transcribe' ? 'the transcription' : 'your script'} just now. Resume to pick it up where it is.`) }))
+    // a job from before a reload that the server no longer knows: nothing to pick up
+    else if (resumeJob && e instanceof HttpError && e.status === 404) patch({ run: { status: 'idle' } })
+    else patch((st) => ({ run: { ...st.run, status: 'error', error: errMsg(e) } }))
   }
+}
+
+/**
+ * After a reload: the run this tab was following when it went away. Its job kept going on the server, so the wizard
+ * asks how it is doing instead of calling it interrupted: one still going is followed again, a finished one is taken
+ * as finished (the video is ready, the script is there), a failed one says why. Nothing is started that wasn't
+ * already: transcribing stays for the person to resume, because the script after it was never asked for.
+ */
+export function resumeRun(opts: { workspaceId?: string; onProject?: (id: string) => void } = {}): Promise<void> | undefined {
+  const r = get().run
+  if (!r.interrupted || !r.jobId) return
+  if (r.phase === 'assemble') return runAssemble({ onProject: opts.onProject })
+  if (r.phase === 'script' && opts.workspaceId) return runGenerate(opts.workspaceId, opts.onProject)
 }
 
 /**
@@ -290,7 +332,7 @@ export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean;
   if (!s.projectId) return
   let projectId = s.projectId
   const resumeJob = s.run.interrupted && s.run.phase === 'assemble' ? s.run.jobId : undefined
-  patch({ step: 'assemble', run: { status: 'running', phase: 'assemble', message: 'Narrating and assembling your video…', progress: 0 } })
+  patch({ step: 'assemble', run: resumeJob ? { status: 'running', phase: 'assemble', message: 'Checking on your video…', progress: -1 } : { status: 'running', phase: 'assemble', message: 'Narrating and assembling your video…', progress: 0 } })
   try {
     const job = await runJob(
       patch,
@@ -329,12 +371,14 @@ export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean;
       run: { status: 'done', phase: 'assemble', message: copyId ? 'Your video is ready, as a copy: someone edited the original’s timeline while it was being assembled, and those edits were kept' : 'Your video is ready' },
     })
   } catch (e) {
-    if (e instanceof DOMException && e.name === 'AbortError') {
-      // Only the run that was cancelled reports it; a run superseded by a newer one stays silent.
-      if (abort?.signal === signal) patch((st) => ({ run: { ...st.run, status: 'idle', message: 'Stopped', jobId: undefined, interrupted: false } }))
-    } else if (e instanceof HttpError && e.status === 409 && (e.body?.details as { reason?: string } | undefined)?.reason === 'edited') {
-      if (abort?.signal === signal) patch({ run: { status: 'idle', phase: 'assemble', confirm: 'edited', message: errMsg(e), ...(opts.renarrate?.length ? { renarrate: opts.renarrate } : {}) } })
-    } else if (abort?.signal === signal) patch((st) => ({ run: { ...st.run, status: 'error', error: errMsg(e) } }))
+    if (abort?.signal !== signal) return // superseded by a newer run, which reports for itself
+    if (e instanceof DOMException && e.name === 'AbortError') patch((st) => ({ run: { ...st.run, status: 'idle', message: 'Stopped', jobId: undefined, interrupted: false } }))
+    else if (e instanceof HttpError && e.status === 409 && (e.body?.details as { reason?: string } | undefined)?.reason === 'edited') {
+      patch({ run: { status: 'idle', phase: 'assemble', confirm: 'edited', message: errMsg(e), ...(opts.renarrate?.length ? { renarrate: opts.renarrate } : {}) } })
+    } else if (e instanceof LostTouch) patch({ run: lostTouch('assemble', e.jobId, 'Couldn’t check on your video just now. Resume to pick it up where it is.') })
+    // a job from before a reload that the server no longer knows: nothing to pick up
+    else if (resumeJob && e instanceof HttpError && e.status === 404) patch({ run: { status: 'idle', phase: 'assemble' } })
+    else patch((st) => ({ run: { ...st.run, status: 'error', error: errMsg(e) } }))
   }
 }
 

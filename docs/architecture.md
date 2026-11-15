@@ -171,6 +171,14 @@ from metering) to give each queued job its place in line, an estimated wait (or 
 limits. When a job ends in the worker, `afterJob` in `jobs/worker.ts` runs the follow-ups (metering its run time;
 the place to add notifications).
 
+**Coming back to a job (Producer AI wizard).** The wizard keeps the id of the script or assembly job it is following
+in the tab's storage. A tab that reloads, or opens another video and comes back, asks about that job
+(`resumeRun` in `apps/web/src/shell/producer/wizardStore.ts`) instead of calling it interrupted: still going → it is
+followed again; done → the result is taken (the video is ready, the script opens for review); failed → its reason;
+cancelled → back to the button. Only when the question itself fails (offline, a deploy) does it stay "Resume", and
+Resume asks about the same job: it is never started a second time. Transcribing is not picked up on its own, because
+the script that follows it was never asked for.
+
 ## Usage and limits (P-1, A-18)
 `limits.ts` holds the abuse brakes and quotas (cloud only, every one an env value where 0 = off; see `.env.example`).
 Request rates (AI calls per person per minute and day and per space per day, sign-ups per IP and overall, device
