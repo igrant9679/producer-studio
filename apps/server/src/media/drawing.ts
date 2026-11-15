@@ -40,6 +40,16 @@ const frameTimeout = (code: string) => (uses3d(code) ? FRAME_TIMEOUT_3D_MS : FRA
 /** The whole render of one scene (a 3D one draws about four frames a second at 1080p in software, after ~25 s to start). */
 const RENDER_TIMEOUT_MS = 6 * 60_000
 const RENDER_TIMEOUT_3D_MS = 15 * 60_000
+const renderTimeout = (code: string) => (uses3d(code) ? RENDER_TIMEOUT_3D_MS : RENDER_TIMEOUT_MS)
+/**
+ * The whole try-out of one scene (every frame at the test rate; a 3D one takes well under a minute). Each frame has
+ * its own limit, but a hundred frames each just inside it would be hours of saying nothing: a drawing that slow is
+ * told so (it could never be rendered at the full rate either) and goes back to be made lighter.
+ */
+const TEST_TIMEOUT_MS = 90_000
+const TEST_TIMEOUT_3D_MS = 4 * 60_000
+/** What a drawing too slow to try out or render is told, so its next version is lighter. */
+const LIGHTER = 'Build everything once (env.memo, the build function of env.stage3d) and only move things in draw(); use fewer objects, particles, lights and shadows.'
 
 export interface DrawingEnv {
   width: number
@@ -472,7 +482,14 @@ async function frame(p: Page, t: number, jpeg: boolean, limitMs = FRAME_TIMEOUT_
  * Draw a few frames to see that the code runs and what it shows: JPEGs at `times` (seconds). Throws DrawingError
  * with what went wrong.
  */
-export async function testDrawing(code: string, env: DrawingEnv, times: number[], signal?: AbortSignal): Promise<Buffer[]> {
+export async function testDrawing(
+  code: string,
+  env: DrawingEnv,
+  times: number[],
+  signal?: AbortSignal,
+  /** `limitMs` / `renderLimitMs`: the try-out's and the render's time limits, when not the usual ones (tests). */
+  opts: { onProgress?: (f: number) => void; limitMs?: number; renderLimitMs?: number } = {},
+): Promise<Buffer[]> {
   const work = tmpDir('drawing')
   const { browser, page: p } = await open(code, env, work)
   const onAbort = () => void close(browser)
@@ -485,10 +502,31 @@ export async function testDrawing(code: string, env: DrawingEnv, times: number[]
     const at = (t: number) => Math.min(last, Math.max(0, Math.round(t / step)))
     const want = new Set(times.map(at))
     const shots = new Map<number, Buffer>()
+    const limit = opts.limitMs ?? (uses3d(code) ? TEST_TIMEOUT_3D_MS : TEST_TIMEOUT_MS)
+    const began = Date.now()
+    // the first frame builds the scene (and compiles a 3D one's shaders): the frames after it show the pace
+    let first = 0
     for (let i = 0; i <= last; i++) {
       if (signal?.aborted) throw new CancelledError()
       const shot = await frame(p, i * step, want.has(i), frameTimeout(code))
       if (shot) shots.set(i, shot)
+      const spent = Date.now() - began
+      if (i === 0) first = spent
+      opts.onProgress?.((i + 1) / (last + 1))
+      if (spent > limit && i < last) throw new DrawingError(`Too slow to draw: ${i + 1} of its ${last + 1} test frames took ${Math.round(spent / 1000)} s. ${LIGHTER}`, i * step)
+    }
+    // a drawing whose full render (every frame at env.fps) could not finish in time is told now, while it can still
+    // be made lighter, not after its looks, when the render gives up
+    if (last > 0) {
+      const per = (Date.now() - began - first) / last
+      const frames = Math.max(1, Math.ceil(env.duration * env.fps))
+      const whole = first + per * frames
+      const renderLimit = opts.renderLimitMs ?? renderTimeout(code)
+      if (whole > renderLimit * 0.8) {
+        throw new DrawingError(
+          `Too slow to render: a frame takes about ${(per / 1000).toFixed(1)} s to draw, so this scene's ${frames} frames would take about ${Math.max(1, Math.round(whole / 60_000))} minutes (the limit is ${Math.round(renderLimit / 60_000)}). ${LIGHTER}`,
+        )
+      }
     }
     // one per time asked for, in that order
     return times.map((t) => shots.get(at(t))!)
@@ -503,9 +541,16 @@ export async function testDrawing(code: string, env: DrawingEnv, times: number[]
 export async function renderDrawing(code: string, env: DrawingEnv, outFile: string, opts: { signal?: AbortSignal; onProgress?: (f: number) => void } = {}): Promise<void> {
   const work = tmpDir('drawing')
   const { browser, page: p } = await open(code, env, work)
-  const timer = setTimeout(() => void close(browser), uses3d(code) ? RENDER_TIMEOUT_3D_MS : RENDER_TIMEOUT_MS)
+  const limit = renderTimeout(code)
+  let tooLong = false
+  const timer = setTimeout(() => {
+    tooLong = true
+    void close(browser)
+  }, limit)
   const onAbort = () => void close(browser)
   opts.signal?.addEventListener('abort', onAbort, { once: true })
+  // how far it is, said every 15 frames and at least every few seconds (slow frames are not a stalled job)
+  let said = 0
   const frames = Math.max(1, Math.ceil(env.duration * env.fps))
   // frames go straight to ffmpeg as a stream of JPEGs
   const enc = spawn(ctx().config.ffmpegPath, ['-hide_banner', '-nostdin', '-y', '-f', 'image2pipe', '-framerate', String(env.fps), '-c:v', 'mjpeg', '-i', '-', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', outFile], { stdio: ['pipe', 'ignore', 'pipe'] })
@@ -517,7 +562,10 @@ export async function renderDrawing(code: string, env: DrawingEnv, outFile: stri
       if (opts.signal?.aborted) throw new CancelledError()
       const jpg = (await frame(p, i / env.fps, true, frameTimeout(code)))!
       if (!enc.stdin.write(jpg)) await new Promise((r) => enc.stdin.once('drain', r))
-      if (i % 15 === 0) opts.onProgress?.(i / frames)
+      if (i % 15 === 0 || Date.now() - said > 5_000) {
+        said = Date.now()
+        opts.onProgress?.(i / frames)
+      }
     }
     enc.stdin.end()
     const code_ = await done
@@ -535,6 +583,8 @@ export async function renderDrawing(code: string, env: DrawingEnv, outFile: stri
       fs.rm(outFile, { force: true, maxRetries: 5, retryDelay: 200 }, () => undefined)
     }
     if (opts.signal?.aborted) throw new CancelledError()
+    // the browser was closed under it: say that, not the protocol error the closing caused
+    if (tooLong) throw new HttpError(504, 'server', `the animation took longer than ${Math.round(limit / 60_000)} minutes to render`)
     throw err
   } finally {
     clearTimeout(timer)

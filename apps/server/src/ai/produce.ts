@@ -2,7 +2,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import {
   captionStyleFromPreset,
@@ -40,7 +40,7 @@ import { ctx } from '../context'
 import { assets } from '../db/schema'
 import { assetDoc } from '../dto'
 import { HttpError, invalid } from '../http'
-import { type JobContext, subContext } from '../jobs/worker'
+import { CancelledError, type JobContext, subContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
 import { type AssetRow, createAssetFromFile, localSource, tmpDir } from '../services/assets'
 import { processAsset } from '../media/process'
@@ -747,7 +747,8 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
     const s = spoken[i]
     const v = voices.get(s.id)!
     jc.check()
-    jc.progress(0.6 + (i / input.scenes.length) * 0.3, `Timing captions ${s.id}`)
+    // (quick, and said at the end of the voices' share of the bar: the visuals' share starts here and never goes back)
+    jc.progress(0.6, `Timing captions ${s.id}`)
     let transcript = v.asset.transcript
     if (!transcript) {
       transcript = whisperAvailable()
@@ -866,6 +867,12 @@ export const MAX_AI_CLIPS = 3
 export const MAX_DRAWN = 6
 /** AI-drawn scenes drawn at the same time (each waits minutes on the model; its test and final renders are short). */
 export const DRAWN_AT_ONCE = 2
+/**
+ * One drawing, start to clip, takes this long at most. Each of its steps has its own limit and reports while it runs
+ * (ai/drawn.ts); this is for whatever still hangs (an upload, a browser that won't close). That scene is given up and
+ * stood in for, and the rest of the video is made: one scene never costs the whole run.
+ */
+export const DRAWN_LIMITS = { sceneMs: 30 * 60_000 }
 
 type MadeKind = 'image' | 'stock' | 'photo' | 'aiVideo'
 const MAKING: Record<MadeKind, string> = { image: 'Making an image', stock: 'Finding footage', photo: 'Finding a photo', aiVideo: 'Making a video clip' }
@@ -957,12 +964,60 @@ async function makeSceneVisuals(
       drawing = { ...drawing, style: 'studio3d' }
     }
   }
-  // progress never goes back, whichever scene reports it (two drawings report in turn)
-  let high = 0
-  const up: JobContext = { ...jc, progress: (f, m) => jc.progress(f < 0 ? f : (high = Math.max(high, f)), m) }
-  const slot = (s: ScriptScene, label: string) => {
+  // The visuals' share of the bar (0.6 to 0.9) is what is done of all the scenes together, each counting its own
+  // part. Several drawings are under way at once: the last scene finishing first must not read as "nearly done" while
+  // another is still being written, and the bar never goes back whichever of them reports.
+  const part = todo.map(() => 0)
+  const tell = (i: number, f: number, m?: string) => {
+    if (f >= 0) part[i] = Math.max(part[i], Math.min(1, f))
+    jc.progress(0.6 + (part.reduce((a, b) => a + b, 0) / todo.length) * 0.3, m)
+  }
+  /** This scene's visual is settled (made, reused, or given up). */
+  const finished = (s: ScriptScene) => tell(todo.indexOf(s), 1)
+  const slot = (s: ScriptScene, label: string): JobContext => {
     const i = todo.indexOf(s)
-    return subContext(up, 0.6 + (i / todo.length) * 0.3, 0.6 + ((i + 1) / todo.length) * 0.3, label)
+    return { ...jc, progress: (f, m) => tell(i, f, m !== undefined ? `${label}: ${m}` : m) }
+  }
+  /** One scene's drawing, given up (the scene, not the job) when it takes longer than DRAWN_LIMITS.sceneMs. */
+  const withinLimit = async <T>(s: ScriptScene, work: (sc: Pick<JobContext, 'signal' | 'progress' | 'check'>) => Promise<T>): Promise<T> => {
+    const ac = new AbortController()
+    const onStop = () => ac.abort(jc.signal.reason)
+    if (jc.signal.aborted) onStop()
+    else jc.signal.addEventListener('abort', onStop, { once: true })
+    const ms = DRAWN_LIMITS.sceneMs
+    const tooLong = () => new HttpError(504, 'server', `it took longer than ${ms >= 60_000 ? `${Math.round(ms / 60_000)} minutes` : `${Math.round(ms / 1000)} s`} to draw`)
+    let late = false
+    let timer: NodeJS.Timeout | undefined
+    const over = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        late = true
+        ac.abort()
+        reject(tooLong())
+      }, ms)
+      timer.unref?.()
+    })
+    const sc = slot(s, `Drawing ${s.id}`)
+    const run = work({
+      signal: ac.signal,
+      // a scene given up says nothing more, whatever of it is still winding down
+      progress: (f, m) => {
+        if (!late) sc.progress(f, m)
+      },
+      check: () => {
+        if (ac.signal.aborted) throw new CancelledError()
+      },
+    })
+    // given up when too long: whatever it does afterwards is nobody's to handle
+    run.catch(() => undefined)
+    try {
+      return await Promise.race([run, over])
+    } catch (err) {
+      if (late && !jc.signal.aborted) throw tooLong()
+      throw err
+    } finally {
+      clearTimeout(timer)
+      jc.signal.removeEventListener('abort', onStop)
+    }
   }
 
   /**
@@ -1014,11 +1069,14 @@ async function makeSceneVisuals(
     for (;;) {
       const style = drawing!.style
       try {
-        const made = await makeDrawn(slot(s, `Drawing ${s.id}`), { ...o, drawing: drawing!, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work, blender, reference, onWorking })
+        const opts = { ...o, drawing: drawing!, jobId: jc.job.id, scene: s, visual: v, last: o.scenes.at(-1)?.id === s.id, work, blender, reference, onWorking }
+        // (Blender renders on a rented card and keeps its own time)
+        const made = blender ? await makeDrawn(slot(s, `Drawing ${s.id}`), opts) : await withinLimit(s, (sc) => makeDrawn(sc, opts))
         reference ??= made.code
         generated.set(s.id, made.asset)
         s.visual = { kind: 'drawn', prompt: v.prompt, code: made.code, assetId: made.asset.id, ...(style !== 'clean' ? { style } : {}) }
         stoodIn(s, 'drawn')
+        finished(s)
         return
       } catch (err) {
         if (jc.signal.aborted) throw err
@@ -1032,6 +1090,7 @@ async function makeSceneVisuals(
         }
         log.warn('drawn scene failed', { scene: s.id, err })
         couldNotDraw.set(s.id, err instanceof HttpError ? err.message : 'it could not be drawn')
+        finished(s)
         return
       }
     }
@@ -1042,11 +1101,13 @@ async function makeSceneVisuals(
     for (const s of todo) {
       jc.check()
       if (s.visual?.kind === 'animation') {
-        up.progress(0.6 + (todo.indexOf(s) / todo.length) * 0.3, `Drawing the animation for ${s.id}`)
+        tell(todo.indexOf(s), 0, `Drawing the animation for ${s.id}`)
         const { visual, missing } = await findIllustrations(jc, { ...o, jobId: jc.job.id, visual: s.visual, work, into: illustrations })
         s.visual = visual
         if (missing.length) notes.push(`${s.id}: no illustration found for ${missing.map((m) => `“${m}”`).join(', ')}, so a labelled circle stands in`)
       } else if (s.visual?.kind !== 'drawn') await make(s)
+      // (a clip that became a drawing is settled when it is drawn, below)
+      if (s.visual?.kind !== 'drawn') finished(s)
     }
     // 2. the drawings (the script's, and clips that became one). A drawing takes minutes, nearly all of it waiting for
     // the model, so DRAWN_AT_ONCE are drawn at a time; Blender has one card and takes them one by one.
@@ -1055,8 +1116,16 @@ async function makeSceneVisuals(
     else if (toDraw.length) {
       const now = toDraw.slice(0, MAX_DRAWN)
       for (const s of toDraw.slice(MAX_DRAWN)) couldNotDraw.set(s.id, `only ${MAX_DRAWN} scenes are drawn per video`)
-      // a scene drawn before in this style (an earlier assembly) already shows how the film's characters look
       const style = drawing.style
+      // A drawing this video already has for the same note in this style, from a run that was stopped or failed after
+      // finishing it (its code is kept on its clip): used again, not paid for twice.
+      for (const s of now) {
+        const v = s.visual as Extract<SceneVisual, { kind: 'drawn' }>
+        if (v.code && drawingStyleOf(v.style) === style) continue
+        const was = await earlierDrawing({ workspaceId: o.workspaceId, projectId: o.projectId, prompt: v.prompt, style })
+        if (was) s.visual = { kind: 'drawn', prompt: v.prompt, code: was.code, assetId: was.assetId, ...(style !== 'clean' ? { style } : {}) }
+      }
+      // a scene drawn before in this style (an earlier assembly) already shows how the film's characters look
       reference = now.map((s) => s.visual).find((v): v is Extract<SceneVisual, { kind: 'drawn' }> & { code: string } => v?.kind === 'drawn' && !!v.code && drawingStyleOf(v.style) === style)?.code
       // else the first scene leads: the others start as soon as its code first runs (its looks go on meanwhile)
       let lead: Promise<void> | undefined
@@ -1119,6 +1188,26 @@ export function sameReasonTogether(notes: string[]): string[] {
     }
   }
   return out.map((o) => (typeof o === 'string' ? o : `${o.ids.join(', ')}: ${o.why}`))
+}
+
+/** What a drawing was asked for: the director's note and the drawing style (its clip keeps the code under this). */
+const drawnAsk = (prompt: string, style: DrawingStyleId) => crypto.createHash('sha256').update(JSON.stringify([prompt.trim(), style])).digest('hex')
+
+/**
+ * A drawing this project already has for this note in this style: the newest, a clip that is ready before one that
+ * never finished processing (its code is as good). Clips in the trash don't count.
+ */
+async function earlierDrawing(o: { workspaceId: string; projectId: string; prompt: string; style: DrawingStyleId }): Promise<{ code: string; assetId: string } | undefined> {
+  const rows = (
+    await ctx()
+      .db.select()
+      .from(assets)
+      .where(and(eq(assets.workspaceId, o.workspaceId), eq(assets.projectId, o.projectId), eq(assets.origin, 'ai'), isNull(assets.trashedAt), sql`${assets.meta}->'generated'->>'ask' = ${drawnAsk(o.prompt, o.style)}`))
+      .orderBy(desc(assets.createdAt))
+      .limit(10)
+  ).filter((r) => r.meta?.generated?.kind === 'drawn' && !!r.meta.generated.code)
+  const best = rows.find((r) => r.status === 'ready') ?? rows[0]
+  return best ? { code: best.meta!.generated!.code!, assetId: best.id } : undefined
 }
 
 /** What a drawn clip was made from: the code, its length and frame (the same → the clip is reused). */
@@ -1191,7 +1280,9 @@ async function makeDrawn(
     mime: 'video/mp4',
     kind: 'video',
     origin: 'ai',
-    meta: { generated: { kind: 'drawn', prompt: drawnKey(code, env, wordsKey), provider, model: o.blender ? 'blender' : 'code' }, jobId: o.jobId },
+    // the clip keeps the code that draws it: a later assembly of this video finds it here (earlierDrawing), whether or
+    // not this run gets as far as saving the script
+    meta: { generated: { kind: 'drawn', prompt: drawnKey(code, env, wordsKey), provider, model: o.blender ? 'blender' : 'code', ask: drawnAsk(o.visual.prompt, o.drawing.style), code }, jobId: o.jobId },
   })
   jc.progress(0.92, 'Preparing it for the editor')
   const ready = await processAsset(row.id, jc)

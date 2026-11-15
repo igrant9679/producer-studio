@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { type AudioItem, createShapeItem, type Project, type ProjectDocResponse, type ScriptScene } from '@producer/core'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
-import { editedSinceAssembly, produceAssemble, sceneSpans, timelineFingerprint } from '../ai/produce'
+import { DRAWN_LIMITS, editedSinceAssembly, produceAssemble, sceneSpans, timelineFingerprint } from '../ai/produce'
 import { type AiProvider, setProvider } from '../ai/provider'
 import { MUSIC_DUCK_DB, sfxManifest } from '../ai/soundtrack'
 import { tts } from '../ai/tts'
@@ -300,6 +300,131 @@ describe('Producer AI assembly', () => {
     expect(lines[0]).toMatch(/^s01, s02, s03: /)
     expect(lines[0]).not.toMatch(/The AI drew|stands in/)
   }, 300_000)
+
+  it('a run stopped part way keeps the drawings it finished: the next assembly uses them and draws only the rest', async ({ skip }) => {
+    if (!ctx().config.chromePath || !fs.existsSync(ctx().config.chromePath!)) skip()
+    const id = await newProject('Stopped part way')
+    const codeFor = (colour: string) => `function draw(ctx, t, env) { ctx.fillStyle = '${colour}'; ctx.fillRect(40 + t * 50, env.H / 2 - 40, 80, 80); }`
+    const film: ScriptScene[] = [
+      { ...scenes[0], visual: { kind: 'drawn', prompt: 'A red square slides right' } },
+      { ...scenes[1], id: 's02', title: 'Middle', narration: 'It keeps going all the way.', visual: { kind: 'drawn', prompt: 'A blue square slides right' } },
+      { ...scenes[1], id: 's03', visual: { kind: 'drawn', prompt: 'A green square slides right' } },
+    ]
+    const noteOf = (prompt: string) => /WHAT TO DRAW \(the director's note\)\n(.+)/.exec(prompt)?.[1] ?? ''
+    const colourOf = (note: string) => (/red/.test(note) ? 'red' : /blue/.test(note) ? 'blue' : 'green')
+    const drawnClips = async () => (await ctx().db.select().from(assets).where(eq(assets.projectId, id))).filter((r) => r.meta?.generated?.kind === 'drawn')
+    const stop = new AbortController()
+    let stopping = true
+    let writes: Array<{ note: string; prompt: string }> = []
+    setProvider({
+      id: 'anthropic-key',
+      status: async () => ({ available: true, detail: 'fake', model: 'fake' }),
+      write: async () => '',
+      runAgent: async () => ({ text: '' }),
+      structured: async (req: { prompt: string; images: unknown[] }) => {
+        const note = noteOf(req.prompt)
+        const code = codeFor(colourOf(note))
+        if (req.images.length) return { problems: 'none', changed: false, code }
+        writes.push({ note, prompt: req.prompt })
+        if (stopping && /blue/.test(note)) {
+          // this one is still being written when the job is stopped: the other two are finished by then
+          for (let i = 0; i < 600 && (await drawnClips()).filter((r) => r.status === 'ready').length < 2; i++) await new Promise((r) => setTimeout(r, 200))
+          stop.abort()
+          throw new Error('stopped')
+        }
+        return { plan: 'A square slides across', code }
+      },
+    } as unknown as AiProvider)
+    const start = async () => {
+      const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes: film, brief: { ...brief, source: 'idea', idea: 'Squares' } })
+      expect(r.status).toBe(200)
+      return (await getJob(r.body.id))!
+    }
+    try {
+      const job = await start()
+      const bar: number[] = []
+      const first = produceAssemble({ ...inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }, stop.signal), progress: (p) => void bar.push(p) })
+      await expect(first).rejects.toBeTruthy()
+      // nothing of the video was saved: the script still only asks for the drawings
+      const before = (await load(id)).project
+      expect(before.ai?.status).not.toBe('assembled')
+      expect(before.tracks.flatMap((t) => t.items)).toHaveLength(0)
+      // but the two finished drawings are kept, each clip with the code that draws it
+      const kept = (await drawnClips()).filter((r) => r.status === 'ready')
+      expect(kept).toHaveLength(2)
+      expect(kept.map((r) => r.meta.generated!.code).sort()).toEqual([codeFor('green'), codeFor('red')])
+      expect(kept.every((r) => /^[0-9a-f]{64}$/.test(r.meta.generated!.ask ?? ''))).toBe(true)
+      // the bar counted all three drawings: two finished of three is not "nearly done", and it never went back
+      expect(Math.max(...bar)).toBeLessThan(0.85)
+      expect(bar.every((p, i) => i === 0 || p >= bar[i - 1])).toBe(true)
+
+      // again: only the scene that wasn't finished is written, shown an earlier scene's code so the film stays one film
+      stopping = false
+      writes = []
+      const again = await start()
+      const out = await produceAssemble(inlineContext({ id: again.id, kind: 'ai.produce.assemble', workspaceId, userId: again.userId, projectId: id, input: again.input }))
+      expect(writes.map((w) => w.note)).toEqual(['A blue square slides right'])
+      expect(writes[0].prompt).toContain('THE SAME FILM, AN EARLIER SCENE')
+      expect(writes[0].prompt).toContain(codeFor('red'))
+      expect(out.notes ?? []).toEqual([])
+      const p = (await load(id)).project
+      const vis = p.ai!.script!.scenes.map((s) => s.visual as { kind: string; code?: string; assetId?: string })
+      expect(vis.map((v) => [v.kind, v.code])).toEqual([['drawn', codeFor('red')], ['drawn', codeFor('blue')], ['drawn', codeFor('green')]])
+      // the same clips, not rendered again
+      expect([vis[0].assetId, vis[2].assetId].sort()).toEqual(kept.map((r) => r.id).sort())
+      expect(p.tracks.find((t) => t.main)!.items.filter((i) => i.type === 'video')).toHaveLength(3)
+      // a clip put in the trash is not picked up: that scene is drawn again
+      await ctx().db.update(assets).set({ trashedAt: Date.now() }).where(eq(assets.id, vis[0].assetId!))
+      writes = []
+      const third = await start()
+      await produceAssemble(inlineContext({ id: third.id, kind: 'ai.produce.assemble', workspaceId, userId: third.userId, projectId: id, input: third.input }))
+      expect(writes.map((w) => w.note)).toEqual(['A red square slides right'])
+    } finally {
+      setProvider(undefined)
+    }
+  }, 420_000)
+
+  it('a drawing that hangs is given up after its limit and stood in for; the rest of the video is made', async () => {
+    const id = await newProject('One scene hangs')
+    const film: ScriptScene[] = [{ ...scenes[0], visual: { kind: 'drawn', prompt: 'A square that never arrives' } }, scenes[1]]
+    let asked = 0
+    setProvider({
+      id: 'anthropic-key',
+      status: async () => ({ available: true, detail: 'fake', model: 'fake' }),
+      write: async () => '',
+      runAgent: async () => ({ text: '' }),
+      // the worst kind of hang: it never answers, and takes no notice of being told to stop
+      structured: () => {
+        asked++
+        return new Promise(() => undefined)
+      },
+    } as unknown as AiProvider)
+    const usual = DRAWN_LIMITS.sceneMs
+    DRAWN_LIMITS.sceneMs = 1500
+    try {
+      const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes: film, brief: { ...brief, source: 'idea', idea: 'Squares' } })
+      expect(r.status).toBe(200)
+      const job = (await getJob(r.body.id))!
+      const said: string[] = []
+      const out = await produceAssemble({ ...inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }), progress: (_p, m) => void (m && said.push(m)) })
+      expect(asked).toBe(1)
+      // the video exists, with text where the drawing would be, and says why
+      expect(out.notes).toEqual(['s01: it took longer than 2 s to draw'])
+      const p = (await load(id)).project
+      expect(p.ai!.status).toBe('assembled')
+      expect(p.tracks.flatMap((t) => t.items).some((i) => i.type === 'text' && i.name === 's01 headline')).toBe(true)
+      // the script still asks for the drawing, so the next assembly tries again
+      expect(p.ai!.script!.scenes[0].visual).toEqual(film[0].visual)
+      // once given up, the scene says nothing more: the job went on to its sound and timeline
+      const gaveUp = said.findIndex((m) => /Adding music|Assembling timeline/.test(m))
+      expect(gaveUp).toBeGreaterThan(-1)
+      expect(said.slice(gaveUp).some((m) => m.startsWith('Drawing s01'))).toBe(false)
+    } finally {
+      DRAWN_LIMITS.sceneMs = usual
+      setProvider(undefined)
+    }
+    expect(DRAWN_LIMITS.sceneMs).toBe(30 * 60_000)
+  }, 120_000)
 
   it('Blender scenes with no Blender here (no RunPod key, no Blender on the server) are drawn in the 3D studio style, and say why', async () => {
     const id = await newProject('Blender')

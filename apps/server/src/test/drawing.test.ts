@@ -8,7 +8,7 @@ import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import * as z from 'zod/v4'
 import { strongestModel } from '@producer/core'
-import { DRAWN_SYSTEM, MAX_FIXES, MAX_LOOKS, THREE_GUIDE, buildDrawingPrompt, drawingPalette, stepReporter, writeDrawing } from '../ai/drawn'
+import { DRAWING_LIMITS, DRAWN_SYSTEM, MAX_FIXES, MAX_LOOKS, THREE_GUIDE, TooSlowError, buildDrawingPrompt, drawingPalette, stepReporter, writeDrawing } from '../ai/drawn'
 import type { AiProvider, StructuredRequest } from '../ai/provider'
 import { toSceneVisual, VisualSchema } from '../ai/scenes'
 import { ctx } from '../context'
@@ -147,6 +147,9 @@ describe('the drawing sandbox', () => {
   }, 120_000)
 })
 
+/** An answer that never comes: the request ends only when it is told to stop, as a real one does. */
+const HANG = Symbol('an answer that never comes')
+
 /** A model that answers each structured() call from a script, and records what it was sent. */
 function scripted(answers: unknown[]): AiProvider & { calls: Array<StructuredRequest<unknown>> } {
   const calls: Array<StructuredRequest<unknown>> = []
@@ -160,10 +163,37 @@ function scripted(answers: unknown[]): AiProvider & { calls: Array<StructuredReq
       calls.push(req as StructuredRequest<unknown>)
       const a = answers.shift()
       if (!a) throw new Error('no more answers')
+      if (a === HANG) {
+        return new Promise<T>((_, reject) => {
+          const stop = () => reject(new Error('the request was aborted'))
+          if (req.signal?.aborted) stop()
+          else req.signal?.addEventListener('abort', stop, { once: true })
+        })
+      }
       return req.schema.parse(a) as T
     },
   }
 }
+
+describe('a drawing too slow to use', () => {
+  it('is told so when its try-out takes too long, or its render could not finish in time, and how to make it lighter', async ({ skip }) => {
+    if (!chrome) skip()
+    // (env: 1.2 s at 10 fps = 12 frames to try, 12 to render)
+    const slow = await testDrawing(GOOD, env, [0.2], undefined, { limitMs: 0 }).catch((e: unknown) => e)
+    expect(slow).toBeInstanceOf(DrawingError)
+    expect((slow as DrawingError).message).toMatch(/^Too slow to draw: 1 of its 12 test frames took \d+ s\. Build everything once \(env\.memo/)
+    expect((slow as DrawingError).at).toBe(0)
+    const heavy = await testDrawing(GOOD, env, [0.2], undefined, { renderLimitMs: 1 }).catch((e: unknown) => e)
+    expect(heavy).toBeInstanceOf(DrawingError)
+    expect((heavy as DrawingError).message).toMatch(/^Too slow to render: a frame takes about [\d.]+ s to draw, so this scene's 12 frames would take about \d+ minutes \(the limit is 0\)\. Build everything once/)
+    // with the usual limits the same drawing passes, and says how far it is frame by frame
+    const seen: number[] = []
+    const shots = await testDrawing(GOOD, env, [0.2], undefined, { onProgress: (f) => seen.push(f) })
+    expect(shots).toHaveLength(1)
+    expect(seen).toHaveLength(12)
+    expect(seen.at(-1)).toBe(1)
+  }, 120_000)
+})
 
 describe('one film, many scenes', () => {
   const o = { description: 'The fox curls round the bird', narration: 'n', headline: 'h', env: { width: 1280, height: 720, fps: 30, duration: 5, words: [], palette: { canvas: '#fff', ink: '#111', accent: '#f60' }, fonts: { headline: 'A', body: 'B' } } }
@@ -226,7 +256,8 @@ describe('writing a drawing', () => {
       now += 1000
       r.alive()
     }
-    expect(said).toEqual(['Writing the animation', 'Writing the animation', 'Writing the animation', 'Writing the animation'])
+    // (said again every 20 s; once a minute has gone by it says how long the step has taken)
+    expect(said).toEqual(['Writing the animation', 'Writing the animation', 'Writing the animation', 'Writing the animation (1 min)'])
     // the next step replaces it, and is what gets repeated from then on
     r.say(0.3, 'Trying the animation')
     now += 25_000
@@ -236,6 +267,72 @@ describe('writing a drawing', () => {
     // nobody listening: nothing to do
     expect(() => stepReporter(undefined).alive()).not.toThrow()
   })
+
+  it('a step under way is said again by the clock though nothing arrives (the model thinking sends no word), and not after it ends', async () => {
+    const said: string[] = []
+    let now = 1_000_000
+    const r = stepReporter((_f, m) => said.push(m), 250, () => now)
+    r.say(0.05, 'Writing the animation')
+    // 1.2 s of work during which nothing calls alive(); the clock says a minute goes by every 280 ms
+    const tick = setInterval(() => (now += 60_000), 280)
+    const out = await r.during(new Promise<string>((res) => setTimeout(() => res('the code'), 1200)))
+    clearInterval(tick)
+    expect(out).toBe('the code')
+    expect(said.length).toBeGreaterThanOrEqual(3)
+    expect(said[0]).toBe('Writing the animation')
+    expect(said.at(-1)).toMatch(/^Writing the animation \(\d+ min\)$/)
+    const n = said.length
+    await new Promise((res) => setTimeout(res, 700))
+    expect(said).toHaveLength(n)
+    // work that fails is passed on as it is, and the saying stops too
+    await expect(r.during(Promise.reject(new Error('no')))).rejects.toThrow('no')
+  })
+
+  it('an answer that takes too long is given up, and the code is asked for once more with less thinking', async ({ skip }) => {
+    if (!chrome) skip()
+    const model = scripted([HANG, { plan: 'p', code: GOOD }, { problems: 'none', changed: false, code: GOOD }])
+    const said: string[] = []
+    const r = await writeDrawing(model, { description: 'd', narration: 'n', headline: 'h', env, limits: { writeMs: 200 }, progress: (_f, m) => said.push(m) })
+    expect(r.code).toBe(GOOD)
+    // the write (given up), the write again with less thinking, one look
+    expect(model.calls.map((c) => c.effort)).toEqual(['medium', 'low', 'medium'])
+    // the answer given up was told to stop; the next one wasn't
+    expect(model.calls[0].signal?.aborted).toBe(true)
+    expect(model.calls[1].signal?.aborted).toBe(false)
+    expect(said).toContain('Writing the animation again, more simply')
+    // the limits a real drawing gets: each well under the 20 minutes a silent job is given
+    expect(DRAWING_LIMITS).toEqual({ writeMs: 12 * 60_000, againMs: 8 * 60_000, lookMs: 6 * 60_000, looksUntilMs: 15 * 60_000 })
+  }, 120_000)
+
+  it('too slow twice: the scene can’t be drawn, and says why; stopping the job is a stop, not slowness', async () => {
+    // (no browser needed: nothing runs before the code arrives)
+    const model = scripted([HANG, HANG])
+    const err = await writeDrawing(model, { description: 'd', narration: 'n', headline: 'h', env, limits: { writeMs: 100, againMs: 150 } }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TooSlowError)
+    expect(err).toMatchObject({ status: 504, message: expect.stringMatching(/^the AI took longer than \d+ minutes to answer$/) })
+    expect(model.calls).toHaveLength(2)
+    expect(new TooSlowError(8 * 60_000).message).toBe('the AI took longer than 8 minutes to answer')
+    // the job is stopped while an answer is awaited: that request is told to stop at once, and it isn't called slow
+    const job = new AbortController()
+    const waiting = scripted([HANG])
+    const stopped = writeDrawing(waiting, { description: 'd', narration: 'n', headline: 'h', env, signal: job.signal }).catch((e: unknown) => e)
+    setTimeout(() => job.abort(), 60)
+    expect(await stopped).not.toBeInstanceOf(TooSlowError)
+    expect(waiting.calls[0].signal?.aborted).toBe(true)
+  })
+
+  it('a look that takes too long is skipped, and no new look starts late: the code that runs is kept', async ({ skip }) => {
+    if (!chrome) skip()
+    const slowLook = scripted([{ plan: 'p', code: GOOD }, HANG])
+    expect((await writeDrawing(slowLook, { description: 'd', narration: 'n', headline: 'h', env, limits: { lookMs: 200 } })).code).toBe(GOOD)
+    expect(slowLook.calls).toHaveLength(2)
+    expect(slowLook.calls[1].signal?.aborted).toBe(true)
+    // a scene that has already taken long enough gets its first look and no more
+    const v1 = GOOD.replace('10 + 20 * k', '11 + 20 * k')
+    const picky = scripted([{ plan: 'p', code: GOOD }, { problems: 'more', changed: true, code: v1 }, { problems: 'more', changed: true, code: GOOD.replace('10 + 20 * k', '12 + 20 * k') }])
+    expect((await writeDrawing(picky, { description: 'd', narration: 'n', headline: 'h', env, limits: { looksUntilMs: 1 } })).code).toBe(v1)
+    expect(picky.calls).toHaveLength(2)
+  }, 180_000)
 
   it('keeps the working code when the reviewed version breaks; gives up when the fix fails too', async ({ skip }) => {
     if (!chrome) skip()

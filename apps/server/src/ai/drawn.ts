@@ -13,7 +13,7 @@ import { HttpError } from '../http'
 import { log } from '../log'
 import type { BlenderRunner } from '../media/blender'
 import { DrawingError, type DrawingEnv, testDrawing } from '../media/drawing'
-import type { AiProvider, ScriptImage } from './provider'
+import type { AiProvider, ScriptImage, StructuredRequest } from './provider'
 
 /** The longest drawing code kept (the model is asked for far less). */
 export const MAX_CODE_CHARS = 60_000
@@ -316,22 +316,66 @@ export const LOOK_AT = [0.18, 0.45, 0.72, 0.97]
  */
 export const DRAWING_EFFORT = 'medium' as const
 
-/** While an answer streams in, how often its step is reported again (the job watchdog stops a job silent for 20 min). */
+/** While a step is under way, how often it is reported again (the job watchdog stops a job silent for 20 min). */
 const ALIVE_EVERY_MS = 20_000
 
-/** Reports a job's steps (`say`), and the current step again when told the work is alive, at most every `everyMs`. */
+/**
+ * How long each step of one drawing may take. A job that reports nothing for 20 minutes is stopped whole, and the
+ * model can think for longer than that without sending a word (its thinking isn't streamed, and the SDK drops the
+ * server's pings): so a step under way is said again by the clock, and what keeps a drawing from running on for ever
+ * is these limits instead. An answer that takes too long is given up, not the scene: the code is asked for once more
+ * with less thinking, a look that takes too long is skipped (the code already runs), and no new look starts late.
+ */
+export const DRAWING_LIMITS = {
+  /** The model writing the code (several minutes at most when it goes well). */
+  writeMs: 12 * 60_000,
+  /** Writing it again with less thinking, and a fix of code that failed. */
+  againMs: 8 * 60_000,
+  /** One look at its frames. */
+  lookMs: 6 * 60_000,
+  /** No new look starts once this much has gone into the scene: what runs is rendered. */
+  looksUntilMs: 15 * 60_000,
+}
+
+/** The model took longer over one answer than a drawing allows: that answer is given up (the job goes on). */
+export class TooSlowError extends HttpError {
+  constructor(limitMs: number) {
+    super(504, 'server', `the AI took longer than ${Math.round(limitMs / 60_000)} minutes to answer`)
+  }
+}
+
+/**
+ * Reports a job's steps (`say`). A step that takes a while is said again, with the minutes it has taken: when told the
+ * work is alive (`alive`, at most every `everyMs`), and by the clock for as long as a piece of work is under way
+ * (`during`), so a step that sends nothing while it works (the model thinking, frames being tried) still reports.
+ */
 export function stepReporter(report: ((f: number, msg: string) => void) | undefined, everyMs = ALIVE_EVERY_MS, now: () => number = Date.now) {
   let at: [number, string] = [0, '']
   let said = 0
+  let since = 0
+  const tell = () => {
+    said = now()
+    const min = Math.floor((now() - since) / 60_000)
+    report?.(at[0], min >= 1 ? `${at[1]} (${min} min)` : at[1])
+  }
   const say = (f: number, msg: string) => {
     at = [f, msg]
-    said = now()
-    report?.(f, msg)
+    since = now()
+    tell()
   }
   const alive = () => {
-    if (now() - said >= everyMs) say(...at)
+    if (now() - said >= everyMs) tell()
   }
-  return { say, alive }
+  const during = async <T>(work: Promise<T>): Promise<T> => {
+    const t = setInterval(alive, Math.max(250, Math.min(everyMs, 5_000)))
+    t.unref?.()
+    try {
+      return await work
+    } finally {
+      clearInterval(t)
+    }
+  }
+  return { say, alive, during }
 }
 
 export const MAX_FIXES = 2
@@ -359,6 +403,8 @@ export async function writeDrawing(
     reference?: string
     /** Called once, with the first code that runs (before the looks polish it): the video's later scenes can start from it. */
     onWorking?: (code: string) => void
+    /** Other time limits than DRAWING_LIMITS (tests). */
+    limits?: Partial<typeof DRAWING_LIMITS>
   },
 ): Promise<{ code: string; plan: string; frames: Buffer[] }> {
   const times = LOOK_AT.map((k) => k * o.env.duration)
@@ -367,12 +413,53 @@ export async function writeDrawing(
   const system = blender ? BLENDER_SYSTEM : DRAWN_SYSTEM
   const schema = blender ? BlenderSchema : DrawingSchema
   const brief = () => (blender ? buildBlenderPrompt(o) : buildDrawingPrompt(o))
-  const tryIt = (c: string) => (blender ? blender.test(c, o.env, times, o.signal) : testDrawing(c, o.env, times, o.signal))
-  // each step says where it is; while the model's answer streams in, the same step is said again now and then, so a
-  // long answer (minutes of thinking and code) isn't taken for a job that has stopped making progress
-  const { say, alive: onActivity } = stepReporter(o.progress)
-  say(0.05, blender ? 'Writing the Blender scene' : 'Writing the animation')
-  const first = await provider.structured({ system, prompt: brief(), images: [], schema, signal: o.signal, onActivity, effort: DRAWING_EFFORT })
+  const limits = { ...DRAWING_LIMITS, ...o.limits }
+  const began = Date.now()
+  // each step says where it is, and says so again by the clock for as long as it is under way: the model thinking for
+  // minutes, or frames being tried, send nothing, and a job that reports nothing is taken for one that has stopped
+  const { say, alive: onActivity, during } = stepReporter(o.progress)
+  const tryIt = (c: string) => during(blender ? blender.test(c, o.env, times, o.signal) : testDrawing(c, o.env, times, o.signal))
+  /** One answer of the model, heard out for at most `limitMs` (TooSlowError after that; the job's own stop still stops it). */
+  const ask = async <T>(req: Omit<StructuredRequest<T>, 'signal' | 'onActivity'>, limitMs: number): Promise<T> => {
+    const ac = new AbortController()
+    const onStop = () => ac.abort(o.signal?.reason)
+    if (o.signal?.aborted) onStop()
+    else o.signal?.addEventListener('abort', onStop, { once: true })
+    let slow = false
+    let timer: NodeJS.Timeout | undefined
+    const tooSlow = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        slow = true
+        ac.abort()
+        reject(new TooSlowError(limitMs))
+      }, limitMs)
+      timer.unref?.()
+    })
+    const call = provider.structured({ ...req, signal: ac.signal, onActivity })
+    // given up when too slow: whatever it does afterwards is nobody's to handle
+    call.catch(() => undefined)
+    try {
+      return await during(Promise.race([call, tooSlow]))
+    } catch (err) {
+      if (slow && !o.signal?.aborted) throw new TooSlowError(limitMs)
+      throw err
+    } finally {
+      clearTimeout(timer)
+      o.signal?.removeEventListener('abort', onStop)
+    }
+  }
+  const writing = blender ? 'Writing the Blender scene' : 'Writing the animation'
+  say(0.05, writing)
+  let first: { plan: string; code: string }
+  try {
+    first = await ask({ system, prompt: brief(), images: [], schema, effort: DRAWING_EFFORT }, limits.writeMs)
+  } catch (err) {
+    if (!(err instanceof TooSlowError)) throw err
+    // minutes of thinking and no code yet: asked once more, thinking less (what a cut-off answer gets too)
+    log.info('the drawing took too long to write; asking again with less thinking', { limitMs: limits.writeMs })
+    say(0.15, `${writing} again, more simply`)
+    first = await ask({ system, prompt: brief(), images: [], schema, effort: 'low' }, limits.againMs)
+  }
   let code = fence(first.code).slice(0, MAX_CODE_CHARS)
   const plan = first.plan
   let frames: Buffer[]
@@ -387,9 +474,10 @@ export async function writeDrawing(
       if (fix >= MAX_FIXES) throw new HttpError(502, 'server', `the AI’s animation didn’t run (${err.message.slice(0, 120)})`)
       log.info('drawing failed; asking for a fix', { error: err.message, at: err.at, fix: fix + 1 })
       say(0.35 + fix * 0.08, 'Fixing the animation')
-      const fixed = await provider.structured({
-        system,
-        prompt: `${brief()}
+      const fixed: { plan: string; code: string } = await ask(
+        {
+          system,
+          prompt: `${brief()}
 
 YOUR CODE FAILED${err.at !== undefined ? ` at t = ${err.at.toFixed(2)} s` : ''}: ${err.message}
 
@@ -397,37 +485,45 @@ THE CODE
 ${code}
 
 Fix it and return the plan and the full code.`,
-        images: [],
-        schema,
-        signal: o.signal,
-        onActivity,
-        effort: DRAWING_EFFORT,
-      })
+          images: [],
+          schema,
+          effort: DRAWING_EFFORT,
+        },
+        limits.againMs,
+      )
       code = fence(fixed.code).slice(0, MAX_CODE_CHARS)
+      say(0.38 + fix * 0.08, 'Trying the animation')
     }
   }
   // looks at its own frames, as a viewer would see them; each fix that runs is kept, and the next look sees it
   for (let look = 0; look < MAX_LOOKS; look++) {
+    // a scene that has already taken this long is rendered as it is: it runs, and another look is minutes more
+    if (look && Date.now() - began > limits.looksUntilMs) {
+      log.info('no more looks at this drawing: it has taken long enough', { looks: look, ms: Date.now() - began })
+      break
+    }
     say(0.55 + look * 0.13, look ? 'Checking the animation again' : 'Checking the animation')
     const images: ScriptImage[] = frames.map((data, i) => ({ label: `Frame at ${times[i].toFixed(1)} s:`, mediaType: 'image/jpeg', data: data.toString('base64') }))
     try {
-      const review = await provider.structured({
-        system,
-        prompt: `${brief()}
+      const review = await ask(
+        {
+          system,
+          prompt: `${brief()}
 
 THE CODE YOU WROTE${look ? ` (after ${look} round${look > 1 ? 's' : ''} of your own fixes)` : ''}
 ${code}
 
 The images that follow are frames of it at ${times.map((t) => `${t.toFixed(1)} s`).join(', ')}. Look at them as a viewer and as a demanding art director: is the scene clear, does it show the director's note, does something meaningful move between them, does it look finished and polished (composition, depth, colour, line and shape quality, nothing crude or placeholder-like), is anything cut off, cluttered, unreadable or inside the top 22% headline band or the bottom 16% caption band? If anything can be clearly better, fix it in the code; otherwise return the code unchanged with changed = false.`,
-        images,
-        schema: ReviewSchema,
-        signal: o.signal,
-        onActivity,
-        effort: DRAWING_EFFORT,
-      })
+          images,
+          schema: ReviewSchema,
+          effort: DRAWING_EFFORT,
+        },
+        limits.lookMs,
+      )
       const next = fence(review.code).slice(0, MAX_CODE_CHARS)
       if (!review.changed || !next || next === code) break
       try {
+        say(0.6 + look * 0.13, 'Trying the improved animation')
         frames = await tryIt(next)
         code = next
       } catch (err) {

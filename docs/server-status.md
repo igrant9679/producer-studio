@@ -233,6 +233,29 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   jointed toy figure with a motion library (walk, run, idle, talk, dance, sit, wave, nod, shake, point, jump, cheer,
   clap, shrug, turn); the 3D styles' prompts carry `CHARACTER_GUIDE`. Each add-on loads only on pages whose code uses
   it (`usesLottie`, `usesPeeps`, `uses3d`).
+  **A drawing that goes quiet no longer costs the video** (15 Nov 2026, found by a real video on production: three 3D
+  scenes, one finished, then 20 minutes with no progress report, the watchdog stopped the job and nothing it had drawn
+  was kept). *Why it went quiet*: the keep-alive of 14 Nov listened for stream events, and a model that is thinking
+  sends none (thinking text isn't streamed on the strongest models, and the SDK drops the server's `ping` events; its
+  request timeout only covers the wait for the first byte). Trying a drawing's frames in the sandbox reported nothing
+  either. *Every step reports and has its own limit* (`ai/drawn.ts`): `stepReporter.during` says the step under way
+  again every 20 s by the clock, with the minutes it has taken ("Drawing s02: Writing the animation (4 min)"), so the
+  watchdog is no longer what bounds a drawing; `DRAWING_LIMITS` is (write 12 min, written again or fixed 8, a look 6,
+  no new look after 15). An answer over its limit is given up, not the scene: the code is asked for once more at low
+  effort (`TooSlowError`), a slow look is skipped because the code already runs. The sandbox (`media/drawing.ts`)
+  bounds a try-out (90 s, 3D 4 min) and tells a drawing whose full render could not finish in time
+  ("Too slow to render: a frame takes about … Build everything once …"), which goes back to the model as a fix
+  while it can still be made lighter; a render reports at least every 5 s and says when it ran out of time.
+  *One scene never costs the run* (`makeSceneVisuals` → `withinLimit`): a drawing that still isn't done after
+  `DRAWN_LIMITS.sceneMs` (30 min: a hang nothing above caught) is given up and stood in for like any scene that
+  can't be drawn, and the rest of the video is made. *Finished drawings are kept*: a drawn clip's asset row holds the
+  code that draws it and what it was asked for (`meta.generated.code` / `.ask`, the note and the style hashed), so a
+  later assembly of the same project uses a drawing an earlier run finished (`earlierDrawing`; the clip itself while
+  the timing is the same, else the code is rendered again): a run that was stopped, failed or restarted pays only for
+  the scenes it hadn't finished, as it already did for voices. A clip in the trash isn't picked up. *An honest bar*:
+  the visuals' share of the job's progress (0.6 to 0.9) is what is done of all the scenes together, not the furthest
+  scene's slot (the last scene finishing first read as 90% with "less than a minute left" for 20 minutes), and caption
+  timing no longer moves the bar into that share and back.
   **Animated videos that actually get made** (14 Nov 2026, found by a real video on production). *Room to answer*: a
   structured answer on an Anthropic key (the script, every AI-drawn scene's code, its fixes and reviews) was asked for
   with `max_tokens: 16000`, which the model's thinking shares: on the strongest models every drawn scene came back
