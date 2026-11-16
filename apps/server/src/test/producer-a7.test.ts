@@ -3,12 +3,11 @@
 // names. Kokoro is replaced by a short tone; everything else is real.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { BrandKitSummary, Project, ProjectDocResponse, ScriptScene, ScriptVersion } from '@producer/core'
-import { produceAssemble } from '../ai/produce'
 import { tts } from '../ai/tts'
 import { getJob } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
-import { type Client, setup, signup } from './helpers'
+import { type Client, produceAssembleHere as produceAssemble, setup, signup } from './helpers'
 
 let client: Client
 let workspaceId = ''

@@ -6,15 +6,15 @@ import { eq } from 'drizzle-orm'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { type AudioItem, createShapeItem, type Project, type ProjectDocResponse, type ScriptScene } from '@producer/core'
 import { ctx } from '../context'
-import { assets } from '../db/schema'
-import { DRAWN_LIMITS, editedSinceAssembly, produceAssemble, sceneSpans, timelineFingerprint } from '../ai/produce'
+import { assets, jobs } from '../db/schema'
+import { DRAWN_LIMITS, editedSinceAssembly, sceneSpans, timelineFingerprint } from '../ai/produce'
 import { type AiProvider, setProvider } from '../ai/provider'
 import { MUSIC_DUCK_DB, sfxManifest } from '../ai/soundtrack'
 import { tts } from '../ai/tts'
-import { getJob } from '../jobs/queue'
+import { enqueue, getJob } from '../jobs/queue'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
-import { type Client, setup, signup } from './helpers'
+import { type Client, produceAssembleHere as produceAssemble, setup, signup } from './helpers'
 
 let client: Client
 let workspaceId = ''
@@ -515,6 +515,40 @@ describe('Producer AI assembly', () => {
     expect(voiceTrack.items.map((i) => (i.type === 'audio' ? i.assetId : ''))[0]).toBe(made[0].id)
   })
 
+  it('one assembly of a video at a time: a second request is told which job is already making it', async () => {
+    const id = await newProject('Once at a time')
+    const first = await assemble(id)
+    expect(first.status).toBe(200)
+    // (tests run no worker: the first is still waiting in the queue)
+    const second = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes, brief })
+    expect(second.status).toBe(409)
+    expect(second.body).toMatchObject({ error: 'This video is already being assembled.', code: 'conflict', details: { reason: 'assembling', jobId: first.body.id } })
+    // asking to replace the timeline changes nothing about that
+    expect((await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes, brief, replace: true })).status).toBe(409)
+    // into a copy is another video
+    const copy = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes, brief, intoCopy: true })
+    expect(copy.status).toBe(200)
+    expect(copy.body.projectId).not.toBe(id)
+    // the job history's Retry of an earlier, failed assembly of this video is refused the same way
+    const userId = (await getJob(first.body.id))!.userId
+    const failed = await enqueue('ai.produce.assemble', { projectId: id, scenes }, { workspaceId, userId, projectId: id })
+    await ctx().db.update(jobs).set({ status: 'error', error: 'The AI key ran out of credit.', createdAt: Date.now() - 60_000 }).where(eq(jobs.id, failed.id))
+    const retry = await client.json('POST', `/api/jobs/${failed.id}/retry`)
+    expect(retry.status).toBe(409)
+    expect(retry.body.details).toMatchObject({ reason: 'assembling', jobId: first.body.id })
+    // once it has ended the video can be assembled again: finished …
+    await first.run()
+    const next = await assemble(id)
+    expect(next.status).toBe(200)
+    expect((await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes, brief })).body.details).toMatchObject({ reason: 'assembling', jobId: next.body.id })
+    // … or stopped: a stopped one no longer stands in the way, and the failed one can be retried now
+    expect((await client.json('POST', `/api/jobs/${next.body.id}/cancel`)).status).toBe(200)
+    const again = await client.json('POST', `/api/jobs/${failed.id}/retry`)
+    expect(again.status).toBe(200)
+    expect(again.body.kind).toBe('ai.produce.assemble')
+    expect((await client.json('POST', `/api/jobs/${again.body.id}/cancel`)).status).toBe(200)
+  })
+
   it('asks before re-assembling over edits made since, then replaces them or assembles into a copy', async () => {
     const id = await newProject()
     const a = await assemble(id)
@@ -523,7 +557,10 @@ describe('Producer AI assembly', () => {
     expect(editedSinceAssembly(p)).toBe(false)
     expect(p.ai?.assembled?.fingerprint).toBe(timelineFingerprint(p))
     // unchanged since: no question
-    expect((await assemble(id)).status).toBe(200)
+    const unasked = await assemble(id)
+    expect(unasked.status).toBe(200)
+    // (stopped again, never run: one assembly of a video at a time)
+    expect((await client.json('POST', `/api/jobs/${unasked.body.id}/cancel`)).status).toBe(200)
 
     await editTimeline(id)
     const asked = await assemble(id)

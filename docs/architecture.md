@@ -171,13 +171,24 @@ from metering) to give each queued job its place in line, an estimated wait (or 
 limits. When a job ends in the worker, `afterJob` in `jobs/worker.ts` runs the follow-ups (metering its run time;
 the place to add notifications).
 
-**Coming back to a job (Producer AI wizard).** The wizard keeps the id of the script or assembly job it is following
-in the tab's storage. A tab that reloads, or opens another video and comes back, asks about that job
-(`resumeRun` in `apps/web/src/shell/producer/wizardStore.ts`) instead of calling it interrupted: still going → it is
-followed again; done → the result is taken (the video is ready, the script opens for review); failed → its reason;
-cancelled → back to the button. Only when the question itself fails (offline, a deploy) does it stay "Resume", and
-Resume asks about the same job: it is never started a second time. Transcribing is not picked up on its own, because
-the script that follows it was never asked for.
+**One assembly of a video at a time, and the wizard follows it.** `POST /api/ai/produce/assemble` (and the job
+history's Retry) refuse a second assembly of a project that has one queued or running (`activeJob` in
+`jobs/queue.ts`): 409 with `details: { reason: 'assembling', jobId }`. A second one would pay for the same voices and
+drawings again and then fight the first over the timeline; `intoCopy` is another video and is not refused, and a
+stopped job is `cancelled` at once, so it never stands in the way. The wizard
+(`apps/web/src/shell/producer/wizardStore.ts`) never offers to start what is already going:
+- *Coming back.* It keeps the id of the script or assembly job it follows in the tab's storage. A tab that reloads,
+  or opens another video and comes back, asks about that job (`resumeRun`) instead of calling it interrupted: still
+  going → followed again; done → the result is taken; failed → its reason; cancelled → back to the button.
+  Transcribing is not picked up on its own, because the script that follows it was never asked for.
+- *A fresh tab or another device.* A wizard loaded from the project knows nothing of a job at work on it, so it asks
+  (`followActiveJob`, `GET /api/jobs?projectId=`) and follows a queued or running assembly or script job.
+- *A failed question is not a failed job.* A poll that fails because the server can't be reached (offline, a deploy:
+  502/503/504) is asked again for `FOLLOW.patienceMs` (3 minutes; `waitForJob`'s `patienceMs`), the page saying so
+  meanwhile; a deploy puts the job back in the queue and it goes on. After that the run becomes "Resume" on the same
+  job id (`LostTouch`), whether it was started in this tab or picked up: never "Assembly failed, try again".
+- *Told it is already being assembled* (the 409 above: another tab, or a press whose answer never arrived), the wizard
+  follows the job the server named.
 
 ## Usage and limits (P-1, A-18)
 `limits.ts` holds the abuse brakes and quotas (cloud only, every one an env value where 0 = off; see `.env.example`).

@@ -542,10 +542,28 @@ async function uploadResumable(workspaceId: string, file: File, onProgress?: (f:
   return rec
 }
 
-/** Poll/await a job until it finishes (uses GET; SSE listeners update UI in parallel). */
-export async function waitForJob<R>(id: string, onUpdate?: (j: Job<R>) => void, intervalMs = 1000): Promise<Job<R>> {
+/**
+ * Poll/await a job until it finishes (uses GET; SSE listeners update UI in parallel). With `patienceMs`, a poll that
+ * fails because the server couldn't be reached (offline, a deploy restarting it: 502/503/504) is tried again for that
+ * long before the failure is passed on, because it is the question that failed, not the job. `onRetry` hears of each
+ * such failure, and may throw to stop waiting.
+ */
+export async function waitForJob<R>(id: string, onUpdate?: (j: Job<R>) => void, intervalMs = 1000, opts: { patienceMs?: number; onRetry?: (err: unknown) => void } = {}): Promise<Job<R>> {
+  let lostAt = 0
   for (;;) {
-    const j = await api.job<R>(id)
+    let j: Job<R>
+    try {
+      j = await api.job<R>(id)
+      lostAt = 0
+    } catch (e) {
+      const unreachable = !(e instanceof HttpError) || e.status === 502 || e.status === 503 || e.status === 504
+      if (!unreachable || !opts.patienceMs) throw e
+      lostAt ||= Date.now()
+      if (Date.now() - lostAt >= opts.patienceMs) throw e
+      opts.onRetry?.(e)
+      await new Promise((r) => setTimeout(r, Math.max(intervalMs, 2000)))
+      continue
+    }
     onUpdate?.(j)
     if (j.status === 'done') return j
     if (j.status === 'error' || j.status === 'cancelled') throw new Error(j.error || `Job ${j.status}`)

@@ -76,6 +76,7 @@ import {
 import {
   addLibraryAssets,
   cancelRun,
+  followActiveJob,
   markDraftSaved,
   removeWizardAsset,
   resumeDraft,
@@ -1499,8 +1500,10 @@ export default function ProducerWizard() {
         replace(sanitizeForResume(saved))
         resumeProcessingAssets()
         void resumeDraft()
-        // a script or video that was being made when the tab went away kept going: follow it, or show how it ended
-        void resumeRun({ workspaceId: saved.workspaceId ?? sessionWorkspaceId, onProject: onProjectCreated })
+        // a script or video that was being made when the tab went away kept going: follow it, or show how it ended;
+        // and one being made by a job this tab never knew of (another tab or device) is followed too
+        const following = { workspaceId: saved.workspaceId ?? sessionWorkspaceId, onProject: onProjectCreated }
+        if (!resumeRun(following)) void followActiveJob(following)
         return
       }
       setLoading(true)
@@ -1514,6 +1517,8 @@ export default function ProducerWizard() {
           const loaded = stateFromProject(res)
           markDraftSaved(loaded)
           replace(loaded)
+          // the project says nothing of a job at work on it right now: ask, so it is shown and not started twice
+          void followActiveJob({ workspaceId: loaded.workspaceId ?? sessionWorkspaceId, onProject: onProjectCreated })
         })
         .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false))

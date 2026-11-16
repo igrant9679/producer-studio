@@ -102,3 +102,23 @@ export async function claimJob(id: string, workerId = 'test-worker') {
   if (!rows[0]) throw new Error(`job ${id} is not queued`)
   return rows[0]
 }
+
+/**
+ * Run an assembly job here the way the worker would, and end its row the way the worker would. Tests run no worker,
+ * and a job left "queued" for ever would stand in the way of that video's next assembly (one at a time).
+ */
+export async function produceAssembleHere(jc: import('../jobs/worker').JobContext) {
+  const { produceAssemble } = await import('../ai/produce')
+  const { ctx } = await import('../context')
+  const { jobs } = await import('../db/schema')
+  const { eq } = await import('drizzle-orm')
+  const end = (status: 'done' | 'error') => ctx().db.update(jobs).set({ status, updatedAt: Date.now() }).where(eq(jobs.id, jc.job.id))
+  try {
+    const out = await produceAssemble(jc)
+    await end('done')
+    return out
+  } catch (err) {
+    await end('error')
+    throw err
+  }
+}

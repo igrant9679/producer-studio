@@ -523,7 +523,8 @@ export interface ProduceScriptRequest {
 }
 
 // POST /api/ai/produce/assemble -> Job<{ version, notes? }>; 409 { details: { reason: 'edited' } } when the timeline was
-// edited since the last assembly and neither `replace` nor `intoCopy` is set
+// edited since the last assembly and neither `replace` nor `intoCopy` is set; 409 { details: { reason: 'assembling',
+// jobId } } when this project is already being assembled (follow that job; `intoCopy` is not refused)
 export interface ProduceAssembleRequest {
   projectId: string
   scenes: ScriptScene[]

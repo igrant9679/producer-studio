@@ -9,7 +9,7 @@ import { devices, jobs, projects, sessions } from '../db/schema'
 import { jobDto } from '../dto'
 import { HttpError, invalid, memberRole, notFound, requireRole, roleAtLeast } from '../http'
 import { describeQueue } from '../jobs/queue-info'
-import { cancelJob, enqueue, getJob } from '../jobs/queue'
+import { activeJob, cancelJob, enqueue, getJob } from '../jobs/queue'
 import { QUEUED_KINDS, assertQueueRoom, limitAi } from '../limits'
 import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 import { sseClosed, sseOpened } from '../metrics'
@@ -88,6 +88,11 @@ jobRoutes.post('/:id/retry', async (c) => {
   if (j.projectId) {
     const p = await ctx().db.select({ id: projects.id }).from(projects).where(eq(projects.id, j.projectId)).limit(1)
     if (!p.length) throw new HttpError(409, 'conflict', 'The project this job belonged to was deleted.')
+  }
+  // one assembly of a video at a time, however it is asked for (routes/ai.ts refuses a second the same way)
+  if (j.kind === 'ai.produce.assemble' && j.projectId) {
+    const going = await activeJob(j.projectId, 'ai.produce.assemble')
+    if (going) throw new HttpError(409, 'conflict', 'This video is already being assembled.', { reason: 'assembling', jobId: going.id })
   }
   if (QUEUED_KINDS.includes(j.kind as JobKind)) await assertQueueRoom(j.workspaceId)
   if (j.kind === 'ai.produce.script') {

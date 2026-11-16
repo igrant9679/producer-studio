@@ -10,7 +10,7 @@ import { api, HttpError } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import ProducerWizard from '../producer/ProducerWizard'
 import { initialState, sanitizeForResume, storageKey, type WizardState } from '../producer/wizardLogic'
-import { resumeRun, runAssemble, useWizard } from '../producer/wizardStore'
+import { FOLLOW, followActiveJob, resumeRun, runAssemble, useWizard } from '../producer/wizardStore'
 
 // the first render of the whole wizard is slow on a cold module graph
 vi.setConfig({ testTimeout: 30_000 })
@@ -55,6 +55,7 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.restoreAllMocks()
+  FOLLOW.patienceMs = 3 * 60_000
 })
 
 describe('coming back to a video that was being assembled', () => {
@@ -128,6 +129,8 @@ describe('coming back to a video that was being assembled', () => {
     ['the network is down', () => new TypeError('Failed to fetch')],
     ['the server is restarting', () => new HttpError(503, { error: 'Service unavailable' })],
   ])('when it can’t be asked about (%s) it stays the same job to resume, never a second one', async (_why, failure) => {
+    // (the three minutes it would keep asking are over)
+    FOLLOW.patienceMs = 0
     const assemble = vi.spyOn(api, 'produceAssemble')
     vi.mocked(api.job).mockRejectedValueOnce(failure())
     back(assembling())
@@ -157,6 +160,138 @@ describe('coming back to a video that was being assembled', () => {
   })
 })
 
+describe('one assembly of a video at a time', () => {
+  /** On the review step, nothing running: about to press Assemble video. */
+  const ready = () => useWizard.getState().replace(wizard({ step: 'review', run: { status: 'idle' } }))
+
+  it('a status check that fails for a moment is asked again: the job goes on, and nothing is started twice', async () => {
+    vi.useFakeTimers()
+    ready()
+    const assemble = vi.spyOn(api, 'produceAssemble').mockResolvedValue(job({ id: 'j1', status: 'queued' }))
+    const polls: Array<() => Promise<Job>> = [
+      async () => job({ id: 'j1', status: 'running', progress: 0.3, message: 'Voicing s02' }),
+      // the network drops, then the server is restarting behind its gateway (a deploy)
+      async () => Promise.reject(new TypeError('Failed to fetch')),
+      async () => Promise.reject(new HttpError(502, { error: 'Bad gateway' })),
+      async () => job({ id: 'j1', status: 'running', progress: 0.7, message: 'Drawing s01: Writing the animation' }),
+      async () => job({ id: 'j1', result: { version: 6 } }),
+    ]
+    vi.mocked(api.job).mockImplementation(() => (polls.shift() ?? (async () => job({ id: 'j1' })))())
+    const run = runAssemble()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(st().run).toMatchObject({ status: 'running', jobId: 'j1', progress: 0.3, message: 'Voicing s02' })
+    await vi.advanceTimersByTimeAsync(1000)
+    // still running, and the page says what is going on instead of "Assembly failed"
+    expect(st().run).toMatchObject({ status: 'running', jobId: 'j1', message: 'Lost the connection to the server: trying again…' })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(st().run).toMatchObject({ status: 'running', jobId: 'j1' })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(st().run).toMatchObject({ status: 'running', progress: 0.7, message: 'Drawing s01: Writing the animation' })
+    await vi.advanceTimersByTimeAsync(1000)
+    await run
+    expect(st()).toMatchObject({ assembledVersion: 6, run: { status: 'done', phase: 'assemble' } })
+    expect(assemble).toHaveBeenCalledTimes(1)
+  })
+
+  it('when the server stays out of reach, a run started here becomes Resume on the same job, not “failed, try again”', async () => {
+    FOLLOW.patienceMs = 0
+    ready()
+    const assemble = vi.spyOn(api, 'produceAssemble').mockResolvedValue(job({ id: 'j1', status: 'queued' }))
+    vi.mocked(api.job).mockRejectedValueOnce(new HttpError(503, { error: 'Service unavailable' }))
+    await runAssemble()
+    expect(st().run).toMatchObject({ status: 'idle', phase: 'assemble', interrupted: true, jobId: 'j1' })
+    expect(st().run.error).toBeUndefined()
+    // pressing the button again asks about the same job; the assembly is not asked for a second time
+    await runAssemble()
+    expect(vi.mocked(api.job).mock.calls.every((c) => c[0] === 'j1')).toBe(true)
+    expect(assemble).toHaveBeenCalledTimes(1)
+    expect(st().run).toMatchObject({ status: 'done', phase: 'assemble' })
+  })
+
+  it('a job that really failed is still a failure, with its reason', async () => {
+    ready()
+    vi.spyOn(api, 'produceAssemble').mockResolvedValue(job({ id: 'j1', status: 'queued' }))
+    vi.mocked(api.job).mockResolvedValue(job({ id: 'j1', status: 'error', error: 'Producer AI made no progress for 20 minutes and was stopped. Try again.' }))
+    await runAssemble()
+    expect(st().run).toMatchObject({ status: 'error', error: 'Producer AI made no progress for 20 minutes and was stopped. Try again.' })
+    expect(st().run.interrupted).toBeFalsy()
+  })
+
+  it('told that the video is already being assembled, the wizard follows that job', async () => {
+    ready()
+    const assemble = vi.spyOn(api, 'produceAssemble').mockRejectedValue(new HttpError(409, { error: 'This video is already being assembled.', code: 'conflict', details: { reason: 'assembling', jobId: 'j_other' } }))
+    vi.mocked(api.job).mockImplementation(async (id: string) => job({ id, result: { version: 8 } }))
+    await runAssemble({ replace: true })
+    expect(assemble).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(api.job).mock.calls.map((c) => c[0])).toEqual(['j_other'])
+    expect(st()).toMatchObject({ step: 'assemble', assembledVersion: 8, run: { status: 'done', phase: 'assemble' } })
+  })
+
+  it('a wizard opened on a video that is being assembled elsewhere follows that job', async () => {
+    ready()
+    const assemble = vi.spyOn(api, 'produceAssemble')
+    const jobs = vi.spyOn(api, 'jobs').mockResolvedValue([
+      job({ id: 'j_export', kind: 'export.render', status: 'running', createdAt: 9 }),
+      job({ id: 'j_old', status: 'done', createdAt: 1 }),
+      job({ id: 'j9', status: 'running', createdAt: 5 }),
+    ])
+    await followActiveJob({ workspaceId: 'ws_a' })
+    expect(jobs).toHaveBeenCalledWith({ projectId: 'p1' })
+    expect(vi.mocked(api.job).mock.calls.map((c) => c[0])).toEqual(['j9'])
+    expect(st()).toMatchObject({ step: 'assemble', run: { status: 'done', phase: 'assemble' } })
+    expect(assemble).not.toHaveBeenCalled()
+  })
+
+  it('…and one whose script is being written follows the writing', async () => {
+    useWizard.getState().replace(wizard({ step: 'brief', scenes: [], run: { status: 'idle' } }))
+    const script = vi.spyOn(api, 'produceScript')
+    vi.spyOn(api, 'jobs').mockResolvedValue([job({ id: 'j_script', kind: 'ai.produce.script', status: 'queued' })])
+    vi.mocked(api.job).mockImplementation(async (id: string) => job({ id, kind: 'ai.produce.script', result: { script: { scenes: [scene('s01'), scene('s02')] } } }))
+    await followActiveJob({ workspaceId: 'ws_a' })
+    expect(script).not.toHaveBeenCalled()
+    expect(st()).toMatchObject({ step: 'review', run: { status: 'done', phase: 'script' } })
+    expect(st().scenes).toHaveLength(2)
+  })
+
+  it('nothing at work, a question that fails, or a run already being followed: nothing changes', async () => {
+    ready()
+    const before = st()
+    const jobs = vi.spyOn(api, 'jobs').mockResolvedValue([job({ id: 'j_old', status: 'done' }), job({ id: 'j_stopped', status: 'cancelled' }), job({ id: 'j_failed', status: 'error' })])
+    await followActiveJob({ workspaceId: 'ws_a' })
+    expect(st()).toBe(before)
+    jobs.mockRejectedValue(new TypeError('Failed to fetch'))
+    await followActiveJob({ workspaceId: 'ws_a' })
+    expect(st()).toBe(before)
+    expect(api.job).not.toHaveBeenCalled()
+    // a run this tab already has (running, or waiting to be resumed) is not asked about at all
+    jobs.mockClear()
+    useWizard.getState().replace(wizard({ run: { status: 'running', phase: 'assemble', jobId: 'j7' } }))
+    await followActiveJob({ workspaceId: 'ws_a' })
+    back(assembling())
+    await followActiveJob({ workspaceId: 'ws_a' })
+    expect(jobs).not.toHaveBeenCalled()
+  })
+
+  it('a fresh tab (nothing in its storage) shows the assembly that is under way, and its end', async () => {
+    const assemble = vi.spyOn(api, 'produceAssemble')
+    const doc = { project: { id: 'p1', name: 'Spring tour', assets: {}, tracks: [], ai: { brief: wizard().brief, script: { scenes: [scene('s01'), scene('s02')] }, status: 'scripted' } }, summary: { id: 'p1', name: 'Spring tour', workspaceId: 'ws_a', kind: 'producer' }, version: 3 }
+    vi.mocked(api.project).mockResolvedValue(doc as never)
+    vi.spyOn(api, 'jobs').mockResolvedValue([job({ id: 'j9', status: 'running', progress: 0.7 })])
+    let finished = false
+    vi.mocked(api.job).mockImplementation(async (id: string) => (finished ? job({ id, result: { version: 4 } }) : job({ id, status: 'running', progress: 0.7, message: 'Drawing s02: Writing the animation (2 min)' })))
+    show('/producer/p1')
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Assembling your video' })).toBeTruthy())
+    expect(await screen.findByText('Drawing s02: Writing the animation (2 min)')).toBeTruthy()
+    expect(vi.mocked(api.job).mock.calls.every((c) => c[0] === 'j9')).toBe(true)
+    // there is a Stop, and no button that would start it again
+    expect(screen.getByRole('button', { name: /Stop/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Assemble video/ })).toBeNull()
+    finished = true
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Your video is ready' })).toBeTruthy(), { timeout: 5000 })
+    expect(assemble).not.toHaveBeenCalled()
+  })
+})
+
 describe('coming back to a script that was being written', () => {
   const writing = (): WizardState => wizard({ step: 'generate', scenes: [], run: { status: 'running', phase: 'script', jobId: 'j_script', message: 'Writing your script…' } })
 
@@ -174,6 +309,7 @@ describe('coming back to a script that was being written', () => {
   })
 
   it('when it can’t be asked about it stays the same job to resume', async () => {
+    FOLLOW.patienceMs = 0
     const script = vi.spyOn(api, 'produceScript')
     vi.mocked(api.job).mockRejectedValueOnce(new TypeError('Failed to fetch'))
     back(writing())

@@ -1,5 +1,5 @@
 // Postgres-backed job queue: enqueue, claim (FOR UPDATE SKIP LOCKED), progress, finish, cancel, stale recovery.
-import { and, eq, inArray, lt, ne, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm'
 import type { Job, JobKind } from '@producer/core'
 import { ctx } from '../context'
 import { jobs } from '../db/schema'
@@ -90,6 +90,17 @@ export async function claimNext(workerId: string, kinds?: readonly JobKind[], op
 
 export async function getJob(id: string): Promise<JobRow | null> {
   return (await ctx().db.select().from(jobs).where(eq(jobs.id, id)).limit(1))[0] ?? null
+}
+
+/** The newest job of this kind still queued or running for a project (one that was stopped is 'cancelled' already). */
+export async function activeJob(projectId: string, kind: JobKind): Promise<JobRow | null> {
+  const rows = await ctx()
+    .db.select()
+    .from(jobs)
+    .where(and(eq(jobs.projectId, projectId), eq(jobs.kind, kind), inArray(jobs.status, ['queued', 'running'])))
+    .orderBy(desc(jobs.createdAt))
+    .limit(1)
+  return rows[0] ?? null
 }
 
 /** Running, and (when given) still held by `lockedBy`: a worker that lost its lock writes nothing more. */

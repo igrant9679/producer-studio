@@ -1050,6 +1050,9 @@ on('POST', '/api/ai/produce/script', (_m, _q, b) => {
 on('POST', '/api/ai/produce/assemble', (_m, _q, b) => {
   const p = projects.find((x) => x.id === b.projectId)
   const scenes = b.scenes as ScriptScene[]
+  // like the server: one assembly of a video at a time (into a copy is another video)
+  const going = b.intoCopy ? undefined : jobs.find((j) => j.kind === 'ai.produce.assemble' && j.projectId === b.projectId && !j.finished)
+  if (going) return json({ error: 'This video is already being assembled.', code: 'conflict', details: { reason: 'assembling', jobId: going.id } }, 409)
   const j = startJob('ai.produce.assemble', p?.workspaceId ?? 'ws_personal', 6500, {
     projectId: String(b.projectId),
     message: 'Assembling video',

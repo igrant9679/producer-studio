@@ -10,7 +10,7 @@ import { jobDto } from '../dto'
 import { eq } from 'drizzle-orm'
 import { memberships, workspaces } from '../db/schema'
 import { HttpError, body, notFound, requireRole } from '../http'
-import { enqueue } from '../jobs/queue'
+import { activeJob, enqueue } from '../jobs/queue'
 import { assertQueueRoom, limitAi } from '../limits'
 import { inlineContext } from '../jobs/worker'
 import { log } from '../log'
@@ -251,6 +251,14 @@ aiRoutes.post('/produce/assemble', async (c) => {
   )
   const row = await loadProjectRow(b.projectId)
   await requireRole(u.id, row.workspaceId, 'editor')
+  // One assembly of a video at a time. A second one (another tab, a page that lost touch with the first and offers
+  // "Try again", a press whose answer never arrived) would pay for the same voices and drawings again and then fight
+  // the first over the timeline: the caller is told which job is already making it, and follows that one. Into a
+  // copy is another video.
+  if (!b.intoCopy) {
+    const going = await activeJob(row.id, 'ai.produce.assemble')
+    if (going) throw new HttpError(409, 'conflict', 'This video is already being assembled.', { reason: 'assembling', jobId: going.id })
+  }
   await assertQueueRoom(row.workspaceId)
   // assembling replaces the whole timeline: ask first when it holds edits made since the last assembly
   if (!b.replace && !b.intoCopy && editedSinceAssembly(row.doc)) {

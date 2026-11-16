@@ -200,8 +200,15 @@ export function removeWizardAsset(localId: string) {
 // ---------------- runs ----------------
 
 /**
- * A job this tab was following before it went away couldn't be asked about (offline, the server restarting). The job
- * may well still be going, or be finished: it stays the wizard's job to pick up, and is never started a second time.
+ * How long a job that can't be asked about is asked again before the wizard stops and offers Resume: a network blip
+ * or a deploy restarting the server (the job is put back in the queue and goes on) is over well within it.
+ */
+export const FOLLOW = { patienceMs: 3 * 60_000 }
+
+/**
+ * A job the wizard is following couldn't be asked about (offline, the server restarting) for longer than it waits.
+ * The job may well still be going, or be finished: it stays the wizard's job to pick up, and is never started a
+ * second time ("Assembly failed, try again" here would pay for the same video twice).
  */
 class LostTouch extends Error {
   constructor(readonly jobId: string) {
@@ -219,19 +226,31 @@ async function runJob<R>(patch: (p: Patch) => void, start: () => Promise<Job<R>>
   let last: Job<R> | undefined
   let j: Job<R>
   try {
-    j = await waitForJob<R>(id, (u) => {
-      if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
-      last = u
-      trackJob(u as Job)
-      onUpdate(u)
-    })
+    j = await waitForJob<R>(
+      id,
+      (u) => {
+        if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+        last = u
+        trackJob(u as Job)
+        onUpdate(u)
+      },
+      1000,
+      {
+        patienceMs: FOLLOW.patienceMs,
+        // the server can't be reached just now: it is asked again, and the page says so meanwhile
+        onRetry: () => {
+          if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+          patch((s) => ({ run: { ...s.run, message: 'Lost the connection to the server: trying again…' } }))
+        },
+      },
+    )
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') throw e
-    // stopped by someone (here before the reload, or from the jobs list): not a failure
+    // stopped by someone (here before a reload, or from the jobs list): not a failure
     if (last?.status === 'cancelled') throw new DOMException('Stopped', 'AbortError')
-    // picking up a job from before a reload, and the question itself failed (the job didn't): it stays resumable,
-    // unless the server no longer knows the job at all
-    if (existingJobId && last?.status !== 'error' && !(e instanceof HttpError && e.status === 404)) throw new LostTouch(id)
+    // the question failed, not the job (it failed with its own reason, or the server no longer knows it): the job
+    // stays resumable, whether it was started just now or picked up after a reload
+    if (last?.status !== 'error' && !(e instanceof HttpError && e.status === 404)) throw new LostTouch(id)
     throw e
   }
   patch((s) => ({ run: { ...s.run, jobId: undefined } }))
@@ -375,11 +394,42 @@ export async function runAssemble(opts: { replace?: boolean; intoCopy?: boolean;
     if (e instanceof DOMException && e.name === 'AbortError') patch((st) => ({ run: { ...st.run, status: 'idle', message: 'Stopped', jobId: undefined, interrupted: false } }))
     else if (e instanceof HttpError && e.status === 409 && (e.body?.details as { reason?: string } | undefined)?.reason === 'edited') {
       patch({ run: { status: 'idle', phase: 'assemble', confirm: 'edited', message: errMsg(e), ...(opts.renarrate?.length ? { renarrate: opts.renarrate } : {}) } })
+    } else if (e instanceof HttpError && e.status === 409 && assemblingJob(e)) {
+      // it is already being assembled (in another tab, or by a press whose answer never arrived): that one is followed
+      patch({ run: { status: 'idle', phase: 'assemble', jobId: assemblingJob(e), interrupted: true } })
+      return runAssemble({ onProject: opts.onProject })
     } else if (e instanceof LostTouch) patch({ run: lostTouch('assemble', e.jobId, 'Couldn’t check on your video just now. Resume to pick it up where it is.') })
     // a job from before a reload that the server no longer knows: nothing to pick up
     else if (resumeJob && e instanceof HttpError && e.status === 404) patch({ run: { status: 'idle', phase: 'assemble' } })
     else patch((st) => ({ run: { ...st.run, status: 'error', error: errMsg(e) } }))
   }
+}
+
+/** The job the server named when it refused a second assembly of the same video. */
+function assemblingJob(e: HttpError): string | undefined {
+  const d = e.body?.details as { reason?: string; jobId?: unknown } | undefined
+  return d?.reason === 'assembling' && typeof d.jobId === 'string' ? d.jobId : undefined
+}
+
+/**
+ * A wizard opened on a video that is being written or assembled right now, by a job this tab knows nothing of (it was
+ * started in another tab or on another device, or this tab's storage is gone): that job is followed, so the page shows
+ * it and "Assemble video" can't start it a second time. Asked once when the video is loaded; a question that fails
+ * changes nothing (the server refuses a second assembly anyway).
+ */
+export async function followActiveJob(opts: { workspaceId?: string; onProject?: (id: string) => void } = {}): Promise<void> {
+  const busy = (r: WizardState['run']) => r.status === 'running' || (!!r.interrupted && !!r.jobId)
+  const s = get()
+  if (!s.projectId || busy(s.run)) return
+  const { patch, live } = scoped()
+  const list = await api.jobs({ projectId: s.projectId }).catch(() => undefined)
+  if (!list || !live() || busy(get().run)) return
+  const going = list
+    .filter((j) => (j.status === 'queued' || j.status === 'running') && (j.kind === 'ai.produce.assemble' || (j.kind === 'ai.produce.script' && !!opts.workspaceId)))
+    .sort((a, b) => b.createdAt - a.createdAt)[0]
+  if (!going) return
+  patch({ run: { status: 'idle', phase: going.kind === 'ai.produce.assemble' ? 'assemble' : 'script', jobId: going.id, interrupted: true } })
+  await resumeRun(opts)
 }
 
 export function cancelRun() {
