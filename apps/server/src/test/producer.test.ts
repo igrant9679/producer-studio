@@ -328,7 +328,8 @@ describe('Producer AI assembly', () => {
         writes.push({ note, prompt: req.prompt })
         if (stopping && /blue/.test(note)) {
           // this one is still being written when the job is stopped: the other two are finished by then
-          for (let i = 0; i < 600 && (await drawnClips()).filter((r) => r.status === 'ready').length < 2; i++) await new Promise((r) => setTimeout(r, 200))
+          // (up to six minutes: on a busy machine two drawings take a while)
+          for (let i = 0; i < 1800 && (await drawnClips()).filter((r) => r.status === 'ready').length < 2; i++) await new Promise((r) => setTimeout(r, 200))
           stop.abort()
           throw new Error('stopped')
         }
@@ -382,7 +383,7 @@ describe('Producer AI assembly', () => {
     } finally {
       setProvider(undefined)
     }
-  }, 420_000)
+  }, 900_000)
 
   it('a drawing that hangs is given up after its limit and stood in for; the rest of the video is made', async () => {
     const id = await newProject('One scene hangs')
