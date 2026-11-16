@@ -157,16 +157,57 @@ export function validateScenes(scenes: ScriptScene[], silent = false): string | 
   return undefined
 }
 
-/** Pictures and music only: what “Just the animation” sets on a brief made from an idea. */
-export function animationOnly(b: Brief): Brief {
-  // of the two animated kinds, the ones the person had ticked stay their choice (one unticked isn't ticked again)
-  const kept = (b.visualKinds ?? []).filter((k) => k === 'animation' || k === 'drawn')
-  return { ...b, narration: false, captions: false, onScreenText: false, cards: false, visualKinds: kept.length ? kept : ['animation', 'drawn'] }
+/** What “Just the animation” asks for when the person has ticked no moving picture of their own. */
+const ANIMATED: NonNullable<Brief['visualKinds']> = ['animation', 'drawn']
+
+/**
+ * The visuals a film without words is made of, from the kinds the person ticked. Their choice stays theirs, and no
+ * kind is ticked for them while they have a moving one (an AI-drawn scene is paid for, and so is an AI clip):
+ *  - animations, AI-drawn scenes and AI clips they ticked stay (an AI clip is never ticked by default, so one that is
+ *    ticked was asked for);
+ *  - with none of those, stock footage stays if it is ticked (it usually is, by default, which is why it doesn't ride
+ *    along with the kinds above: real footage in a film asked for as animation);
+ *  - with nothing that moves ticked (only stills, diagrams or text), the two animated kinds.
+ */
+export function animationKinds(ticked: Brief['visualKinds']): NonNullable<Brief['visualKinds']> {
+  const made = (ticked ?? []).filter((k) => k === 'animation' || k === 'drawn' || k === 'aiVideo')
+  if (made.length) return made
+  return ticked?.includes('stock') ? ['stock'] : [...ANIMATED]
 }
 
-/** Undoes it: every part back, and the visuals to the usual choice. */
+/** Pictures and music only: what “Just the animation” sets on a brief made from an idea (the tone is left alone). */
+export function animationOnly(b: Brief): Brief {
+  return { ...b, narration: false, captions: false, onScreenText: false, cards: false, visualKinds: animationKinds(b.visualKinds) }
+}
+
+/**
+ * Undoes it: every part back. The visuals go back to the usual choice only when they are the two animated kinds the
+ * preset sets by itself; a choice of the person's that the preset kept (AI clips only, say) is still theirs afterwards,
+ * also when the button reads as pressed because they unticked the four parts by hand.
+ */
 export function everything(b: Brief): Brief {
-  return { ...b, narration: true, captions: true, onScreenText: true, cards: true, visualKinds: undefined }
+  const kinds = b.visualKinds
+  const preset = !!kinds && kinds.length === ANIMATED.length && ANIMATED.every((k) => kinds.includes(k))
+  return { ...b, narration: true, captions: true, onScreenText: true, cards: true, visualKinds: preset ? undefined : kinds }
+}
+
+/**
+ * The Assemble step's line under its heading: what assembly will do (`done` false) or did, said of the video as it is
+ * made: no "narrated" when the brief has narration off, no captions promised without them, and "1 scene".
+ */
+export function assembleLine(s: Pick<WizardState, 'brief' | 'scenes'>, done: boolean): string {
+  const n = s.scenes.length
+  const count = `${n} ${n === 1 ? 'scene' : 'scenes'}`
+  const parts = videoParts(s.brief)
+  const idea = isIdea(s)
+  if (!done) {
+    const look = `apply your ${idea ? 'look' : 'template look'}${parts.captions ? ' and captions' : ''}`
+    if (!idea) return `Producer will narrate ${count}, cut the footage and ${look}.`
+    return parts.narration ? `Producer will narrate ${count}, make ${n === 1 ? 'its visual' : 'their visuals'} and ${look}.` : `Producer will make the visuals for ${count} and ${look}, without narration.`
+  }
+  const styled = `styled with the ${s.brief.template ? 'selected' : 'default'} look. Fine-tune anything in the editor.`
+  if (!idea) return `${count} narrated, cut to your footage and ${styled}`
+  return parts.narration ? `${count} narrated, ${n === 1 ? 'its visual' : 'their visuals'} built and ${styled}` : `${count} built without narration and ${styled}`
 }
 
 export function validateBrief(b: Brief): Partial<Record<keyof Brief, string>> {

@@ -8,7 +8,7 @@ import { and, eq } from 'drizzle-orm'
 import OpenAI from 'openai'
 import { ApiError } from '@google/genai'
 import { ctx } from '../context'
-import { aiKeys } from '../db/schema'
+import { aiKeys, usageDaily } from '../db/schema'
 import { setKeyClients } from '../ai/keys'
 import { downloadStock, findIllustration, generateImage, generateVideo, generationCapabilities, illustrationPng, searchStock, type StockClip } from '../ai/generate'
 import { commonsLicence } from '../ai/generate/stock'
@@ -402,6 +402,13 @@ describe('generateVideo', () => {
     expect(progress.at(-1)).toEqual([1, 'Clip ready'])
     expect(gemini.cancel).not.toHaveBeenCalled()
     expect(gemini.delete).toHaveBeenCalledWith('int-1', {}, expect.anything())
+    // the clip is counted for the Usage page: one clip and the seconds Google returned (not the 15 asked for), under
+    // the model that made it, and nothing as tokens
+    const counted = await ctx().db.select().from(usageDaily).where(eq(usageDaily.workspaceId, ws))
+    expect(counted.map((u) => [u.metric, u.subject, u.amount]).sort()).toEqual([
+      ['clip.count', 'gemini|gemini-omni-1.2-flash', 1],
+      ['clip.seconds', 'gemini|gemini-omni-1.2-flash', 9.96],
+    ])
   })
 
   it('clamps short clips up to the model minimum; without ffprobe the clamped length is returned', async () => {

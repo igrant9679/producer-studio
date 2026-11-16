@@ -378,6 +378,31 @@ export function stepReporter(report: ((f: number, msg: string) => void) | undefi
   return { say, alive, during }
 }
 
+/** A step as it reads inside a line naming several scenes: "Checking the animation again (3 min)" → "checking again, 3 min". */
+function shortStep(step: string): string {
+  const m = /^(.*?)(?: \((\d+) min\))?$/.exec(step.trim())
+  const text = m?.[1] ?? step
+  const word = text.split(/\s+/)[0] ?? ''
+  const short = `${word.charAt(0).toLowerCase()}${word.slice(1)}${/\bagain\b/.test(text) ? ' again' : ''}`
+  return m?.[2] ? `${short}, ${m[2]} min` : short
+}
+
+/**
+ * The one status line of the scenes in work now. A job has one line, and two drawings each saying their own step
+ * every 20 seconds made it flip between them; so with several under way the line names them all, and changes only when
+ * a step or a minute does: "Drawing s01 (checking, 3 min) and s02 (writing, 1 min)". One scene alone reads as it always
+ * did ("Drawing s01: Checking the animation (3 min)"). Undefined when nothing is in work.
+ */
+export function inWorkLine(work: Array<{ label: string; step?: string }>): string | undefined {
+  if (!work.length) return undefined
+  if (work.length === 1) return work[0].step ? `${work[0].label}: ${work[0].step}` : work[0].label
+  // "Drawing s01 … and s02 …": the verb once, when it is the same for all of them
+  const verb = (l: string) => l.split(' ')[0]
+  const same = work.every((w) => verb(w.label) === verb(work[0].label))
+  const names = work.map((w, i) => `${same && i ? w.label.slice(verb(w.label).length).trim() : w.label}${w.step ? ` (${shortStep(w.step)})` : ''}`)
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+}
+
 export const MAX_FIXES = 2
 export const MAX_LOOKS = 3
 

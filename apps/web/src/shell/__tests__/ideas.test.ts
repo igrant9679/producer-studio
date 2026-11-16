@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { defaultVisual, diagramFromText, diagramToText, objectsFromText, objectsToText, withPrompt } from '../producer/sceneVisuals'
 import { estimateAssemble } from '../producer/estimates'
 import { failedReason } from '../../editor/LeftPanel'
-import { animationOnly, canAdvance, defaultBrief, everything, initialState, newScene, stateFromProject, unsavedDraft, validateScenes } from '../producer/wizardLogic'
+import { animationOnly, assembleLine, canAdvance, defaultBrief, everything, initialState, newScene, stateFromProject, unsavedDraft, validateScenes } from '../producer/wizardLogic'
 
 describe('a draft only this tab holds', () => {
   it('is unsaved once it has an idea, a title, recordings or scenes, and never once a project holds it', () => {
@@ -153,6 +153,47 @@ describe('a video without some of its parts', () => {
     const back = everything(only)
     expect(videoParts(back)).toEqual({ narration: true, captions: true, onScreenText: true, cards: true })
     expect(back.visualKinds).toBeUndefined()
+  })
+
+  it('“Just the animation” keeps a choice of AI clips or stock footage instead of swapping in paid AI-drawn scenes', () => {
+    const b = { ...defaultBrief({ prompt: 'A heartwarming story of a fox who finds a friend in the forest' }), source: 'idea' as const }
+    // seen on the live site on 15 Nov: only “AI video clip” ticked became ['animation', 'drawn']
+    const clips = animationOnly({ ...b, visualKinds: ['aiVideo'] })
+    expect(clips.visualKinds).toEqual(['aiVideo'])
+    expect(videoParts(clips)).toEqual({ narration: false, captions: false, onScreenText: false, cards: false })
+    // an AI clip is only ever ticked on purpose: it stays beside the animated kinds, stills and text go
+    expect(animationOnly({ ...b, visualKinds: ['motion', 'image', 'aiVideo', 'drawn'] }).visualKinds).toEqual(['aiVideo', 'drawn'])
+    // stock footage alone is a moving picture too; ticked by default beside an animated kind, it doesn't ride along
+    expect(animationOnly({ ...b, visualKinds: ['stock', 'photo'] }).visualKinds).toEqual(['stock'])
+    expect(animationOnly({ ...b, visualKinds: ['motion', 'diagram', 'animation', 'image', 'photo', 'stock'] }).visualKinds).toEqual(['animation'])
+    expect(animationOnly({ ...b, visualKinds: [] }).visualKinds).toEqual(['animation', 'drawn'])
+    // the preset never sets the tone (the tone follows the idea when the first step is left: toneForIdea)
+    expect(b.tone).toBe('Calm')
+    expect(animationOnly({ ...b, tone: 'Confident' }).tone).toBe('Confident')
+    expect(clips.tone).toBe('Calm')
+    // undoing it gives the words back and leaves a choice the preset kept; only its own two kinds go back to the usual
+    expect(everything(clips).visualKinds).toEqual(['aiVideo'])
+    expect(videoParts(everything(clips))).toEqual({ narration: true, captions: true, onScreenText: true, cards: true })
+    expect(everything({ ...b, narration: false, onScreenText: false, cards: false, visualKinds: ['stock'] }).visualKinds).toEqual(['stock'])
+    expect(everything({ ...b, visualKinds: ['drawn', 'animation'] }).visualKinds).toBeUndefined()
+    expect(everything({ ...b, visualKinds: undefined }).visualKinds).toBeUndefined()
+  })
+
+  it('the Assemble step says what was made: no “narrated” without narration, and “1 scene”', () => {
+    const idea = { ...defaultBrief(), source: 'idea' as const }
+    const five = Array.from({ length: 5 }, () => newScene(undefined, undefined, true))
+    // seen on the live site on 15 Nov: “5 scenes narrated” and “1 scenes narrated” with narration off
+    expect(assembleLine({ brief: animationOnly(idea), scenes: five }, true)).toBe('5 scenes built without narration and styled with the default look. Fine-tune anything in the editor.')
+    expect(assembleLine({ brief: animationOnly(idea), scenes: five.slice(0, 1) }, true)).toBe('1 scene built without narration and styled with the default look. Fine-tune anything in the editor.')
+    expect(assembleLine({ brief: idea, scenes: five }, true)).toBe('5 scenes narrated, their visuals built and styled with the default look. Fine-tune anything in the editor.')
+    expect(assembleLine({ brief: { ...idea, template: 't1' }, scenes: five.slice(0, 1) }, true)).toBe('1 scene narrated, its visual built and styled with the selected look. Fine-tune anything in the editor.')
+    // from recordings there is always a narrator
+    expect(assembleLine({ brief: { ...defaultBrief(), narration: false }, scenes: five.slice(0, 1) }, true)).toBe('1 scene narrated, cut to your footage and styled with the default look. Fine-tune anything in the editor.')
+    // and before it runs, it promises only what the brief asks for
+    expect(assembleLine({ brief: animationOnly(idea), scenes: five }, false)).toBe('Producer will make the visuals for 5 scenes and apply your look, without narration.')
+    expect(assembleLine({ brief: idea, scenes: five.slice(0, 1) }, false)).toBe('Producer will narrate 1 scene, make its visual and apply your look and captions.')
+    expect(assembleLine({ brief: { ...idea, captions: false }, scenes: five }, false)).toBe('Producer will narrate 5 scenes, make their visuals and apply your look.')
+    expect(assembleLine({ brief: defaultBrief(), scenes: five }, false)).toBe('Producer will narrate 5 scenes, cut the footage and apply your template look and captions.')
   })
 
   it('a silent scene is asked for what happens, not for narration', () => {

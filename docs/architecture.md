@@ -203,7 +203,13 @@ when an upload starts) read those totals. On cloud a space uses the server's own
 turns it on (`workspace_usage_settings`, `PUT /api/usage/builtin-ai`; spaces from before v15 keep it on); its own keys
 work either way. `GET /api/usage` is the Usage page: AI requests, tokens and an estimated cost per provider and model
 (list prices in `packages/core/src/usage.ts`, labelled as an estimate), job minutes by kind, storage per space, the
-limits with what is used of each, and for owners who used what.
+limits with what is used of each, and for owners who used what. AI video clips are counted too (16 Nov 2026):
+`generateVideo` records each clip a provider returns with `recordClip` (metrics `clip.count` and `clip.seconds`, subject
+`provider|model`, the seconds measured from the file), and the page lists clips and seconds per provider and model
+(`ai.clips`, `clipCount`, `clipSeconds`; `clipSeconds` per person for owners). They are counted, never priced: no clip
+price is in this code, so `estCostUsd` leaves them out and the page says to check the provider's bill. Clips made
+before `CLIP_USAGE_SINCE` were not recorded, which the page says when the period reaches back that far; a clip the
+provider made but that failed on the way back (a timeout, a lost download) is not counted either.
 
 ## Speed (`packages/core/src/speed.ts`)
 One mapping from a clip's time to its source time, read by everything: `evaluate` and the preview player, the export

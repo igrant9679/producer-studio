@@ -121,7 +121,7 @@ describe('AI metering and quotas (P-1, A-18)', () => {
     expect((await write(A.client, wsId)).status).toBe(200)
     const u = await A.client.json('GET', `/api/usage?workspaceId=${wsId}`)
     expect(u.status).toBe(200)
-    expect(u.body.ai).toMatchObject({ requests: 2, inputTokens: 200, outputTokens: 100, estimate: true })
+    expect(u.body.ai).toMatchObject({ requests: 2, inputTokens: 200, outputTokens: 100, estimate: true, clips: [], clipCount: 0, clipSeconds: 0 })
     expect(u.body.ai.providers).toEqual([{ provider: 'anthropic-key', model: 'claude-opus-5-5', requests: 2, inputTokens: 200, outputTokens: 100, estCostUsd: estimateCost('anthropic-key', 'claude-opus-5-5', 200, 100) }])
     expect(u.body.ai.estCostUsd).toBeCloseTo((200 * 4 + 100 * 20) / 1e6)
     // the owner sees who used it

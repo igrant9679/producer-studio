@@ -73,7 +73,10 @@ describe('time estimates', () => {
     expect(two).toBeLessThan(one * 1.7)
     expect(estimateAssemble([drawnScene('s01'), drawnScene('s02'), drawnScene('s03')])).toBeLessThan(two + 30)
     expect(estimateAssemble([drawnScene('s01'), drawnScene('s02'), drawnScene('s03'), drawnScene('s04'), drawnScene('s05')])).toBeGreaterThan(one * 2.3)
-    expect(estimateAssemble([drawnScene('s01')], { drawingStyle: 'studio3d' })).toBeGreaterThan(one * 1.5)
+    // 3D is slower than 2D, Blender (never measured) slower still, motion graphics quicker
+    const one3d = estimateAssemble([drawnScene('s01')], { drawingStyle: 'studio3d' })
+    expect(one3d).toBeGreaterThan(one * 1.2)
+    expect(estimateAssemble([drawnScene('s01')], { drawingStyle: 'blender' })).toBeGreaterThan(one3d * 1.3)
     expect(estimateAssemble([drawnScene('s01')], { drawingStyle: 'lottie' })).toBeLessThan(one)
     expect(estimateAssemble([drawnScene('s01', true)])).toBeLessThan(60)
     // time left follows where the time goes: at 60% (voices done, drawings starting) nearly all of a drawn video is still ahead
@@ -88,9 +91,23 @@ describe('time estimates', () => {
     // and what they roughly cost on the animation model, said before assembling: only drawings still to make count
     const cost = estimateDrawnCost([drawnScene('s01'), drawnScene('s02'), drawnScene('s03', true)], { drawingStyle: 'studio3d', provider: 'anthropic-key', model: 'claude-fable-5-2' })
     expect(cost.scenes).toBe(2)
-    expect(cost.each).toBeCloseTo((80_000 * 8 + 90_000 * 40) / 1_000_000, 2)
+    expect(cost.each).toBeCloseTo((80_000 * 8 + 55_000 * 40) / 1_000_000, 2)
     expect(cost.total).toBeCloseTo(cost.each * 2, 5)
-    expect(estimateDrawnCost([drawnScene('s01')], { provider: 'anthropic-key', model: 'claude-opus-5-5' }).each).toBeLessThan(cost.each / 3)
+    // The one real run at medium effort (live site, 15 Nov 2026): three studio3d scenes on claude-fable-5-2, silent,
+    // with music, took 14.9 minutes and $6.69. The wizard said 26 minutes and $13 then; it now says a little more than
+    // was measured, not twice as much.
+    const fox = [drawnScene('s01'), drawnScene('s02'), drawnScene('s03')].map((sc) => ({ ...sc, narration: 'The fox finds a friend under the old oak tree in the forest.' }))
+    const said = estimateAssemble(fox, { drawingStyle: 'studio3d', narration: false, music: true })
+    expect(said).toBeGreaterThan(14.9 * 60)
+    expect(said).toBeLessThan(14.9 * 60 * 1.4)
+    const foxCost = estimateDrawnCost(fox, { drawingStyle: 'studio3d', provider: 'anthropic-key', model: 'claude-fable-5-2' }).total
+    expect(foxCost).toBeGreaterThan(6.69)
+    expect(foxCost).toBeLessThan(6.69 * 1.4)
+    // styles with no measurement at medium effort keep their earlier figures
+    expect(estimateDrawnCost([drawnScene('s01')], { drawingStyle: 'blender', provider: 'anthropic-key', model: 'claude-fable-5-2' }).each).toBeCloseTo((80_000 * 8 + 90_000 * 40) / 1_000_000, 2)
+    expect(estimateDrawnCost([drawnScene('s01')], { provider: 'anthropic-key', model: 'claude-fable-5-2' }).each).toBeCloseTo((44_000 * 8 + 49_500 * 40) / 1_000_000, 2)
+    // a lighter model draws the same scene for less (Opus 5.5 lists at half of Fable 5.2)
+    expect(estimateDrawnCost([drawnScene('s01')], { drawingStyle: 'studio3d', provider: 'anthropic-key', model: 'claude-opus-5-5' }).each).toBeLessThan(cost.each * 0.6)
     // the Claude app's own plan has no price per token
     expect(estimateDrawnCost([drawnScene('s01')], { provider: 'claude-cli', model: 'claude-opus-5-5' }).total).toBe(0)
     const fresh = estimateAssemble([scene('s01'), scene('s02', { visual: { kind: 'aiVideo', prompt: 'x' } as never })])

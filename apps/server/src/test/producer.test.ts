@@ -344,8 +344,17 @@ describe('Producer AI assembly', () => {
     try {
       const job = await start()
       const bar: number[] = []
-      const first = produceAssemble({ ...inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }, stop.signal), progress: (p) => void bar.push(p) })
+      const said: string[] = []
+      const first = produceAssemble({
+        ...inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }, stop.signal),
+        progress: (p, m) => {
+          bar.push(p)
+          if (m) said.push(m)
+        },
+      })
       await expect(first).rejects.toBeTruthy()
+      // while several scenes were being drawn the status was one line naming them all, not each scene's own in turn
+      expect(said.some((m) => /^Drawing s\d\d( \([^)]+\))?(, s\d\d( \([^)]+\))?)* and s\d\d( \([^)]+\))?$/.test(m))).toBe(true)
       // nothing of the video was saved: the script still only asks for the drawings
       const before = (await load(id)).project
       expect(before.ai?.status).not.toBe('assembled')

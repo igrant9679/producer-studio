@@ -350,6 +350,19 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   diagram leave the writer's choices, and the animator draws no text; a scene with nothing else to show keeps its
   headline, and a credit line a licence requires stays. No cards: the first scene starts at 0, and no whoosh goes into a
   close that isn't there. The wizard's "Just the animation" sets all four and asks for animation and drawn visuals.
+  Since 16 Nov 2026 it keeps the moving kinds the person ticked (`animationKinds` in the wizard's `wizardLogic.ts`):
+  animations, AI-drawn scenes and AI clips stay; with none of those, stock footage stays; only with nothing that moves
+  ticked does it set animation and drawn. Undoing it puts the visuals back to the usual choice only when they are those
+  two; it never sets the tone (that follows the idea when the first step is left, `toneForIdea`).
+  **Found on the live site on 15 Nov 2026** (fixed 16 Nov): the preset above; the Assemble step's line now comes from
+  `assembleLine` (no "narrated" without narration, "1 scene"); several drawings under way are one status line naming
+  them all in scene order (`inWorkLine` in `ai/drawn.ts`: "Drawing s01 (checking, 3 min) and s02 (writing, 1 min)"; one
+  scene alone reads as before), where each scene's own line used to replace the other's every 10 to 20 s; the wizard's
+  estimate for three.js 3D drawn scenes is 12 minutes and 80,000 tokens in / 55,000 out a scene, about a quarter above
+  the one run measured at medium effort (three studio3d scenes on claude-fable-5-2: 14.9 minutes, 221,054 in / 123,016
+  out, $6.69), where it had said 26 minutes and $13 (`estimates.ts` says where each number comes from; 2D, Lottie and
+  Blender are unchanged, having no measurement at medium effort); and AI clip seconds are on the Usage page
+  (architecture.md → "Usage and limits").
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI

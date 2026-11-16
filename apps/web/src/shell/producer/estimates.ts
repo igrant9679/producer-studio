@@ -23,25 +23,45 @@ const VISUAL_SECONDS: Record<string, number> = { image: 20, stock: 10, photo: 5,
 
 /**
  * Seconds the AI takes to draw one scene (write the code, try it, look at its frames up to three times, render it),
- * as measured on real runs: about 5 minutes for motion graphics, 9 for a 2D drawing, 17 for a 3D scene. Two are drawn
- * at a time.
+ * from real runs: about 5 minutes for motion graphics and 9 for a 2D drawing (one on 14 Nov 2026 took 11). Two are
+ * drawn at a time.
+ *
+ * 3D (three.js): 12 minutes. A 3D scene took about 17 minutes while the model thought at its own default; since
+ * drawings think at medium effort (14 Nov 2026) there is one measurement, on the live site on 15 Nov: three studio3d
+ * scenes on claude-fable-5-2, the whole assembly in 14.9 minutes, which is about 9.5 minutes a scene as assembleParts
+ * counts them (the first leads, the other two side by side). One run isn't a rule, so this sits about a quarter above
+ * it rather than on it; bring it down when more runs agree. Blender has no measurement (its time is the render's) and
+ * keeps the old 17.
  */
 export function drawnSeconds(style: string | undefined): number {
-  if (is3dDrawingStyle(style) || isBlenderStyle(style)) return 1000
+  if (isBlenderStyle(style)) return 1000
+  if (is3dDrawingStyle(style)) return 720
   return isLottieStyle(style) ? 280 : 560
 }
 
 /** Drawings the next assembly has to make: scenes drawn before (code and clip) are reused. */
 export const freshDrawings = (scenes: ScriptScene[]): number => scenes.filter((sc) => sc.visual?.kind === 'drawn' && !(sc.visual.code && sc.visual.assetId)).length
 
+/** A 3D scene's tokens while the model thought at its own default (before 14 Nov 2026): what the other styles are scaled from. */
+const DEFAULT_EFFORT_3D = { input: 80_000, output: 90_000 }
+
 /**
  * Tokens one drawing takes (writing the code, then up to three looks at its own frames, each answer with the model's
- * thinking). Measured on a 3D scene on a strongest-tier model: about 80,000 in and 90,000 out; 2D and motion-graphics
- * code is shorter.
+ * thinking).
+ *
+ * 3D (three.js): 80,000 in and 55,000 out. Measured at medium effort on the live site on 15 Nov 2026: three studio3d
+ * scenes on claude-fable-5-2 took 10 requests, 221,054 tokens in and 123,016 out ($6.69 at list price), so about
+ * 74,000 in and 41,000 out a scene. That is one run, and a scene that needs a fix or a third look takes more: the
+ * output stays about a third above the measurement (three such scenes then read as roughly $8.50, not the $13 the
+ * default-effort figures gave).
+ *
+ * 2D and motion-graphics code is shorter; neither they nor Blender have a measurement at medium effort, so they keep
+ * the figures scaled from the default-effort 3D scene.
  */
 export function drawnTokens(style: string | undefined): { input: number; output: number } {
-  const k = is3dDrawingStyle(style) || isBlenderStyle(style) ? 1 : isLottieStyle(style) ? 0.35 : 0.55
-  return { input: Math.round(80_000 * k), output: Math.round(90_000 * k) }
+  if (is3dDrawingStyle(style)) return { input: 80_000, output: 55_000 }
+  const k = isBlenderStyle(style) ? 1 : isLottieStyle(style) ? 0.35 : 0.55
+  return { input: Math.round(DEFAULT_EFFORT_3D.input * k), output: Math.round(DEFAULT_EFFORT_3D.output * k) }
 }
 
 /** Roughly what the scenes still to draw cost on this model (0: nothing to draw, or a provider with no price, like the Claude app's own plan). */
@@ -68,8 +88,8 @@ export function estimateAssemble(scenes: ScriptScene[], opts: AssembleOptions = 
 
 /**
  * What is left of an assembly at the job's progress. The job reports voices as 0 to 0.6, visuals as 0.6 to 0.9 and the
- * music and timeline after that, but the time is nowhere near shared that way: three drawings are half an hour inside
- * the 0.6 to 0.9 band. So each band's share of the progress is turned into that part's own seconds.
+ * music and timeline after that, but the time is nowhere near shared that way: three drawings are a quarter of an hour
+ * or more inside the 0.6 to 0.9 band. So each band's share of the progress is turned into that part's own seconds.
  */
 export function assembleRemaining(scenes: ScriptScene[], opts: AssembleOptions, progress: number | undefined): number {
   const p = assembleParts(scenes, opts)

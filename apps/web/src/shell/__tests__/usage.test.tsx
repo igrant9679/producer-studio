@@ -48,7 +48,7 @@ function summary(over: Partial<UsageSummary> = {}): UsageSummary {
     from: Date.now() - 29 * 86400_000,
     to: Date.now(),
     days: 30,
-    ai: { providers: [{ provider: 'anthropic-key', model: 'claude-opus-5-5', requests: 3, inputTokens: 1200, outputTokens: 300, estCostUsd: 0.0108 }], requests: 3, inputTokens: 1200, outputTokens: 300, estCostUsd: 0.0108, estimate: true },
+    ai: { providers: [{ provider: 'anthropic-key', model: 'claude-opus-5-5', requests: 3, inputTokens: 1200, outputTokens: 300, estCostUsd: 0.0108 }], requests: 3, inputTokens: 1200, outputTokens: 300, estCostUsd: 0.0108, estimate: true, clips: [], clipCount: 0, clipSeconds: 0 },
     jobs: { minutes: 12.5, byKind: [{ kind: 'export.render', minutes: 12.5, runs: 2 }] },
     storage: { bytes: 5 * 1024 * 1024, files: 2, byKind: [{ kind: 'video', bytes: 5 * 1024 * 1024, files: 2 }] },
     spaces: [
@@ -74,7 +74,7 @@ const openUsage = () =>
 describe('the Usage page (A-18)', () => {
   it('shows each limit with what is used of it, AI per provider with an estimated cost, processing and storage', async () => {
     signIn('owner')
-    handler = (c) => ({ body: summary({ days: c.path.includes('days=7') ? 7 : 30, members: [{ userId: 'u1', name: 'Ada', aiRequests: 3, tokens: 1500, jobMinutes: 12.5 }] }) })
+    handler = (c) => ({ body: summary({ days: c.path.includes('days=7') ? 7 : 30, members: [{ userId: 'u1', name: 'Ada', aiRequests: 3, tokens: 1500, jobMinutes: 12.5, clipSeconds: 0 }] }) })
     openUsage()
     const meter = await screen.findByRole('meter', { name: 'Storage' })
     expect(meter.getAttribute('aria-valuetext')).toBe('5.0 MB of 10 MB')
@@ -92,6 +92,38 @@ describe('the Usage page (A-18)', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Last 7 days' })))
     await waitFor(() => expect(calls.at(-1)!.path).toBe('/api/usage?workspaceId=w1&days=7'))
     expect(screen.getByRole('button', { name: 'Last 7 days' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('shows the AI video clips made on the space’s keys in seconds per provider and model, with no price put on them', async () => {
+    signIn('owner')
+    const base = summary()
+    const clips = [
+      { provider: 'gemini', model: 'gemini-omni-1.2-flash', clips: 5, seconds: 51.4 },
+      { provider: 'fal', model: 'fal-ai/wan/v2.2-a14b/text-to-video', modelName: 'Wan 2.2', clips: 1, seconds: 8 },
+    ]
+    // a period that reaches back before clips were counted says so
+    handler = () => ({ body: summary({ from: Date.UTC(2026, 10, 1), ai: { ...base.ai, clips, clipCount: 6, clipSeconds: 59.4 }, members: [{ userId: 'u1', name: 'Ada', aiRequests: 3, tokens: 1500, jobMinutes: 12.5, clipSeconds: 59.4 }] }) })
+    openUsage()
+    const table = await screen.findByRole('table', { name: 'AI video clips per provider and model' })
+    const rows = Array.from(table.querySelectorAll('tr')).map((tr) => Array.from(tr.querySelectorAll('th,td')).map((c) => c.textContent))
+    expect(rows).toEqual([
+      ['Provider', 'Model', 'Clips', 'Seconds of video'],
+      ['Gemini (your key)', 'gemini-omni-1.2-flash', '5', '51.4 s'],
+      ['fal.ai (your key)', 'Wan 2.2', '1', '8 s'],
+      ['Total', '6', '59.4 s'],
+    ])
+    // counted, not priced: the only dollars on the page are the token estimate's
+    expect(table.textContent).not.toMatch(/\$/)
+    expect(screen.getByText(/puts no price on them/).textContent).toMatch(/Clips made before Nov 16, 2026 were not counted\./)
+    // and the owner sees whose they were
+    expect(within(screen.getByRole('table', { name: 'Usage per person' })).getByText('59.4 s')).toBeTruthy()
+    cleanup()
+    // no clips in the period: no table, and no column for them
+    handler = () => ({ body: summary({ members: [{ userId: 'u1', name: 'Ada', aiRequests: 3, tokens: 1500, jobMinutes: 12.5, clipSeconds: 0 }] }) })
+    openUsage()
+    await screen.findByRole('table', { name: 'Usage per person' })
+    expect(screen.queryByRole('table', { name: 'AI video clips per provider and model' })).toBeNull()
+    expect(within(screen.getByRole('table', { name: 'Usage per person' })).queryByText('AI video')).toBeNull()
   })
 
   it('an owner turns the server’s AI key on and off with a switch', async () => {

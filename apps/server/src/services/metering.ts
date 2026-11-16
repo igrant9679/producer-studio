@@ -49,7 +49,8 @@ export function noteTokens(input: number | null | undefined, output: number | nu
 export interface UsageRow {
   workspaceId: string
   userId?: string
-  metric: 'ai.requests' | 'ai.input_tokens' | 'ai.output_tokens' | 'job.ms' | 'job.runs'
+  /** `clip.*`: AI video clips, the seconds of video a provider generated and how many clips, under "provider|model". */
+  metric: 'ai.requests' | 'ai.input_tokens' | 'ai.output_tokens' | 'job.ms' | 'job.runs' | 'clip.seconds' | 'clip.count'
   subject?: string
   amount: number
 }
@@ -78,6 +79,21 @@ export function recordJobRun(job: { workspaceId: string; userId: string; kind: s
   return recordUsage([
     { workspaceId: job.workspaceId, userId: job.userId, metric: 'job.ms', subject: job.kind, amount: Math.round(ms) },
     { workspaceId: job.workspaceId, userId: job.userId, metric: 'job.runs', subject: job.kind, amount: 1 },
+  ])
+}
+
+/**
+ * An AI video clip was generated on the space's own key (Gemini or fal.ai): one clip and its seconds, as measured from
+ * the file the provider returned, for the space and the person. Providers bill clips by the second, so this is what an
+ * owner checks against their bill; no price is kept here.
+ */
+export function recordClip(workspaceId: string, clip: { provider: string; model: string; seconds: number }) {
+  const subject = `${clip.provider}|${clip.model}`
+  const userId = currentUserId()
+  const seconds = Number.isFinite(clip.seconds) && clip.seconds > 0 ? Math.round(clip.seconds * 100) / 100 : 0
+  return recordUsage([
+    { workspaceId, userId, metric: 'clip.seconds', subject, amount: seconds },
+    { workspaceId, userId, metric: 'clip.count', subject, amount: 1 },
   ])
 }
 

@@ -11,6 +11,7 @@ import { type MediaInfo, setGenerateClients } from '../ai/generate/capabilities'
 import { pricePerSecond } from '../ai/generate/fal'
 import { firstFramePrompt, makeAiClip, sameReasonTogether } from '../ai/produce'
 import { CancelledError } from '../jobs/worker'
+import { withActor } from '../services/metering'
 import { setup, signup, type TestEnv } from './helpers'
 
 const FAL_KEY = '3f1c2a9e-7b4d-4e21-9c55-0a1b2c3d4e5f:0123456789abcdef0123456789abcdef'
@@ -300,6 +301,25 @@ describe('a Wan clip', () => {
     expect(calls.some((c) => c.method === 'PUT')).toBe(false)
   })
 
+  it('each clip made is counted on the Usage page: clips and seconds per provider and model, for the person, never as tokens or dollars', async () => {
+    const A = await space({ fal: FAL_KEY })
+    const userId = (await A.client.json('GET', '/api/auth/me')).body.user.id as string
+    handler = queue([{ status: 'COMPLETED' }])
+    await withActor(userId, () => generateVideo({ workspaceId: A.workspaceId, prompt: 'waves', aspect: '16:9', seconds: 8, outDir }))
+    // the seconds are the file's (a provider may return more than was asked for), not the request's
+    probeResult = async () => ({ duration: 12.03, width: 1280, height: 720 })
+    await withActor(userId, () => generateVideo({ workspaceId: A.workspaceId, prompt: 'a boat', aspect: '16:9', seconds: 8, outDir }))
+    // a clip that was never made is not counted
+    const ac = new AbortController()
+    ac.abort()
+    await expect(withActor(userId, () => generateVideo({ workspaceId: A.workspaceId, prompt: 'a gull', aspect: '16:9', seconds: 8, outDir, signal: ac.signal }))).rejects.toBeInstanceOf(CancelledError)
+    const u = (await A.client.json('GET', `/api/usage?workspaceId=${A.workspaceId}`)).body
+    expect(u.ai.clips).toEqual([{ provider: 'fal', model: WAN22, modelName: 'Wan 2.2', clips: 2, seconds: 20.1 }])
+    expect(u.ai).toMatchObject({ clipCount: 2, clipSeconds: 20.1, providers: [], requests: 0, inputTokens: 0, outputTokens: 0, estCostUsd: 0 })
+    expect(u.jobs.byKind).toEqual([])
+    expect(u.members).toEqual([expect.objectContaining({ userId, aiRequests: 0, tokens: 0, jobMinutes: 0, clipSeconds: 20.1 })])
+  })
+
   it('clamps the length to Wan 2.2’s 161 frames, and 1:1 is passed through', async () => {
     const A = await space({ fal: FAL_KEY })
     calls.length = 0
@@ -458,5 +478,7 @@ describe('picture first: Wan animates a picture painted first', () => {
 describe('notes about scenes', () => {
   it('scenes that failed for the same reason share one line, in order', () => {
     expect(sameReasonTogether(['s01: no key', 's02: no key', 'Blender was off', 's03: too long', 's04: no key'])).toEqual(['s01, s02, s04: no key', 'Blender was off', 's03: too long'])
+    // drawings finish in any order (two are drawn at once): the line still names the scenes in scene order
+    expect(sameReasonTogether(['s02: drawn', 's10: drawn', 's01: drawn', 's03: drawn'])).toEqual(['s01, s02, s03, s10: drawn'])
   })
 })

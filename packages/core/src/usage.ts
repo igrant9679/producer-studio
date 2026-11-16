@@ -83,6 +83,24 @@ export interface UsageLimitView {
   unit: 'requests' | 'tokens' | 'minutes' | 'bytes' | 'jobs'
 }
 
+/**
+ * AI video clips are counted from this day (UTC midnight, epoch ms): the ones made before it were never recorded, so a
+ * period that starts earlier shows fewer clips than the provider billed.
+ */
+export const CLIP_USAGE_SINCE = Date.UTC(2026, 10, 16)
+
+/** AI video clips one provider and model generated on the space's own key. */
+export interface ClipUsage {
+  /** 'gemini' or 'fal'. */
+  provider: string
+  model: string
+  /** The model in words where its id is a path (fal: "Wan 2.2"). */
+  modelName?: string
+  clips: number
+  /** Seconds of video the provider returned, measured from the files (what it bills by), to a tenth. */
+  seconds: number
+}
+
 export interface UsageSummary {
   workspaceId: string
   /** The period the totals cover (epoch ms), and how many days. */
@@ -97,13 +115,20 @@ export interface UsageSummary {
     estCostUsd: number
     /** Costs are estimates from list prices in code (packages/core/src/usage.ts), not the provider's bill. */
     estimate: true
+    /**
+     * AI video clips, most seconds first. Counted, not priced: providers bill clips by the second at prices that are
+     * not in this code, so estCostUsd above never includes them.
+     */
+    clips: ClipUsage[]
+    clipCount: number
+    clipSeconds: number
   }
   jobs: { minutes: number; byKind: Array<{ kind: JobKind | string; minutes: number; runs: number }> }
   storage: { bytes: number; files: number; byKind: Array<{ kind: string; bytes: number; files: number }> }
   /** Every space this person belongs to, with its storage. */
   spaces: Array<{ id: string; name: string; bytes: number }>
   /** Owners only: who used what in this period. */
-  members?: Array<{ userId: string; name: string; aiRequests: number; tokens: number; jobMinutes: number }>
+  members?: Array<{ userId: string; name: string; aiRequests: number; tokens: number; jobMinutes: number; clipSeconds: number }>
   limits: UsageLimitView[]
   builtinAi: {
     /** This space may use the server's own AI key. */

@@ -71,6 +71,7 @@ import {
   type StepId,
   type WizardState,
   animationOnly,
+  assembleLine,
   everything,
 } from './wizardLogic'
 import {
@@ -1282,18 +1283,14 @@ function AssembleStep({ s, onRun }: { s: WizardState; onRun: (opts?: { replace?:
       )}
       <p className="ps-gen-line" aria-live="polite">
         {done
-          ? isIdea(s)
-            ? `${s.scenes.length} scenes narrated, their visuals built and styled with the ${s.brief.template ? 'selected' : 'default'} look. Fine-tune anything in the editor.`
-            : `${s.scenes.length} scenes narrated, cut to your footage and styled with the ${s.brief.template ? 'selected' : 'default'} look. Fine-tune anything in the editor.`
+          ? assembleLine(s, true)
           : r.status === 'error'
             ? r.error
             : r.status === 'running'
               ? r.message
               : r.interrupted
                 ? (r.jobId && r.message) || 'Assembly was interrupted — resume to finish.'
-                : isIdea(s)
-                  ? `Producer will narrate ${s.scenes.length} scenes, make their visuals and apply your look and captions.`
-                  : `Producer will narrate ${s.scenes.length} scenes, cut the footage and apply your template look and captions.`}
+                : assembleLine(s, false)}
       </p>
       {done && !!r.message && r.message !== 'Your video is ready' && (
         <div className="ps-alert info" role="status" style={{ marginBottom: 14 }}><Copy size={15} style={{ flex: 'none' }} /> {r.message}</div>

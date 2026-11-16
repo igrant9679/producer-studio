@@ -8,7 +8,7 @@ import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import * as z from 'zod/v4'
 import { strongestModel } from '@producer/core'
-import { DRAWING_LIMITS, DRAWN_SYSTEM, MAX_FIXES, MAX_LOOKS, THREE_GUIDE, TooSlowError, buildDrawingPrompt, drawingPalette, stepReporter, writeDrawing } from '../ai/drawn'
+import { DRAWING_LIMITS, DRAWN_SYSTEM, MAX_FIXES, MAX_LOOKS, THREE_GUIDE, TooSlowError, buildDrawingPrompt, drawingPalette, inWorkLine, stepReporter, writeDrawing } from '../ai/drawn'
 import type { AiProvider, StructuredRequest } from '../ai/provider'
 import { toSceneVisual, VisualSchema } from '../ai/scenes'
 import { ctx } from '../context'
@@ -266,6 +266,26 @@ describe('writing a drawing', () => {
     expect(said.slice(4)).toEqual(['Trying the animation', 'Trying the animation'])
     // nobody listening: nothing to do
     expect(() => stepReporter(undefined).alive()).not.toThrow()
+  })
+
+  it('several scenes in work are one status line naming them all, not two lines taking turns', () => {
+    // one scene alone reads as it always did
+    expect(inWorkLine([])).toBeUndefined()
+    expect(inWorkLine([{ label: 'Drawing s01', step: 'Checking the animation (3 min)' }])).toBe('Drawing s01: Checking the animation (3 min)')
+    expect(inWorkLine([{ label: 'Drawing s01' }])).toBe('Drawing s01')
+    // two under way (seen on the live site on 15 Nov: the line flipped between them every 10 to 20 s)
+    const s01 = { label: 'Drawing s01', step: 'Checking the animation (3 min)' }
+    const s02 = { label: 'Drawing s02', step: 'Writing the animation (1 min)' }
+    expect(inWorkLine([s01, s02])).toBe('Drawing s01 (checking, 3 min) and s02 (writing, 1 min)')
+    // whichever of them reports, the line is the same until a step or a minute changes
+    expect(inWorkLine([s01, { ...s02 }])).toBe(inWorkLine([s01, s02]))
+    // the first leads and two more follow it: three at once; a step in its first minute has no time yet
+    expect(inWorkLine([{ label: 'Drawing s01', step: 'Checking the animation again (2 min)' }, { label: 'Drawing s02', step: 'Trying the animation' }, { label: 'Drawing s03', step: 'Writing the animation again, more simply (1 min)' }])).toBe(
+      'Drawing s01 (checking again, 2 min), s02 (trying) and s03 (writing again, 1 min)',
+    )
+    expect(inWorkLine([{ label: 'Drawing s01', step: 'Rendering the animation' }, { label: 'Drawing s02' }])).toBe('Drawing s01 (rendering) and s02')
+    // different kinds of work keep their own words
+    expect(inWorkLine([{ label: 'Making an AI clip for s01', step: 'Generating the clip' }, { label: 'Drawing s02', step: 'Writing the animation' }])).toBe('Making an AI clip for s01 (generating) and Drawing s02 (writing)')
   })
 
   it('a step under way is said again by the clock though nothing arrives (the model thinking sends no word), and not after it ends', async () => {

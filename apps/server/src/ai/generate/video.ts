@@ -9,8 +9,9 @@
 // Not here: OpenAI (its Sora video API shut down on 24 Sep 2026, no replacement) and Veo (left the Gemini API on
 // 22 Oct 2026). Two request details only the docs vouch for, not a live key: background mode for this model (a 400
 // naming it → one synchronous call instead) and the duration format (a 400 naming it → the model's default length).
-// The seconds returned are measured from the file. A clip can start from a picture (`image`, a still made first): Wan
-// on fal animates it (image-to-video); Gemini is given the words alone, so its clips are made as before.
+// The seconds returned are measured from the file, and counted for the Usage page (services/metering recordClip).
+// A clip can start from a picture (`image`, a still made first): Wan on fal animates it (image-to-video); Gemini is
+// given the words alone, so its clips are made as before.
 // A clip can also be given reference pictures (`references`: the film's characters, painted once), so the same fox is
 // the same fox in every clip. Gemini Omni 1.2 takes them as image parts before the words (its guide: up to 6 a request,
 // 3 per character for up to 2 characters) with video_config.task 'reference_to_video', so a picture is never taken for
@@ -20,6 +21,7 @@ import fs from 'node:fs'
 import { HttpError, invalid } from '../../http'
 import { CancelledError } from '../../jobs/worker'
 import { log } from '../../log'
+import { recordClip } from '../../services/metering'
 import { redact } from '../common'
 import { mapGeminiError } from '../gemini'
 import { FAL_IMAGE_VIDEO_MODELS, FAL_VIDEO_MODELS, type FalVideoModel, falClip, falModelName, mapFalError } from './fal'
@@ -69,7 +71,7 @@ export function clampSeconds(m: GeminiVideoModel, seconds: number): number {
   return Math.min(m.maxSeconds, Math.max(m.minSeconds, n))
 }
 
-export async function generateVideo(opts: {
+interface VideoOptions {
   workspaceId: string
   prompt: string
   aspect: GenAspect
@@ -81,7 +83,21 @@ export async function generateVideo(opts: {
   references?: string[]
   signal?: AbortSignal
   onProgress?: (fraction: number, message: string) => void
-}): Promise<GeneratedFile & { seconds: number; fromPicture?: boolean; /** Reference pictures the clip was made with. */ references?: number }> {
+}
+type MadeClip = GeneratedFile & { seconds: number; fromPicture?: boolean; /** Reference pictures the clip was made with. */ references?: number }
+
+/**
+ * One AI clip on the space's own key. Each clip a provider returns is counted for the Usage page (its seconds as
+ * measured from the file, under the provider and model that made it): the provider bills by the second, and nothing
+ * else here tells the owner how many were generated.
+ */
+export async function generateVideo(opts: VideoOptions): Promise<MadeClip> {
+  const clip = await makeVideo(opts)
+  await recordClip(opts.workspaceId, clip)
+  return clip
+}
+
+async function makeVideo(opts: VideoOptions): Promise<MadeClip> {
   if (opts.signal?.aborted) throw new CancelledError()
   const prompt = opts.prompt.trim()
   if (!prompt) throw invalid('Describe the clip to generate.')

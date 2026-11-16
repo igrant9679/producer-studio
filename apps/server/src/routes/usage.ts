@@ -2,9 +2,10 @@
 import { Hono } from 'hono'
 import { and, eq, gt, inArray, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
-import { estimateCost, type UsageLimitView, type UsageSummary } from '@producer/core'
+import { estimateCost, type ClipUsage, type UsageLimitView, type UsageSummary } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { audit } from '../services/audit'
+import { falModelName } from '../ai/generate/fal'
 import { builtinProvider } from '../ai/resolve'
 import { ctx } from '../context'
 import { jobs, memberships, rateWindows, users, workspaces } from '../db/schema'
@@ -33,12 +34,20 @@ usageRoutes.get('/', async (c) => {
   // AI by provider and model
   const ai = new Map<string, { provider: string; model: string; requests: number; inputTokens: number; outputTokens: number }>()
   const jobKinds = new Map<string, { kind: string; ms: number; runs: number }>()
-  const people = new Map<string, { aiRequests: number; tokens: number; jobMs: number }>()
+  // AI video clips by provider and model: seconds and clips, never tokens or dollars
+  const clipKinds = new Map<string, { provider: string; model: string; clips: number; seconds: number }>()
+  const people = new Map<string, { aiRequests: number; tokens: number; jobMs: number; clipSeconds: number }>()
   for (const r of rows) {
     const n = Number(r.amount)
-    const who = people.get(r.userId) ?? { aiRequests: 0, tokens: 0, jobMs: 0 }
+    const who = people.get(r.userId) ?? { aiRequests: 0, tokens: 0, jobMs: 0, clipSeconds: 0 }
     people.set(r.userId, who)
-    if (r.metric.startsWith('ai.')) {
+    if (r.metric === 'clip.seconds' || r.metric === 'clip.count') {
+      const [provider, ...rest] = r.subject.split('|')
+      const e = clipKinds.get(r.subject) ?? { provider, model: rest.join('|'), clips: 0, seconds: 0 }
+      clipKinds.set(r.subject, e)
+      if (r.metric === 'clip.seconds') (e.seconds += n), (who.clipSeconds += n)
+      else e.clips += n
+    } else if (r.metric.startsWith('ai.')) {
       const [provider, ...rest] = r.subject.split('|')
       const e = ai.get(r.subject) ?? { provider, model: rest.join('|'), requests: 0, inputTokens: 0, outputTokens: 0 }
       ai.set(r.subject, e)
@@ -54,6 +63,13 @@ usageRoutes.get('/', async (c) => {
   }
   const providers = [...ai.values()].map((p) => ({ ...p, estCostUsd: estimateCost(p.provider, p.model, p.inputTokens, p.outputTokens) })).sort((a, b) => b.estCostUsd - a.estCostUsd || b.requests - a.requests)
   const sum = (k: 'requests' | 'inputTokens' | 'outputTokens' | 'estCostUsd') => providers.reduce((t, p) => t + p[k], 0)
+  const tenth = (n: number) => Math.round(n * 10) / 10
+  const clips: ClipUsage[] = [...clipKinds.values()]
+    .map((c) => {
+      const name = c.provider === 'fal' ? falModelName(c.model) : c.model
+      return { provider: c.provider, model: c.model, ...(name !== c.model ? { modelName: name } : {}), clips: c.clips, seconds: tenth(c.seconds) }
+    })
+    .sort((a, b) => b.seconds - a.seconds || b.clips - a.clips)
 
   // storage: this space, and every space this person is in
   const mine = await ctx()
@@ -69,8 +85,8 @@ usageRoutes.get('/', async (c) => {
     const ids = [...people.keys()].filter(Boolean)
     const names = new Map(ids.length ? (await ctx().db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids))).map((x) => [x.id, x.name]) : [])
     members = [...people.entries()]
-      .map(([userId, p]) => ({ userId, name: userId ? (names.get(userId) ?? 'Former member') : 'Automatic', aiRequests: p.aiRequests, tokens: p.tokens, jobMinutes: Math.round((p.jobMs / 60_000) * 10) / 10 }))
-      .sort((a, b) => b.tokens - a.tokens || b.jobMinutes - a.jobMinutes)
+      .map(([userId, p]) => ({ userId, name: userId ? (names.get(userId) ?? 'Former member') : 'Automatic', aiRequests: p.aiRequests, tokens: p.tokens, jobMinutes: Math.round((p.jobMs / 60_000) * 10) / 10, clipSeconds: tenth(p.clipSeconds) }))
+      .sort((a, b) => b.tokens - a.tokens || b.jobMinutes - a.jobMinutes || b.clipSeconds - a.clipSeconds)
   }
 
   const cfg = ctx().config
@@ -102,7 +118,17 @@ usageRoutes.get('/', async (c) => {
     from,
     to: now,
     days,
-    ai: { providers, requests: sum('requests'), inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), estCostUsd: sum('estCostUsd'), estimate: true },
+    ai: {
+      providers,
+      requests: sum('requests'),
+      inputTokens: sum('inputTokens'),
+      outputTokens: sum('outputTokens'),
+      estCostUsd: sum('estCostUsd'),
+      estimate: true,
+      clips,
+      clipCount: clips.reduce((t, c) => t + c.clips, 0),
+      clipSeconds: tenth([...clipKinds.values()].reduce((t, c) => t + c.seconds, 0)),
+    },
     jobs: {
       minutes: Math.round(([...jobKinds.values()].reduce((t, k) => t + k.ms, 0) / 60_000) * 10) / 10,
       byKind: [...jobKinds.values()].map((k) => ({ kind: k.kind, minutes: Math.round((k.ms / 60_000) * 10) / 10, runs: k.runs })).sort((a, b) => b.minutes - a.minutes),

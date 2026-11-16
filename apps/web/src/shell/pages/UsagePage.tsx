@@ -1,7 +1,7 @@
 // The space's usage (A-18): its limits and how much of each is used, AI requests and an estimated cost per provider,
-// processing minutes, storage (this space and every space you're in), who used what (owners), and the switch for the
+// AI video clips in seconds per provider and model (counted, never priced), processing minutes, storage (this space and every space you're in), who used what (owners), and the switch for the
 // server's own AI key (P-1, owners on cloud).
-import type { JobKind, UsageLimitView, UsageSummary } from '@producer/core'
+import { CLIP_USAGE_SINCE, type JobKind, type UsageLimitView, type UsageSummary } from '@producer/core'
 import { BarChart3, Bot, Clock, HardDrive, History, Sparkles, Users } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
@@ -16,6 +16,10 @@ const PERIODS = [7, 30, 90]
 
 const nf = (n: number) => Math.round(n).toLocaleString('en-US')
 const usd = (n: number) => (n > 0 && n < 0.01 ? '< $0.01' : `$${n.toFixed(2)}`)
+/** Seconds of video, to a tenth: "12 s", "63.5 s". */
+const secs = (n: number) => `${n.toLocaleString('en-US', { maximumFractionDigits: 1 })} s`
+/** The day clips began to be counted, in words ("Nov 16, 2026"). */
+const CLIPS_SINCE_WORDS = new Date(CLIP_USAGE_SINCE).toLocaleDateString('en-US', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' })
 
 /** A provider id in words. */
 export function providerLabel(id: string): string {
@@ -23,6 +27,7 @@ export function providerLabel(id: string): string {
   if (id === 'anthropic-key') return 'Anthropic (your key)'
   if (id === 'openai') return 'OpenAI (your key)'
   if (id === 'gemini') return 'Gemini (your key)'
+  if (id === 'fal') return 'fal.ai (your key)'
   if (id === 'claude-cli') return 'Claude Code (desktop)'
   return id
 }
@@ -126,7 +131,7 @@ export default function UsagePage() {
         <div>
           <span className="eyebrow">{ws?.name ?? 'Space'}</span>
           <h1>Usage</h1>
-          <p>What this space used: AI requests and their estimated cost, processing time and storage, against the limits this server sets.</p>
+          <p>What this space used: AI requests and their estimated cost, AI video clips, processing time and storage, against the limits this server sets.</p>
         </div>
       </div>
       <div className="row ps-usage-periods" role="group" aria-label="Period">
@@ -193,6 +198,45 @@ export default function UsagePage() {
                 </table>
               </div>
             )}
+            {shown.ai.clips.length > 0 && (
+              <>
+                <h3 className="ps-usage-sub">AI video clips</h3>
+                <p className="muted ps-usage-note">
+                  Video made on your own Gemini or fal.ai key. The provider bills clips by the second at its own prices, so this counts the seconds it returned and puts no price on them: check them against your provider’s bill.
+                  {shown.from < CLIP_USAGE_SINCE ? ` Clips made before ${CLIPS_SINCE_WORDS} were not counted.` : ''}
+                </p>
+                <div className="ps-table-wrap">
+                  <table className="ps-usage-table">
+                    <caption className="ps-usage-sr">AI video clips per provider and model</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Provider</th>
+                        <th scope="col">Model</th>
+                        <th scope="col" className="num">Clips</th>
+                        <th scope="col" className="num">Seconds of video</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shown.ai.clips.map((c) => (
+                        <tr key={`${c.provider}|${c.model}`}>
+                          <td>{providerLabel(c.provider)}</td>
+                          <td className="mono" title={c.modelName ? c.model : undefined}>{c.modelName ?? (c.model || '—')}</td>
+                          <td className="num">{nf(c.clips)}</td>
+                          <td className="num">{secs(c.seconds)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <th scope="row" colSpan={2}>Total</th>
+                        <td className="num">{nf(shown.ai.clipCount)}</td>
+                        <td className="num">{secs(shown.ai.clipSeconds)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </>
+            )}
           </Section>
 
           <Section icon={<Clock size={16} />} title="Processing" note={`${shown.jobs.minutes.toLocaleString('en-US', { maximumFractionDigits: 1 })} minutes of exports, voiceovers, transcriptions and processing in the last ${shown.days} days.`}>
@@ -249,6 +293,7 @@ export default function UsagePage() {
                         <th scope="col">Person</th>
                         <th scope="col" className="num">AI requests</th>
                         <th scope="col" className="num">Tokens</th>
+                        {shown.ai.clips.length > 0 && <th scope="col" className="num">AI video</th>}
                         <th scope="col" className="num">Processing</th>
                       </tr>
                     </thead>
@@ -258,6 +303,7 @@ export default function UsagePage() {
                           <th scope="row">{m.name}</th>
                           <td className="num">{nf(m.aiRequests)}</td>
                           <td className="num">{nf(m.tokens)}</td>
+                          {shown.ai.clips.length > 0 && <td className="num">{secs(m.clipSeconds)}</td>}
                           <td className="num">{m.jobMinutes.toLocaleString('en-US', { maximumFractionDigits: 1 })} min</td>
                         </tr>
                       ))}

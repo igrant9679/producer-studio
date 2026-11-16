@@ -51,7 +51,7 @@ import { insertProject, loadProjectRow, saveProjectDoc, withFreshIds, type SaveO
 import { getBrand } from '../routes/workspaces'
 import { requireProvider } from './provider'
 import { MAX_REFERENCED, castIn, characterPicturePrompt, normalizeCast, withCast } from './cast'
-import { drawingPalette, writeDrawing } from './drawn'
+import { drawingPalette, inWorkLine, writeDrawing } from './drawn'
 import { type DrawingEnv, renderDrawing } from '../media/drawing'
 import { BlenderUnavailableError, type BlenderRunner, openBlender } from '../media/blender'
 import { houseRules } from './rules'
@@ -988,11 +988,26 @@ async function makeSceneVisuals(
     if (f >= 0) part[i] = Math.max(part[i], Math.min(1, f))
     jc.progress(0.6 + (part.reduce((a, b) => a + b, 0) / todo.length) * 0.3, m)
   }
-  /** This scene's visual is settled (made, reused, or given up). */
-  const finished = (s: ScriptScene) => tell(todo.indexOf(s), 1)
+  // The job has one status line. Each scene in work keeps the step it last said, and the line names them all in scene
+  // order (inWorkLine), so two drawings under way read as one steady line, not two taking turns every few seconds.
+  const inWork = new Map<number, { label: string; step?: string }>()
+  const line = () => inWorkLine([...inWork.entries()].sort((a, b) => a[0] - b[0]).map(([, w]) => w))
+  /** This scene says nothing more for now (its entry leaves the line). */
+  const idle = (s: ScriptScene) => void inWork.delete(todo.indexOf(s))
+  /** This scene's visual is settled (made, reused, or given up); the line goes on with the scenes still in work. */
+  const finished = (s: ScriptScene) => {
+    idle(s)
+    tell(todo.indexOf(s), 1, line())
+  }
   const slot = (s: ScriptScene, label: string): JobContext => {
     const i = todo.indexOf(s)
-    return { ...jc, progress: (f, m) => tell(i, f, m !== undefined ? `${label}: ${m}` : m) }
+    return {
+      ...jc,
+      progress: (f, m) => {
+        if (m !== undefined) inWork.set(i, { label, step: m })
+        tell(i, f, m !== undefined ? line() : m)
+      },
+    }
   }
   /** One scene's drawing, given up (the scene, not the job) when it takes longer than DRAWN_LIMITS.sceneMs. */
   const withinLimit = async <T>(s: ScriptScene, work: (sc: Pick<JobContext, 'signal' | 'progress' | 'check'>) => Promise<T>): Promise<T> => {
@@ -1041,6 +1056,14 @@ async function makeSceneVisuals(
    * leave here as a drawn scene (drawn with the others, below) or be made again as an AI picture.
    */
   const make = async (s: ScriptScene): Promise<void> => {
+    try {
+      await makeOrStandIn(s)
+    } finally {
+      // (a clip that became a drawing is in work again when it is drawn)
+      idle(s)
+    }
+  }
+  const makeOrStandIn = async (s: ScriptScene): Promise<void> => {
     for (;;) {
       const v = s.visual as Extract<NonNullable<ScriptScene['visual']>, { kind: MadeKind }>
       // generated pictures and clips in the video's look, with the characters they show described the way the cast
@@ -1203,7 +1226,10 @@ async function makeSceneVisuals(
   return { scenes, generated, illustrations, notes: sameReasonTogether(notes), asked }
 }
 
-/** "s01: why", "s02: why" → "s01, s02: why": one line per reason, in the order they first came. */
+/**
+ * "s01: why", "s02: why" → "s01, s02: why": one line per reason, in the order they first came, its scenes in scene
+ * order (drawings finish in any order: the second can be done before the first).
+ */
 export function sameReasonTogether(notes: string[]): string[] {
   const out: Array<{ ids: string[]; why: string } | string> = []
   const byWhy = new Map<string, { ids: string[]; why: string }>()
@@ -1221,7 +1247,8 @@ export function sameReasonTogether(notes: string[]): string[] {
       out.push(ng)
     }
   }
-  return out.map((o) => (typeof o === 'string' ? o : `${o.ids.join(', ')}: ${o.why}`))
+  const inOrder = (ids: string[]) => [...ids].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
+  return out.map((o) => (typeof o === 'string' ? o : `${inOrder(o.ids).join(', ')}: ${o.why}`))
 }
 
 /** What a drawing was asked for: the director's note and the drawing style (its clip keeps the code under this). */
