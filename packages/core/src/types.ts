@@ -591,6 +591,17 @@ export interface ScriptScene {
   narrator?: { voice?: string; speed?: number }
 }
 
+/**
+ * A character seen in more than one scene of a video made from an idea. Its look is said once, here, and given word
+ * for word to every generated picture and clip that shows it, so it is the same character each time.
+ */
+export interface ScriptCharacter {
+  /** What the scenes call it, e.g. "the small orange fox". */
+  name: string
+  /** How it looks, in a sentence or two a painter could follow: kind, build, colours and markings, eyes, clothes. */
+  look: string
+}
+
 export interface ProducerMeta {
   brief?: {
     title: string
@@ -632,6 +643,8 @@ export interface ProducerMeta {
   }
   script?: {
     scenes: ScriptScene[]
+    /** The characters that return from scene to scene (videos made from an idea; absent: none were named). */
+    cast?: ScriptCharacter[]
     message?: string
     /** The brief this script was written from (a brief changed since can leave the narration out of date). */
     brief?: ProducerMeta['brief']

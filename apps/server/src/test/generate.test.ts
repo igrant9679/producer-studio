@@ -159,7 +159,8 @@ describe('generationCapabilities', () => {
     const ws = await space({ gemini: GEMINI_KEY })
     expect(await generationCapabilities(ws)).toEqual({
       image: { provider: 'gemini', model: 'gemini-nano-banana-2.1' },
-      video: { provider: 'gemini', model: 'gemini-omni-1.2-flash', maxSeconds: 15 },
+      // (a clip can be given reference pictures of a film's characters: the model takes them, and this key paints them)
+      video: { provider: 'gemini', model: 'gemini-omni-1.2-flash', maxSeconds: 15, references: 6 },
       stock: false,
       stockSources: NONE,
     })
@@ -425,6 +426,74 @@ describe('generateVideo', () => {
     expect(fs.readFileSync(r.file).equals(MP4)).toBe(true)
     expect(gemini.create.mock.calls.map((c) => c[0].background)).toEqual([true, false])
     expect(gemini.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('reference pictures go before the words, as references and not a first frame; a request without them is as it was', async () => {
+    const ws = await space({ gemini: GEMINI_KEY })
+    const foxPic = path.join(outDir, 'ref-fox.png')
+    const birdPic = path.join(outDir, 'ref-bird.jpg')
+    fs.mkdirSync(outDir, { recursive: true })
+    fs.writeFileSync(foxPic, PNG)
+    fs.writeFileSync(birdPic, JPEG)
+    gemini.create.mockResolvedValue(done())
+    const r = await generateVideo({ workspaceId: ws, prompt: 'the fox meets the bird', aspect: '16:9', seconds: 6, outDir, references: [foxPic, birdPic] })
+    expect(r.references).toBe(2)
+    expect(gemini.create.mock.calls[0][0]).toEqual({
+      model: 'gemini-omni-1.2-flash',
+      input: [
+        { type: 'image', data: PNG.toString('base64'), mime_type: 'image/png' },
+        { type: 'image', data: JPEG.toString('base64'), mime_type: 'image/jpeg' },
+        { type: 'text', text: 'the fox meets the bird' },
+      ],
+      response_format: { type: 'video', aspect_ratio: '16:9', resolution: '720p', duration: '6s' },
+      generation_config: { video_config: { task: 'reference_to_video' } },
+      background: true,
+    })
+    // none given: the plain request, with nothing new in it
+    gemini.create.mockClear()
+    const plain = await generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '16:9', seconds: 6, outDir, references: [] })
+    expect(plain.references).toBeUndefined()
+    expect(gemini.create.mock.calls[0][0]).toEqual({ model: 'gemini-omni-1.2-flash', input: 'waves', response_format: { type: 'video', aspect_ratio: '16:9', resolution: '720p', duration: '6s' }, background: true })
+    // more than the model takes: the first six
+    gemini.create.mockClear()
+    await generateVideo({ workspaceId: ws, prompt: 'a crowd', aspect: '16:9', seconds: 6, outDir, references: Array.from({ length: 8 }, () => foxPic) })
+    expect((gemini.create.mock.calls[0][0].input as unknown[]).length).toBe(7)
+    // a file that isn't a picture is said plainly, before anything is asked of Google
+    const notPic = path.join(outDir, 'ref.txt')
+    fs.writeFileSync(notPic, 'hello')
+    gemini.create.mockClear()
+    expect((await failure(generateVideo({ workspaceId: ws, prompt: 'x', aspect: '16:9', seconds: 6, outDir, references: [notPic] }))).message).toBe('A reference picture isn’t a JPEG, PNG or WebP image.')
+    expect(gemini.create).not.toHaveBeenCalled()
+  })
+
+  it('Google refusing the reference task, or the pictures, never costs the clip: it is made without them', async () => {
+    const ws = await space({ gemini: GEMINI_KEY })
+    const pic = path.join(outDir, 'ref-fox-2.png')
+    fs.mkdirSync(outDir, { recursive: true })
+    fs.writeFileSync(pic, PNG)
+    // the task isn't known: the pictures are sent again without it, and still count
+    gemini.create.mockRejectedValueOnce(geminiError(400, 'Invalid value at generation_config.video_config.task: unknown enum value reference_to_video')).mockResolvedValueOnce(done())
+    const kept = await generateVideo({ workspaceId: ws, prompt: 'the fox runs', aspect: '16:9', seconds: 6, outDir, references: [pic] })
+    expect(kept.references).toBe(1)
+    expect(gemini.create.mock.calls.map((c) => [Array.isArray(c[0].input), 'generation_config' in c[0]])).toEqual([
+      [true, true],
+      [true, false],
+    ])
+    // the pictures themselves aren't taken: the words alone, as clips were always made
+    gemini.create.mockReset()
+    gemini.create
+      .mockRejectedValueOnce(geminiError(400, 'Invalid value at generation_config.video_config.task'))
+      .mockRejectedValueOnce(geminiError(400, 'Image input is not supported for video output with this model'))
+      .mockResolvedValueOnce(done())
+    const words = await generateVideo({ workspaceId: ws, prompt: 'the fox runs', aspect: '16:9', seconds: 6, outDir, references: [pic] })
+    expect(words.references).toBeUndefined()
+    expect(fs.readFileSync(words.file).equals(MP4)).toBe(true)
+    expect(gemini.create.mock.calls[2][0]).toEqual({ model: 'gemini-omni-1.2-flash', input: 'the fox runs', response_format: { type: 'video', aspect_ratio: '16:9', resolution: '720p', duration: '6s' }, background: true })
+    // any other refusal is still a refusal
+    gemini.create.mockReset()
+    gemini.create.mockRejectedValue(geminiError(400, 'The prompt was blocked by our safety policy'))
+    expect((await failure(generateVideo({ workspaceId: ws, prompt: 'x', aspect: '16:9', seconds: 6, outDir, references: [pic] }))).status).toBe(422)
+    expect(gemini.create).toHaveBeenCalledTimes(1)
   })
 
   it('a fired signal cancels the remote interaction and stops', async () => {

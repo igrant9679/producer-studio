@@ -28,6 +28,7 @@ import {
   type MediaCredit,
   type ProducerMeta,
   type Project,
+  type ScriptCharacter,
   type SceneObject,
   type SceneVisual,
   type ScriptScene,
@@ -49,6 +50,7 @@ import { getLook, headlineStyle, labelStyle, lookPalette, sizeForAspect } from '
 import { insertProject, loadProjectRow, saveProjectDoc, withFreshIds, type SaveOptions } from '../services/projects'
 import { getBrand } from '../routes/workspaces'
 import { requireProvider } from './provider'
+import { MAX_REFERENCED, castIn, characterPicturePrompt, normalizeCast, withCast } from './cast'
 import { drawingPalette, writeDrawing } from './drawn'
 import { type DrawingEnv, renderDrawing } from '../media/drawing'
 import { BlenderUnavailableError, type BlenderRunner, openBlender } from '../media/blender'
@@ -306,8 +308,10 @@ async function produceIdeaScript(jc: JobContext, input: { projectId: string; bri
   const check = IdeaScriptSchema.safeParse(raw)
   if (!check.success) throw new HttpError(502, 'server', 'The AI response did not match the script format')
   const scenes = normalizeIdeaScript(check.data, kinds, media)
+  // the characters that return, as the writer described them: every picture and clip of them is made from these words
+  const cast = normalizeCast(check.data.cast)
   jc.check()
-  await saveOnLatest(input.projectId, (cur) => ({ ...cur, ai: { ...(cur.ai ?? {}), brief: input.brief, script: { scenes, message: check.data.message, brief: input.brief }, status: 'scripted' } }))
+  await saveOnLatest(input.projectId, (cur) => ({ ...cur, ai: { ...(cur.ai ?? {}), brief: input.brief, script: { scenes, ...(cast.length ? { cast } : {}), message: check.data.message, brief: input.brief }, status: 'scripted' } }))
   jc.progress(1, `${scenes.length} scenes`)
   return { script: { scenes, message: check.data.message } }
 }
@@ -761,7 +765,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const frameSize = sizeForAspect(brief.aspect || getLook(brief.template).aspect)
   const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand), silent: !parts.narration, noWords: !parts.onScreenText, style: drawingStyleOf(brief.drawingStyle) }
   const allowed = await allowedVisualKinds(row.workspaceId, brief.visualKinds, { fullMotion: brief.motion === 'full' })
-  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing, look: brief.aiLook, fullMotion: brief.motion === 'full', allowed })
+  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing, look: brief.aiLook, fullMotion: brief.motion === 'full', allowed, cast: doc.ai?.script?.cast })
   // 3b. music composed on the cuts, and sound effects where things move (both free: made on this server)
   const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand })
   const sounded = await makeSound(subContext(jc, 0.9, 0.92, 'Adding music and sound'), { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, jobId: jc.job.id, brief, scenes: made.scenes, voices, probe, seed: brand?.name || row.id })
@@ -900,6 +904,8 @@ async function makeSceneVisuals(
     fullMotion?: boolean
     /** The visual kinds this video may use (the brief's, as this space can make them): what a failed visual may become. */
     allowed?: VisualKind[]
+    /** The script's returning characters (ai.script.cast): each is said, and where it can be shown, the same way in every picture and clip. */
+    cast?: ScriptCharacter[]
   },
 ): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[]; asked: Map<string, NonNullable<ScriptScene['visual']>> }> {
   const generated = new Map<string, Asset>()
@@ -915,8 +921,18 @@ async function makeSceneVisuals(
   const work = tmpDir('scene-visuals')
   let clips = 0
   const maxClips = o.fullMotion ? MAX_AI_CLIPS_FULL_MOTION : MAX_AI_CLIPS
+  const clipScenes = todo.filter((s) => s.visual?.kind === 'aiVideo')
+  const caps = clipScenes.length ? await generationCapabilities(o.workspaceId) : undefined
   // Wan clips start from a picture painted first, when this space can paint one
-  const fromPicture = todo.some((s) => s.visual?.kind === 'aiVideo') && !!(await generationCapabilities(o.workspaceId)).video?.fromPicture
+  const fromPicture = !!caps?.video?.fromPicture
+  // The film's characters. Each picture and clip is made on its own, so the script's cast is said word for word in
+  // every prompt that shows a character; and where the clip model takes reference pictures, one picture of each
+  // character that is in more than one clip is painted once (below) and sent with each of those clips.
+  const cast = normalizeCast(o.cast)
+  /** character name → its reference picture (a file). */
+  const pictures = new Map<string, string>()
+  const inClips = (c: ScriptCharacter) => clipScenes.filter((s) => castIn((s.visual as { prompt: string }).prompt, [c]).length).length
+  const toPicture = caps?.video?.references ? cast.filter((c) => inClips(c) > 1).slice(0, MAX_REFERENCED) : []
   // Blender scenes: this computer's Blender or a rented RunPod card, opened on the first one and closed (the pod
   // deleted) when the visuals are done; without one they're drawn in the 3D studio style instead
   let drawing = o.drawing
@@ -1027,8 +1043,12 @@ async function makeSceneVisuals(
   const make = async (s: ScriptScene): Promise<void> => {
     for (;;) {
       const v = s.visual as Extract<NonNullable<ScriptScene['visual']>, { kind: MadeKind }>
-      // generated pictures and clips in the video's look (the reuse below compares the whole request)
-      const ask = v.kind === 'stock' || v.kind === 'photo' ? v.query : withAiLook(v.prompt, o.look)
+      // generated pictures and clips in the video's look, with the characters they show described the way the cast
+      // describes them; a clip is also given the reference pictures of (up to MAX_REFERENCED of) its characters, which
+      // the words number in the order they are sent (the reuse below compares the whole request)
+      const shown = v.kind === 'image' || v.kind === 'aiVideo' ? castIn(v.prompt, cast) : []
+      const pictured = v.kind === 'aiVideo' ? shown.filter((c) => pictures.has(c.name)).slice(0, MAX_REFERENCED) : []
+      const ask = v.kind === 'stock' || v.kind === 'photo' ? v.query : withCast(withAiLook(v.prompt, o.look), [...pictured, ...shown.filter((c) => !pictured.includes(c))], pictured.length)
       // reuse what was made for this scene before, while the request is the same
       if (v.assetId) {
         const prev = (await ctx().db.select().from(assets).where(and(eq(assets.id, v.assetId), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
@@ -1042,7 +1062,7 @@ async function makeSceneVisuals(
       else {
         const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
         try {
-          const made = await makeOne(slot(s, `${MAKING[v.kind]} for ${s.id}`), { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work, fromPicture })
+          const made = await makeOne(slot(s, `${MAKING[v.kind]} for ${s.id}`), { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work, fromPicture, references: pictured.map((c) => pictures.get(c.name)!) })
           if (v.kind === 'aiVideo') clips++
           generated.set(s.id, made.asset)
           s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
@@ -1097,6 +1117,20 @@ async function makeSceneVisuals(
   }
 
   try {
+    // 0. the characters' reference pictures: painted once per video (kept with the project, so the next assembly
+    // uses the same ones), then sent with every clip a character is in. One that can't be painted leaves its
+    // character to the words, and says so.
+    for (const c of toPicture) {
+      jc.check()
+      jc.progress(0.6, `Painting ${c.name} for the clips`)
+      try {
+        pictures.set(c.name, await characterPicture(jc, { workspaceId: o.workspaceId, userId: o.userId, projectId: o.projectId, jobId: jc.job.id, character: c, look: o.look, work }))
+      } catch (err) {
+        if (jc.signal.aborted) throw err
+        log.warn('character picture failed', { character: c.name, err })
+        notes.push(`${c.name} may look different from clip to clip: its reference picture couldn’t be painted (${err instanceof HttpError ? err.message : 'it could not be made'})`)
+      }
+    }
     // 1. everything but the drawings, in order
     for (const s of todo) {
       jc.check()
@@ -1360,7 +1394,18 @@ async function findIllustrations(
  * opening frame and Wan animates it, which keeps the composition and the look; a picture that can't be made (refused,
  * no credit) leaves the clip to the words alone. Progress runs 0 → 0.82.
  */
-export async function makeAiClip(o: { workspaceId: string; prompt: string; aspect: Brief['aspect']; seconds: number; outDir: string; fromPicture?: boolean; signal: AbortSignal; progress: (f: number, msg: string) => void }) {
+export async function makeAiClip(o: {
+  workspaceId: string
+  prompt: string
+  aspect: Brief['aspect']
+  seconds: number
+  outDir: string
+  fromPicture?: boolean
+  /** Reference pictures of the clip's characters (files), in the order the prompt numbers them. */
+  references?: string[]
+  signal: AbortSignal
+  progress: (f: number, msg: string) => void
+}) {
   let image: string | undefined
   if (o.fromPicture) {
     o.progress(0.03, 'Painting the first frame')
@@ -1371,7 +1416,43 @@ export async function makeAiClip(o: { workspaceId: string; prompt: string; aspec
       log.warn('first frame failed; the clip is made from the words', { err })
     }
   }
-  return generateVideo({ workspaceId: o.workspaceId, prompt: o.prompt, aspect: o.aspect, seconds: o.seconds, outDir: o.outDir, image, signal: o.signal, onProgress: (f, m) => o.progress(0.12 + f * 0.7, m) })
+  return generateVideo({ workspaceId: o.workspaceId, prompt: o.prompt, aspect: o.aspect, seconds: o.seconds, outDir: o.outDir, image, ...(o.references?.length ? { references: o.references } : {}), signal: o.signal, onProgress: (f, m) => o.progress(0.12 + f * 0.7, m) })
+}
+
+/**
+ * The reference picture of one of a film's characters: the one this project already has for the same description and
+ * look, else painted now by the space's image AI and kept with the project (a clip in the Library: "Character · …").
+ * Returns the picture as a local file.
+ */
+async function characterPicture(
+  jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
+  o: { workspaceId: string; userId: string; projectId: string; jobId: string; character: ScriptCharacter; look?: string; work: string },
+): Promise<string> {
+  const ask = withAiLook(characterPicturePrompt(o.character), o.look)
+  const had = (
+    await ctx()
+      .db.select()
+      .from(assets)
+      .where(and(eq(assets.workspaceId, o.workspaceId), eq(assets.projectId, o.projectId), eq(assets.origin, 'ai'), eq(assets.status, 'ready'), isNull(assets.trashedAt), sql`${assets.meta}->'generated'->>'kind' = 'character'`, sql`${assets.meta}->'generated'->>'prompt' = ${ask}`))
+      .orderBy(desc(assets.createdAt))
+      .limit(1)
+  )[0]
+  if (had) return localSource(had, o.work)
+  const file = await generateImage({ workspaceId: o.workspaceId, prompt: ask, aspect: '1:1', outDir: o.work, signal: jc.signal })
+  jc.check()
+  const row = await createAssetFromFile({
+    workspaceId: o.workspaceId,
+    userId: o.userId,
+    projectId: o.projectId,
+    filePath: file.file,
+    name: `Character · ${o.character.name}`.slice(0, 200),
+    mime: file.mime,
+    kind: 'image',
+    origin: 'ai',
+    meta: { generated: { kind: 'character', prompt: ask, provider: file.provider, model: file.model }, jobId: o.jobId },
+  })
+  const ready = await processAsset(row.id, { signal: jc.signal, check: jc.check, progress: () => undefined })
+  return localSource(ready, o.work)
 }
 
 /** What the image AI is asked for when it paints a clip's opening frame. */
@@ -1380,7 +1461,7 @@ export const firstFramePrompt = (shot: string) =>
 
 async function makeOne(
   jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
-  o: { workspaceId: string; userId: string; projectId: string; jobId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: MadeKind }; ask: string; seconds: number; work: string; fromPicture?: boolean },
+  o: { workspaceId: string; userId: string; projectId: string; jobId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: MadeKind }; ask: string; seconds: number; work: string; fromPicture?: boolean; references?: string[] },
 ): Promise<{ asset: Asset; credit?: MediaCredit }> {
   const { kind } = o.visual
   let file: { file: string; mime: string; provider: string; model: string }
@@ -1418,7 +1499,7 @@ async function makeOne(
     if (!got) throw lastErr ?? new HttpError(404, 'not_found', `no stock ${photo ? 'photo' : 'footage'} matched “${o.ask}”`)
     file = got
   } else {
-    file = await makeAiClip({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, seconds: o.seconds, outDir: o.work, fromPicture: o.fromPicture, signal: jc.signal, progress: (f, m) => jc.progress(f, m) })
+    file = await makeAiClip({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, seconds: o.seconds, outDir: o.work, fromPicture: o.fromPicture, references: o.references, signal: jc.signal, progress: (f, m) => jc.progress(f, m) })
   }
   jc.check()
   const row = await createAssetFromFile({

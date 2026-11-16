@@ -573,6 +573,8 @@ export interface ProduceCapabilities {
     maxSeconds: number
     /** Each clip starts from an AI picture painted first (fal.ai's Wan, with an OpenAI or Gemini key for the picture). */
     fromPicture?: boolean
+    /** Reference pictures a clip can be given, so a film's characters look the same in every clip (Gemini Omni). */
+    references?: number
     /** What a second of clip costs, from the provider's price list at the key's last test, e.g. 0.08 (USD). */
     pricePerSecond?: number
   }

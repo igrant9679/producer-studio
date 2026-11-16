@@ -2,7 +2,8 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { AI_LOOKS, createProject, evaluate, withAiLook, itemEnd, projectDuration, type Asset, type Project, type ScriptScene, type VisualKind } from '@producer/core'
 import { buildProducerTimeline, firstFramePrompt, syntheticTranscript } from '../ai/produce'
-import { type IdeaMedia, type IdeaScriptOutput, VisualSchema, buildIdeaPrompt, drawnGuide, normalizeIdeaScript } from '../ai/scenes'
+import * as z from 'zod/v4'
+import { type IdeaMedia, type IdeaScriptOutput, IdeaScriptSchema, VisualSchema, buildIdeaPrompt, drawnGuide, normalizeIdeaScript } from '../ai/scenes'
 import { diagramItems, revealTimes, type SceneFrame } from '../ai/scene-layout'
 import { type Palette, getLook, lookPalette } from '../services/looks'
 import { setup } from './helpers'
@@ -21,6 +22,7 @@ describe("the writer's scenes", () => {
   it('turns flat visuals into scene visuals, and anything unusable into animated text', () => {
     const out: IdeaScriptOutput = {
       message: 'm',
+      cast: [],
       scenes: [
         scene({ kind: 'motion', points: ['One', ' Two ', ''] }),
         scene({ kind: 'diagram', diagramType: 'steps', items: ['Plan', 'Build', 'Ship'] }),
@@ -51,7 +53,7 @@ describe("the writer's scenes", () => {
       { ref: 'm1', assetId: 'as_beach', kind: 'video', name: 'beach.mp4', duration: 12 },
       { ref: 'm2', assetId: 'as_team', kind: 'image', name: 'team.jpg' },
     ]
-    const out: IdeaScriptOutput = { message: 'm', scenes: [scene({ kind: 'media', mediaId: 'M2' }), scene({ kind: 'media', mediaId: 'm1' }), scene({ kind: 'media', mediaId: 'm9' })] }
+    const out: IdeaScriptOutput = { message: 'm', cast: [], scenes: [scene({ kind: 'media', mediaId: 'M2' }), scene({ kind: 'media', mediaId: 'm1' }), scene({ kind: 'media', mediaId: 'm9' })] }
     const scenes = normalizeIdeaScript(out, ['motion', 'media'], media)
     expect(scenes.map((s) => s.visual)).toEqual([
       { kind: 'media', assetId: 'as_team' },
@@ -86,8 +88,16 @@ describe("the writer's scenes", () => {
     expect(plain).toContain('use for at most 2 scenes')
     expect(plain).not.toContain('FULL MOTION')
     expect(plain).toContain('About 7 scenes')
-    // the same person, place or thing is described in the same words in every generated picture and clip
+    // each picture and clip is made on its own: a returning character is named once in the cast, with its look, and
+    // called by that name in the scenes; places and things are described in the same words every time
     expect(plain).toContain('Continuity:')
+    expect(plain).toMatch(/List every character that is seen in more than one generated picture or clip under "cast", with a name and a precise look/)
+    expect(plain).toMatch(/call it by exactly that name each time and do not describe its look again/)
+    // the answer has a place for it, and says when it stays empty
+    const shape = z.toJSONSchema(IdeaScriptSchema) as { properties: { cast: { description: string; items: { properties: Record<string, { description: string }> } } }; required: string[] }
+    expect(shape.required).toContain('cast')
+    expect(shape.properties.cast.description).toMatch(/seen in more than one generated picture or clip, most important first, at most 4\. Empty when no character returns\./)
+    expect(Object.keys(shape.properties.cast.items.properties)).toEqual(['name', 'look'])
     const full = buildIdeaPrompt({ brief: { ...brief, motion: 'full' }, kinds, rules: '', example: '' })
     expect(full).toContain('FULL MOTION: this is an animated film. Make EVERY scene an aiVideo')
     expect(full).toContain('About 8 scenes')
@@ -290,6 +300,7 @@ describe('animation scenes and stock photos', () => {
   it('the writer’s animations and photos become scene visuals; an animation with nothing to draw becomes animated text', () => {
     const out: IdeaScriptOutput = {
       message: 'm',
+      cast: [],
       scenes: [
         scene({ kind: 'animation', animStyle: 'journey', objects: ['delivery truck', ' house ', 'gift'], labels: ['Shipped', '', 'Delivered'] }, 'The truck leaves, passes the house, and delivers the gift.'),
         scene({ kind: 'animation', animStyle: 'none', objects: ['rocket'], labels: [] }),

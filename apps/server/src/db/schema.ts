@@ -120,7 +120,8 @@ export interface AssetMeta {
   codec?: string
   /** Made for a scene of a video made from an idea: what was asked for (re-assembling reuses it while that's unchanged). */
   generated?: {
-    kind: 'image' | 'stock' | 'photo' | 'aiVideo' | 'illustration' | 'drawn' | 'music' | 'sfx'
+    /** 'character': a reference picture of one of a film's characters, sent with each clip that shows it. */
+    kind: 'image' | 'stock' | 'photo' | 'aiVideo' | 'illustration' | 'drawn' | 'music' | 'sfx' | 'character'
     prompt: string
     provider?: string
     model?: string

@@ -44,6 +44,8 @@ export interface GeminiVideoModel {
   id: string
   minSeconds: number
   maxSeconds: number
+  /** Reference pictures a request may carry, to keep characters and objects the same from clip to clip. */
+  references?: number
 }
 
 /** gpt-image-1 shut down on 2026-10-23; gpt-image-1.5 shuts down on 2026-12-01. */
@@ -64,7 +66,8 @@ export const GEMINI_IMAGE_MODELS: GeminiImageModel[] = [
  */
 // Omni 1.2 first (Google's current model, 3-15 s); 1.1 (3-10 s) after it: Google routes 1.1 to 1.2 from 3 Dec 2026
 export const GEMINI_VIDEO_MODELS: GeminiVideoModel[] = [
-  { id: 'gemini-omni-1.2-flash', minSeconds: 3, maxSeconds: 15 },
+  // (Google's Omni guide: up to 6 reference images a request, 3 per character for up to 2 characters)
+  { id: 'gemini-omni-1.2-flash', minSeconds: 3, maxSeconds: 15, references: 6 },
   { id: 'gemini-omni-1.1-flash', minSeconds: 3, maxSeconds: 10 },
 ]
 
@@ -243,6 +246,9 @@ export async function generationCapabilities(workspaceId: string): Promise<GenCa
   if (!(video instanceof HttpError)) {
     const m = liveModels(video, 'video', candidates(video.provider, 'video') as GeminiVideoModel[])[0]
     out.video = { provider: video.provider, model: m.id, maxSeconds: m.maxSeconds }
+    // a film's characters stay the same from clip to clip when each clip is given their pictures: the clip model has
+    // to take them, and this space has to be able to paint them
+    if (video.provider === 'gemini' && m.references && out.image) out.video.references = m.references
     // Wan starts each clip from a picture when this space can paint one; fal's price list says what a second costs
     // (the price is the model's it names: none once clips have moved on to another model)
     if (video.provider === 'fal') {

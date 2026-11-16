@@ -70,6 +70,16 @@ export const VisualSchema: z.ZodType<SceneVisual> = z.union([
 
 export const IdeaScriptSchema = z.object({
   message: z.string().describe('The one-sentence message of the video'),
+  cast: z
+    .array(
+      z.object({
+        name: z.string().describe('What the scene prompts call this character, word for word, e.g. "the small orange fox"'),
+        look: z
+          .string()
+          .describe('How it looks, in one or two sentences two painters would paint the same way: kind or species and age, build and proportions, colours and markings, eye colour, what it wears or carries. No actions, no setting.'),
+      }),
+    )
+    .describe('The characters (people, animals, creatures, a mascot) seen in more than one generated picture or clip, most important first, at most 4. Empty when no character returns.'),
   scenes: z.array(
     z.object({
       id: z.string().describe('s01, s02, ... in order'),
@@ -240,7 +250,7 @@ REQUIREMENTS
       ? `Narration ${perScene[0]}-${perScene[1]} words per scene at ~2.6 words/second, and no more than ${words} words in total: the length was asked for, so count your words and cut until they fit.`
       : `NOBODY SPEAKS IN THIS VIDEO: it is pictures${b.music && b.music !== 'off' ? ' and music' : ''} only. Write each scene's narration field as a plain description of what the viewer sees happen. It is never heard; its length sets how long the scene lasts, ~2.6 words/second: ${perScene[0]}-${perScene[1]} words per scene and no more than ${words} words in total (the length was asked for, so count your words and cut until they fit). The pictures have to tell the story alone.`
   }${parts.onScreenText ? '' : '\n- NO WORDS ON SCREEN: the viewer reads nothing, so headlines are only your working titles and animations get no labels. Show everything through what is drawn or moves.'}
-${full ? `- Each scene is one clip of at most ~10 seconds: ${parts.narration ? 'narration 12-24 words per scene' : 'a description of 12-24 words per scene'}, so the clip lasts as long as the scene; use more scenes rather than longer ones.\n` : ''}${generated ? '- Continuity: when several generated pictures or clips show the same person, place or object, describe it in exactly the same words every time (age, build, hair, clothes and colours; the place’s look and light), so they look like one film.\n' : ''}- Vary the visuals; pick the one that makes each line easiest to understand.${full ? '' : mix(kinds)} Never put a number on screen that the narration doesn't say, and don't invent statistics: use bars or stat only with figures from the idea, otherwise use another visual.
+${full ? `- Each scene is one clip of at most ~10 seconds: ${parts.narration ? 'narration 12-24 words per scene' : 'a description of 12-24 words per scene'}, so the clip lasts as long as the scene; use more scenes rather than longer ones.\n` : ''}${generated ? '- Continuity: each generated picture and clip is made on its own, from its own prompt alone, so a character described twice comes out as two different characters. List every character that is seen in more than one generated picture or clip under "cast", with a name and a precise look; in the scene prompts call it by exactly that name each time and do not describe its look again (the look in the cast is added to every prompt for you). A place or an object that returns is described in exactly the same words every time (its look and light), so the scenes look like one film.\n' : ''}- Vary the visuals; pick the one that makes each line easiest to understand.${full ? '' : mix(kinds)} Never put a number on screen that the narration doesn't say, and don't invent statistics: use bars or stat only with figures from the idea, otherwise use another visual.
 ${parts.narration ? '- Headlines are what the viewer reads (official spelling); narration is what the voice says (spoken spelling).\n' : ''}- Fill every visual field; use empty strings, empty lists and diagramType "none" for fields that don't apply to the chosen kind.`
 }
 

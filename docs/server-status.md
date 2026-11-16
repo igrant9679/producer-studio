@@ -233,6 +233,27 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   jointed toy figure with a motion library (walk, run, idle, talk, dance, sit, wave, nod, shake, point, jump, cheer,
   clap, shrug, turn); the 3D styles' prompts carry `CHARACTER_GUIDE`. Each add-on loads only on pages whose code uses
   it (`usesLottie`, `usesPeeps`, `uses3d`).
+  **The same characters in every clip** (15 Nov 2026, found by a real Full motion film on production: five Gemini
+  clips, each a good shot, but the fox had green eyes in one and amber in the others and the bird was twice the size
+  with another beak in the fourth). Every AI picture and clip is made on its own, from its own words, so nothing
+  tied the clips to one design. *The cast* (`ai/cast.ts`): the idea script writer now lists the characters seen in
+  more than one generated picture or clip (`cast` in `IdeaScriptSchema`: a name and a look "two painters would paint
+  the same way", at most 4) and calls them by those names in the scene prompts; it is kept on the script
+  (`ai.script.cast`, `ScriptCharacter` in core; the wizard's draft saves and an assembly leave it there). *In words*:
+  at assembly every `image` and `aiVideo` request that shows a character (`castIn`: its name, or the last word of it)
+  ends with the cast's own description of it (`withCast`), the same sentence every time. *In pictures*: where the clip
+  model takes reference pictures (`GeminiVideoModel.references`: Omni 1.2 takes 6, three per character for two
+  characters; `ProduceCapabilities.video.references`) and the space can paint, one picture of each character that is in
+  more than one clip (at most `MAX_REFERENCED`, 2) is painted first (`characterPicture`: the whole character alone on a
+  plain ground, in the video's look), kept with the project as "Character · <name>" (`meta.generated.kind`
+  `character`, found again by its description, so the next assembly uses the same picture) and sent with every clip
+  the character is in: image parts before the words, with `generation_config.video_config.task` `reference_to_video`
+  so a picture is never taken for the clip's first frame, and the words say which picture shows whom. Only Google's
+  guide vouches for that request shape, so a 400 naming the task has the pictures sent without it, and a 400 naming
+  the pictures has the clip made from the words as before (`start` in `generate/video.ts`); a picture that can't be
+  painted leaves its character to the words and the video says so. A script with no cast (written before this, or
+  with no returning character) is asked for exactly as it was. Wan on fal.ai gets the words (its clips start from a
+  first frame, which is painted from the same words).
   **A drawing that goes quiet no longer costs the video** (15 Nov 2026, found by a real video on production: three 3D
   scenes, one finished, then 20 minutes with no progress report, the watchdog stopped the job and nothing it had drawn
   was kept). *Why it went quiet*: the keep-alive of 14 Nov listened for stream events, and a model that is thinking

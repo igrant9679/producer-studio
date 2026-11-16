@@ -11,6 +11,11 @@
 // naming it → one synchronous call instead) and the duration format (a 400 naming it → the model's default length).
 // The seconds returned are measured from the file. A clip can start from a picture (`image`, a still made first): Wan
 // on fal animates it (image-to-video); Gemini is given the words alone, so its clips are made as before.
+// A clip can also be given reference pictures (`references`: the film's characters, painted once), so the same fox is
+// the same fox in every clip. Gemini Omni 1.2 takes them as image parts before the words (its guide: up to 6 a request,
+// 3 per character for up to 2 characters) with video_config.task 'reference_to_video', so a picture is never taken for
+// the clip's first frame. Like the two details above, only the docs vouch for this shape: a 400 naming the task or
+// the pictures has the clip made without them (as before) rather than not at all.
 import fs from 'node:fs'
 import { HttpError, invalid } from '../../http'
 import { CancelledError } from '../../jobs/worker'
@@ -72,9 +77,11 @@ export async function generateVideo(opts: {
   outDir: string
   /** A still to start the clip from (a file); used by Wan on fal (image-to-video). */
   image?: string
+  /** Reference pictures of the clip's characters (files), in the order the prompt numbers them; used by Gemini. */
+  references?: string[]
   signal?: AbortSignal
   onProgress?: (fraction: number, message: string) => void
-}): Promise<GeneratedFile & { seconds: number; fromPicture?: boolean }> {
+}): Promise<GeneratedFile & { seconds: number; fromPicture?: boolean; /** Reference pictures the clip was made with. */ references?: number }> {
   if (opts.signal?.aborted) throw new CancelledError()
   const prompt = opts.prompt.trim()
   if (!prompt) throw invalid('Describe the clip to generate.')
@@ -97,9 +104,9 @@ export async function generateVideo(opts: {
 
 async function geminiVideo(
   k: GenKey,
-  opts: { prompt: string; aspect: GenAspect; seconds: number; outDir: string; signal?: AbortSignal },
+  opts: { prompt: string; aspect: GenAspect; seconds: number; outDir: string; references?: string[]; signal?: AbortSignal },
   say: (fraction: number, message: string) => void,
-): Promise<GeneratedFile & { seconds: number; fromPicture?: boolean }> {
+): Promise<GeneratedFile & { seconds: number; fromPicture?: boolean; references?: number }> {
   const prompt = opts.prompt
   const client = genDeps().gemini(k.key)
   let clip: Awaited<ReturnType<typeof omniClip>>
@@ -130,6 +137,7 @@ async function geminiVideo(
     model: model.id,
     seconds: info.duration ?? clip.seconds,
     ...(info.width ? { width: info.width, height: info.height } : {}),
+    ...(clip.references ? { references: clip.references } : {}),
   }
 }
 
@@ -187,26 +195,40 @@ async function dataUri(file: string): Promise<string> {
   return `data:${mime};base64,${bytes.toString('base64')}`
 }
 
+/** A reference picture on disk as an image part of the request. */
+async function imagePart(file: string): Promise<{ type: 'image'; data: string; mime_type: string }> {
+  const bytes = await fs.promises.readFile(file)
+  if (bytes.length > 15 * 1024 * 1024) throw invalid('A reference picture is too big to send (over 15 MB).')
+  const mime = sniffImage(bytes)
+  if (!mime) throw invalid('A reference picture isn’t a JPEG, PNG or WebP image.')
+  return { type: 'image', data: bytes.toString('base64'), mime_type: mime }
+}
+
 /** One clip from one model: start it, wait for it, return its bytes. */
 async function omniClip(
   client: GeminiMediaClient,
   m: GeminiVideoModel,
-  opts: { prompt: string; aspect: GenAspect; seconds: number; signal?: AbortSignal },
+  opts: { prompt: string; aspect: GenAspect; seconds: number; references?: string[]; signal?: AbortSignal },
   say: (fraction: number, message: string) => void,
-): Promise<{ bytes: Buffer; mime: string; seconds: number }> {
+): Promise<{ bytes: Buffer; mime: string; seconds: number; references?: number }> {
   const { now, sleep } = genDeps()
   const seconds = clampSeconds(m, opts.seconds)
   const started = now()
   const deadline = started + VIDEO_TIMEOUT_MS
+  // the characters' pictures, for a model that takes them (the others get the words, which describe the characters too)
+  const pictures = m.references ? await Promise.all((opts.references ?? []).slice(0, m.references).map(imagePart)) : []
+  let references = pictures.length
   let it = await start(
     client,
     {
       model: m.id,
-      input: opts.prompt,
+      input: pictures.length ? [...pictures, { type: 'text', text: opts.prompt }] : opts.prompt,
       response_format: { type: 'video', aspect_ratio: opts.aspect === '9:16' ? '9:16' : '16:9', resolution: RESOLUTION, duration: `${seconds}s` },
+      ...(pictures.length ? { generation_config: { video_config: { task: 'reference_to_video' } } } : {}),
       background: true,
     },
     opts.signal,
+    () => (references = 0),
   )
   let wait = POLL_FIRST_MS
   let errors = 0
@@ -243,11 +265,15 @@ async function omniClip(
   const video = it.output_video
   if (!video?.data) throw new HttpError(502, 'server', 'Gemini finished the clip but didn’t send it back. Try again.')
   void client.interactions.delete?.(it.id, {}, { signal: AbortSignal.timeout(10_000) })?.catch(() => undefined)
-  return { bytes: Buffer.from(video.data, 'base64'), mime: video.mime_type?.startsWith('video/') ? video.mime_type : 'video/mp4', seconds }
+  return { bytes: Buffer.from(video.data, 'base64'), mime: video.mime_type?.startsWith('video/') ? video.mime_type : 'video/mp4', seconds, ...(references ? { references } : {}) }
 }
 
-/** interactions.create, adjusting the two request details the docs leave open when the API names them in a 400. */
-async function start(client: GeminiMediaClient, body: Record<string, unknown>, signal?: AbortSignal): Promise<GenInteraction> {
+/**
+ * interactions.create, adjusting the request details the docs leave open when the API names them in a 400: background
+ * mode, the duration, and the reference pictures (their task first, then the pictures themselves: `withoutPictures`
+ * is told, and the clip is made from the words as it always was).
+ */
+async function start(client: GeminiMediaClient, body: Record<string, unknown>, signal?: AbortSignal, withoutPictures?: () => void): Promise<GenInteraction> {
   // a synchronous fallback holds the request open for the whole generation: bound it like the polling
   const timer = AbortSignal.timeout(VIDEO_TIMEOUT_MS)
   const both = signal ? AbortSignal.any([signal, timer]) : timer
@@ -259,14 +285,28 @@ async function start(client: GeminiMediaClient, body: Record<string, unknown>, s
       if (timer.aborted && !signal?.aborted) throw timedOut()
       const msg = statusOf(err) === 400 ? messageOf(err) : ''
       const { duration, ...rf } = b.response_format as Record<string, unknown>
-      if (msg && attempt < 2 && b.background && /background/i.test(msg)) {
+      if (msg && attempt < 4 && b.background && /background/i.test(msg)) {
         log.info('gemini clip: background mode refused, generating synchronously', { model: b.model })
         b = { ...b, background: false }
         continue
       }
-      if (msg && attempt < 2 && duration && /duration/i.test(msg)) {
+      if (msg && attempt < 4 && duration && /duration/i.test(msg)) {
         log.info('gemini clip: duration refused, using the model default', { model: b.model, duration })
         b = { ...b, response_format: rf }
+        continue
+      }
+      if (msg && attempt < 4 && b.generation_config && /(generation_config|video_config|\btask\b|reference_to_video)/i.test(msg)) {
+        log.info('gemini clip: the reference task was refused, sending the pictures without it', { model: b.model })
+        const { generation_config: _task, ...rest } = b
+        b = rest
+        continue
+      }
+      if (msg && attempt < 4 && Array.isArray(b.input) && /(image|picture|reference|input|content|modalit)/i.test(msg)) {
+        log.warn('gemini clip: reference pictures refused, making the clip from the words', { model: b.model, error: redact(msg).slice(0, 200) })
+        const { generation_config: _task, ...rest } = b
+        const text = (b.input as Array<{ type: string; text?: string }>).find((p) => p.type === 'text')?.text ?? ''
+        b = { ...rest, input: text }
+        withoutPictures?.()
         continue
       }
       throw err
