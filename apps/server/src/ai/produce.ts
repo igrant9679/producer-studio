@@ -53,6 +53,7 @@ import { requireProvider } from './provider'
 import { MAX_REFERENCED, castIn, characterPicturePrompt, normalizeCast, withCast } from './cast'
 import { drawingPalette, inWorkLine, writeDrawing } from './drawn'
 import { type DrawingEnv, renderDrawing } from '../media/drawing'
+import { sizeChart } from '../media/size-chart'
 import { BlenderUnavailableError, type BlenderRunner, openBlender } from '../media/blender'
 import { houseRules } from './rules'
 import { ensureTranscript, synthesizeToAsset, transcribeAsset } from './speech'
@@ -933,6 +934,8 @@ async function makeSceneVisuals(
   const pictures = new Map<string, string>()
   const inClips = (c: ScriptCharacter) => clipScenes.filter((s) => castIn((s.visual as { prompt: string }).prompt, [c]).length).length
   const toPicture = caps?.video?.references ? cast.filter((c) => inClips(c) > 1).slice(0, MAX_REFERENCED) : []
+  /** The pictured characters side by side at their true sizes (a file), and who is on it: sent with clips that show them all. */
+  let chart: { file: string; names: string[] } | undefined
   // Blender scenes: this computer's Blender or a rented RunPod card, opened on the first one and closed (the pod
   // deleted) when the visuals are done; without one they're drawn in the 3D studio style instead
   let drawing = o.drawing
@@ -1071,7 +1074,9 @@ async function makeSceneVisuals(
       // the words number in the order they are sent (the reuse below compares the whole request)
       const shown = v.kind === 'image' || v.kind === 'aiVideo' ? castIn(v.prompt, cast) : []
       const pictured = v.kind === 'aiVideo' ? shown.filter((c) => pictures.has(c.name)).slice(0, MAX_REFERENCED) : []
-      const ask = v.kind === 'stock' || v.kind === 'photo' ? v.query : withCast(withAiLook(v.prompt, o.look), [...pictured, ...shown.filter((c) => !pictured.includes(c))], pictured.length)
+      // a clip that shows everyone on the size chart is sent it too, after their own pictures
+      const sized = chart && chart.names.every((n) => pictured.some((c) => c.name === n)) ? chart : undefined
+      const ask = v.kind === 'stock' || v.kind === 'photo' ? v.query : withCast(withAiLook(v.prompt, o.look), [...pictured, ...shown.filter((c) => !pictured.includes(c))], pictured.length, sized ? pictured.length + 1 : undefined)
       // reuse what was made for this scene before, while the request is the same
       if (v.assetId) {
         const prev = (await ctx().db.select().from(assets).where(and(eq(assets.id, v.assetId), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
@@ -1085,7 +1090,7 @@ async function makeSceneVisuals(
       else {
         const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
         try {
-          const made = await makeOne(slot(s, `${MAKING[v.kind]} for ${s.id}`), { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work, fromPicture, references: pictured.map((c) => pictures.get(c.name)!) })
+          const made = await makeOne(slot(s, `${MAKING[v.kind]} for ${s.id}`), { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work, fromPicture, references: [...pictured.map((c) => pictures.get(c.name)!), ...(sized ? [sized.file] : [])] })
           if (v.kind === 'aiVideo') clips++
           generated.set(s.id, made.asset)
           s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
@@ -1152,6 +1157,18 @@ async function makeSceneVisuals(
         if (jc.signal.aborted) throw err
         log.warn('character picture failed', { character: c.name, err })
         notes.push(`${c.name} may look different from clip to clip: its reference picture couldn’t be painted (${err instanceof HttpError ? err.message : 'it could not be made'})`)
+      }
+    }
+    // ...and the characters side by side at their true sizes, made from those pictures (each fills its own, so nothing
+    // else shows how big one is beside the other); without it the words still say how their heights compare
+    const onChart = toPicture.filter((c) => pictures.has(c.name) && c.heightCm)
+    if (onChart.length > 1) {
+      try {
+        const file = path.join(work, `sizes-${crypto.randomBytes(4).toString('hex')}.jpg`)
+        await sizeChart(onChart.map((c) => ({ file: pictures.get(c.name)!, heightCm: c.heightCm! })), file)
+        chart = { file, names: onChart.map((c) => c.name) }
+      } catch (err) {
+        log.warn('size chart failed; the sizes are said in words only', { err })
       }
     }
     // 1. everything but the drawings, in order

@@ -77,6 +77,9 @@ export const IdeaScriptSchema = z.object({
         look: z
           .string()
           .describe('How it looks, in one or two sentences two painters would paint the same way: kind or species and age, build and proportions, colours and markings, eye colour, what it wears or carries. No actions, no setting.'),
+        heightCm: z
+          .number()
+          .describe('How tall it stands in centimetres, head to ground, as a real one of its kind and age would be (a fox cub about 30, a small songbird about 8, a grown woman about 165). It keeps the characters the right size next to each other in every shot, so give a true-to-life figure.'),
       }),
     )
     .describe('The characters (people, animals, creatures, a mascot) seen in more than one generated picture or clip, most important first, at most 4. Empty when no character returns.'),

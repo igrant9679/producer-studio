@@ -7,7 +7,9 @@ import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { AI_LOOKS, type ProjectDocResponse, type ScriptCharacter, type ScriptScene } from '@producer/core'
-import { MAX_CAST, MAX_REFERENCED, castIn, characterPicturePrompt, normalizeCast, withCast } from '../ai/cast'
+import sharp from 'sharp'
+import { MAX_CAST, MAX_REFERENCED, castIn, characterPicturePrompt, normalizeCast, sizesLine, tallAs, withCast } from '../ai/cast'
+import { chartLayout, sizeChart } from '../media/size-chart'
 import { setKeyClients } from '../ai/keys'
 import { saveOnLatest } from '../ai/produce'
 import { setGenerateClients } from '../ai/generate/capabilities'
@@ -71,6 +73,109 @@ The characters, the same in every shot of this film (keep each one's design exac
     expect(sheet).toMatch(/plain light grey background/)
     expect(MAX_REFERENCED).toBe(2)
   })
+
+  it('keeps how tall each character stands, and says how their sizes compare the same way in every prompt', () => {
+    // a height that can be one is kept (rounded); anything else is left out and nothing is said about sizes
+    expect(normalizeCast([{ ...fox, heightCm: 30.4 }, { ...bird, heightCm: 7.96 }, { ...owl, heightCm: 'tall' }, { name: 'a giant', look: 'x', heightCm: 99_999 }, { name: 'a speck', look: 'x', heightCm: 0 }])).toEqual([
+      { ...fox, heightCm: 30 },
+      { ...bird, heightCm: 8 },
+      owl,
+      { name: 'a giant', look: 'x' },
+    ])
+    expect([1, 0.75, 0.62, 0.5, 0.33, 8 / 30, 0.2, 0.16, 0.125, 0.1, 0.03].map(tallAs)).toEqual([
+      'about as tall as',
+      'about three quarters as tall as',
+      'about two thirds as tall as',
+      'about half as tall as',
+      'about a third as tall as',
+      'about a quarter as tall as',
+      'about a fifth as tall as',
+      'about a sixth as tall as',
+      'about an eighth as tall as',
+      'about a tenth as tall as',
+      'less than a tenth as tall as',
+    ])
+    const tallFox = { ...fox, heightCm: 30 }
+    const smallBird = { ...bird, heightCm: 8 }
+    // whichever order they are named in, the taller one is the measure
+    const line = sizesLine([smallBird, tallFox])
+    expect(line).toBe(
+      'Their sizes, the same in every shot (the small orange fox stands about 30 cm tall, the tiny blue bird stands about 8 cm tall): the tiny blue bird is about a quarter as tall as the small orange fox. Keep that difference in size in every shot, close-ups included: never enlarge a smaller character so that it reads better.',
+    )
+    expect(sizesLine([tallFox, smallBird], 3)).toBe(`${line} Reference picture 3 shows them side by side at these sizes.`)
+    // one character, or heights unknown: nothing to compare
+    expect(sizesLine([tallFox])).toBe('')
+    expect(sizesLine([tallFox, bird])).toBe('')
+    expect(sizesLine([{ name: 'Maya', look: 'x', heightCm: 165 }, { name: 'her son', look: 'x', heightCm: 100 }, { name: 'the cat', look: 'x', heightCm: 25 }])).toContain(
+      '(Maya stands about 1.65 m tall, her son stands about 1 m tall, the cat stands about 25 cm tall): her son is about two thirds as tall as Maya; the cat is about a seventh as tall as Maya.',
+    )
+    // in a prompt it comes after the characters, before the note about the reference pictures
+    const asked = withCast('The fox meets the bird.', [tallFox, smallBird], 2, 3)
+    expect(asked.indexOf('- the tiny blue bird:')).toBeLessThan(asked.indexOf('Their sizes, the same in every shot'))
+    expect(asked).toContain('Reference picture 3 shows them side by side at these sizes.\nThe reference pictures only show what the characters look like')
+    // a cast written before heights were asked for reads exactly as it did
+    expect(withCast('The fox meets the bird.', [fox, bird], 2)).not.toContain('Their sizes')
+  })
+})
+
+describe('the characters side by side at their true sizes', () => {
+  it('stands everyone on one line, each as tall as it really is beside the tallest', () => {
+    // a fox 30 cm tall and a bird 8: pictures of 600 x 900 and 300 x 300 pixels
+    const l = chartLayout([{ width: 600, height: 900 }, { width: 300, height: 300 }], [30, 8])
+    expect(l.placed[0]).toEqual({ left: 72, top: 72, width: 587, height: 880 })
+    // 8 / 30 of 880, standing on the same line (bottoms equal)
+    expect(l.placed[1]).toMatchObject({ width: 235, height: 235, left: 72 + 587 + 96 })
+    expect(l.placed[1].top + l.placed[1].height).toBe(l.placed[0].top + l.placed[0].height)
+    expect(l).toMatchObject({ height: 880 + 144, width: 72 + 587 + 96 + 235 + 72 })
+    // the order given is kept, whoever is taller; a very small one is still there to be seen
+    const m = chartLayout([{ width: 100, height: 100 }, { width: 400, height: 800 }], [1, 200])
+    expect(m.placed[0].height).toBe(28)
+    expect(m.placed[1].height).toBe(880)
+    expect(m.placed[0].left).toBeLessThan(m.placed[1].left)
+    // a long row is scaled down whole, proportions kept
+    const wide = chartLayout([{ width: 3000, height: 900 }, { width: 3000, height: 900 }], [10, 5])
+    expect(wide.width).toBeLessThanOrEqual(2600)
+    expect(wide.placed[1].height / wide.placed[0].height).toBeCloseTo(0.5, 1)
+  })
+
+  it('cuts each character out of its own picture and writes one picture of them all', async () => {
+    const t = await setup()
+    const dir = path.join(t.dataDir, 'size-chart')
+    fs.mkdirSync(dir, { recursive: true })
+    const grey = { r: 217, g: 217, b: 217 }
+    // each character fills its own picture the same way: an orange "fox" 300 x 600 and a blue "bird" 300 x 300, on grey
+    const picture = async (name: string, w: number, h: number, colour: { r: number; g: number; b: number }) => {
+      const file = path.join(dir, name)
+      await sharp({ create: { width: 1000, height: 1000, channels: 3, background: grey } })
+        .composite([{ input: await sharp({ create: { width: w, height: h, channels: 3, background: colour } }).png().toBuffer(), left: Math.round((1000 - w) / 2), top: Math.round((1000 - h) / 2) }])
+        .png()
+        .toFile(file)
+      return file
+    }
+    const foxPic = await picture('fox.png', 300, 600, { r: 240, g: 120, b: 20 })
+    const birdPic = await picture('bird.png', 300, 300, { r: 40, g: 110, b: 230 })
+    const out = path.join(dir, 'sizes.jpg')
+    await sizeChart([{ file: foxPic, heightCm: 30 }, { file: birdPic, heightCm: 8 }], out)
+    const meta = await sharp(out).metadata()
+    expect(meta.format).toBe('jpeg')
+    // the fox cut to its 300 x 600 and drawn 880 high (440 wide), the bird 235 high: 72 + 440 + 96 + 235 + 72
+    expect([meta.width, meta.height]).toEqual([915, 1024])
+    const px = async (x: number, y: number) => [...(await sharp(out).extract({ left: x, top: y, width: 1, height: 1 }).raw().toBuffer())]
+    const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) < 30)
+    // the ground is the pictures' own grey; the fox is orange from top to bottom of the row
+    expect(near(await px(10, 10), [217, 217, 217])).toBe(true)
+    expect(near(await px(72 + 220, 80), [240, 120, 20])).toBe(true)
+    expect(near(await px(72 + 220, 72 + 870), [240, 120, 20])).toBe(true)
+    // the bird stands on the same line and reaches only a quarter of the way up: blue low down, grey above it
+    const birdX = 72 + 440 + 96 + 117
+    expect(near(await px(birdX, 72 + 880 - 100), [40, 110, 230])).toBe(true)
+    expect(near(await px(birdX, 72 + 880 - 300), [217, 217, 217])).toBe(true)
+    // a picture with nothing to cut away (one colour) is used whole rather than failing the chart
+    const flat = path.join(dir, 'flat.png')
+    await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 0, g: 0, b: 255 } } }).png().toFile(flat)
+    await sizeChart([{ file: foxPic, heightCm: 30 }, { file: flat, heightCm: 15 }], path.join(dir, 'sizes-2.jpg'))
+    expect((await sharp(path.join(dir, 'sizes-2.jpg')).metadata()).height).toBe(1024)
+  }, 120_000)
 })
 
 // ---------------------------------------------------------------- a film assembled with a cast
@@ -219,6 +324,34 @@ describe('a film assembled with a cast', () => {
     expect(again.p.ai!.script!.cast).toEqual([fox, bird, owl])
     expect((await client.json('PUT', '/api/ai/produce/draft', { projectId: id, brief, scenes: again.p.ai!.script!.scenes })).status).toBe(200)
     expect((await client.json<ProjectDocResponse>('GET', `/api/projects/${id}`)).body.project.ai!.script!.cast).toEqual([fox, bird, owl])
+  }, 240_000)
+
+  it('a cast with heights: clips that show both characters also get them side by side at their true sizes, and the words say so', async () => {
+    const id = await newFilm([{ ...fox, heightCm: 30 }, { ...bird, heightCm: 8 }], 'Fox film, sized')
+    const { out } = await assemble(id)
+    expect(out.notes ?? []).toEqual([])
+    const sent = bodies()
+    expect(sent).toHaveLength(4)
+    // s01 and s02 show both: the fox's picture, the bird's, then the chart made from the two (a JPEG; theirs are PNGs)
+    for (const b of sent.slice(0, 2)) {
+      const pics = picturesOf(b)
+      expect(pics.map((p) => p.mime_type)).toEqual(['image/png', 'image/png', 'image/jpeg'])
+      expect(pics[2].data).not.toBe(pics[0].data)
+      expect(textOf(b)).toContain('the tiny blue bird is about a quarter as tall as the small orange fox.')
+      expect(textOf(b)).toContain('Reference picture 3 shows them side by side at these sizes.')
+      expect(b.generation_config).toEqual({ video_config: { task: 'reference_to_video' } })
+    }
+    // the chart is a real picture of the two (the test pictures are one colour, so each is used whole: 880 and 235 high)
+    const chart = await sharp(Buffer.from(picturesOf(sent[0])[2].data!, 'base64')).metadata()
+    expect([chart.format, chart.width, chart.height]).toEqual(['jpeg', 72 + 880 + 96 + 235 + 72, 1024])
+    // s03, the fox alone: its picture, and nothing about sizes
+    expect(picturesOf(sent[2])).toHaveLength(1)
+    expect(textOf(sent[2])).not.toContain('Their sizes')
+    // the chart is made from the pictures, not painted: two pictures were asked of the image model, no more
+    expect(gemini.generateContent).toHaveBeenCalledTimes(2)
+    // nothing is added to the Library for it
+    const kept = (await ctx().db.select().from(assets).where(eq(assets.projectId, id))).filter((r) => r.kind === 'image')
+    expect(kept.map((r) => r.name).sort()).toEqual(['Character · the small orange fox', 'Character · the tiny blue bird'])
   }, 240_000)
 
   it('a picture that can’t be painted leaves that character to the words, and says so; no cast: clips as before', async () => {

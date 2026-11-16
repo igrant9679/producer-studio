@@ -254,6 +254,16 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   painted leaves its character to the words and the video says so. A script with no cast (written before this, or
   with no returning character) is asked for exactly as it was. Wan on fal.ai gets the words (its clips start from a
   first frame, which is painted from the same words).
+  *Sizes* (16 Nov 2026, from the film that proved the above: the same fox and bird in every clip, but the bird the size
+  of the fox's head in the two-shots and small again on its back). Each reference picture shows its character filling
+  the frame, so nothing said how big one is beside the other. The cast now also says how tall each character stands
+  (`heightCm`, true to life: a fox cub 30, a songbird 8); every prompt that shows two of them says how their heights
+  compare in plain words (`sizesLine` / `tallAs` in `ai/cast.ts`: "the tiny blue bird is about a quarter as tall as the
+  small orange fox ... never enlarge a smaller character so that it reads better"); and a clip that shows all the
+  pictured characters is sent one more reference picture after theirs, the characters side by side on one line at those
+  heights (`media/size-chart.ts`: each cut out of its own picture with sharp's trim, scaled, composited; made from the
+  pictures already painted, so nothing more is paid for and nothing is added to the Library). A cast written before
+  this has no heights and is asked for as it was.
   **A drawing that goes quiet no longer costs the video** (15 Nov 2026, found by a real video on production: three 3D
   scenes, one finished, then 20 minutes with no progress report, the watchdog stopped the job and nothing it had drawn
   was kept). *Why it went quiet*: the keep-alive of 14 Nov listened for stream events, and a model that is thinking

@@ -97,7 +97,8 @@ describe("the writer's scenes", () => {
     const shape = z.toJSONSchema(IdeaScriptSchema) as { properties: { cast: { description: string; items: { properties: Record<string, { description: string }> } } }; required: string[] }
     expect(shape.required).toContain('cast')
     expect(shape.properties.cast.description).toMatch(/seen in more than one generated picture or clip, most important first, at most 4\. Empty when no character returns\./)
-    expect(Object.keys(shape.properties.cast.items.properties)).toEqual(['name', 'look'])
+    expect(Object.keys(shape.properties.cast.items.properties)).toEqual(['name', 'look', 'heightCm'])
+    expect(shape.properties.cast.items.properties.heightCm.description).toMatch(/How tall it stands in centimetres, head to ground, as a real one of its kind and age would be/)
     const full = buildIdeaPrompt({ brief: { ...brief, motion: 'full' }, kinds, rules: '', example: '' })
     expect(full).toContain('FULL MOTION: this is an animated film. Make EVERY scene an aiVideo')
     expect(full).toContain('About 8 scenes')

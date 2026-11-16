@@ -600,6 +600,9 @@ export interface ScriptCharacter {
   name: string
   /** How it looks, in a sentence or two a painter could follow: kind, build, colours and markings, eyes, clothes. */
   look: string
+  /** How tall it stands, in centimetres, true to life: what keeps the characters the right size next to each other
+   * in every clip (absent on casts written before sizes were asked for). */
+  heightCm?: number
 }
 
 export interface ProducerMeta {
