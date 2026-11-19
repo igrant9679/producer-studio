@@ -30,6 +30,11 @@ COPY apps/server/package.json apps/server/package.json
 # binary is not (the server image never runs Electron).
 COPY apps/desktop/package.json apps/desktop/package.json
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
+# onnxruntime-node (Kokoro's voice, through @huggingface/transformers) downloads its CUDA binaries from GitHub on
+# Linux/x64 at install. The server has no GPU and runs the CPU library bundled in the package; and the download
+# (onnxruntime-linux-x64-gpu-1.21.0.tgz) answers 404 now, which failed every build that had to run `npm ci` again
+# (19 Nov 2026, when the build cache for this step was gone).
+ENV ONNXRUNTIME_NODE_INSTALL_CUDA=skip
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build -w @producer/web
