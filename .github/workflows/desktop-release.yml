@@ -1,0 +1,131 @@
+# The Windows desktop release (docs/desktop.md → "Updates", "Bundled tools and how CI gets them").
+# Pushing a tag v<version> (the version in apps/desktop/package.json) builds the installer on GitHub's Windows machine,
+# checks it (the app's layout, Electron's fuses, a silent install that starts the app's engine, a silent uninstall),
+# and only then publishes the release with the installer attached, notes from docs/releases/v<version>.md.
+# A build that fails a check publishes nothing. Unsigned until the owner sets up signing (docs/desktop.md).
+# Built here because a PC with Windows Smart App Control on can't finish the installer: electron-builder runs the
+# uninstaller it has just built, and an unsigned new program is refused (19 Nov 2026).
+name: Desktop release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The tag to build and release (v<version>)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      # electron-builder fetches Electron itself; the npm package's own copy is for development only
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      HYPERFRAMES_NO_TELEMETRY: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: The tag is the app's version
+        run: |
+          $v = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
+          if ($env:TAG -ne "v$v") { throw "tag $env:TAG does not match the app's version $v" }
+          if (-not (Test-Path "docs/releases/v$v.md")) { throw "no release notes at docs/releases/v$v.md" }
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Cache the bundled tools and electron-builder's downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/desktop/build/tools
+            ~\AppData\Local\electron-builder\Cache
+            ~\AppData\Local\electron\Cache
+          key: desktop-tools-${{ hashFiles('apps/desktop/scripts/fetch-tools.mjs', 'package-lock.json') }}
+          restore-keys: desktop-tools-
+
+      - run: npm ci --no-audit --no-fund
+
+      # --download: whisper, its model and Kokoro come from upstream, each checked against the sha256 pinned in
+      # fetch-tools.mjs (cached copies are checked again); Chrome for Testing at its pinned version
+      - name: Build the installer
+        run: npm run dist -w @producer/desktop -- --download
+
+      - name: Check the app's layout and fuses
+        run: |
+          $u = 'apps/desktop/release/win-unpacked'
+          $setup = "apps/desktop/release/Producer-Studio-Setup-$env:VERSION.exe"
+          if (-not (Test-Path $setup)) { throw "no installer at $setup" }
+          $mb = [math]::Round((Get-Item $setup).Length / 1MB)
+          "installer: $mb MB"
+          if ($mb -lt 300) { throw "the installer is too small to hold the app ($mb MB)" }
+          foreach ($f in @('Producer Studio.exe', 'resources/app.asar', 'resources/server/server.mjs', 'resources/web/index.html',
+                           'resources/tools/whisper/whisper-cli.exe', 'resources/tools/whisper/ggml-small.en.bin',
+                           'resources/tools/models/onnx-community/Kokoro-82M-v1.0-ONNX/onnx/model_quantized.onnx',
+                           'resources/tools/chrome/chrome-headless-shell.exe')) {
+            if (-not (Test-Path "$u/$f")) { throw "the app is missing $f" }
+          }
+          $fuses = node node_modules/@electron/fuses/dist/bin.js read --app "$u/Producer Studio.exe" | Out-String
+          $fuses
+          foreach ($want in @('RunAsNode is Enabled', 'EnableCookieEncryption is Enabled', 'EnableNodeOptionsEnvironmentVariable is Disabled',
+                              'EnableNodeCliInspectArguments is Disabled', 'EnableEmbeddedAsarIntegrityValidation is Enabled',
+                              'OnlyLoadAppFromAsar is Enabled', 'GrantFileProtocolExtraPrivileges is Disabled')) {
+            if ($fuses -notmatch [regex]::Escape($want)) { throw "fuse not as built: expected '$want'" }
+          }
+
+      - name: Install silently, start the app's engine, uninstall
+        run: |
+          $setup = (Resolve-Path "apps/desktop/release/Producer-Studio-Setup-$env:VERSION.exe").Path
+          $dir = Join-Path $env:RUNNER_TEMP 'ps-install'
+          $userData = Join-Path $env:RUNNER_TEMP 'ps-profile'
+          Start-Process -FilePath $setup -ArgumentList '/S', "/D=$dir" -Wait
+          if (-not (Test-Path "$dir/Producer Studio.exe")) { throw 'the installer did not install the app' }
+          $env:PS_USER_DATA = $userData
+          $p = Start-Process -FilePath "$dir/Producer Studio.exe" -PassThru
+          $log = Join-Path $userData 'logs/server.log'
+          $ok = $false
+          for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep -Seconds 2
+            if ((Test-Path $log) -and (Select-String -Path $log -Pattern '"msg":"listening"' -Quiet)) { $ok = $true; break }
+            if ($p.HasExited) { "the app exited (code $($p.ExitCode))"; break }
+          }
+          '--- server.log'; Get-Content $log -Tail 25 -ErrorAction SilentlyContinue
+          '--- main.log'; Get-Content (Join-Path $userData 'logs/main.log') -Tail 25 -ErrorAction SilentlyContinue
+          if (-not $p.HasExited) { taskkill /PID $p.Id /T /F | Out-Null }
+          Start-Sleep -Seconds 3
+          if (-not $ok) { throw 'the installed app did not start its engine within 4 minutes' }
+          Start-Process -FilePath "$dir/Uninstall Producer Studio.exe" -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 5
+          if (Test-Path "$dir/Producer Studio.exe") { throw 'the uninstaller left the app behind' }
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = "apps/desktop/release/Producer-Studio-Setup-$env:VERSION.exe"
+          $files = @($setup)
+          if (Test-Path "$setup.blockmap") { $files += "$setup.blockmap" }
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG @files --clobber
+          } else {
+            gh release create $env:TAG @files --title "Producer Studio $env:VERSION" --notes-file "docs/releases/$env:TAG.md" --verify-tag
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'publishing the release failed' }

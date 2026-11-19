@@ -128,6 +128,13 @@ It is offered only when the build says so in `build-info.json`: `signed: true` (
 `updateRepo`, set at build time with `PS_UPDATE_REPO=<owner>/<repo>`. Unsigned builds show the setting greyed out with
 the reason. Owner items: signing, and publishing each release (tag `v<version>`, the installer attached) to that repo.
 
+**Releases** (since 0.7.0, 19 Nov 2026) are built by GitHub: pushing the tag `v<version>` runs
+`.github/workflows/desktop-release.yml` on a Windows runner (the CI recipe above, `--download`), which checks the app's
+layout and fuses, installs it silently and waits for its engine to say it is listening, uninstalls it, and only then
+publishes the release with the installer, notes from `docs/releases/v<version>.md`. A PC with Windows Smart App Control
+on can't finish the installer itself: electron-builder runs the uninstaller it has just built, and Smart App Control
+refuses an unsigned new program (`spawn UNKNOWN`; the CodeIntegrity log shows the block).
+
 ## Security
 
 - Renderer: `sandbox: true` (also `app.enableSandbox()`), `contextIsolation`, no `nodeIntegration`, `webSecurity`,
