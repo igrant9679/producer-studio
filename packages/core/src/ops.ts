@@ -532,6 +532,12 @@ export function duplicateItems(p0: Project, ids: string[]): { project: Project; 
  * slow-motion copy or the brand logo.
  */
 export function unusedAssetIds(p: Project): string[] {
+  const used = usedAssetIds(p)
+  return Object.keys(p.assets).filter((id) => !used.has(id))
+}
+
+/** Media the project's timeline uses: its clips, letterbox fills, smooth slow-motion copies and the brand logo. */
+export function usedAssetIds(p: Pick<Project, 'tracks' | 'brand'>): Set<string> {
   const used = new Set<string>()
   for (const t of p.tracks)
     for (const it of t.items) {
@@ -539,7 +545,7 @@ export function unusedAssetIds(p: Project): string[] {
       if (it.type === 'video' && it.smooth?.assetId) used.add(it.smooth.assetId)
     }
   if (p.brand?.logoAssetId) used.add(p.brand.logoAssetId)
-  return Object.keys(p.assets).filter((id) => !used.has(id))
+  return used
 }
 
 /** The project without these media records (a clip on the timeline keeps its record). */

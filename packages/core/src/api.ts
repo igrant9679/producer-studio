@@ -342,6 +342,11 @@ export interface AssetRecord {
   trashedAt?: number
   /** The project it was uploaded (or made) in: the editor's Media panel shows it under This project. */
   projectId?: string
+  /**
+   * A picture the app keeps to make a video's AI clips from (a character's look, sent with each clip): listed with the
+   * project's media, never counted as a clip that isn't on the timeline. Removing it would repaint the character.
+   */
+  reference?: true
 }
 
 /** Tells one transcript from another without sending it (cheap: no hashing of what can be an hour of words). */

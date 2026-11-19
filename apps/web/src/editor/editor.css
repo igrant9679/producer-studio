@@ -159,7 +159,8 @@
 .ed-unusedbar { position: relative; display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 6px 8px; border-radius: 8px; font-size: 0.75rem; color: var(--text-2); background: var(--field-2); border: 1px solid var(--border); }
 .ed-unusedbar span { flex: 1; }
 .ed-unusedbar .act { font-size: 0.6875rem; font-weight: 600; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-2); color: var(--text); cursor: pointer; }
-.ed-unusedpop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; width: 250px; }
+/* .ed-menu.x, not .x alone: the menu's own rule (position: fixed, further down) would win and put it off the page */
+.ed-menu.ed-unusedpop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; width: 250px; }
 .ed-failedbar { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 6px 8px; border-radius: 8px; font-size: 0.75rem; color: var(--text); background: color-mix(in srgb, var(--danger) 12%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); }
 .ed-failedbar span { flex: 1; }
 .ed-failedbar .act { display: inline-flex; align-items: center; gap: 4px; font-size: 0.6875rem; font-weight: 600; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-2); color: var(--text); cursor: pointer; }
@@ -487,7 +488,7 @@
 .ed-color { position: relative; }
 .ed-color-kit { flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border-radius: 6px; border: 1px solid var(--border); background: var(--field-2); color: var(--text-3); cursor: pointer; }
 .ed-color-kit:hover, .ed-color-kit.on { color: var(--text); border-color: var(--border-strong); }
-.ed-color-pop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; display: grid; grid-template-columns: repeat(6, 22px); gap: 6px; padding: 8px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 24px var(--shadow-drop); }
+.ed-menu.ed-color-pop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 0; display: grid; grid-template-columns: repeat(6, 22px); gap: 6px; padding: 8px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: 0 8px 24px var(--shadow-drop); }
 .ed-color-dot { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--border-strong); cursor: pointer; }
 .ed-color-dot[aria-checked='true'] { outline: 2px solid var(--cyan); outline-offset: 1px; }
 .ed-kf { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 5px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; }

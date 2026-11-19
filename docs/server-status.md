@@ -373,6 +373,33 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   out, $6.69), where it had said 26 minutes and $13 (`estimates.ts` says where each number comes from; 2D, Lottie and
   Blender are unchanged, having no measurement at medium effort); and AI clip seconds are on the Usage page
   (architecture.md → "Usage and limits").
+  **Reported from the live site on 19 Nov 2026** (two bugs, one video of fourteen AI clips).
+  *"Remove…" for clips not on the timeline did nothing.* Its menu opened 4 px below the bottom of the window: the
+  menu's own class (`.ed-unusedpop`, position: absolute under its bar) lost to the general `.ed-menu` rule further down
+  the stylesheet (position: fixed), so it was fixed at `top: 100%` of the window. The brand-colours popover of a colour
+  field (`.ed-color-pop`) had the same fault. Both are now `.ed-menu.<class>`; a menu class that positions itself must
+  outrank `.ed-menu` (`unused-media.test.tsx` reads the rule, since jsdom lays nothing out). With the menu in reach:
+  "Move to the media trash" now takes the clip off the project's list first (`trashUnused`; a clip only trashed stayed
+  listed, still counted); the bar no longer counts what the app keeps for itself, the project's exports
+  (`origin: 'render'`) and its characters' reference pictures (`AssetRecord.reference`, from `meta.generated.kind ===
+  'character'`): trashing an export from that bar would have lost the finished video, and a removed character picture is
+  painted again, differently, at the next assembly; and the brand logo counts as used there as it does in
+  `unusedAssetIds` (one `usedAssetIds` in core).
+  *The export stopped at 18%, "ffmpeg couldn't decode it".* Four exports each lost four to six of the fourteen clips,
+  different ones each time, within 25 s; the files were fine and 44 of 46 GB were free. `extractionFailure` said
+  "couldn't decode" of every cause it didn't know, and what ffmpeg said was thrown away. The gate
+  (`scripts/hf-ffmpeg.mjs`) had limited only the decoder's threads: ffmpeg's filter graph and frame encoder still sized
+  themselves for every core the container reports (48), about seventy threads an extraction. Now all three pools get
+  `PS_FFMPEG_THREADS`; an extraction that fails for no reason of its file (not killed, not a full disk, not a file
+  ffmpeg can't read) is run again while it holds its slot, up to `PS_FFMPEG_RETRIES` (2) more times; HyperFrames' own
+  one retry of a passing fault is on (`HF_VIDEO_EXTRACTION_MAX_RETRIES`); the gate's log records the failed try, its
+  number of tries, `ok` when a later try worked, and the container's process count (`pids.current/pids.max`); a cause
+  the export doesn't know is given in ffmpeg's own words (`ffmpegSaid`: its last line that reads like an error, without
+  paths or log tags), "out of memory" is told by the kill signal and not by a 137 somewhere in the output, and
+  everything ffmpeg and the renderer said goes on the job for an operator (`error_detail`, through `HttpError.details`
+  and `rawJobError`). An export that only succeeded on a later try logs a warning with what the first try met. **Not
+  known yet:** which fault the first tries met on production (nothing kept it); the next export that needs a second try
+  says so in the server log.
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI

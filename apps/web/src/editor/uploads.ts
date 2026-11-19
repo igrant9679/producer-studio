@@ -242,6 +242,17 @@ export async function takeOutOfProject(ids: string[]) {
   if (failed) toast(`${failed} clip${failed === 1 ? '' : 's'} couldn’t be taken out of the project: try again`)
 }
 
+/**
+ * Move clips the timeline doesn't use to the media trash: off this project's media list first, then into the trash.
+ * A clip that was only trashed stayed on the project's list, still counted as not on the timeline.
+ */
+export async function trashUnused(ids: string[]) {
+  const st = useEditor.getState()
+  st.commit(removeUnusedAssets(st.project, ids), `Move ${ids.length} clip${ids.length === 1 ? '' : 's'} to the media trash`)
+  if (st.demo) return
+  await Promise.all(ids.map((id) => removeAsset(id)))
+}
+
 /** Re-run processing for a failed clip. A clip whose file never reached storage has to be uploaded again. */
 export async function retryAsset(id: string) {
   try {

@@ -1,7 +1,7 @@
 // Left icon rail + collapsible asset panel.
 import type { Asset, AssetRecord, AudioItem } from '@producer/core'
 import { useVoices } from '../shell/components/VoiceCard'
-import { TEXT_TEMPLATES, VOICES, addAsset, addItem, assetIdsOf, createAudioItem, createShapeItem, isPathShape, itemEnd, shapePath, type ShapeItem } from '@producer/core'
+import { TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, isPathShape, itemEnd, shapePath, usedAssetIds, type ShapeItem } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -43,7 +43,7 @@ import { type LeftTab, useEditor } from './store'
 import { ViewOnly } from './viewer'
 import { CommentsPanel } from './collab/CommentsPanel'
 import { shortDuration } from './timelineMath'
-import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, uploadFiles, useLibrary } from './uploads'
+import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, trashUnused, uploadFiles, useLibrary } from './uploads'
 import { tipProps } from '../lib/tooltip'
 
 const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
@@ -188,8 +188,14 @@ function MediaPanel() {
   const scoped = scope === 'project' ? ours : list
   const shown = scoped.filter((x) => filter === 'all' || x.asset.kind === filter)
   // not on the timeline (tracker #18): taken out of the project, or into the media trash
-  const used = new Set(tracks.flatMap((t) => t.items.flatMap((it) => [...assetIdsOf(it), ...(it.type === 'video' && it.smooth?.assetId ? [it.smooth.assetId] : [])])))
-  const unused = scope === 'project' ? ours.filter((x) => !used.has(x.asset.id)) : []
+  const brand = useEditor((s) => s.project.brand)
+  const used = usedAssetIds({ tracks, brand })
+  // what the app made for itself is no clip left unused: the project's exports, and the pictures its AI clips are made from
+  const kept = (id: string) => {
+    const r = records.find((x) => x.asset.id === id)
+    return !!r && (r.origin === 'render' || !!r.reference)
+  }
+  const unused = scope === 'project' ? ours.filter((x) => !used.has(x.asset.id) && !kept(x.asset.id)) : []
   const [tidy, setTidy] = useState(false)
   // a clip that failed can't be used: they go last, under the ones that can
   const ordered = [...shown.filter((x) => !isFailed(x.status)), ...shown.filter((x) => isFailed(x.status))]
@@ -222,7 +228,7 @@ function MediaPanel() {
               onClick={() => {
                 setTidy(false)
                 if (window.confirm(`Move ${unused.length} clip${unused.length === 1 ? '' : 's'} to the media trash? Other projects that use ${unused.length === 1 ? 'it' : 'them'} keep playing ${unused.length === 1 ? 'it' : 'them'}, and the trash can put ${unused.length === 1 ? 'it' : 'them'} back.`))
-                  for (const x of unused) void removeAsset(x.asset.id)
+                  void trashUnused(unused.map((x) => x.asset.id))
               }}
               danger
               label={`Move ${unused.length === 1 ? 'it' : 'them'} to the media trash`}

@@ -8,7 +8,9 @@ import path from 'node:path'
 import { createProject, createVideoItem, type Asset, type Project } from '@producer/core'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { SERVER_ROOT } from '../config'
-import { extractionBytes, extractionFailure, extractionSlots, ffmpegGate, freeBytes } from '../render/export'
+import { HttpError } from '../http'
+import { publicJobError, rawJobError } from '../jobs/errors'
+import { extractionBytes, extractionFailure, extractionSlots, ffmpegGate, ffmpegSaid, freeBytes, gateFailures } from '../render/export'
 import { setup } from './helpers'
 
 beforeAll(async () => {
@@ -30,6 +32,13 @@ function fakeFfmpeg(dir: string): string {
       'await new Promise((r) => setTimeout(r, 400))',
       "fs.appendFileSync(log, JSON.stringify({ at: 'end', t: Date.now() }) + String.fromCharCode(10))",
       "if (args.some((a) => a.includes('broken'))) { process.stderr.write('[mov,mp4 @ 0x1] moov atom not found' + String.fromCharCode(10) + 'broken.mp4: Invalid data found when processing input' + String.fromCharCode(10)); process.exit(1) }",
+      // a clip that is fine but meets a passing fault: its first FAKE_FAILS runs end as ffmpeg does when it can't start its threads
+      "if (args.some((a) => a.includes('flaky'))) {",
+      "  const f = log + '.count'",
+      "  const n = (fs.existsSync(f) ? Number(fs.readFileSync(f, 'utf8')) : 0) + 1",
+      '  fs.writeFileSync(f, String(n))',
+      "  if (n <= Number(process.env.FAKE_FAILS || 1)) { process.stderr.write('frame=  137 fps=0.0 q=2.0 size=N/A' + String.fromCharCode(10) + 'Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height' + String.fromCharCode(10) + 'Conversion failed!' + String.fromCharCode(10)); process.exit(1) }",
+      '}',
     ].join(String.fromCharCode(10)),
   )
   return f
@@ -59,6 +68,13 @@ describe('the ffmpeg gate', () => {
     }
     expect(most).toBeLessThanOrEqual(2)
     expect(events.filter((e) => e.at === 'start').every((e) => e.args[0] === '-threads' && e.args[1] === '3')).toBe(true)
+    // the filter graph and the frame encoder size themselves for every core too: they get the same few threads, and
+    // the frame pattern stays the last word
+    const first = events.find((e) => e.at === 'start').args as string[]
+    expect(first.slice(0, 4)).toEqual(['-threads', '3', '-filter_threads', '3'])
+    expect(first.slice(-3, -1)).toEqual(['-threads', '3'])
+    expect(first.at(-1)).toMatch(/frame_%05d\.jpg$/)
+    expect(first.filter((a) => a === '-i').length).toBe(1)
     // an encode (no frame pattern) is left as HyperFrames wrote it
     fs.writeFileSync(log, '')
     expect(await runGate(env, ['-i', 'in.mp4', '-c:v', 'libx264', 'out.mp4'])).toBe(0)
@@ -79,6 +95,40 @@ describe('the ffmpeg gate', () => {
     const line = JSON.parse(fs.readFileSync(failures, 'utf8').trim())
     expect(line).toMatchObject({ input: path.join(dir, 'assets', 'as_broken~2.mp4'), code: 1 })
     expect(line.tail).toMatch(/moov atom not found/)
+    // a file ffmpeg can't read fails the same way every time: it is not run again
+    expect(line.tries).toBe(1)
+  }, 60_000)
+
+  it('runs an extraction again when it failed for no reason of its file, and says so in its log', async () => {
+    // 19 Nov 2026: a video of fourteen AI clips lost four to six of them, different ones each time, in seconds
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-gate-'))
+    const failures = path.join(dir, 'failures.jsonl')
+    const runs = path.join(dir, 'runs.jsonl')
+    const env = { PS_FFMPEG_REAL: fakeFfmpeg(dir), PS_FFMPEG_SLOTS: '1', PS_FFMPEG_LOCKS: path.join(dir, 'locks'), PS_FFMPEG_LOG: failures, FAKE_LOG: runs, FAKE_FAILS: '1' }
+    const extract = ['-ss', '0', '-i', path.join(dir, 'assets', 'as_flaky.mp4'), '-t', '2', '-y', path.join(dir, 'f_%05d.jpg')]
+    expect(await runGate(env, extract)).toBe(0)
+    expect(fs.readFileSync(runs, 'utf8').trim().split('\n').filter((l) => JSON.parse(l).at === 'start').length).toBe(2)
+    const line = JSON.parse(fs.readFileSync(failures, 'utf8').trim())
+    expect(line).toMatchObject({ code: 1, tries: 2, ok: true })
+    expect(line.tail).toMatch(/Error while opening encoder/)
+    // the export reads that as no failure at all
+    const p: Project = { ...createProject({ id: 'p', name: 'x' }), assets: {} }
+    expect(extractionFailure(failures, p)).toBeUndefined()
+    expect(gateFailures(failures).length).toBe(1)
+
+    // one that never works is given up after its tries, and logged once as a failure
+    fs.rmSync(failures)
+    fs.rmSync(runs + '.count')
+    expect(await runGate({ ...env, FAKE_FAILS: '99', PS_FFMPEG_RETRIES: '2' }, extract)).toBe(1)
+    const lost = JSON.parse(fs.readFileSync(failures, 'utf8').trim())
+    expect(lost).toMatchObject({ code: 1, tries: 3 })
+    expect(lost.ok).toBeUndefined()
+    expect(fs.readdirSync(path.join(dir, 'locks'))).toEqual([])
+    // an encode is never run twice
+    fs.rmSync(runs + '.count')
+    fs.writeFileSync(runs, '')
+    expect(await runGate({ ...env, FAKE_FAILS: '99' }, ['-i', 'flaky.mp4', '-c:v', 'libx264', 'out.mp4'])).toBe(1)
+    expect(fs.readFileSync(runs, 'utf8').trim().split('\n').filter((l) => JSON.parse(l).at === 'start').length).toBe(1)
   }, 60_000)
 })
 
@@ -94,6 +144,43 @@ describe('what the export says and checks', () => {
     fs.writeFileSync(f, JSON.stringify({ input: 'assets/as_b.mp4', code: 1, signal: null, tail: 'moov atom not found' }))
     expect(extractionFailure(f, p)).toMatch(/“Interview.mp4”: the file is damaged/)
     expect(extractionFailure(path.join(dir, 'none.jsonl'), p)).toBeUndefined()
+  })
+
+  it('gives a cause it doesn’t know in ffmpeg’s own words, not as a damaged file', () => {
+    const p: Project = { ...createProject({ id: 'p', name: 'x' }), assets: { as_a: video('as_a', 's05 · Government Services'), as_b: video('as_b', 's07 · Social Media') } }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-gate-'))
+    const f = path.join(dir, 'f.jsonl')
+    const encoder = '[mjpeg @ 0x55d0c8a1] ff_frame_thread_encoder_init failed\nError while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height\nframe=  137 fps=0.0 q=2.0 size=N/A time=00:00:04.56\nConversion failed!'
+    fs.writeFileSync(f, [JSON.stringify({ input: '/data/renders/j/assets/as_a.mp4', code: 1, signal: null, tail: encoder, tries: 3 }), JSON.stringify({ input: '/data/renders/j/assets/as_b.mp4', code: 1, signal: null, tail: encoder, tries: 3 })].join('\n'))
+    // not "out of memory" for a frame count of 137, not "damaged", and no server path or log tag
+    expect(extractionFailure(f, p)).toBe(
+      'The render couldn’t read the video in “s05 · Government Services”, “s07 · Social Media”: ffmpeg stopped with “Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height”.',
+    )
+    expect(ffmpegSaid('[image2 @ 0x1] Could not open file : /data/cache/hfx-1.partial-9-ab/frame_00001.jpg\nav_interleaved_write_frame(): Input/output error\nframe=    1 fps=0.0\nConversion failed!')).toBe('av_interleaved_write_frame(): Input/output error')
+    expect(ffmpegSaid('')).toBeUndefined()
+    // the server short of threads, after its tries
+    fs.writeFileSync(f, JSON.stringify({ input: 'assets/as_a.mp4', code: 1, signal: null, tail: '[h264 @ 0x1] pthread_create failed: Resource temporarily unavailable', tries: 3, pids: '1021/1024' }))
+    expect(extractionFailure(f, p)).toMatch(/“s05 · Government Services”: the server was too busy to read them, and trying again didn’t help\. Export again in a minute\.$/)
+    // killed: memory, by the signal and not by a number in its output
+    fs.writeFileSync(f, JSON.stringify({ input: 'assets/as_a.mp4', code: null, signal: 'SIGKILL', tail: '' }))
+    expect(extractionFailure(f, p)).toMatch(/the server ran out of memory/)
+    // nothing said at all
+    fs.writeFileSync(f, JSON.stringify({ input: 'assets/as_a.mp4', code: 1, signal: null, tail: '' }))
+    expect(extractionFailure(f, p)).toMatch(/ffmpeg stopped without saying why\.$/)
+    // a clip that worked on its second try is not named
+    fs.writeFileSync(f, [JSON.stringify({ input: 'assets/as_a.mp4', code: 1, signal: null, tail: encoder, tries: 2, ok: true }), JSON.stringify({ input: 'assets/as_b.mp4', code: 1, signal: null, tail: encoder, tries: 3 })].join('\n'))
+    expect(extractionFailure(f, p)).toMatch(/^The render couldn’t read the video in “s07 · Social Media”: /)
+  })
+
+  it('keeps what ffmpeg said on the job for an operator, under the sentence people see', () => {
+    const err = new HttpError(422, 'invalid', 'The render couldn’t read the video in “a”: ffmpeg stopped without saying why.', { ffmpeg: [{ input: 'assets/as_a.mp4', code: 1, signal: null, tail: 'the tail', tries: 3 }], renderer: 'Video extraction failed for 1 source(s)' })
+    const raw = rawJobError(err)
+    expect(raw.startsWith('The render couldn’t read the video in “a”')).toBe(true)
+    expect(raw).toMatch(/"tail": "the tail"/)
+    expect(raw).toMatch(/Video extraction failed for 1 source/)
+    expect(publicJobError('export.render', err)).toBe('The render couldn’t read the video in “a”: ffmpeg stopped without saying why.')
+    // an error with nothing kept reads as before
+    expect(rawJobError(new Error('plain'))).toMatch(/^Error: plain|^plain/)
   })
 
   it('knows the disk its frames need: every used second of video at the export’s rate and size', () => {

@@ -11,6 +11,7 @@ import { ctx } from '../context'
 import { assets, exportsTable, jobs } from '../db/schema'
 import { HttpError } from '../http'
 import { newId } from '../ids'
+import { scrubPaths } from '../jobs/errors'
 import { emitJob } from '../jobs/queue'
 import { CancelledError, type JobContext } from '../jobs/worker'
 import { log } from '../log'
@@ -290,6 +291,8 @@ export function hfEnv(): NodeJS.ProcessEnv {
   // the frames HyperFrames extracted, kept between exports on the data volume (P-18): the container's own disk is
   // small and goes with every deploy
   env.HYPERFRAMES_EXTRACT_CACHE_DIR ??= ctx().config.renderCacheDir
+  // one more try, by HyperFrames itself, of an extraction that met a passing fault (EAGAIN, a busy device)
+  env.HF_VIDEO_EXTRACTION_MAX_RETRIES ??= '1'
   env.HYPERFRAMES_NO_TELEMETRY = '1'
   env.DO_NOT_TRACK = '1'
   env.FORCE_COLOR = '0'
@@ -411,30 +414,74 @@ export async function freeBytes(dir: string): Promise<number | undefined> {
 
 const gb = (n: number) => (n >= 10 * 2 ** 30 ? (n / 2 ** 30).toFixed(0) : (n / 2 ** 30).toFixed(1))
 
+/** One line of the gate's log (scripts/hf-ffmpeg.mjs): an extraction that failed, or (`ok`) failed and then worked. */
+export interface GateFailure {
+  input: string
+  code: number | null
+  signal: string | null
+  tail: string
+  tries?: number
+  ok?: boolean
+  stopped?: boolean
+  pids?: string
+}
+
+/** The gate's log, read; empty when there is none. */
+export function gateFailures(logFile: string): GateFailure[] {
+  try {
+    return fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as GateFailure)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * ffmpeg's own word on why it stopped: the last line of its output that reads like an error (not its progress or
+ * its summary), without server paths or its log tags, short enough to sit in a sentence.
+ */
+export function ffmpegSaid(tail: string): string | undefined {
+  const lines = tail
+    .split(/\r?\n/)
+    .map((l) => scrubPaths(l))
+    .filter((l) => l && !/^(frame=|size=|video:|Conversion failed|Exiting normally|Press \[q\]|\[hf-ffmpeg\])/i.test(l))
+  const telling = [...lines].reverse().find((l) => /error|invalid|unable|cannot|can.t|could not|failed|no such|denied|unavailable|unrecogni[sz]ed|unknown|not found|killed|too many/i.test(l)) ?? lines.at(-1)
+  return (
+    telling
+      ?.replace(/[|“”"]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160) || undefined
+  )
+}
+
 /**
  * Why HyperFrames couldn't read some of the video, in words: the clips (by their names in the project) and the cause
- * ffmpeg gave, from the gate's log. Undefined when nothing was logged.
+ * ffmpeg gave, from the gate's log. Undefined when nothing was logged. A cause this doesn't know is given in
+ * ffmpeg's own words: "ffmpeg couldn't decode it" was said of clips that were fine (found on 19 Nov 2026).
  */
 export function extractionFailure(logFile: string, project: Project): string | undefined {
-  let lines: Array<{ input: string; code: number | null; signal: string | null; tail: string }>
-  try {
-    lines = fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
-  } catch {
-    return undefined
-  }
+  // an extraction that a later try got past is no failure
+  const lines = gateFailures(logFile).filter((l) => !l.ok)
   if (!lines.length) return undefined
   const names = [...new Set(lines.map((l) => {
     const id = path.basename(l.input).replace(/[~.].*$/, '')
     return project.assets[id]?.name ?? path.basename(l.input)
   }))]
-  const all = lines.map((l) => `${l.tail} ${l.signal ?? ''} ${l.code ?? ''}`).join('\n')
+  const all = lines.map((l) => l.tail).join('\n')
+  const said = lines.map((l) => ffmpegSaid(l.tail)).find(Boolean)
   const cause = /No space left on device|ENOSPC/i.test(all)
     ? 'the server ran out of disk space for its frames'
-    : /SIGKILL|Cannot allocate memory|out of memory|\b137\b/i.test(all)
+    : lines.some((l) => l.signal === 'SIGKILL' || l.code === 137) || /Cannot allocate memory|out of memory/i.test(all)
       ? 'the server ran out of memory'
       : /Invalid data found|could not find codec|moov atom not found|Error while decoding|corrupt/i.test(all)
         ? 'the file is damaged or in a format the renderer can’t decode'
-        : 'ffmpeg couldn’t decode it'
+        : /Resource temporarily unavailable|EAGAIN|pthread_create/i.test(all)
+          ? 'the server was too busy to read them, and trying again didn’t help. Export again in a minute'
+          : lines.every((l) => l.stopped)
+            ? 'reading them took longer than the renderer allows'
+            : said
+              ? `ffmpeg stopped with “${said}”`
+              : 'ffmpeg stopped without saying why'
   const list = names.slice(0, 3).map((n) => `“${n}”`).join(', ') + (names.length > 3 ? ` and ${names.length - 3} more` : '')
   return `The render couldn’t read the video in ${list}: ${cause}.`
 }
@@ -488,12 +535,17 @@ export async function renderComposition(dir: string, out: string, opts: { fps: n
       if (f !== undefined) opts.progress?.(f)
     },
   })
+  const tried = gate.PS_FFMPEG_LOG ? gateFailures(gate.PS_FFMPEG_LOG) : []
   if (r.code !== 0 || !fs.existsSync(out)) {
-    const read = gate.PS_FFMPEG_LOG && opts.project ? extractionFailure(gate.PS_FFMPEG_LOG, opts.project) : undefined
-    if (read) throw new HttpError(422, 'invalid', read)
     const tail = stripAnsi(`${r.stderr}\n${r.stdout}`).trim().split(/\r?\n/).filter(Boolean).slice(-8).join(' | ')
+    const read = gate.PS_FFMPEG_LOG && opts.project ? extractionFailure(gate.PS_FFMPEG_LOG, opts.project) : undefined
+    // the sentence is for the person; what ffmpeg and the renderer said goes on the job for an operator (error_detail)
+    if (read) throw new HttpError(422, 'invalid', read, { ffmpeg: tried.filter((l) => !l.ok), renderer: tail.slice(-1500) })
     throw new Error(`Render failed (exit ${r.code}): ${tail.slice(-900)}`)
   }
+  // an extraction that only worked on a later try: the export is fine, and the log says what the first try met
+  const again = tried.filter((l) => l.ok)
+  if (again.length) log.warn('export: frame extractions that needed another try', { clips: again.length, tries: Math.max(...again.map((l) => l.tries ?? 2)), pids: again[0].pids, said: ffmpegSaid(again[0].tail) ?? again[0].tail.slice(-300) })
 }
 
 /** Output size for a resolution preset: scale so the short side matches, even dimensions, never upscale past 4k. */

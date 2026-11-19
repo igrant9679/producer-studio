@@ -87,6 +87,8 @@ export function assetRecord(a: typeof assets.$inferSelect, opts: { light?: boole
     etag: etagOf(assetEditable(a)),
     ...(a.trashedAt != null ? { trashedAt: a.trashedAt } : {}),
     ...(a.projectId ? { projectId: a.projectId } : {}),
+    // a character's reference picture (ai/cast.ts): the project's media lists it, but it is no unused clip
+    ...(a.meta?.generated?.kind === 'character' ? { reference: true as const } : {}),
   }
   if (!opts.light) return rec
   const { transcript, ...rest } = doc

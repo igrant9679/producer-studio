@@ -81,6 +81,16 @@ export function shownAssetError(stored: string): string {
 
 /** The raw error for operators (the job's error_detail): the message and, when there is one, the stack. */
 export function rawJobError(err: unknown): string {
-  if (err instanceof Error) return (err.stack && err.stack.includes(err.message) ? err.stack : `${err.message}\n${err.stack ?? ''}`).slice(0, 8000)
-  return String(err).slice(0, 8000)
+  if (!(err instanceof Error)) return String(err).slice(0, 8000)
+  const text = err.stack && err.stack.includes(err.message) ? err.stack : `${err.message}\n${err.stack ?? ''}`
+  // what the step itself kept for an operator (an export's ffmpeg output): before the stack, which is the long part
+  const details = (err as { details?: unknown }).details
+  let kept = ''
+  if (details && typeof details === 'object')
+    try {
+      kept = JSON.stringify(details, null, 1).slice(0, 5000)
+    } catch {
+      /* not something that can be written down */
+    }
+  return (kept ? `${err.message}\n${kept}\n${text.replace(err.message, '').trim()}` : text).slice(0, 8000)
 }
