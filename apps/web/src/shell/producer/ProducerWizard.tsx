@@ -1,4 +1,4 @@
-import { AI_LOOKS, DRAWING_STYLES, MUSIC_STYLES, PRODUCE_LIMITS, aiLookOf, drawingStyleOf, is3dDrawingStyle, isBlenderStyle, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { AI_LOOKS, CAPTION_PLACES, CAPTION_PRESETS, CAPTION_SIZES, DRAWING_STYLES, FONTS, MUSIC_STYLES, PRODUCE_LIMITS, SFX_PREVIEW_ROLES, aiLookOf, captionStyleFromPreset, libraryTrackFor, sfxKitFor, drawingStyleOf, is3dDrawingStyle, isBlenderStyle, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -16,6 +16,8 @@ import {
   GripVertical,
   Library,
   Lightbulb,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -495,6 +497,84 @@ function StartStep({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
 }
 
 // ---------------- ② brief ----------------
+// ---------- hearing the brief's sound before it is picked (19 Nov 2026) ----------
+
+let briefSounds: HTMLAudioElement[] = []
+let briefTimers: ReturnType<typeof setTimeout>[] = []
+function stopBriefSound() {
+  for (const a of briefSounds) a.pause()
+  for (const t of briefTimers) clearTimeout(t)
+  briefSounds = []
+  briefTimers = []
+}
+
+/** One thing playing at a time: a music style's library track, or the sound effects one after another. */
+function useBriefSound() {
+  const [on, setOn] = useState<string | null>(null)
+  useEffect(() => () => stopBriefSound(), [])
+  const play = (key: string, urls: string[], gapMs = 0) => {
+    const was = on
+    stopBriefSound()
+    if (was === key) return setOn(null)
+    setOn(key)
+    urls.forEach((url, i) => {
+      const go = () => {
+        const a = new Audio(url)
+        a.volume = 0.8
+        briefSounds.push(a)
+        if (i === urls.length - 1) a.onended = () => setOn((k) => (k === key ? null : k))
+        void a.play().catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          setOn((k) => (k === key ? null : k))
+          toast('That sound can’t be played here. Try again in a moment.')
+        })
+      }
+      if (i === 0) go()
+      else briefTimers.push(setTimeout(go, i * gapMs))
+    })
+  }
+  const stop = () => {
+    stopBriefSound()
+    setOn(null)
+  }
+  return { on, play, stop }
+}
+
+/** What the captions will look like: a frame of the video's shape with a line of them in the chosen look. */
+function CaptionSample({ b, brandPreset, brandFont }: { b: Brief; brandPreset?: string; brandFont?: string }) {
+  const [w, h] = b.aspect === '9:16' ? [1080, 1920] : b.aspect === '1:1' ? [1080, 1080] : [1920, 1080]
+  const look = captionStyleFromPreset(b.captionPreset ?? brandPreset ?? 'clean', { width: w, height: h })
+  const box = b.aspect === '9:16' ? 150 : b.aspect === '1:1' ? 220 : 320
+  const k = box / w
+  const st = look.style
+  const size = Math.max(7, st.fontSize * (CAPTION_SIZES[b.captionSize ?? 'medium'] ?? 1) * k)
+  const place = b.captionPosition ? CAPTION_PLACES[b.captionPosition] : undefined
+  const top = Math.round((place ?? look.position) * 1000) / 10
+  const bg = st.background
+  return (
+    <div className="ps-capsample" style={{ width: box, height: (box * h) / w }} aria-hidden>
+      <span
+        style={{
+          top: `${top}%`,
+          fontFamily: `'${b.captionFont ?? brandFont ?? st.fontFamily}', sans-serif`,
+          fontSize: size,
+          fontWeight: st.fontWeight,
+          fontStyle: st.italic ? 'italic' : undefined,
+          textTransform: st.uppercase ? 'uppercase' : undefined,
+          color: st.color,
+          WebkitTextStroke: st.stroke ? `${Math.max(0.5, st.stroke.width * k)}px ${st.stroke.color}` : undefined,
+          textShadow: st.shadow ? `0 ${st.shadow.y * k}px ${st.shadow.blur * k}px ${st.shadow.color}` : undefined,
+          background: bg ? `color-mix(in srgb, ${bg.color} ${Math.round((bg.opacity ?? 1) * 100)}%, transparent)` : undefined,
+          padding: bg ? `${bg.padding * k}px ${bg.padding * k * 1.4}px` : undefined,
+          borderRadius: bg ? bg.radius * k : undefined,
+        }}
+      >
+        Your captions <em style={{ color: look.mode === 'line' ? undefined : look.highlightColor, fontStyle: 'inherit' }}>look</em> like this
+      </span>
+    </div>
+  )
+}
+
 function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: TemplateSummary[]; tplLoading: boolean }) {
   const patch = useWizard((st) => st.patch)
   const b = s.brief
@@ -517,6 +597,17 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
   const parts = videoParts(b)
   const idea = b.source === 'idea'
   const onlyAnimation = idea && !parts.narration && !parts.onScreenText && !parts.cards
+  const sound = useBriefSound()
+  const music = musicStyleFor(b.music, b.tone)
+  const musicTrack = music ? libraryTrackFor(music) : undefined
+  // another style picked while one plays: that one stops, so the button offers the new one
+  const heard = useRef(music)
+  useEffect(() => {
+    if (heard.current !== music && sound.on === 'music') sound.stop()
+    heard.current = music
+  }, [music, sound])
+  const kit = kits.data?.find((k) => (b.brandKitId ? k.id === b.brandKitId : k.default))?.doc
+  const brandPreset = kit?.captionPreset
   return (
     <div className="ps-wz-body">
       <div className="ps-wz-intro">
@@ -569,6 +660,12 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
             {musicStyleFor(b.music, b.tone) ? `${MUSIC_STYLES.find((m) => m.id === musicStyleFor(b.music, b.tone))?.about}. Composed for this video on its scene changes${parts.narration ? ', and quieter while the narrator speaks' : ''}. Free.` : parts.narration ? 'The video has narration only.' : 'The video has no sound but any effects you add.'}
           </div>
+          {musicTrack && (
+            <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} aria-pressed={sound.on === 'music'} onClick={() => sound.play('music', [api.musicPreviewUrl(musicTrack.id)])}>
+              {sound.on === 'music' ? <Pause size={13} /> : <Play size={13} />} {sound.on === 'music' ? 'Stop' : `Listen to ${MUSIC_STYLES.find((m) => m.id === music)?.label}`}
+            </button>
+          )}
+          {musicTrack && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>A track in this style from the music library (the first listen can take a little while). Your video’s own music is composed for its scenes. The editor’s Audio panel has the whole library.</div>}
         </div>
         <div className="ps-field">
           <span className="label">Sound effects</span>
@@ -576,7 +673,58 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
             <input type="checkbox" checked={b.soundEffects === true} onChange={(e) => set({ soundEffects: e.target.checked })} />
             <span>A whoosh on each scene change and a soft pop as graphics appear{parts.cards ? ', with a ding on the close card' : ''}. Free, and each one is a clip you can move or delete.</span>
           </label>
+          <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} aria-pressed={sound.on === 'sfx'} onClick={() => sound.play('sfx', SFX_PREVIEW_ROLES.map((r) => api.sfxPreviewUrl(sfxKitFor(music), r)), 900)}>
+            {sound.on === 'sfx' ? <Pause size={13} /> : <Play size={13} />} {sound.on === 'sfx' ? 'Stop' : 'Listen to the effects'}
+          </button>
         </div>
+        {parts.captions && (
+          <div className="ps-field" style={{ gridColumn: '1 / -1' }}>
+            <span className="label">How the captions look</span>
+            <div className="ps-capopts">
+              <div className="ps-capctl">
+                <div className="row" style={{ flexWrap: 'wrap', gap: 6 }} role="radiogroup" aria-label="Caption look">
+                  {CAPTION_PRESETS.map((c) => {
+                    const chosen = (b.captionPreset ?? brandPreset ?? 'clean') === c.id
+                    return (
+                      <button key={c.id} type="button" role="radio" aria-checked={chosen} className={clsx('chip', chosen && 'active')} onClick={() => set({ captionPreset: c.id })}>
+                        {c.name}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="ps-capline">
+                  <label className="label" htmlFor="b-capfont" style={{ margin: 0 }}>Font</label>
+                  <select id="b-capfont" className="input" value={b.captionFont ?? ''} onChange={(e) => set({ captionFont: e.target.value || undefined })}>
+                    <option value="">The brand’s font{kit?.fonts.body ? ` (${kit.fonts.body})` : ''}</option>
+                    {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                </div>
+                <div className="ps-capline">
+                  <span className="label" style={{ margin: 0 }}>Size</span>
+                  <div className="ps-seg" role="radiogroup" aria-label="Caption size">
+                    {(['small', 'medium', 'large'] as const).map((z) => (
+                      <button key={z} type="button" role="radio" aria-checked={(b.captionSize ?? 'medium') === z} className={(b.captionSize ?? 'medium') === z ? 'on' : ''} onClick={() => set({ captionSize: z })}>
+                        {z === 'small' ? 'Small' : z === 'medium' ? 'Medium' : 'Large'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="ps-capline">
+                  <span className="label" style={{ margin: 0 }}>Place</span>
+                  <div className="ps-seg" role="radiogroup" aria-label="Caption place">
+                    {(['top', 'middle', 'bottom'] as const).map((z) => (
+                      <button key={z} type="button" role="radio" aria-checked={(b.captionPosition ?? 'bottom') === z} className={(b.captionPosition ?? 'bottom') === z ? 'on' : ''} onClick={() => set({ captionPosition: z })}>
+                        {z === 'top' ? 'Top' : z === 'middle' ? 'Middle' : 'Bottom'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="muted" style={{ fontSize: 12 }}>Every caption can still be restyled in the editor (Captions panel).</div>
+              </div>
+              <CaptionSample b={b} brandPreset={brandPreset} brandFont={kit?.fonts.body} />
+            </div>
+          </div>
+        )}
         <div className="ps-field" style={{ gridColumn: '1 / -1' }}>
           <span className="label">Aspect ratio</span>
           <div className="ps-seg">

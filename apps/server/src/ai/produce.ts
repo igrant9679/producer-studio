@@ -5,7 +5,7 @@ import path from 'node:path'
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import * as z from 'zod/v4'
 import {
-  captionStyleFromPreset,
+  captionStyleForBrief,
   createAudioItem,
   createImageItem,
   createProject,
@@ -658,8 +658,8 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   }
   // captions from the voice transcripts
   if (!parts.captions) return { ...p, updatedAt: Date.now() }
-  const captionStyle = captionStyleFromPreset(inp.brand?.captionPreset ?? 'clean')
-  captionStyle.style = { ...captionStyle.style, fontFamily: pal.bodyFont, boxWidth: Math.round(width * 0.8), fontSize: Math.round(captionStyle.style.fontSize * scale) }
+  // the look, font, size and place the brief picked (else the brand kit's look in its body font)
+  const captionStyle = captionStyleForBrief(inp.brief, { brandPreset: inp.brand?.captionPreset, brandFont: pal.bodyFont, scale, boxWidth: Math.round(width * 0.8) })
   const withCaptions = generateCaptions(p, { itemIds: voice.items.map((i) => i.id), style: captionStyle })
   return { ...withCaptions, updatedAt: Date.now() }
 }

@@ -53,6 +53,9 @@ if (config.role === 'all' || config.role === 'worker') {
 }
 // cloud only: a desktop's local disk needs no watching, and its cloud media has its own error paths
 if (config.mode === 'cloud') startStorageMonitor()
+// cloud only: the music library's tracks are composed in the background, so the first listen is instant (a desktop
+// composes a track when it is first played, on its owner's machine, rather than spend its CPU at every start)
+if (config.mode === 'cloud' && (config.role === 'all' || config.role === 'api') && process.env.MUSIC_LIBRARY_WARM !== '0') (await import('./routes/music')).warmMusicLibrary()
 if (desktop) await desktop.startDesktopServices()
 
 let closing = false

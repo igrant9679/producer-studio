@@ -3,7 +3,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import * as z from 'zod/v4'
-import { AI_LOOKS, DRAWING_STYLES, MAX_AI_CLIPS_FULL_MOTION, MUSIC_STYLES, PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
+import { AI_LOOKS, CAPTION_PRESETS, DRAWING_STYLES, FONTS, MAX_AI_CLIPS_FULL_MOTION, MUSIC_STYLES, PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { jobDto } from '../dto'
@@ -170,6 +170,10 @@ const BriefSchema = z.object({
   captions: z.boolean().optional(),
   onScreenText: z.boolean().optional(),
   cards: z.boolean().optional(),
+  captionPreset: z.enum(CAPTION_PRESETS.map((c) => c.id) as [string, ...string[]]).optional(),
+  captionFont: z.enum(FONTS as unknown as [string, ...string[]]).optional(),
+  captionSize: z.enum(['small', 'medium', 'large']).optional(),
+  captionPosition: z.enum(['top', 'middle', 'bottom']).optional(),
 })
 
 aiRoutes.post('/produce/script', async (c) => {

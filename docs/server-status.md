@@ -400,6 +400,26 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   and `rawJobError`). An export that only succeeded on a later try logs a warning with what the first try met. **Not
   known yet:** which fault the first tries met on production (nothing kept it); the next export that needs a second try
   says so in the server log.
+  **Asked for on 19 Nov 2026** (the owner): sounds heard before they are used, a music library, and caption choices.
+  *Music library* (`MUSIC_LIBRARY` in core `music.ts`, 20 tracks, at least one per `MUSIC_STYLES` style;
+  `routes/music.ts`): composed by the server with the videos' own composer (so free to use anywhere), each from a fixed
+  seed in 8-second sections (`libraryCuts`), at the louder level of music heard alone. A track is composed the first
+  time it is asked for (one composition however many ask; tens of seconds) and kept on the data volume
+  (`<dataDir>/music-library/<id>-l<library version>-m<composer version>.m4a`); a cloud API server also composes the
+  missing ones in the background, one at a time, from three minutes after it starts (`warmMusicLibrary`;
+  `MUSIC_LIBRARY_WARM=0` turns that off; a desktop composes on first listen). `GET /api/music` lists them with `ready`,
+  `GET /api/music/:id/preview` serves one (Range supported), `POST /api/music/:id/add {workspaceId, projectId?}` copies it
+  into the space as an audio clip (`meta.generated.kind 'library'`, found again by track and version, so adding it twice
+  reuses it). The editor's Audio panel lists the library under the project's own sounds: Listen (a spinner until it
+  plays) and + (adds it at the playhead). *Hearing the brief*: Music has "Listen to <style>" (that style's first library
+  track; another style picked stops it) and Sound effects "Listen to the effects" (whoosh, pop and ding of the kit that
+  goes with the music, `sfxKitFor`, `GET /api/music/sfx/:kit/:role`). The Audio panel's play buttons now say when a
+  sound is still on its way and when it can't be played. *Captions in the brief*: with Captions on, a look
+  (`CAPTION_PRESETS`), a font (`FONTS`, else the brand's body font), a size (small/medium/large, `CAPTION_SIZES`) and a
+  place (top/middle/bottom, `CAPTION_PLACES`; bottom is the look's own place), beside a sample frame of the video's shape;
+  stored on the brief (`captionPreset`, `captionFont`, `captionSize`, `captionPosition`) and applied at assembly by
+  `captionStyleForBrief` (absent: the brand kit's look in its body font, as before). The editor's Captions panel already
+  turns a video's captions on and off and restyles them.
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI

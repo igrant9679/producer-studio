@@ -53,7 +53,7 @@ import type {
   Workspace,
   WriteRequest,
 } from '@producer/core'
-import type { MultipartPlan, TranscriptionInfo } from '@producer/core'
+import type { LibraryTrack, MultipartPlan, TranscriptionInfo } from '@producer/core'
 import { MULTIPART_FROM_BYTES, rememberUpload, resumeKey, savedUpload, sendParts, UploadPausedError, xhrTransport } from './multipartUpload'
 
 export class HttpError extends Error {
@@ -372,6 +372,12 @@ export const api = {
   tts: (body: TtsRequest) => reqOnce<Job<{ asset: AssetRecord; duration: number }>>('POST', '/ai/tts', body),
   voices: (workspaceId?: string) => req<Voice[]>('GET', `/ai/voices${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   voiceSampleUrl: (id: string) => `/api/ai/voices/${encodeURIComponent(id)}/sample`,
+  /** The music library (server routes/music.ts): its tracks, one to listen to, and the space's clip of one. */
+  musicLibrary: () => req<Array<LibraryTrack & { ready: boolean }>>('GET', '/music'),
+  musicPreviewUrl: (id: string) => `/api/music/${encodeURIComponent(id)}/preview`,
+  addLibraryMusic: (id: string, body: { workspaceId: string; projectId?: string }) => req<AssetRecord>('POST', `/music/${encodeURIComponent(id)}/add`, body),
+  /** One take of a sound effect from a kit (the brief's preview of its sound effects). */
+  sfxPreviewUrl: (kit: string, role: string) => `/api/music/sfx/${encodeURIComponent(kit)}/${encodeURIComponent(role)}`,
   write: (body: WriteRequest, onDelta: (text: string) => void, signal?: AbortSignal) =>
     postStream('/ai/write', body, (ev, data) => {
       if (ev === 'delta') onDelta((data as { text: string }).text)

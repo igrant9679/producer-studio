@@ -227,3 +227,11 @@
 .ps-sver-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 0.8125rem; }
 .ps-sver-meta span { color: var(--text-2); font-size: 0.75rem; }
 .ps-sver-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* how the captions look (the brief, 19 Nov 2026): the choices beside a sample frame */
+.ps-capopts { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.ps-capctl { flex: 1 1 320px; display: grid; gap: 10px; min-width: 0; }
+.ps-capline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ps-capline .input { width: auto; min-width: 200px; max-width: 100%; }
+.ps-capsample { position: relative; flex: none; border-radius: 8px; overflow: hidden; background: linear-gradient(160deg, #2c3a4f, #121821 70%); border: 1px solid var(--border); }
+.ps-capsample span { position: absolute; left: 50%; width: 86%; transform: translate(-50%, -50%); text-align: center; line-height: 1.2; white-space: normal; }

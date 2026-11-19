@@ -28,7 +28,7 @@ import type {
   User,
   Workspace,
 } from '@producer/core'
-import { INVITE_TTL_MS, VOICES, createProject as coreCreateProject, normalizeTags, searchSnippet, searchWords, type SearchHit } from '@producer/core'
+import { INVITE_TTL_MS, MUSIC_LIBRARY, VOICES, createProject as coreCreateProject, normalizeTags, searchSnippet, searchWords, type SearchHit } from '@producer/core'
 import { registerR3cMocks } from './mockR3c'
 import { installAccountMocks, mockMail } from './mockAccount'
 import { isMockOperator, registerOpsMocks } from './mockOps'
@@ -1013,6 +1013,7 @@ on('POST', '/api/ai/tts', (_m, _q, b) => {
   return json(publicJob(j))
 })
 on('GET', '/api/ai/voices', () => json(VOICES.map((v) => ({ ...v }))))
+on('GET', '/api/music', () => json(MUSIC_LIBRARY.map((t) => ({ ...t, ready: false }))))
 on('GET', '/api/voice/profiles', () => json([]))
 on('POST', '/api/ai/write', async (_m, _q, b) => {
   await delay(300)

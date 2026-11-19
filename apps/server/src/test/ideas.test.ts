@@ -224,6 +224,27 @@ describe('timeline from an idea', () => {
     })
   })
 
+  it('gives the captions the look, font, size and place the brief picked (19 Nov 2026), else the default', () => {
+    const base = p.tracks.find((t) => t.kind === 'caption')!
+    expect(base.captionStyle).toMatchObject({ preset: 'clean' })
+    const q = buildProducerTimeline({
+      project: createProject({ id: 'p_caps', name: 'Caps' }),
+      brief: { title: 'Caps', audience: '', goal: '', tone: 'warm', template: 'studio-dark', voice: 'af_heart', aspect: '16:9', source: 'idea', captionPreset: 'boxed', captionFont: 'Oswald', captionSize: 'large', captionPosition: 'top' },
+      scenes,
+      footage: new Map(),
+      voices: new Map(scenes.map((s) => [s.id, voice(`as_vo_${s.id}`, s.narration)])),
+      generated: new Map([
+        ['s03', still],
+        ['s04', clip],
+      ]),
+    })
+    const caps = q.tracks.find((t) => t.kind === 'caption')!
+    expect(caps.items.length).toBeGreaterThan(0)
+    expect(caps.captionStyle).toMatchObject({ preset: 'boxed', position: 0.14, style: { fontFamily: 'Oswald' } })
+    expect(caps.captionStyle!.style.fontSize).toBe(Math.round(base.captionStyle!.style.fontSize * (50 / 56) * 1.3))
+    expect(caps.captionStyle!.style.background).toBeTruthy()
+  })
+
   it('puts your own image (with a slow pan) and your own clip (from the part chosen, filling the frame) on the main track', () => {
     const photo: Asset = { id: 'as_photo', kind: 'image', name: 'team.jpg', src: '', width: 1200, height: 900 }
     const beach: Asset = { id: 'as_beach', kind: 'video', name: 'beach.mp4', src: '', duration: 20, width: 1920, height: 1080, hasAudio: true }

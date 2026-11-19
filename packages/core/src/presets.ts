@@ -267,6 +267,36 @@ export function templatePlacement(tpl: TextTemplate, style: TextStyle, canvas?: 
   return { x: Math.round(-W / 2 + W * 0.06 + box / 2), y: Math.round(H * y) }
 }
 
+/** How big the brief asks its captions to be, against the look's own size. */
+export const CAPTION_SIZES = { small: 0.8, medium: 1, large: 1.3 } as const
+export type CaptionSize = keyof typeof CAPTION_SIZES
+
+/** Where the brief asks its captions to sit (a fraction of the frame's height); 'bottom' keeps the look's own place. */
+export const CAPTION_PLACES = { top: 0.14, middle: 0.5, bottom: undefined } as const
+export type CaptionPlace = keyof typeof CAPTION_PLACES
+
+/** What a brief can say about its captions (absent: the brand kit's look, its body font, the look's size and place). */
+export interface CaptionChoice {
+  captionPreset?: string
+  captionFont?: string
+  captionSize?: CaptionSize
+  captionPosition?: CaptionPlace
+}
+
+/**
+ * The caption style a video made by Producer gets: the look the brief picked (else the brand kit's, else Clean), in its
+ * font (else the brand's body font), size and place, `scale`d for the frame and as wide as `boxWidth`.
+ */
+export function captionStyleForBrief(choice: CaptionChoice, o: { brandPreset?: string; brandFont: string; scale: number; boxWidth: number }): CaptionStyle {
+  const s = captionStyleFromPreset(choice.captionPreset ?? o.brandPreset ?? 'clean')
+  const size = CAPTION_SIZES[choice.captionSize ?? 'medium'] ?? 1
+  const font = choice.captionFont && (FONTS as readonly string[]).includes(choice.captionFont) ? choice.captionFont : o.brandFont
+  s.style = { ...s.style, fontFamily: font, boxWidth: o.boxWidth, fontSize: Math.round(s.style.fontSize * o.scale * size) }
+  const place = choice.captionPosition ? CAPTION_PLACES[choice.captionPosition] : undefined
+  if (place !== undefined) s.position = place
+  return s
+}
+
 /** A caption style from a preset, sized for `canvas` when given (see `textStyleFor`). */
 export function captionStyleFromPreset(id: string, canvas?: Canvas): CaptionStyle {
   const p = CAPTION_PRESETS.find((c) => c.id === id) ?? CAPTION_PRESETS[0]

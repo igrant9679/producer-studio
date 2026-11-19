@@ -5,7 +5,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { and, eq, sql } from 'drizzle-orm'
-import { type Asset, type Item, type MusicStyle, type Project, createAudioItem, createTrack } from '@producer/core'
+import { type Asset, type Item, type MusicStyle, type Project, createAudioItem, createTrack, sfxKitFor } from '@producer/core'
 import { SERVER_ROOT } from '../config'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
@@ -139,10 +139,8 @@ export function sfxManifest(): SfxManifest | null {
 
 /** The kit whose sounds suit the music: soft and organic under quiet styles, crisp under bright ones, punchy under beats. */
 export function kitFor(style: MusicStyle | undefined): string {
-  if (!style) return 'crisp'
-  if (['ambient', 'piano', 'acoustic', 'lofi', 'guofeng'].includes(style)) return 'calm'
-  if (['mallet', 'pizzicato'].includes(style)) return 'crisp'
-  return 'launch'
+  // in core, so the brief's preview plays the kit the video will get
+  return sfxKitFor(style)
 }
 
 export interface SfxCue {

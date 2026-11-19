@@ -36,7 +36,7 @@ function trackJob(j: Job) {
   useLibrary.setState({ progress: j.status === 'running' || j.status === 'queued' ? { ...rest, [j.assetId]: { p: j.progress, message: j.message } } : rest })
 }
 
-function upsertRecord(r: AssetRecord) {
+export function upsertRecord(r: AssetRecord) {
   const recs = useLibrary.getState().records
   const i = recs.findIndex((x) => x.asset.id === r.asset.id)
   const next = i >= 0 ? recs.map((x, j) => (j === i ? r : x)) : [r, ...recs]

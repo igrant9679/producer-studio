@@ -1,7 +1,7 @@
 // Left icon rail + collapsible asset panel.
 import type { Asset, AssetRecord, AudioItem } from '@producer/core'
 import { useVoices } from '../shell/components/VoiceCard'
-import { TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, isPathShape, itemEnd, shapePath, usedAssetIds, type ShapeItem } from '@producer/core'
+import { MUSIC_LIBRARY, MUSIC_STYLES, TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, isPathShape, itemEnd, shapePath, usedAssetIds, type LibraryTrack, type ShapeItem } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -43,7 +43,7 @@ import { type LeftTab, useEditor } from './store'
 import { ViewOnly } from './viewer'
 import { CommentsPanel } from './collab/CommentsPanel'
 import { shortDuration } from './timelineMath'
-import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, trashUnused, uploadFiles, useLibrary } from './uploads'
+import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, trashUnused, upsertRecord, uploadFiles, useLibrary } from './uploads'
 import { tipProps } from '../lib/tooltip'
 
 const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
@@ -554,22 +554,32 @@ function AudioPanel() {
   const list = useLibraryList(['audio'])
   const project = useEditor((s) => s.project)
   const [playing, setPlaying] = useState<string | null>(null)
+  // a sound still on its way (a library track the server is composing for the first time takes a while)
+  const [waiting, setWaiting] = useState<string | null>(null)
   useEffect(() => () => previewEl?.pause(), [])
-  const toggle = (a: Asset, url: string) => {
-    if (playing === a.id) {
+  const toggle = (key: string, url: string) => {
+    if (playing === key) {
       previewEl?.pause()
       setPlaying(null)
+      setWaiting(null)
       return
     }
     previewEl?.pause()
-    previewEl = new Audio(url)
-    previewEl.volume = 0.7
-    previewEl.onended = () => setPlaying(null)
-    void previewEl.play().catch(() => {
+    const el = new Audio(url)
+    previewEl = el
+    el.volume = 0.7
+    el.onended = () => previewEl === el && setPlaying(null)
+    el.onwaiting = () => previewEl === el && setWaiting(key)
+    el.onplaying = () => previewEl === el && setWaiting(null)
+    setWaiting(key)
+    void el.play().catch((err: unknown) => {
+      if (previewEl !== el) return
       setPlaying(null)
-      toast('Preview unavailable')
+      setWaiting(null)
+      // a pause before it started is no failure
+      if (!(err instanceof DOMException && err.name === 'AbortError')) toast('This sound can’t be played here. Try again in a moment.')
     })
-    setPlaying(a.id)
+    setPlaying(key)
   }
   const inProject = list.filter((x) => project.assets[x.asset.id])
   const others = list.filter((x) => !project.assets[x.asset.id])
@@ -581,8 +591,8 @@ function AudioPanel() {
       onDragStart={(e) => startDrag(e, { kind: 'asset', asset })}
       onDragEnd={endDrag}
     >
-      <button className="pl" onClick={() => toggle(asset, assetUrl(asset, asset.id, 'media'))} title="Preview">
-        {playing === asset.id ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
+      <button className="pl" onClick={() => toggle(asset.id, assetUrl(asset, asset.id, 'media'))} aria-label={`${playing === asset.id ? 'Stop' : 'Listen to'} ${asset.name}`} title="Listen">
+        {waiting === asset.id ? <Loader2 size={13} className="spin" /> : playing === asset.id ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
       </button>
       <div className="meta">
         <div className="nm">{asset.name}</div>
@@ -600,6 +610,7 @@ function AudioPanel() {
         <div className="eyebrow">In this project</div>
         {inProject.length ? inProject.map(row) : <p className="ed-note">No audio in this project yet.</p>}
       </div>
+      <MusicLibrary playing={playing} waiting={waiting} toggle={toggle} />
       <div className="ed-group">
         <div className="eyebrow">Uploads</div>
         <UploadBox accept="audio/*" label="Upload audio" />
@@ -607,6 +618,74 @@ function AudioPanel() {
         {others.map(row)}
       </div>
     </>
+  )
+}
+
+/**
+ * The music library (19 Nov 2026): tracks the server composed with Producer's own composer, free to use in any video.
+ * Listen first; + puts the track at the playhead (the first time in a space, as a new clip in its media).
+ */
+function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; waiting: string | null; toggle: (key: string, url: string) => void }) {
+  const demo = useEditor((s) => s.demo)
+  const [tracks, setTracks] = useState<Array<LibraryTrack & { ready?: boolean }>>(() => [...MUSIC_LIBRARY])
+  const [adding, setAdding] = useState<string | null>(null)
+  useEffect(() => {
+    if (demo) return
+    let live = true
+    api
+      .musicLibrary()
+      .then((t) => live && setTracks(t))
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [demo])
+  const add = async (t: LibraryTrack) => {
+    if (A.demoBlocked('the music library')) return
+    const s = useEditor.getState()
+    if (!s.workspaceId) return
+    setAdding(t.id)
+    try {
+      const rec = await api.addLibraryMusic(t.id, { workspaceId: s.workspaceId, projectId: s.projectId || undefined })
+      upsertRecord(rec)
+      A.addAssetAt(rec.asset, useEditor.getState().playhead)
+      toast(`Added “${t.title}” at the playhead`)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setAdding(null)
+    }
+  }
+  const style = (id: string) => MUSIC_STYLES.find((m) => m.id === id)?.label ?? id
+  return (
+    <div className="ed-group" role="group" aria-label="Music library">
+      <div className="eyebrow">Music library · {tracks.length}</div>
+      <p className="ed-note">Free to use in any video. Listen first; + adds the track at the playhead.</p>
+      {tracks.map((t) => {
+        const key = `library:${t.id}`
+        return (
+          <div key={t.id} className="ed-audiorow">
+            <button
+              className="pl"
+              onClick={() => (A.demoBlocked('the music library') ? undefined : toggle(key, api.musicPreviewUrl(t.id)))}
+              aria-label={`${playing === key ? 'Stop' : 'Listen to'} ${t.title}`}
+              title={t.ready === false ? 'Listen (the first listen takes a little while as the track is made)' : 'Listen'}
+            >
+              {waiting === key ? <Loader2 size={13} className="spin" /> : playing === key ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
+            </button>
+            <div className="meta">
+              <div className="nm">{t.title}</div>
+              <div className="sub">
+                {style(t.style)} · {t.mood} · {shortDuration(t.seconds)}
+              </div>
+            </div>
+            <button className="add" aria-label={`Add ${t.title} at the playhead`} title="Add at playhead" disabled={adding === t.id} onClick={() => void add(t)}>
+              {adding === t.id ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+            </button>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

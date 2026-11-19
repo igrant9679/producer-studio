@@ -643,6 +643,12 @@ export interface ProducerMeta {
     captions?: boolean
     onScreenText?: boolean
     cards?: boolean
+    /** How the captions look (see captionStyleForBrief): a CAPTION_PRESETS look, a FONTS font, a size and a place.
+     * Absent: the brand kit's look in its body font, at the look's own size and place. */
+    captionPreset?: string
+    captionFont?: string
+    captionSize?: 'small' | 'medium' | 'large'
+    captionPosition?: 'top' | 'middle' | 'bottom'
   }
   script?: {
     scenes: ScriptScene[]
