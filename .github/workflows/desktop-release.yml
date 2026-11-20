@@ -79,7 +79,8 @@ jobs:
           foreach ($f in @('Producer Studio.exe', 'resources/app.asar', 'resources/server/server.mjs', 'resources/web/index.html',
                            'resources/tools/whisper/whisper-cli.exe', 'resources/tools/whisper/ggml-small.en.bin',
                            'resources/tools/models/onnx-community/Kokoro-82M-v1.0-ONNX/onnx/model_quantized.onnx',
-                           'resources/tools/chrome/chrome-headless-shell.exe')) {
+                           'resources/tools/chrome/chrome-headless-shell.exe',
+                           'resources/server/scripts/music/compose.mjs', 'resources/server/sfx/manifest.json')) {
             if (-not (Test-Path "$u/$f")) { throw "the app is missing $f" }
           }
           $fuses = node node_modules/@electron/fuses/dist/bin.js read --app "$u/Producer Studio.exe" | Out-String
