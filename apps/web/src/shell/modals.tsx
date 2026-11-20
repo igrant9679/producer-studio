@@ -1,5 +1,5 @@
 // Modals opened from the shell chrome: aspect picker, create / rename / delete space, invite, help.
-import { ASPECT_RATIOS } from '@producer/core'
+import { ASPECT_RATIOS, MUSIC_LIBRARY } from '@producer/core'
 import type { Workspace } from '@producer/core'
 import { Check, Copy, Download, Keyboard, Link2, Mail, MonitorDown, Trash2 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
@@ -341,6 +341,10 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
             </p>
             <ul style={{ color: 'var(--text-2)', paddingLeft: 18, lineHeight: 1.8 }}>
               <li>Upload recordings from <b>Create new → Upload media</b> or drag files onto the Library.</li>
+              <li>
+                Free music for any video: the editor’s <b>Audio</b> tab has a music library of {MUSIC_LIBRARY.length} tracks. Listen to one first, then <b>+</b> adds it at the playhead
+                (the editor’s Help explains more).
+              </li>
               <li>Everything in a space — projects, media, brand kit — is shared with its members.</li>
               <li>Exports and share links live under <b>Exports &amp; sharing</b>.</li>
               <li>What a space used (AI, processing, storage) and its limits are under <b>Usage</b>; finished and failed jobs, with Retry, under <b>Background jobs → Job history</b>.</li>

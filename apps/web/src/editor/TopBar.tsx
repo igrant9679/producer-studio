@@ -1,7 +1,7 @@
 import { ASPECT_RATIOS, presetCanvasSize, setAspect, updateProject } from '@producer/core'
 import clsx from 'clsx'
 import type { ThemePreference } from '@producer/core'
-import { ArrowLeft, Check, ChevronDown, CloudOff, Hand, History, Keyboard, Loader2, Monitor, Moon, MousePointer2, Redo2, Share2, Sun, TriangleAlert, Undo2, Upload } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, CircleHelp, CloudOff, Hand, History, Loader2, Monitor, Moon, MousePointer2, Redo2, Share2, Sun, TriangleAlert, Undo2, Upload } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { themeLabel, useAppearance } from '../lib/appearance'
@@ -99,8 +99,8 @@ export function TopBar() {
       <div className="row ed-top-r">
         <PresenceAvatars />
         <ThemeMenu />
-        <button className="ed-tbtn ed-top-wide" {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
-          <Keyboard size={16} />
+        <button className="ed-tbtn ed-top-wide" {...tipProps('Help', 'Every shortcut in the editor, and how to use the music library.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
+          <CircleHelp size={16} />
         </button>
         <button className="btn sm" onClick={share} {...tipProps('Share', 'Review links to this project: make one, copy it, and set its expiry, password, downloads and comments.')}>
           <Share2 size={14} /> <span className="ed-top-lbl">Share</span>

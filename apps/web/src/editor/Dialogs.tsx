@@ -1,11 +1,12 @@
-// Export dialog and keyboard shortcuts dialog.
+// Export dialog and the editor's Help (keyboard shortcuts, the music library).
 import type { ExportPreviewResult, ExportRecord, ExportRequest, Job, Project } from '@producer/core'
-import { EXPORT_FPS, EXPORT_PRESETS, EXPORT_RESOLUTIONS, StageRenderer, aspectOf, filledCaptionTracks, isAudioFormat, presetCanvasSize, projectDuration, projectForExport, selectionRange } from '@producer/core'
+import { EXPORT_FPS, EXPORT_PRESETS, EXPORT_RESOLUTIONS, MUSIC_LIBRARY, StageRenderer, aspectOf, filledCaptionTracks, isAudioFormat, presetCanvasSize, projectDuration, projectForExport, selectionRange } from '@producer/core'
 import clsx from 'clsx'
-import { Captions, Check, Copy, Download, Film, Loader2, Music, Play, TriangleAlert, X } from 'lucide-react'
+import { AudioLines, Captions, Check, Copy, Download, Film, Keyboard, Loader2, Music, Play, Plus, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
+import { TabPanel, Tabs } from '../shell/ui'
 import { downloadUrl } from '../shell/util'
 import { LoudnessField, type Loudness } from './audio/LoudnessField'
 import { Field, Segmented, useFieldIds } from './controls'
@@ -16,7 +17,10 @@ import { useEditor } from './store'
 import { timecode } from './timelineMath'
 import { inOutRange, useTransport } from './transport'
 
-const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+// what Tab reaches: a roving tab row's other tabs (tabindex -1) are not stops, so the last stop is the selected tab
+const FOCUSABLE = ['a[href]', 'button:not(:disabled)', 'input:not(:disabled)', 'select:not(:disabled)', 'textarea:not(:disabled)', '[tabindex]']
+  .map((s) => `${s}:not([tabindex="-1"])`)
+  .join(', ')
 /** Editor dialogs open now, the topmost last: Escape closes only that one. */
 const open: HTMLElement[] = []
 
@@ -523,23 +527,85 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Panels and menus', [['Tab, Enter (first stops)', 'Skip to the canvas or the timeline'], ['← / → on a Properties tab', 'Previous / next tab'], ['Tab in a popover (transition, freeze, track sound)', 'Next control (Shift: back); Esc closes'], ['Tab in a menu', 'Close it without choosing']]],
 ]
 
-export function ShortcutsDialog() {
+type HelpTab = 'keys' | 'music'
+
+/** The editor's Help (? or the Help buttons): every shortcut, and how to use the music library (19 Nov 2026). */
+export function HelpDialog() {
+  const [tab, setTab] = useState<HelpTab>('keys')
   const close = () => useEditor.setState({ shortcutsOpen: false })
+  const openLibrary = () => useEditor.setState({ activeLeftTab: 'audio', leftCollapsed: false, shortcutsOpen: false })
   return (
-    <EditorDialog title="Keyboard shortcuts" onClose={close} style={{ maxWidth: 760 }}>
-      <div className="ed-keys">
-        {SHORTCUTS.map(([group, list]) => (
-          <div key={group}>
-            <div className="eyebrow">{group}</div>
-            {list.map(([k, d]) => (
-              <div key={k} className="ed-keyrow">
-                <span>{d}</span>
-                <span className="keys">{k.split(' ').map((x, i) => (x === '/' ? <span key={i} className="muted"> / </span> : <span key={i} className="kbd">{x}</span>))}</span>
+    <EditorDialog title="Help" onClose={close} style={{ maxWidth: 760 }}>
+      <div className="ed-help-tabs">
+        <Tabs
+          id="ed-help"
+          className="ed-seg sm"
+          label="Help"
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { id: 'keys', label: 'Keyboard shortcuts', icon: <Keyboard size={13} /> },
+            { id: 'music', label: 'Music library', icon: <Music size={13} /> },
+          ]}
+        />
+      </div>
+      <TabPanel tabs="ed-help" value={tab}>
+        {tab === 'keys' ? (
+          <div className="ed-keys">
+            {SHORTCUTS.map(([group, list]) => (
+              <div key={group}>
+                <div className="eyebrow">{group}</div>
+                {list.map(([k, d]) => (
+                  <div key={k} className="ed-keyrow">
+                    <span>{d}</span>
+                    <span className="keys">{k.split(' ').map((x, i) => (x === '/' ? <span key={i} className="muted"> / </span> : <span key={i} className="kbd">{x}</span>))}</span>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
-        ))}
-      </div>
+        ) : (
+          <MusicLibraryHelp onOpen={openLibrary} />
+        )}
+      </TabPanel>
     </EditorDialog>
+  )
+}
+
+/** How to use the music library (LeftPanel's MusicLibrary and the routes in server/routes/music.ts). */
+function MusicLibraryHelp({ onOpen }: { onOpen: () => void }) {
+  // the panel's buttons are icons, so the steps show the same icons (named for screen readers)
+  const icon = { size: 11, role: 'img', className: 'ed-help-ic' } as const
+  return (
+    <div className="ed-help">
+      <p>
+        {MUSIC_LIBRARY.length} music tracks you can use in any video, free. Producer Studio composes them itself, so there is no key or account to set up.
+      </p>
+      <ol>
+        <li>
+          Open the <b>Audio</b> tab on the left. The tracks are under <b>Music library</b>, each with its style, mood and length.
+        </li>
+        <li>
+          Press <Play {...icon} aria-label="Listen" fill="currentColor" /> to hear a track, and press it again to stop. Starting another track stops the one playing.
+        </li>
+        <li>
+          Press <Plus {...icon} aria-label="Add" /> to put the track on the timeline at the playhead. It is then listed under <b>In this project</b>, and adding it again uses the same file.
+        </li>
+        <li>On the timeline it is an ordinary audio clip: move it, trim it, and set its volume and fades in Properties.</li>
+      </ol>
+      <div className="eyebrow">Good to know</div>
+      <ul>
+        <li>
+          A track nobody has played yet is composed the first time it is heard, with a spinner until it starts. That takes a moment on producerstudio.app and up to a minute in the desktop app. After that it plays straight away.
+        </li>
+        <li>Your own sounds in the Audio tab can be heard before you add them too.</li>
+        <li>
+          Making a video with Producer? Its brief has <b>Listen</b> buttons for the music style and the sound effects.
+        </li>
+      </ul>
+      <button type="button" className="btn sm" onClick={onOpen}>
+        <AudioLines size={13} /> Open the music library
+      </button>
+    </div>
   )
 }

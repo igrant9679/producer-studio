@@ -323,7 +323,7 @@ describe('the top bar', () => {
       expect(b.getAttribute('data-tip')).toBe(TIP)
     }
     // looking around still works
-    expect(screen.getByRole('button', { name: /Keyboard shortcuts/ }).matches(':disabled')).toBe(false)
+    expect(screen.getByRole('button', { name: /^Help/ }).matches(':disabled')).toBe(false)
   })
 
   it('an editor sees none of it', () => {

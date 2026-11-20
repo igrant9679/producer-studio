@@ -411,7 +411,9 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   `GET /api/music/:id/preview` serves one (Range supported), `POST /api/music/:id/add {workspaceId, projectId?}` copies it
   into the space as an audio clip (`meta.generated.kind 'library'`, found again by track and version, so adding it twice
   reuses it). The editor's Audio panel lists the library under the project's own sounds: Listen (a spinner until it
-  plays) and + (adds it at the playhead). *Hearing the brief*: Music has "Listen to <style>" (that style's first library
+  plays) and + (adds it at the playhead). The editor's Help (?, the rail's and the top bar's Help buttons; it was the
+  Keyboard shortcuts dialog) has a Music library tab explaining it, with a button that opens the Audio tab; the app's
+  Help → About points to it. *Hearing the brief*: Music has "Listen to <style>" (that style's first library
   track; another style picked stops it) and Sound effects "Listen to the effects" (whoosh, pop and ding of the kit that
   goes with the music, `sfxKitFor`, `GET /api/music/sfx/:kit/:role`). The Audio panel's play buttons now say when a
   sound is still on its way and when it can't be played. *Captions in the brief*: with Captions on, a look

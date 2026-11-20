@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
 import { Field, Menu, MenuItem, Section, Segmented, Slider, Toggle } from '../controls'
-import { ExportDialog, ShortcutsDialog } from '../Dialogs'
+import { ExportDialog, HelpDialog } from '../Dialogs'
 import { useEditor } from '../store'
 
 const S = () => useEditor.getState()
@@ -118,13 +118,13 @@ describe('menus manage focus', () => {
 })
 
 describe('dialogs manage focus', { timeout: 20_000 }, () => {
-  it('the shortcuts dialog is named, takes focus, keeps Tab inside, and gives focus back on Escape', () => {
+  it('the Help dialog is named, takes focus, keeps Tab inside, and gives focus back on Escape', () => {
     const Box = () => {
       const open = useEditor((s) => s.shortcutsOpen)
       return (
         <>
           <button onClick={() => S().set({ shortcutsOpen: true })}>Shortcuts</button>
-          {open && <ShortcutsDialog />}
+          {open && <HelpDialog />}
         </>
       )
     }
@@ -132,15 +132,18 @@ describe('dialogs manage focus', { timeout: 20_000 }, () => {
     const opener = screen.getByRole('button', { name: 'Shortcuts' })
     act(() => opener.focus())
     fireEvent.click(opener)
-    const dlg = screen.getByRole('dialog', { name: 'Keyboard shortcuts' })
+    const dlg = screen.getByRole('dialog', { name: 'Help' })
     expect(dlg.getAttribute('aria-modal')).toBe('true')
     const close = screen.getByRole('button', { name: 'Close' })
     expect(document.activeElement).toBe(close)
-    // the only control: Tab and Shift+Tab stay on it
+    // its controls: Close and the selected tab (a tab row is one stop); Tab and Shift+Tab go round them
+    const keys = screen.getByRole('tab', { name: 'Keyboard shortcuts' })
     fireEvent.keyDown(close, { key: 'Tab' })
+    act(() => keys.focus())
+    fireEvent.keyDown(keys, { key: 'Tab' })
     expect(document.activeElement).toBe(close)
     fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(close)
+    expect(document.activeElement).toBe(keys)
     fireEvent.keyDown(close, { key: 'Escape' })
     expect(S().shortcutsOpen).toBe(false)
     expect(document.activeElement).toBe(opener)

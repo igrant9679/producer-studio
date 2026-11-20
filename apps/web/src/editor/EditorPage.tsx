@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { HttpError } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
 import { Canvas } from './Canvas'
-import { ExportDialog, ShortcutsDialog } from './Dialogs'
+import { ExportDialog, HelpDialog } from './Dialogs'
 import { ReplaceMediaHost } from './clipMedia'
 import { PasteAttributesHost } from './PasteAttributes'
 import { SmoothJobsHost } from './SpeedPanel'
@@ -226,7 +226,7 @@ function EditorShell() {
         </div>
       </div>
       {exportOpen && <ExportDialog />}
-      {shortcutsOpen && <ShortcutsDialog />}
+      {shortcutsOpen && <HelpDialog />}
       <ReplaceMediaHost />
       <PasteAttributesHost />
       <SmoothJobsHost />

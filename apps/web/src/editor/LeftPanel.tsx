@@ -9,9 +9,9 @@ import {
   AudioLines,
   Bot,
   ChevronsLeft,
+  CircleHelp,
   Clapperboard,
   FileText,
-  Keyboard,
   Loader2,
   MessageSquare,
   Mic,
@@ -48,7 +48,7 @@ import { tipProps } from '../lib/tooltip'
 
 const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
   { id: 'media', label: 'Media', icon: <Clapperboard size={18} />, desc: 'Your uploaded videos and images. Hover a clip to preview it; press + or drag it onto the timeline.' },
-  { id: 'audio', label: 'Audio', icon: <AudioLines size={18} />, desc: 'Audio uploads and voiceovers generated from text.' },
+  { id: 'audio', label: 'Audio', icon: <AudioLines size={18} />, desc: 'Voiceovers generated from text, a free music library to listen to and add, and your audio uploads.' },
   { id: 'text', label: 'Text', icon: <Type size={18} />, desc: 'Headings, body text, styled titles and shapes.' },
   { id: 'captions', label: 'Captions', icon: <Subtitles size={18} />, desc: 'Auto captions from speech, manual captions, caption styles, SRT import and export.' },
   { id: 'transcript', label: 'Transcript', icon: <FileText size={18} />, desc: 'Edit by text: select words to cut them, remove pauses and filler words, search what was said.' },
@@ -77,9 +77,9 @@ export function LeftRail() {
         </button>
       ))}
       <div className="spacer" />
-      <button onClick={() => useEditor.setState({ shortcutsOpen: true })} {...tipProps('Keyboard shortcuts', 'Every shortcut in the editor.', '?', 'right')}>
-        <Keyboard size={18} />
-        <span>Keys</span>
+      <button onClick={() => useEditor.setState({ shortcutsOpen: true })} {...tipProps('Help', 'Every shortcut in the editor, and how to use the music library.', '?', 'right')}>
+        <CircleHelp size={18} />
+        <span>Help</span>
       </button>
     </nav>
   )
