@@ -5,6 +5,8 @@
 //   GET  /api/music                       -> the library's tracks, each with `ready` (made) and `seconds`
 //   GET  /api/music/:id/preview           -> a made track (from storage; Range supported)
 //   POST /api/music/:id/add               -> { workspaceId, projectId? } -> AssetRecord: the space's clip of the track
+//   POST /api/music/:id/customize         -> { workspaceId, projectId?, mode: topic, topic } -> Job: the song remade for the
+//                                            space's topic on its own Gemini key (library.custom)
 //   GET  /api/music/style/:style/preview  -> a sample of a music style (composed once and kept; audio/mp4)
 //   GET  /api/music/sfx/:kit/:role        -> one take of a sound effect, for the brief's preview
 import fs from 'node:fs'
@@ -14,12 +16,12 @@ import * as z from 'zod/v4'
 import { MUSIC_STYLES, STYLE_SAMPLE_SECONDS, type MusicStyle, styleSampleCuts } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
-import { assetRecord } from '../dto'
+import { assetRecord, jobDto } from '../dto'
 import { HttpError, body, notFound, requireRole } from '../http'
 import { log } from '../log'
 import { MUSIC_VERSION, SFX_DIR, composeMusicFile, sfxManifest } from '../ai/soundtrack'
 import { serveObject } from '../media/serve'
-import { addLibraryItem, listMusic, madeItem, requireItem } from '../services/media-library'
+import { addLibraryItem, listMusic, madeItem, queueCustom, requireItem } from '../services/media-library'
 import { assertProjectInWorkspace } from '../services/projects'
 
 /** What composes a style sample (tests stand in a quick one: the real composer takes tens of seconds). */
@@ -124,4 +126,14 @@ musicRoutes.post('/:id/add', async (c) => {
   if (b.projectId) await assertProjectInWorkspace(b.projectId, b.workspaceId)
   const row = await addLibraryItem({ it, workspaceId: b.workspaceId, userId: u.id, projectId: b.projectId, signal: c.req.raw.signal })
   return c.json(assetRecord(row, { light: true }))
+})
+
+musicRoutes.post('/:id/customize', async (c) => {
+  const u = requireUser(c)
+  const it = requireItem(c.req.param('id'), 'music')
+  const b = await body(c, z.object({ workspaceId: z.string().min(1), projectId: z.string().max(80).optional(), mode: z.enum(['brand', 'topic']), topic: z.string().max(300).optional(), aspect: z.enum(['16:9', '9:16', '1:1']).optional() }))
+  await requireRole(u.id, b.workspaceId, 'editor')
+  if (b.projectId) await assertProjectInWorkspace(b.projectId, b.workspaceId)
+  const job = await queueCustom({ it, mode: b.mode, topic: b.topic, aspect: b.aspect, workspaceId: b.workspaceId, userId: u.id, projectId: b.projectId })
+  return c.json(jobDto(job))
 })

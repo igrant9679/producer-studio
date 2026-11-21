@@ -96,6 +96,21 @@ export function libraryItem(id: string): ({ kind: 'music' } & LibraryTrack) | Li
   return CLIP_LIBRARY.find((x) => x.id === id)
 }
 
+/**
+ * Making an item a space's own (21 Nov 2026, the owner: "customize based on their needs/brand/topic"): an animation
+ * drawn again in the space's brand colours and fonts ('brand', free), or any item remade for the space's topic on its
+ * own AI keys ('topic').
+ */
+export type LibraryCustomMode = 'brand' | 'topic'
+
+/** What a customization costs the space, in words: said before it starts. */
+export function libraryCustomCost(it: { kind: LibraryKind; seconds?: number }, mode: LibraryCustomMode): string {
+  if (mode === 'brand') return 'Free: the animation is drawn again in your brand kit’s colours and fonts. It takes a minute or two (a 3D one longer).'
+  if (it.kind === 'music') return 'One song from Google’s Lyria, on this space’s Gemini key.'
+  if (it.kind === 'motion') return `One ${it.seconds ?? 8}-second AI clip, on this space’s video key (Gemini or fal.ai).`
+  return 'One drawing by this space’s animation AI, on its key (minutes; a 3D one can take a quarter of an hour).'
+}
+
 /** An item as the server lists it: made (`ready`) and how long it measured. */
 export type LibraryEntry<T> = T & { ready: boolean; seconds?: number }
 

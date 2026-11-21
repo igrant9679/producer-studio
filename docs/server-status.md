@@ -432,6 +432,15 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   kinds?}`. In the editor: Audio → Music library (made songs only, genre · mood · length) and Media → Clip library
   (Animations | Full motion, poster frames, plays on hover, + at the playhead); the Help's Media library tab explains
   both. The old composed tracks (`<dataDir>/music-library`) are deleted at start-up; spaces keep copies they added.
+  *Making an item your own* (the owner, same day: "customize based on their needs/brand/topic"): the wand on a song or
+  clip opens Make it your own (`editor/LibraryCustomize.tsx`): an animation drawn again from its kept code
+  (`library/clips/<id>.v1.drawing.js`) in the space's brand kit colours and fonts (free, only the render; the same brand
+  again reuses the space's copy), or any item remade for the video's topic on the space's own keys (an animation
+  redrawn by its animation AI from the library's drawing, a clip filmed again in the video's shape on its video key, a
+  song written again in the same genre on its Gemini key); each says what it costs first (`libraryCustomCost`). A
+  `library.custom` job in the space (`POST /api/clips|music/:id/customize {workspaceId, projectId?, mode, topic?,
+  aspect?}`); the result goes into the project's media and onto the timeline at the playhead. A library song added at
+  the playhead is cut to end with the video's last picture, with a 2 s fade out (`fitSongToVideo`).
   Not in the desktop app (made on the cloud server; the panels say so there). **Not known yet:** whether the owner's
   Gemini key may use Lyria and Gemini video, and how the AI's drawings come out, until the library is made on
   production.

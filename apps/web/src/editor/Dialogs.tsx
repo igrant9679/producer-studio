@@ -2,7 +2,7 @@
 import type { ExportPreviewResult, ExportRecord, ExportRequest, Job, Project } from '@producer/core'
 import { EXPORT_FPS, EXPORT_PRESETS, EXPORT_RESOLUTIONS, CLIP_LIBRARY, MUSIC_LIBRARY, StageRenderer, aspectOf, filledCaptionTracks, isAudioFormat, presetCanvasSize, projectDuration, projectForExport, selectionRange } from '@producer/core'
 import clsx from 'clsx'
-import { AudioLines, Captions, Check, Clapperboard, Copy, Download, Film, Keyboard, Loader2, Music, Play, Plus, TriangleAlert, X } from 'lucide-react'
+import { AudioLines, Captions, Check, Clapperboard, Copy, Download, Film, Keyboard, Loader2, Music, Play, Plus, TriangleAlert, Wand2, X } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
@@ -593,7 +593,7 @@ function MediaLibraryHelp({ onOpenMusic, onOpenClips }: { onOpenMusic: () => voi
           Press <Play {...icon} aria-label="Listen" fill="currentColor" /> to hear a song, and press it again to stop. Starting another song stops the one playing.
         </li>
         <li>
-          Press <Plus {...icon} aria-label="Add" /> to put the song on the timeline at the playhead. It is then listed under <b>In this project</b>, and adding it again uses the same file.
+          Press <Plus {...icon} aria-label="Add" /> to put the song on the timeline at the playhead. It is cut to end where your video ends, with a fade out, and listed under <b>In this project</b>; adding it again uses the same file.
         </li>
         <li>On the timeline it is an ordinary audio clip: move it, trim it, and set its volume and fades in Properties.</li>
       </ol>
@@ -607,6 +607,19 @@ function MediaLibraryHelp({ onOpenMusic, onOpenClips }: { onOpenMusic: () => voi
           Press <Plus {...icon} aria-label="Add" /> on a clip to put it on the timeline at the playhead. It joins this project’s media like any clip you upload: trim it, speed it up or slow it down, and put titles or a voiceover over it.
         </li>
       </ol>
+      <div className="eyebrow">Make it your own</div>
+      <ul>
+        <li>
+          Press <Wand2 {...icon} aria-label="Make it your own" /> on a song or a clip.
+        </li>
+        <li>
+          <b>In your brand</b> (animations): drawn again in your brand kit’s colours and fonts. Free; it takes a minute or two.
+        </li>
+        <li>
+          <b>For your topic</b>: say what your video is about, and the animation is drawn again about it, the clip filmed again for it, or the song written again in the same genre to suit it. This uses your space’s own AI keys, and says what it costs before it starts.
+        </li>
+        <li>What it makes goes into this project’s media and onto the timeline at the playhead.</li>
+      </ul>
       <div className="eyebrow">Good to know</div>
       <ul>
         <li>An item shows up once it has been made. While the library is still being made, some may be missing for a little while.</li>

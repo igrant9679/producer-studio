@@ -13,11 +13,11 @@ import { failJob, finishJob } from '../jobs/queue'
 import type { JobContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
 import { SAMPLES } from '../routes/music'
-import { LIBRARY_MAKERS, forgetLibraryInfo, makeLibraryJob } from '../services/media-library'
+import { LIBRARY_MAKERS, LIBRARY_REMAKERS, customizeLibraryJob, forgetLibraryInfo, makeLibraryJob } from '../services/media-library'
 import { claimJob, setup, signup, type TestEnv } from './helpers'
 
 let t: TestEnv
-const real = { compose: SAMPLES.compose, makers: { ...LIBRARY_MAKERS } }
+const real = { compose: SAMPLES.compose, makers: { ...LIBRARY_MAKERS }, remakers: { ...LIBRARY_REMAKERS } }
 const composed: string[] = []
 const made: string[] = []
 let failOnce: string | undefined
@@ -63,6 +63,7 @@ beforeAll(async () => {
 afterAll(() => {
   SAMPLES.compose = real.compose
   Object.assign(LIBRARY_MAKERS, real.makers)
+  Object.assign(LIBRARY_REMAKERS, real.remakers)
   ctx().config.operatorEmails = []
 })
 
@@ -225,4 +226,93 @@ describe('the media library', () => {
     const kept = await ctx().db.select().from(jobs).where(and(eq(jobs.kind, 'library.make'), sql`${jobs.status} = 'queued'`))
     expect(kept).toHaveLength(0)
   }, 120_000)
+})
+
+describe('making a library item a space’s own (21 Nov 2026: “customize based on their needs/brand/topic”)', () => {
+  const asked: Array<{ what: string; [k: string]: unknown }> = []
+  beforeAll(() => {
+    const picture = async (file: string) => {
+      await ffmpeg(['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=24:duration=2', '-pix_fmt', 'yuv420p', '-c:v', 'libx264', file])
+    }
+    LIBRARY_REMAKERS.render = async (code, env, file) => {
+      asked.push({ what: 'render', code, palette: env.palette, fonts: env.fonts })
+      await picture(file)
+    }
+    LIBRARY_REMAKERS.drawing = async (o) => {
+      asked.push({ what: 'drawing', description: o.description, reference: o.reference, palette: o.env.palette })
+      return '// drawn for the topic'
+    }
+    LIBRARY_REMAKERS.motion = async (o) => {
+      asked.push({ what: 'motion', prompt: o.prompt, aspect: o.aspect, seconds: o.seconds })
+      const file = `${o.outDir}/remade.mp4`
+      await picture(file)
+      return { file, mime: 'video/mp4', seconds: 2, provider: 'gemini', model: 'gemini-omni-1.2-flash' }
+    }
+    LIBRARY_REMAKERS.music = async (o) => {
+      asked.push({ what: 'music', prompt: o.prompt })
+      const file = `${o.outDir}/remade.m4a`
+      await ffmpeg(['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=500:duration=6', '-c:a', 'aac', '-b:a', '96k', file])
+      return { file, mime: 'audio/mp4', seconds: 6, provider: 'gemini', model: 'lyria-3.5' }
+    }
+  })
+
+  /** Runs one queued customize job the way the worker would. */
+  async function run(jobId: string) {
+    const row = await claimJob(jobId)
+    const jc: JobContext = { job: row, signal: new AbortController().signal, progress: () => undefined, check: () => undefined }
+    const out = (await customizeLibraryJob(jc)) as { asset: { asset: { id: string; name: string; kind: string } }; reused?: boolean }
+    await finishJob(row.id, out, row.lockedBy ?? undefined)
+    return out
+  }
+
+  it('draws an animation again in the space’s brand colours and fonts, free, once per brand', async () => {
+    const { client, workspaceId } = await signup(t.app, 'Brand owner')
+    expect((await client.json('PUT', `/api/workspaces/${workspaceId}/brand`, { name: 'Northwind', colors: ['#0b1830', '#ff5a5f', '#f3f5fa'], fonts: { headline: 'Montserrat', body: 'Inter' } })).status).toBe(200)
+    const anim = CLIP_LIBRARY.find((c) => c.kind === 'animation' && c.style === 'clean')!
+    asked.length = 0
+    const job = await client.json('POST', `/api/clips/${anim.id}/customize`, { workspaceId, mode: 'brand' })
+    expect(job.status).toBe(200)
+    expect(job.body).toMatchObject({ kind: 'library.custom', status: 'queued' })
+    const out = await run(job.body.id)
+    expect(out.asset.asset).toMatchObject({ kind: 'video', name: `Animation · ${anim.title} (your brand)` })
+    // the library's own code, drawn in the brand (no AI asked)
+    expect(asked.map((a) => a.what)).toEqual(['render'])
+    expect(asked[0]).toMatchObject({ code: '// clean', fonts: { headline: 'Montserrat' } })
+    expect(JSON.stringify(asked[0].palette)).toMatch(/#ff5a5f/i)
+    // the same brand again: the space's copy, not another render
+    const again = await run((await client.json('POST', `/api/clips/${anim.id}/customize`, { workspaceId, mode: 'brand' })).body.id)
+    expect(again.reused).toBe(true)
+    expect(again.asset.asset.id).toBe(out.asset.asset.id)
+    expect(asked).toHaveLength(1)
+  })
+
+  it('remakes any item for the space’s topic on its own keys: an animation from the library’s drawing, a clip in the video’s shape, a song in the same genre', async () => {
+    const { client, workspaceId } = await signup(t.app, 'Topic owner')
+    const anim = CLIP_LIBRARY.find((c) => c.kind === 'animation')!
+    const motion = CLIP_LIBRARY.find((c) => c.kind === 'motion')!
+    const song = MUSIC_LIBRARY[4]
+    asked.length = 0
+    const a = await run((await client.json('POST', `/api/clips/${anim.id}/customize`, { workspaceId, mode: 'topic', topic: 'our new electric bike' })).body.id)
+    expect(asked.map((x) => x.what)).toEqual(['drawing', 'render'])
+    expect(asked[0]).toMatchObject({ reference: `// ${anim.style}`, description: expect.stringContaining('our new electric bike') })
+    expect(asked[1]).toMatchObject({ code: '// drawn for the topic' })
+    expect(a.asset.asset.name).toBe(`Animation · ${anim.title} (“our new electric bike”)`)
+    const m = await run((await client.json('POST', `/api/clips/${motion.id}/customize`, { workspaceId, mode: 'topic', topic: 'a bakery at dawn', aspect: '9:16' })).body.id)
+    expect(asked.at(-1)).toMatchObject({ what: 'motion', aspect: '9:16', seconds: 8, prompt: expect.stringContaining('a bakery at dawn') })
+    expect(m.asset.asset.kind).toBe('video')
+    const s = await run((await client.json('POST', `/api/music/${song.id}/customize`, { workspaceId, mode: 'topic', topic: 'a calm yoga studio' })).body.id)
+    expect(asked.at(-1)).toMatchObject({ what: 'music', prompt: expect.stringContaining(song.prompt) })
+    expect(String(asked.at(-1)!.prompt)).toContain('a calm yoga studio')
+    expect(s.asset.asset).toMatchObject({ kind: 'audio', name: `Music · ${song.title} (“a calm yoga studio”)` })
+  })
+
+  it('refuses what can’t be done, and anyone outside the space', async () => {
+    const { client, workspaceId } = await signup(t.app, 'Refused')
+    const motion = CLIP_LIBRARY.find((c) => c.kind === 'motion')!
+    expect((await client.json('POST', `/api/clips/${motion.id}/customize`, { workspaceId, mode: 'brand' })).status).toBe(400)
+    expect((await client.json('POST', `/api/music/${MUSIC_LIBRARY[0].id}/customize`, { workspaceId, mode: 'brand' })).status).toBe(400)
+    expect((await client.json('POST', `/api/clips/${motion.id}/customize`, { workspaceId, mode: 'topic', topic: 'x' })).status).toBe(400)
+    const other = await signup(t.app, 'Outsider')
+    expect((await other.client.json('POST', `/api/clips/${motion.id}/customize`, { workspaceId, mode: 'topic', topic: 'a bakery' })).status).toBe(404)
+  })
 })

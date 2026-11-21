@@ -46,6 +46,7 @@ import { shortDuration } from './timelineMath'
 import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, trashUnused, upsertRecord, uploadFiles, useLibrary } from './uploads'
 import { tipProps } from '../lib/tooltip'
 import { useSystem } from '../shell/system'
+import { type CustomizableItem, LibraryCustomize, fitSongToVideo } from './LibraryCustomize'
 
 const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
   { id: 'media', label: 'Media', icon: <Clapperboard size={18} />, desc: 'Your uploaded videos and images, and a free clip library of animations and full-motion clips. Hover a clip to preview it; press + or drag it onto the timeline.' },
@@ -664,7 +665,7 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
     try {
       const rec = await api.addLibraryMusic(t.id, { workspaceId: s.workspaceId, projectId: s.projectId || undefined })
       upsertRecord(rec)
-      A.addAssetAt(rec.asset, useEditor.getState().playhead)
+      fitSongToVideo(A.addAssetAt(rec.asset, useEditor.getState().playhead))
       toast(`Added “${t.title}” at the playhead`)
     } catch (e) {
       toastError(e)
@@ -673,6 +674,7 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
     }
   }
   const ready = (tracks ?? []).filter((t) => t.ready)
+  const [custom, setCustom] = useState<CustomizableItem | null>(null)
   return (
     <div className="ed-group" role="group" aria-label="Music library">
       <div className="eyebrow">Music library{tracks ? ` · ${ready.length}` : ''}</div>
@@ -683,7 +685,7 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
       ) : !ready.length ? (
         <p className="ed-note">{desktop ? 'The music library is on producerstudio.app; it isn’t in the desktop app yet.' : 'The library’s music is being made. Each track appears here when it is ready.'}</p>
       ) : (
-        <p className="ed-note">Free to use in any video. Listen first; + adds the track at the playhead.</p>
+        <p className="ed-note">Free to use in any video. Listen first; + adds the song at the playhead, cut to end with your video; the wand remakes it for your topic.</p>
       )}
       {ready.map((t) => {
         const key = `library:${t.id}`
@@ -699,12 +701,16 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
                 {t.seconds ? ` · ${shortDuration(t.seconds)}` : ''}
               </div>
             </div>
+            <button className="add ghost" aria-label={`Make ${t.title} your own`} title="Make it your own" onClick={() => setCustom({ kind: 'music', ...t })}>
+              <Wand2 size={13} />
+            </button>
             <button className="add" aria-label={`Add ${t.title} at the playhead`} title="Add at playhead" disabled={adding === t.id} onClick={() => void add(t)}>
               {adding === t.id ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
             </button>
           </div>
         )
       })}
+      {custom && <LibraryCustomize item={custom} onClose={() => setCustom(null)} />}
     </div>
   )
 }
@@ -751,9 +757,10 @@ export function ClipLibrary() {
   const count = (k: LibraryClip['kind']) => ready.filter((c) => c.kind === k).length
   const shown = ready.filter((c) => c.kind === kind)
   const style = (id?: string) => DRAWING_STYLES.find((d) => d.id === id)?.label
+  const [custom, setCustom] = useState<CustomizableItem | null>(null)
   return (
     <div className="ed-group" role="group" aria-label="Clip library">
-      <p className="ed-note">Free to use in any video: animations drawn by AI, and full-motion AI video. Hover to watch; + adds the clip at the playhead.</p>
+      <p className="ed-note">Free to use in any video: animations drawn by AI, and full-motion AI video. Hover to watch; + adds the clip at the playhead; the wand makes it your own (your brand, your topic).</p>
       <div className="ed-chiprow" style={{ margin: '4px 0 10px' }}>
         {(['animation', 'motion'] as const).map((k) => (
           <button key={k} className={clsx('chip', kind === k && 'active')} aria-pressed={kind === k} onClick={() => setKind(k)}>
@@ -773,16 +780,17 @@ export function ClipLibrary() {
       ) : (
         <div className="ed-grid2">
           {shown.map((c) => (
-            <LibraryClipCard key={c.id} clip={c} detail={c.kind === 'animation' ? (style(c.style) ?? 'Animation') : 'Full motion'} adding={adding === c.id} onAdd={() => void add(c)} demo={demo} />
+            <LibraryClipCard key={c.id} clip={c} detail={c.kind === 'animation' ? (style(c.style) ?? 'Animation') : 'Full motion'} adding={adding === c.id} onAdd={() => void add(c)} onCustomize={() => setCustom(c)} demo={demo} />
           ))}
         </div>
       )}
+      {custom && <LibraryCustomize item={custom} onClose={() => setCustom(null)} />}
     </div>
   )
 }
 
 /** One clip of the clip library: its poster frame, the clip itself on hover, and + to add it. */
-function LibraryClipCard({ clip, detail, adding, onAdd, demo }: { clip: LibraryEntry<LibraryClip>; detail: string; adding: boolean; onAdd: () => void; demo: boolean }) {
+function LibraryClipCard({ clip, detail, adding, onAdd, onCustomize, demo }: { clip: LibraryEntry<LibraryClip>; detail: string; adding: boolean; onAdd: () => void; onCustomize: () => void; demo: boolean }) {
   const [hovering, setHovering] = useState(false)
   const [videoOk, setVideoOk] = useState(false)
   const [posterFailed, setPosterFailed] = useState(false)
@@ -806,6 +814,9 @@ function LibraryClipCard({ clip, detail, adding, onAdd, demo }: { clip: LibraryE
         <span className="dur">{shortDuration(clip.seconds)}</span>
         <button className="add" aria-label={`Add ${clip.title} at the playhead`} disabled={adding} onClick={onAdd} title="Add at playhead">
           {adding ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+        </button>
+        <button className="add mine" aria-label={`Make ${clip.title} your own`} onClick={onCustomize} title="Make it your own">
+          <Wand2 size={13} />
         </button>
       </div>
       <div className="nm">{clip.title}</div>

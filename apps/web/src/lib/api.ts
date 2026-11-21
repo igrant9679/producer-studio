@@ -383,6 +383,9 @@ export const api = {
   clipPreviewUrl: (id: string) => `/api/clips/${encodeURIComponent(id)}/preview`,
   clipPosterUrl: (id: string) => `/api/clips/${encodeURIComponent(id)}/poster`,
   addLibraryClip: (id: string, body: { workspaceId: string; projectId?: string }) => req<AssetRecord>('POST', `/clips/${encodeURIComponent(id)}/add`, body),
+  /** A library item made the space's own: an animation in its brand, or any item remade for its topic (a job). */
+  customizeLibrary: (kind: 'music' | 'clip', id: string, body: { workspaceId: string; projectId?: string; mode: 'brand' | 'topic'; topic?: string; aspect?: '16:9' | '9:16' | '1:1' }) =>
+    req<Job>('POST', `/${kind === 'music' ? 'music' : 'clips'}/${encodeURIComponent(id)}/customize`, body),
   /** One take of a sound effect from a kit (the brief's preview of its sound effects). */
   sfxPreviewUrl: (kit: string, role: string) => `/api/music/sfx/${encodeURIComponent(kit)}/${encodeURIComponent(role)}`,
   write: (body: WriteRequest, onDelta: (text: string) => void, signal?: AbortSignal) =>

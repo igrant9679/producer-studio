@@ -82,6 +82,7 @@ export const JOB_LABELS: Record<JobKind, string> = {
   'media.sketch': 'Sketching the picture in',
   'asset.copy': 'Copying a clip to another space',
   'library.make': 'Making the media library',
+  'library.custom': 'Customizing a library item',
 }
 
 export function initials(name: string | undefined): string {

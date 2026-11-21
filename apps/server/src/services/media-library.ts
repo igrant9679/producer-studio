@@ -4,6 +4,7 @@
 // animations. Each made item is kept in storage under library/ with a small JSON beside it saying what it is (its
 // file, length, model, when), shared by every space: listed in the editor, heard or watched there, and copied into a
 // space as its own clip when someone adds it.
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
@@ -18,10 +19,12 @@ import {
   type LibraryItemStatus,
   type LibraryKind,
   type LibraryTrack,
+  type LibraryCustomMode as CustomMode,
   libraryItem,
 } from '@producer/core'
 import { ctx } from '../context'
 import { assets, jobs } from '../db/schema'
+import { assetRecord } from '../dto'
 import { HttpError, notFound } from '../http'
 import { newId } from '../ids'
 import { enqueue } from '../jobs/queue'
@@ -328,6 +331,135 @@ export async function addLibraryItem(o: { it: LibraryItem; workspaceId: string; 
   } finally {
     fs.rm(work, { recursive: true, force: true }, () => undefined)
   }
+}
+
+// ---------------- customizing an item for a space (21 Nov 2026) ----------------
+// The owner: "The clips and samples should be available for users to insert into their videos and customize based on
+// their needs/brand/topic". An animation can be drawn again from its kept code in the space's brand colours and fonts
+// (no AI: only the render), and any item can be remade for the space's topic on the space's own AI keys (an animation
+// redrawn from the library's code for the topic, a clip filmed again, a song written again in the same genre).
+
+
+/** Checks a customization can be asked for, and queues it as the space's job. */
+export async function queueCustom(o: { it: LibraryItem; mode: CustomMode; topic?: string; aspect?: string; workspaceId: string; userId: string; projectId?: string | null }) {
+  const info = await madeItem(o.it)
+  if (o.mode === 'brand' && (o.it.kind !== 'animation' || !info.drawing)) throw new HttpError(400, 'invalid', 'Only the animations can be drawn again in your brand: a song or a filmed clip can’t be recoloured this way.')
+  const topic = (o.topic ?? '').trim()
+  if (o.mode === 'topic' && topic.length < 3) throw new HttpError(400, 'invalid', 'Say what your video is about, in a few words.')
+  const what = o.mode === 'brand' ? 'in your brand' : 'for your topic'
+  return enqueue('library.custom', { item: o.it.id, mode: o.mode, ...(o.mode === 'topic' ? { topic: topic.slice(0, 300) } : {}), ...(o.aspect ? { aspect: o.aspect } : {}) }, { workspaceId: o.workspaceId, userId: o.userId, projectId: o.projectId ?? null, message: `Making “${o.it.title}” ${what}` })
+}
+
+async function readText(key: string): Promise<string> {
+  const s = await ctx().storage.getStream(key)
+  const chunks: Buffer[] = []
+  for await (const ch of s) chunks.push(Buffer.isBuffer(ch) ? ch : Buffer.from(ch))
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/** The space's brand, as a drawing's palette and fonts. */
+async function brandDrawing(workspaceId: string, style: DrawingStyleId) {
+  const [{ getBrandKit }, { getLook, lookPalette }, { drawingPalette }] = await Promise.all([import('./brand'), import('./looks'), import('../ai/drawn')])
+  const brand = await getBrandKit(workspaceId, undefined, { fallback: true }).catch(() => null)
+  const pal = lookPalette(getLook(undefined), brand)
+  return { palette: drawingPalette(style, { canvas: pal.canvas, accent: pal.accent, ink: pal.ink }), fonts: { headline: pal.headlineFont, body: pal.bodyFont } }
+}
+
+/** Remakes for a topic go through these (tests stand in quick ones: the real ones spend the space's AI credit). */
+export const LIBRARY_REMAKERS = {
+  async music(o: { workspaceId: string; prompt: string; outDir: string; signal: AbortSignal }): Promise<MadeItem> {
+    return LIBRARY_MAKERS.music(o)
+  },
+  async motion(o: { workspaceId: string; prompt: string; seconds: number; aspect: string; outDir: string; signal: AbortSignal; progress: (f: number, m: string) => void }): Promise<MadeItem> {
+    const { generateVideo } = await import('../ai/generate/video')
+    const aspect = (['16:9', '9:16', '1:1'].includes(o.aspect) ? o.aspect : '16:9') as '16:9' | '9:16' | '1:1'
+    const v = await generateVideo({ workspaceId: o.workspaceId, prompt: o.prompt, aspect, seconds: o.seconds, outDir: o.outDir, signal: o.signal, onProgress: o.progress })
+    return { file: v.file, mime: v.mime, seconds: v.seconds, provider: v.provider, model: v.model }
+  },
+  async drawing(o: { workspaceId: string; description: string; reference: string; env: NonNullable<LibraryInfo['drawing']>['env']; style: DrawingStyleId; signal: AbortSignal; progress: (f: number, m: string) => void }): Promise<string> {
+    const [{ requireProvider }, { writeDrawing }] = await Promise.all([import('../ai/provider'), import('../ai/drawn')])
+    const ai = await requireProvider(o.workspaceId, 'animation')
+    const { code } = await writeDrawing(ai, { description: o.description, narration: '', headline: '', env: { ...o.env, words: [] }, silent: true, noWords: true, style: o.style, reference: o.reference, signal: o.signal, progress: o.progress })
+    return code
+  },
+  async render(code: string, env: NonNullable<LibraryInfo['drawing']>['env'], file: string, o: { signal: AbortSignal; onProgress: (f: number) => void }) {
+    const { renderDrawing } = await import('../media/drawing')
+    await renderDrawing(code, { ...env, words: [] }, file, o)
+  },
+}
+
+/** The 'library.custom' job: the item made the space's own (in its brand, or for its topic), added to its media. */
+export async function customizeLibraryJob(jc: JobContext): Promise<unknown> {
+  const { item, mode, topic = '', aspect = '16:9' } = jc.job.input as { item: string; mode: CustomMode; topic?: string; aspect?: string }
+  const it = requireItem(item)
+  const info = await madeItem(it)
+  const ws = jc.job.workspaceId
+  const progress = (f: number, m: string) => jc.progress(Math.min(0.9, f), m)
+  const work = tmpDir('library-custom')
+  try {
+    let made: MadeItem
+    let key: string
+    if (it.kind === 'animation') {
+      if (!info.drawing) throw new HttpError(400, 'invalid', 'This animation can’t be drawn again: its drawing wasn’t kept.')
+      const style = (info.drawing.style as DrawingStyleId) ?? it.style ?? 'clean'
+      const look = await brandDrawing(ws, style)
+      const env = { ...info.drawing.env, ...look }
+      const library = await readText(info.drawing.key)
+      key = `${libraryAssetKey(it)} ${mode} ${crypto.createHash('sha256').update(JSON.stringify([look, mode === 'topic' ? topic : ''])).digest('hex').slice(0, 12)}`
+      // the same brand again: the clip this space already has
+      if (mode === 'brand') {
+        const had = await spaceCopy(ws, key)
+        if (had) return { asset: assetRecord(had), reused: true }
+      }
+      let code = library
+      if (mode === 'topic') {
+        jc.progress(0.03, 'Drawing it for your topic')
+        code = await LIBRARY_REMAKERS.drawing({ workspaceId: ws, description: `${it.prompt}\nMake it about this instead, keeping the style and the kind of motion: ${topic}`, reference: library, env, style, signal: jc.signal, progress: (f, m) => progress(f * 0.6, m) })
+      }
+      jc.check()
+      const file = path.join(work, 'custom.mp4')
+      const from = mode === 'topic' ? 0.6 : 0.05
+      jc.progress(from, mode === 'brand' ? 'Drawing it in your brand' : 'Rendering the animation')
+      await LIBRARY_REMAKERS.render(code, env, file, { signal: jc.signal, onProgress: (f) => progress(from + f * (0.9 - from), mode === 'brand' ? 'Drawing it in your brand' : 'Rendering the animation') })
+      made = { file, mime: 'video/mp4', seconds: env.duration, provider: mode === 'brand' ? info.provider : 'ai', model: 'code' }
+    } else {
+      if (mode !== 'topic') throw new HttpError(400, 'invalid', 'Only the animations can be drawn again in your brand.')
+      key = `${libraryAssetKey(it)} topic ${crypto.randomBytes(6).toString('hex')}`
+      jc.progress(0.03, it.kind === 'music' ? 'Writing the song for your topic' : 'Making the clip for your topic')
+      made =
+        it.kind === 'music'
+          ? await LIBRARY_REMAKERS.music({ workspaceId: ws, prompt: `${it.prompt} Make it suit this: ${topic}.`, outDir: work, signal: jc.signal })
+          : await LIBRARY_REMAKERS.motion({ workspaceId: ws, prompt: `${it.prompt} Make it about this instead, keeping the kind of shot, the camera movement and the mood: ${topic}.`, seconds: it.seconds, aspect, outDir: work, signal: jc.signal, progress })
+    }
+    jc.check()
+    jc.progress(0.92, 'Adding it to your media')
+    const label = mode === 'brand' ? 'your brand' : `“${topic.length > 40 ? `${topic.slice(0, 38)}…` : topic}”`
+    const row = await createAssetFromFile({
+      workspaceId: ws,
+      userId: jc.job.userId,
+      projectId: jc.job.projectId ?? null,
+      filePath: made.file,
+      name: `${it.kind === 'music' ? 'Music' : it.kind === 'motion' ? 'Clip' : 'Animation'} · ${it.title} (${label})`.slice(0, 200),
+      mime: made.mime,
+      kind: it.kind === 'music' ? 'audio' : 'video',
+      origin: 'ai',
+      meta: { generated: { kind: 'library', prompt: key, provider: made.provider, model: made.model }, jobId: jc.job.id },
+    })
+    const ready = await processAsset(row.id, jc)
+    return { asset: assetRecord(ready) }
+  } finally {
+    fs.rm(work, { recursive: true, force: true }, () => undefined)
+  }
+}
+
+async function spaceCopy(workspaceId: string, key: string): Promise<AssetRow | undefined> {
+  return (
+    await ctx()
+      .db.select()
+      .from(assets)
+      .where(and(eq(assets.workspaceId, workspaceId), eq(assets.status, 'ready'), isNull(assets.trashedAt), sql`${assets.meta}->'generated'->>'kind' = 'library'`, sql`${assets.meta}->'generated'->>'prompt' = ${key}`))
+      .limit(1)
+  )[0]
 }
 
 /** The library before 21 Nov 2026 was composed onto the server's disk: those files are no longer listed. */

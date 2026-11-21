@@ -99,6 +99,7 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'media.sketch': 'Sketching the picture in',
   'asset.copy': 'Copying the clip',
   'library.make': 'Making a media library item',
+  'library.custom': 'Customizing a library item',
 }
 
 /**
