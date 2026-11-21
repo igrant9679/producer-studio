@@ -20,6 +20,7 @@ import { operatorRoutes } from './routes/operator'
 import { aiRoutes } from './routes/ai'
 import { voiceRoutes } from './routes/voice'
 import { musicRoutes } from './routes/music'
+import { clipRoutes } from './routes/clips'
 import { aiSettingsRoutes } from './routes/ai-settings'
 import { assetRoutes, mediaRoutes, uploadRoutes } from './routes/assets'
 import { sceneRoutes } from './routes/scenes'
@@ -144,6 +145,7 @@ export function createApp() {
   app.route('/api/ai', aiRoutes)
   app.route('/api/voice', voiceRoutes)
   app.route('/api/music', musicRoutes)
+  app.route('/api/clips', clipRoutes)
   app.route('/api/exports', spaceExportRoutes)
   app.route('/api/exports', exportRoutes)
   app.route('/api/search', searchRoutes)

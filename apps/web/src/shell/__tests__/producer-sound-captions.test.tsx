@@ -63,16 +63,16 @@ afterEach(() => {
 })
 
 describe('hearing the brief’s sound', () => {
-  it('plays a library track in the chosen music style, and stops it', async () => {
+  it('plays a sample of the chosen music style, and stops it', async () => {
     show(brief({ music: 'lofi' }))
     const listen = await screen.findByRole('button', { name: /Listen to Lo-fi/ })
     fireEvent.click(listen)
-    expect(played).toEqual(['/api/music/study-session/preview'])
+    expect(played).toEqual(['/api/music/style/lofi/preview'])
     expect(screen.getByRole('button', { name: /Stop/ }).getAttribute('aria-pressed')).toBe('true')
-    // another style plays its own track
+    // another style plays its own sample
     fireEvent.change(screen.getByLabelText('Music'), { target: { value: 'cinematic' } })
     fireEvent.click(screen.getByRole('button', { name: /Listen to Cinematic/ }))
-    expect(played.at(-1)).toBe('/api/music/rising-horizon/preview')
+    expect(played.at(-1)).toBe('/api/music/style/cinematic/preview')
     // no music: nothing to hear
     fireEvent.change(screen.getByLabelText('Music'), { target: { value: 'off' } })
     expect(screen.queryByRole('button', { name: /Listen to Cinematic/ })).toBeNull()

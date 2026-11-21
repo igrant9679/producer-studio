@@ -1,9 +1,10 @@
 // The Operator page (P-10): support without database access, for accounts named in OPERATOR_EMAILS. People (find,
 // disable or enable, send a reset), Jobs (inspect, requeue, cancel), Storage (per space, orphaned files) and the full
-// audit log. Everyone else sees a page that isn't there.
-import type { AuditEntry, OperatorJob, OperatorUser, OperatorUserDetail, OrphanScan, StorageUsageRow } from '@producer/core'
-import { Ban, Copy, HardDrive, ListChecks, RotateCcw, Search, ShieldCheck, Trash2, UserCheck, UserX, Users } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+// audit log, and the Media library (the editor's music and clips, made with a space's keys). Everyone else sees a
+// page that isn't there.
+import type { AuditEntry, LibraryItemStatus, LibraryKind, OperatorJob, OperatorUser, OperatorUserDetail, OrphanScan, StorageUsageRow } from '@producer/core'
+import { Ban, Clapperboard, Copy, HardDrive, ListChecks, RotateCcw, Search, ShieldCheck, Sparkles, Trash2, UserCheck, UserX, Users } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { opsApi } from '../../lib/opsApi'
 import { toast, toastError } from '../../lib/toast'
 import { useSession } from '../../lib/session'
@@ -12,11 +13,12 @@ import { formatBytes, relativeTime } from '../util'
 import { AuditList } from './AuditPage'
 import './activity.css'
 
-type Tab = 'people' | 'jobs' | 'storage' | 'audit'
+type Tab = 'people' | 'jobs' | 'storage' | 'library' | 'audit'
 const TABS: Array<{ id: Tab; label: string; icon: JSX.Element }> = [
   { id: 'people', label: 'People', icon: <Users size={15} /> },
   { id: 'jobs', label: 'Jobs', icon: <ListChecks size={15} /> },
   { id: 'storage', label: 'Storage', icon: <HardDrive size={15} /> },
+  { id: 'library', label: 'Media library', icon: <Clapperboard size={15} /> },
   { id: 'audit', label: 'Audit log', icon: <ShieldCheck size={15} /> },
 ]
 
@@ -366,6 +368,155 @@ function Storage() {
   )
 }
 
+const KIND_LABEL: Record<LibraryKind, string> = { music: 'Music', motion: 'Full motion', animation: 'Animations' }
+const minSec = (s?: number) => (s == null ? '' : s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${Math.round(s)} s`)
+
+/** What an item of the library is doing, in words. */
+function itemState(s: LibraryItemStatus): { text: string; tone?: 'bad' | 'busy' } {
+  if (s.ready) return { text: `Made · ${minSec(s.seconds)}${s.model ? ` · ${s.model}` : ''}` }
+  const j = s.job
+  if (!j) return { text: 'Not made yet' }
+  if (j.status === 'queued') return { text: 'Waiting its turn', tone: 'busy' }
+  if (j.status === 'running') return { text: `${Math.round(Math.max(0, j.progress) * 100)}% · ${j.message || 'Making it'}`, tone: 'busy' }
+  if (j.status === 'error') return { text: `Failed: ${j.error || j.message || 'no reason given'}`, tone: 'bad' }
+  if (j.status === 'cancelled') return { text: 'Stopped' }
+  return { text: 'Not made yet' }
+}
+
+/**
+ * The media library (21 Nov 2026): the editor's music and clip libraries, made once with the keys of a space this
+ * operator owns (that space's AI credit pays), one item at a time, and shared by every space.
+ */
+function MediaLibrary() {
+  const [items, setItems] = useState<LibraryItemStatus[]>()
+  const [error, setError] = useState<string>()
+  const workspaces = useSession((s) => s.workspaces)
+  const spaces = useMemo(() => workspaces.filter((w) => w.role === 'owner'), [workspaces])
+  const current = useSession((s) => s.workspaceId)
+  const [space, setSpace] = useState<string>(() => (spaces.find((w) => w.id === current) ?? spaces[0])?.id ?? '')
+  const [kinds, setKinds] = useState<LibraryKind[]>(['music', 'motion', 'animation'])
+  const [confirm, setConfirm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const load = () => opsApi.library().then((r) => (setItems(r), setError(undefined)), (e) => setError(msg(e)))
+  useEffect(() => void load(), [])
+  const going = !!items?.some((s) => s.job && (s.job.status === 'queued' || s.job.status === 'running'))
+  // while it is being made, the list follows along
+  useEffect(() => {
+    if (!going) return
+    const t = window.setInterval(() => void load(), 10_000)
+    return () => window.clearInterval(t)
+  }, [going])
+  const missing = (k: LibraryKind) => (items ?? []).filter((s) => s.kind === k && !s.ready)
+  const todo = kinds.flatMap((k) => missing(k))
+  const motionSeconds = kinds.includes('motion') ? missing('motion').length * 8 : 0
+  const spend = [
+    kinds.includes('music') && missing('music').length ? `${missing('music').length} songs with Google’s Lyria (one call per song)` : '',
+    motionSeconds ? `${missing('motion').length} full-motion clips with Gemini video (${motionSeconds} s of AI video)` : '',
+    kinds.includes('animation') && missing('animation').length ? `${missing('animation').length} animations drawn by the space’s animation AI (the 3D ones take longest)` : '',
+  ].filter(Boolean)
+  const spaceName = spaces.find((w) => w.id === space)?.name ?? 'the space'
+  async function make() {
+    setBusy(true)
+    try {
+      const r = await opsApi.makeLibrary(space, kinds)
+      toast(r.going ? 'The library is already being made' : r.queued.length ? `Making ${r.queued.length} items, one at a time` : 'Everything chosen is made already')
+      await load()
+    } catch (e) {
+      toastError(msg(e))
+    } finally {
+      setBusy(false)
+      setConfirm(false)
+    }
+  }
+  return (
+    <>
+      <p className="muted">
+        The music and clips everyone finds in the editor (Audio → Music library, Media → Clip library). Each item is made once, with the AI keys of a space you own, and then shared by every space. Items already made are never made again.
+      </p>
+      {error ? (
+        <div className="ps-alert" role="alert">{error}</div>
+      ) : !items ? (
+        <Spinner size={18} />
+      ) : (
+        <>
+          <div className="row" style={{ gap: 18, flexWrap: 'wrap', margin: '6px 0 14px' }} role="status" aria-label="Made so far">
+            {(['music', 'motion', 'animation'] as const).map((k) => {
+              const all = items.filter((s) => s.kind === k)
+              return (
+                <span key={k}>
+                  <strong>{KIND_LABEL[k]}</strong> {all.filter((s) => s.ready).length} of {all.length} made
+                </span>
+              )
+            })}
+          </div>
+          {!spaces.length ? (
+            <div className="ps-alert info">You don’t own a space, and the library is made with the keys of a space you own.</div>
+          ) : (
+            <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ minWidth: 220 }}>
+                <label className="label" htmlFor="op-lib-space">
+                  With the keys of
+                </label>
+                <select id="op-lib-space" className="input" value={space} onChange={(e) => setSpace(e.target.value)}>
+                  {spaces.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <fieldset className="row" style={{ gap: 12, border: 0, padding: 0, margin: 0 }} aria-label="What to make">
+                {(['music', 'motion', 'animation'] as const).map((k) => (
+                  <label key={k} className="row" style={{ gap: 6 }}>
+                    <input type="checkbox" checked={kinds.includes(k)} onChange={(e) => setKinds((cur) => (e.target.checked ? [...cur, k] : cur.filter((x) => x !== k)))} />
+                    {KIND_LABEL[k]} ({missing(k).length} to make)
+                  </label>
+                ))}
+              </fieldset>
+              <button className="btn primary" disabled={busy || going || !todo.length || !space} onClick={() => setConfirm(true)}>
+                {busy ? <Spinner size={13} /> : <Sparkles size={14} />} {going ? 'Being made…' : 'Make what’s missing…'}
+              </button>
+            </div>
+          )}
+          <div className="ps-table-wrap" style={{ marginTop: 16 }}>
+            <table className="ps-table" aria-label="The media library">
+              <thead>
+                <tr>
+                  <th scope="col">Item</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">State</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((s) => {
+                  const st = itemState(s)
+                  return (
+                    <tr key={s.id}>
+                      <td>{s.title}</td>
+                      <td>{KIND_LABEL[s.kind]}</td>
+                      <td className={st.tone === 'busy' ? 'muted' : undefined} style={st.tone === 'bad' ? { color: 'var(--danger)' } : undefined}>{st.text}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      {confirm && (
+        <ConfirmDialog
+          title={`Make ${todo.length} items with ${spaceName}’s keys?`}
+          body={`This spends ${spaceName}’s AI credit on: ${spend.join('; ')}. They are made one at a time (Jobs shows each one), so the server stays free for people’s own work.`}
+          confirmLabel="Make them"
+          busy={busy}
+          onConfirm={() => void make()}
+          onClose={() => setConfirm(false)}
+        />
+      )}
+    </>
+  )
+}
+
 function Audit() {
   const [q, setQ] = useState('')
   const [items, setItems] = useState<AuditEntry[]>()
@@ -417,12 +568,12 @@ export default function OperatorPage() {
         <div>
           <span className="eyebrow">Server</span>
           <h1>Operator</h1>
-          <p>Find and help people, look after jobs and storage, and read the audit log. Everything done here is written to the audit log.</p>
+          <p>Find and help people, look after jobs and storage, make the media library, and read the audit log. Everything done here is written to the audit log.</p>
         </div>
       </div>
       <Tabs id="ps-operator" tabs={TABS} value={tab} onChange={setTab} label="Operator tools" />
       <TabPanel tabs="ps-operator" value={tab}>
-        {tab === 'people' ? <People /> : tab === 'jobs' ? <Jobs /> : tab === 'storage' ? <Storage /> : <Audit />}
+        {tab === 'people' ? <People /> : tab === 'jobs' ? <Jobs /> : tab === 'storage' ? <Storage /> : tab === 'library' ? <MediaLibrary /> : <Audit />}
       </TabPanel>
     </div>
   )

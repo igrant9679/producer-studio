@@ -49,51 +49,11 @@ export function sfxKitFor(style: MusicStyle | undefined): 'calm' | 'crisp' | 'la
 /** The sounds a video's effects play, in the order the brief's preview plays them (earshot's role names). */
 export const SFX_PREVIEW_ROLES = ['whoosh.short', 'pop', 'click.confirm'] as const
 
-/**
- * A track in the music library: composed once by the server with the same composer as a video's own music (so it is
- * free to use in any video, here and elsewhere), kept, and added to a video from the editor's Audio panel. Every style
- * has at least one, so the brief's music choice can be heard before it is picked.
- */
-export interface LibraryTrack {
-  id: string
-  title: string
-  style: MusicStyle
-  /** In a few words, for the list. */
-  mood: string
-  seconds: number
-}
+/** How long the sample of a music style the brief plays is (composed by the server, like a video's own music). */
+export const STYLE_SAMPLE_SECONDS = 45
 
-/** Bumped when the library's tracks change: a new number composes them again. */
-export const MUSIC_LIBRARY_VERSION = 1
-
-export const MUSIC_LIBRARY: readonly LibraryTrack[] = [
-  { id: 'sunny-mallets', title: 'Sunny Mallets', style: 'mallet', mood: 'Friendly and light', seconds: 75 },
-  { id: 'clear-explainer', title: 'Clear Explainer', style: 'mallet', mood: 'Upbeat and curious', seconds: 90 },
-  { id: 'launch-pulse', title: 'Launch Pulse', style: 'pulse', mood: 'Confident and modern', seconds: 75 },
-  { id: 'cloud-drive', title: 'Cloud Drive', style: 'pulse', mood: 'Driving and techy', seconds: 90 },
-  { id: 'quiet-story', title: 'Quiet Story', style: 'piano', mood: 'Warm and human', seconds: 90 },
-  { id: 'first-light', title: 'First Light', style: 'piano', mood: 'Hopeful and gentle', seconds: 75 },
-  { id: 'porch-guitar', title: 'Porch Guitar', style: 'acoustic', mood: 'Warm, for lifestyle', seconds: 75 },
-  { id: 'weekend-strum', title: 'Weekend Strum', style: 'acoustic', mood: 'Bright and easy', seconds: 60 },
-  { id: 'study-session', title: 'Study Session', style: 'lofi', mood: 'Cozy and focused', seconds: 90 },
-  { id: 'rainy-window', title: 'Rainy Window', style: 'lofi', mood: 'Mellow and creative', seconds: 75 },
-  { id: 'deep-field', title: 'Deep Field', style: 'ambient', mood: 'Calm and spacious', seconds: 90 },
-  { id: 'clean-room', title: 'Clean Room', style: 'ambient', mood: 'Still, for science and tech', seconds: 60 },
-  { id: 'rising-horizon', title: 'Rising Horizon', style: 'cinematic', mood: 'Epic, building', seconds: 75 },
-  { id: 'big-reveal', title: 'Big Reveal', style: 'cinematic', mood: 'Dramatic and bold', seconds: 60 },
-  { id: 'brass-strut', title: 'Brass Strut', style: 'funk', mood: 'Confident and fun', seconds: 75 },
-  { id: 'tiptoe', title: 'Tiptoe', style: 'pizzicato', mood: 'Playful and quirky', seconds: 60 },
-  { id: 'neon-highway', title: 'Neon Highway', style: 'synthwave', mood: 'Retro, driving', seconds: 75 },
-  { id: 'pixel-quest', title: 'Pixel Quest', style: 'chiptune', mood: 'Games and retro', seconds: 60 },
-  { id: 'heavy-hitter', title: 'Heavy Hitter', style: 'trap', mood: 'Bold, high energy', seconds: 60 },
-  { id: 'silk-road', title: 'Silk Road', style: 'guofeng', mood: 'Elegant and traditional', seconds: 75 },
-]
-
-/** The library track the brief plays when its music style is previewed. */
-export const libraryTrackFor = (style: MusicStyle): LibraryTrack | undefined => MUSIC_LIBRARY.find((t) => t.style === style)
-
-/** Where a library track changes section (the composer re-voices on each, so the track develops): every 8 s. */
-export function libraryCuts(seconds: number): Array<{ id: string; t: number }> {
+/** Where a style sample changes section (the composer re-voices on each, so the sample develops): every 8 s. */
+export function styleSampleCuts(seconds: number): Array<{ id: string; t: number }> {
   const out: Array<{ id: string; t: number }> = []
   for (let t = 0, i = 0; t < seconds - 4; t += 8, i++) out.push({ id: `part${i + 1}`, t })
   return out

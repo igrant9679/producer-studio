@@ -72,6 +72,13 @@ export const GEMINI_VIDEO_MODELS: GeminiVideoModel[] = [
 ]
 
 /**
+ * Lyria over the Interactions API (Google's music guide, 21 Nov 2026): lyria-3.5 makes a whole song of "a couple of
+ * minutes" (MP3, 44.1 kHz stereo, SynthID-watermarked); lyria-3-pro-preview is the older full-song model the SDK still
+ * names. Not lyria-3-clip-preview: its songs are always 30 s, too short for the library.
+ */
+export const GEMINI_MUSIC_MODELS: Array<{ id: string }> = [{ id: 'lyria-3.5' }, { id: 'lyria-3-pro-preview' }]
+
+/**
  * Google accepted the clip, then stopped it with its generic "There was a problem processing your request" (AI Studio
  * logs those as 403: seen when the key's project isn't allowed to use the model). Treated as "this key can't use this
  * model": the next model is tried and the key is passed over for clips for a while (another key takes them).
@@ -95,6 +102,11 @@ export interface GenInteraction {
   id: string
   status: string
   output_video?: { data?: string; uri?: string; mime_type?: string }
+  /** A song (Lyria): the SDK's helper over the last audio block. */
+  output_audio?: { data?: string; uri?: string; mime_type?: string }
+  /** The raw turns, where the audio block is when the helper isn't filled in. */
+  steps?: Array<{ content?: Array<{ type?: string; data?: string; mime_type?: string; text?: string }> }>
+  outputs?: Array<{ type?: string; data?: string; mime_type?: string; text?: string }>
   errors?: Array<{ code?: string; message?: string }>
 }
 
@@ -167,7 +179,7 @@ export function setGenerateClients(c: Partial<GenerateDeps> | undefined) {
 
 // ---------------- the workspace's key ----------------
 
-export type GenKind = 'image' | 'video'
+export type GenKind = 'image' | 'video' | 'music'
 
 /** A stored workspace key that can make `kind`. `id` names it in the model memo (scope + provider + key hash). */
 export interface GenKey {
@@ -180,6 +192,7 @@ const LABEL: Record<GenProvider, string> = { openai: 'OpenAI', gemini: 'Gemini',
 /** The models `p` can make `kind` with, in the order they're tried. */
 export function candidates(p: GenProvider, kind: GenKind): GeminiVideoModel[] | Array<{ id: string }> {
   if (kind === 'image') return p === 'openai' ? OPENAI_IMAGE_MODELS : p === 'gemini' ? GEMINI_IMAGE_MODELS : []
+  if (kind === 'music') return p === 'gemini' ? GEMINI_MUSIC_MODELS : []
   return p === 'gemini' ? GEMINI_VIDEO_MODELS : p === 'fal' ? FAL_VIDEO_MODELS : []
 }
 
@@ -187,6 +200,7 @@ const UNREADABLE = 'The saved AI key for this space can’t be read any more (th
 
 function noKey(kind: GenKind, meta: Partial<Record<StoredKeyProvider, KeyMeta>>): HttpError {
   if (kind === 'image') return new HttpError(503, 'server', 'AI images need your own OpenAI or Gemini API key. Add one in Settings → AI.')
+  if (kind === 'music') return new HttpError(503, 'server', 'AI music needs a Gemini API key (Google’s Lyria). Add one in Settings → AI.')
   if (meta.openai)
     return new HttpError(503, 'server', 'AI video clips need a Gemini or fal.ai API key (OpenAI shut down its Sora video API in September 2026). Add one in Settings → AI.')
   return new HttpError(503, 'server', 'AI video clips need your own Gemini or fal.ai API key. Add one in Settings → AI.')
@@ -195,6 +209,7 @@ function noKey(kind: GenKind, meta: Partial<Record<StoredKeyProvider, KeyMeta>>)
 /** Which providers to try for `kind`, best first: stills follow the default writing provider, clips the video choice. */
 function providerOrder(doc: AiSettingsDoc, kind: GenKind): GenProvider[] {
   if (kind === 'image') return doc.defaultProvider === 'gemini' ? ['gemini', 'openai'] : ['openai', 'gemini']
+  if (kind === 'music') return ['gemini']
   return doc.videoProvider === 'fal' ? ['fal', 'gemini'] : ['gemini', 'fal']
 }
 
@@ -202,12 +217,12 @@ function providerOrder(doc: AiSettingsDoc, kind: GenKind): GenProvider[] {
  * The key to use for `kind`, or why there is none. A key whose last test failed, or whose models all failed for it
  * lately, is passed over while another works; a saved key that can't be decrypted stops here (never a fallback).
  */
-async function pickKey(workspaceId: string, kind: GenKind, loaded?: { doc: AiSettingsDoc; meta: Partial<Record<StoredKeyProvider, KeyMeta>> }): Promise<GenKey | HttpError> {
+async function pickKey(workspaceId: string, kind: GenKind, loaded?: { doc: AiSettingsDoc; meta: Partial<Record<StoredKeyProvider, KeyMeta>> }, only?: GenProvider): Promise<GenKey | HttpError> {
   const scope = ctx().config.mode === 'desktop' ? LOCAL_SCOPE : workspaceId
   const doc = loaded?.doc ?? (await loadDoc(scope))
   const meta = loaded?.meta ?? (await keyMeta(scope))
-  const stored = providerOrder(doc, kind).filter((p) => meta[p] && candidates(p, kind).length)
-  if (!stored.length) return noKey(kind, meta)
+  const stored = providerOrder(doc, kind).filter((p) => meta[p] && candidates(p, kind).length && (!only || p === only))
+  if (!stored.length) return only && !meta[only] ? new HttpError(503, 'server', `This needs the space’s ${LABEL[only]} key, and it has none. Add one in Settings → AI.`) : noKey(kind, meta)
   let problem: HttpError | undefined
   for (const p of stored) {
     const d = p === 'fal' ? doc.media?.fal : doc.providers[p]
@@ -227,9 +242,9 @@ async function pickKey(workspaceId: string, kind: GenKind, loaded?: { doc: AiSet
   return problem!
 }
 
-/** The key for generating `kind` in this workspace; 503 with the reason when there is none. */
-export async function requireKey(workspaceId: string, kind: GenKind): Promise<GenKey> {
-  const k = await pickKey(workspaceId, kind)
+/** The key for generating `kind` in this workspace (only `only`'s, when given); 503 with the reason when there is none. */
+export async function requireKey(workspaceId: string, kind: GenKind, only?: GenProvider): Promise<GenKey> {
+  const k = await pickKey(workspaceId, kind, undefined, only)
   if (k instanceof HttpError) throw k
   return k
 }
@@ -339,7 +354,7 @@ function noModels(p: GenProvider, kind: GenKind, tried: string[], last?: unknown
       'server',
       'Google won’t run Gemini’s video models for this key: it takes each clip, then stops it with “There was a problem processing your request”. That usually means the key’s Google project isn’t allowed to use Gemini Omni video yet. Open Google AI Studio → Logs: a 403 on these requests confirms it; check billing is on for the project. Or add a fal.ai key in Settings → AI to make clips with Wan instead.',
     )
-  const what = kind === 'image' ? 'image' : 'video'
+  const what = kind
   const where = p === 'openai' ? 'your OpenAI account' : p === 'fal' ? 'your fal.ai account' : 'Google AI Studio'
   return new HttpError(503, 'server', `This ${LABEL[p]} key can’t use any of the ${what} models Producer Studio works with (${tried.join(', ')}). Check the key’s access in ${where}, or add another provider’s key in Settings → AI.`)
 }

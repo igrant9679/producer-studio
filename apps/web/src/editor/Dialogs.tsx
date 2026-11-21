@@ -1,8 +1,8 @@
-// Export dialog and the editor's Help (keyboard shortcuts, the music library).
+// Export dialog and the editor's Help (keyboard shortcuts, the media library).
 import type { ExportPreviewResult, ExportRecord, ExportRequest, Job, Project } from '@producer/core'
-import { EXPORT_FPS, EXPORT_PRESETS, EXPORT_RESOLUTIONS, MUSIC_LIBRARY, StageRenderer, aspectOf, filledCaptionTracks, isAudioFormat, presetCanvasSize, projectDuration, projectForExport, selectionRange } from '@producer/core'
+import { EXPORT_FPS, EXPORT_PRESETS, EXPORT_RESOLUTIONS, CLIP_LIBRARY, MUSIC_LIBRARY, StageRenderer, aspectOf, filledCaptionTracks, isAudioFormat, presetCanvasSize, projectDuration, projectForExport, selectionRange } from '@producer/core'
 import clsx from 'clsx'
-import { AudioLines, Captions, Check, Copy, Download, Film, Keyboard, Loader2, Music, Play, Plus, TriangleAlert, X } from 'lucide-react'
+import { AudioLines, Captions, Check, Clapperboard, Copy, Download, Film, Keyboard, Loader2, Music, Play, Plus, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
@@ -527,13 +527,14 @@ const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
   ['Panels and menus', [['Tab, Enter (first stops)', 'Skip to the canvas or the timeline'], ['← / → on a Properties tab', 'Previous / next tab'], ['Tab in a popover (transition, freeze, track sound)', 'Next control (Shift: back); Esc closes'], ['Tab in a menu', 'Close it without choosing']]],
 ]
 
-type HelpTab = 'keys' | 'music'
+type HelpTab = 'keys' | 'library'
 
-/** The editor's Help (? or the Help buttons): every shortcut, and how to use the music library (19 Nov 2026). */
+/** The editor's Help (? or the Help buttons): every shortcut, and how to use the media library (music and clips). */
 export function HelpDialog() {
   const [tab, setTab] = useState<HelpTab>('keys')
   const close = () => useEditor.setState({ shortcutsOpen: false })
-  const openLibrary = () => useEditor.setState({ activeLeftTab: 'audio', leftCollapsed: false, shortcutsOpen: false })
+  const openMusic = () => useEditor.setState({ activeLeftTab: 'audio', leftCollapsed: false, shortcutsOpen: false })
+  const openClips = () => useEditor.setState((s) => ({ activeLeftTab: 'media', leftCollapsed: false, shortcutsOpen: false, clipLibraryAsk: s.clipLibraryAsk + 1 }))
   return (
     <EditorDialog title="Help" onClose={close} style={{ maxWidth: 760 }}>
       <div className="ed-help-tabs">
@@ -545,7 +546,7 @@ export function HelpDialog() {
           onChange={setTab}
           tabs={[
             { id: 'keys', label: 'Keyboard shortcuts', icon: <Keyboard size={13} /> },
-            { id: 'music', label: 'Music library', icon: <Music size={13} /> },
+            { id: 'library', label: 'Media library', icon: <Clapperboard size={13} /> },
           ]}
         />
       </div>
@@ -565,47 +566,63 @@ export function HelpDialog() {
             ))}
           </div>
         ) : (
-          <MusicLibraryHelp onOpen={openLibrary} />
+          <MediaLibraryHelp onOpenMusic={openMusic} onOpenClips={openClips} />
         )}
       </TabPanel>
     </EditorDialog>
   )
 }
 
-/** How to use the music library (LeftPanel's MusicLibrary and the routes in server/routes/music.ts). */
-function MusicLibraryHelp({ onOpen }: { onOpen: () => void }) {
-  // the panel's buttons are icons, so the steps show the same icons (named for screen readers)
+/** How to use the media library: the music (LeftPanel's MusicLibrary) and the clips (ClipLibrary); server services/media-library.ts. */
+function MediaLibraryHelp({ onOpenMusic, onOpenClips }: { onOpenMusic: () => void; onOpenClips: () => void }) {
+  // the panels' buttons are icons, so the steps show the same icons (named for screen readers)
   const icon = { size: 11, role: 'img', className: 'ed-help-ic' } as const
+  const animations = CLIP_LIBRARY.filter((c) => c.kind === 'animation').length
+  const motion = CLIP_LIBRARY.length - animations
   return (
     <div className="ed-help">
       <p>
-        {MUSIC_LIBRARY.length} music tracks you can use in any video, free. Producer Studio composes them itself, so there is no key or account to set up.
+        Music and clips you can use in any video, free: {MUSIC_LIBRARY.length} instrumental songs in different genres (made with Google’s Lyria), {animations} animations drawn by AI and {motion} full-motion AI video clips.
       </p>
+      <div className="eyebrow">Music</div>
       <ol>
         <li>
-          Open the <b>Audio</b> tab on the left. The tracks are under <b>Music library</b>, each with its style, mood and length.
+          Open the <b>Audio</b> tab on the left. The songs are under <b>Music library</b>, each with its genre, mood and length.
         </li>
         <li>
-          Press <Play {...icon} aria-label="Listen" fill="currentColor" /> to hear a track, and press it again to stop. Starting another track stops the one playing.
+          Press <Play {...icon} aria-label="Listen" fill="currentColor" /> to hear a song, and press it again to stop. Starting another song stops the one playing.
         </li>
         <li>
-          Press <Plus {...icon} aria-label="Add" /> to put the track on the timeline at the playhead. It is then listed under <b>In this project</b>, and adding it again uses the same file.
+          Press <Plus {...icon} aria-label="Add" /> to put the song on the timeline at the playhead. It is then listed under <b>In this project</b>, and adding it again uses the same file.
         </li>
         <li>On the timeline it is an ordinary audio clip: move it, trim it, and set its volume and fades in Properties.</li>
       </ol>
+      <div className="eyebrow">Clips</div>
+      <ol>
+        <li>
+          Open the <b>Media</b> tab on the left and choose <b>Clip library</b>, then <b>Animations</b> or <b>Full motion</b>.
+        </li>
+        <li>Hold the pointer over a clip to watch it.</li>
+        <li>
+          Press <Plus {...icon} aria-label="Add" /> on a clip to put it on the timeline at the playhead. It joins this project’s media like any clip you upload: trim it, speed it up or slow it down, and put titles or a voiceover over it.
+        </li>
+      </ol>
       <div className="eyebrow">Good to know</div>
       <ul>
-        <li>
-          A track nobody has played yet is composed the first time it is heard, with a spinner until it starts. That takes a moment on producerstudio.app and up to a minute in the desktop app. After that it plays straight away.
-        </li>
+        <li>An item shows up once it has been made. While the library is still being made, some may be missing for a little while.</li>
         <li>Your own sounds in the Audio tab can be heard before you add them too.</li>
         <li>
-          Making a video with Producer? Its brief has <b>Listen</b> buttons for the music style and the sound effects.
+          Making a video with Producer? Its brief has <b>Listen</b> buttons for the music style and the sound effects. That music is composed for your video’s scenes, separately from this library.
         </li>
       </ul>
-      <button type="button" className="btn sm" onClick={onOpen}>
-        <AudioLines size={13} /> Open the music library
-      </button>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" className="btn sm" onClick={onOpenMusic}>
+          <AudioLines size={13} /> Open the music library
+        </button>
+        <button type="button" className="btn sm" onClick={onOpenClips}>
+          <Clapperboard size={13} /> Open the clip library
+        </button>
+      </div>
     </div>
   )
 }

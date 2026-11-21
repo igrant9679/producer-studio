@@ -152,6 +152,8 @@ describe('clips with no sound (PIP-1)', () => {
         const blank = { points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '', animStyle: 'none', objects: [], labels: [] }
         return {
           message: 'A good trip',
+          // the writer names the film's recurring characters (none here); the answer always has the list (15 Nov)
+          cast: [],
           scenes: [
             { id: 's01', title: 'Team', headline: 'Our team', narration: 'This is our team.', visual: { ...blank, kind: 'media', mediaId: 'm2' } },
             { id: 's02', title: 'Beach', headline: 'The beach', narration: 'And this is where we went.', visual: { ...blank, kind: 'media', mediaId: 'm1' } },

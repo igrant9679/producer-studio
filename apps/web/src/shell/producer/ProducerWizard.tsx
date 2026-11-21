@@ -1,4 +1,4 @@
-import { AI_LOOKS, CAPTION_PLACES, CAPTION_PRESETS, CAPTION_SIZES, DRAWING_STYLES, FONTS, MUSIC_STYLES, PRODUCE_LIMITS, SFX_PREVIEW_ROLES, aiLookOf, captionStyleFromPreset, libraryTrackFor, sfxKitFor, drawingStyleOf, is3dDrawingStyle, isBlenderStyle, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { AI_LOOKS, CAPTION_PLACES, CAPTION_PRESETS, CAPTION_SIZES, DRAWING_STYLES, FONTS, MUSIC_STYLES, PRODUCE_LIMITS, SFX_PREVIEW_ROLES, aiLookOf, captionStyleFromPreset, sfxKitFor, drawingStyleOf, is3dDrawingStyle, isBlenderStyle, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -599,7 +599,6 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
   const onlyAnimation = idea && !parts.narration && !parts.onScreenText && !parts.cards
   const sound = useBriefSound()
   const music = musicStyleFor(b.music, b.tone)
-  const musicTrack = music ? libraryTrackFor(music) : undefined
   // another style picked while one plays: that one stops, so the button offers the new one
   const heard = useRef(music)
   useEffect(() => {
@@ -660,12 +659,12 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
             {musicStyleFor(b.music, b.tone) ? `${MUSIC_STYLES.find((m) => m.id === musicStyleFor(b.music, b.tone))?.about}. Composed for this video on its scene changes${parts.narration ? ', and quieter while the narrator speaks' : ''}. Free.` : parts.narration ? 'The video has narration only.' : 'The video has no sound but any effects you add.'}
           </div>
-          {musicTrack && (
-            <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} aria-pressed={sound.on === 'music'} onClick={() => sound.play('music', [api.musicPreviewUrl(musicTrack.id)])}>
+          {music && (
+            <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} aria-pressed={sound.on === 'music'} onClick={() => sound.play('music', [api.styleSampleUrl(music)])}>
               {sound.on === 'music' ? <Pause size={13} /> : <Play size={13} />} {sound.on === 'music' ? 'Stop' : `Listen to ${MUSIC_STYLES.find((m) => m.id === music)?.label}`}
             </button>
           )}
-          {musicTrack && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>A track in this style from the music library (the first listen can take a little while). Your video’s own music is composed for its scenes. The editor’s Audio panel has the whole library.</div>}
+          {music && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>A sample of this style, made the way your video’s own music is (composed for its scenes); the first listen can take a little while. The editor’s Audio tab also has a music library of other genres.</div>}
         </div>
         <div className="ps-field">
           <span className="label">Sound effects</span>

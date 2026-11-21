@@ -41,7 +41,7 @@ import {
   tryModels,
   withoutKey,
 } from './capabilities'
-import type { GenAspect, GeneratedFile } from './index'
+import type { GenAspect, GeneratedFile, GenProvider } from './index'
 
 const VIDEO_TIMEOUT_MS = 15 * 60_000
 const POLL_FIRST_MS = 5_000
@@ -81,6 +81,8 @@ interface VideoOptions {
   image?: string
   /** Reference pictures of the clip's characters (files), in the order the prompt numbers them; used by Gemini. */
   references?: string[]
+  /** Only this provider's key (the media library's clips are Gemini's, whatever the space's video choice). */
+  provider?: GenProvider
   signal?: AbortSignal
   onProgress?: (fraction: number, message: string) => void
 }
@@ -101,7 +103,7 @@ async function makeVideo(opts: VideoOptions): Promise<MadeClip> {
   if (opts.signal?.aborted) throw new CancelledError()
   const prompt = opts.prompt.trim()
   if (!prompt) throw invalid('Describe the clip to generate.')
-  const k = await requireKey(opts.workspaceId, 'video')
+  const k = await requireKey(opts.workspaceId, 'video', opts.provider)
   const say = opts.onProgress ?? (() => undefined)
   say(0, 'Starting the AI clip')
   if (k.provider === 'fal') return falVideo(k, { ...opts, prompt }, say)
@@ -110,7 +112,7 @@ async function makeVideo(opts: VideoOptions): Promise<MadeClip> {
   } catch (err) {
     // Google refused every video model for this key: a stored fal.ai key makes this clip (and, while Gemini is passed
     // over, the next ones) instead
-    if (!(err instanceof HttpError) || err.status !== 503) throw err
+    if (!(err instanceof HttpError) || err.status !== 503 || opts.provider) throw err
     const next = await requireKey(opts.workspaceId, 'video').catch(() => undefined)
     if (next?.provider !== 'fal') throw err
     log.info('gemini clips refused for this key; making the clip with fal.ai instead')

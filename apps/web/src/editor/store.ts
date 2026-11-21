@@ -85,6 +85,8 @@ export interface EditorState {
   editingTextId: string | null
   fullscreen: boolean
   shortcutsOpen: boolean
+  /** Raised to have the Media tab show its Clip library (the Help's button). */
+  clipLibraryAsk: number
   exportOpen: boolean
   /** Viewer mode (viewer.tsx): the person looks, plays and comments; every edit is refused. */
   readOnly: boolean
@@ -232,6 +234,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   editingTextId: null,
   fullscreen: false,
   shortcutsOpen: false,
+  clipLibraryAsk: 0,
   exportOpen: false,
   versionsOpen: false,
   readOnly: false,

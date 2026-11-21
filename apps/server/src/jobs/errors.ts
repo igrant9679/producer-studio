@@ -30,6 +30,7 @@ const WHAT: Record<string, string> = {
   'media.bgremove': 'Removing the background',
   'media.smooth': 'Smooth slow motion',
   'media.sketch': 'Sketching the picture in',
+  'library.make': 'Making a media library item',
 }
 
 /**

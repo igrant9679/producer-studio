@@ -55,7 +55,8 @@ if (config.role === 'all' || config.role === 'worker') {
 if (config.mode === 'cloud') startStorageMonitor()
 // cloud only: the music library's tracks are composed in the background, so the first listen is instant (a desktop
 // composes a track when it is first played, on its owner's machine, rather than spend its CPU at every start)
-if (config.mode === 'cloud' && (config.role === 'all' || config.role === 'api') && process.env.MUSIC_LIBRARY_WARM !== '0') (await import('./routes/music')).warmMusicLibrary()
+// the music library composed on the server's disk before 21 Nov 2026 (replaced by AI songs kept in storage)
+if (config.mode === 'cloud' && (config.role === 'all' || config.role === 'api')) (await import('./services/media-library')).removeOldMusicLibrary()
 if (desktop) await desktop.startDesktopServices()
 
 let closing = false

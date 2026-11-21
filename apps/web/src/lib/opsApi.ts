@@ -1,6 +1,6 @@
 // Client for the operations routes (contract: packages/core/src/operations.ts): a space's audit log (P-8) and the
 // operator tools (P-10). Kept beside lib/api.ts so the two change independently.
-import type { AuditEntry, OperatorJob, OperatorUser, OperatorUserDetail, OrphanScan, Page, StorageUsageRow } from '@producer/core'
+import type { AuditEntry, LibraryItemStatus, LibraryKind, OperatorJob, OperatorUser, OperatorUserDetail, OrphanScan, Page, StorageUsageRow } from '@producer/core'
 import { req } from './api'
 
 const enc = encodeURIComponent
@@ -25,6 +25,9 @@ export const opsApi = {
 
   storage: (q = '') => req<StorageUsageRow[]>('GET', `/operator/storage${qs({ q })}`),
   orphans: (scanId?: string) => req<OrphanScan>('POST', '/operator/storage/orphans', scanId ? { scanId } : {}),
+  /** The media library (21 Nov 2026): what is made, being made or failed; and having the rest made with a space's keys. */
+  library: () => req<LibraryItemStatus[]>('GET', '/operator/library'),
+  makeLibrary: (workspaceId: string, kinds?: LibraryKind[]) => req<{ queued: string[]; going?: boolean }>('POST', '/operator/library/make', { workspaceId, ...(kinds ? { kinds } : {}) }),
 
   audit: (o: { q?: string; kind?: string; userId?: string; workspaceId?: string; cursor?: string } = {}) => req<Page<AuditEntry>>('GET', `/operator/audit${qs({ limit: 50, ...o })}`),
 }

@@ -18,6 +18,9 @@
 //                                                       with the scanId of a dry run: removes those that are still
 //                                                       orphaned, and says how many went)
 // GET  /api/operator/audit?q&kind&workspaceId&userId&limit&cursor -> Page<AuditEntry>
+// GET  /api/operator/library                        -> LibraryItemStatus[] (the media library: made, being made, failed)
+// POST /api/operator/library/make {workspaceId, kinds?} -> {queued: ids, going?}  (makes what isn't made yet with that
+//                                                       space's keys, one item at a time; the operator must own the space)
 // Every POST above is written to the audit log.
 
 export type AuditKind =
@@ -55,6 +58,7 @@ export type AuditKind =
   | 'operator.job.requeued'
   | 'operator.job.cancelled'
   | 'operator.storage.orphans'
+  | 'operator.library.make'
 
 export interface AuditEntry {
   id: string

@@ -1,6 +1,6 @@
 // Operations in the shell (R4-A): a space's Audit tab beside Activity, for owners (P-8), and the Operator page (P-10).
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { AuditEntry, OperatorJob, OperatorUser, OperatorUserDetail, User, Workspace } from '@producer/core'
+import type { AuditEntry, LibraryItemStatus, OperatorJob, OperatorUser, OperatorUserDetail, User, Workspace } from '@producer/core'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSession } from '../../lib/session'
@@ -212,5 +212,48 @@ describe('the Operator page (P-10)', () => {
     const dialog = await screen.findByRole('alertdialog', { name: 'Remove 1 orphaned files?' })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove for good' }))
     await waitFor(() => expect(calls.filter((c) => c.path === '/api/operator/storage/orphans').map((c) => c.body)).toEqual([{}, { scanId: 'scan_1' }]))
+  })
+})
+
+describe('the Operator page’s Media library (21 Nov 2026)', () => {
+  const items = (): LibraryItemStatus[] => [
+    { id: 'morning-espresso', kind: 'music', title: 'Morning Espresso', ready: true, seconds: 112, model: 'lyria-3.5' },
+    { id: 'neon-pulse', kind: 'music', title: 'Neon Pulse', ready: false, job: { id: 'j1', status: 'error', progress: 0, message: '', error: 'Google answered without a song' } },
+    { id: 'coffee-pour', kind: 'motion', title: 'Coffee Pour', ready: false },
+    { id: 'coastline-aerial', kind: 'motion', title: 'Coastline From Above', ready: false },
+    { id: 'clay-planet', kind: 'animation', title: 'Clay Planet', ready: false },
+  ]
+  it('shows what is made and what failed, and has the rest made with a space the operator owns, after saying what it spends', async () => {
+    signIn('editor', true)
+    handler = (c) => (c.path === '/api/operator/library' ? { body: items() } : c.path === '/api/operator/library/make' ? { body: { queued: ['neon-pulse', 'coffee-pour', 'coastline-aerial', 'clay-planet'] } } : { body: [] })
+    at('/operator')
+    fireEvent.click(screen.getByRole('tab', { name: 'Media library' }))
+    const table = await screen.findByRole('table', { name: 'The media library' })
+    expect(within(table).getByText('Made · 1:52 · lyria-3.5')).toBeTruthy()
+    expect(within(table).getByText('Failed: Google answered without a song')).toBeTruthy()
+    expect(screen.getByRole('status', { name: 'Made so far' }).textContent).toMatch(/Music 1 of 2 made.*Full motion 0 of 2 made.*Animations 0 of 1 made/)
+    // only spaces this operator owns can pay: w1 is an editor's space here
+    const pick = screen.getByLabelText('With the keys of') as HTMLSelectElement
+    expect([...pick.options].map((o) => o.textContent)).toEqual(['Other team'])
+    fireEvent.click(screen.getByRole('button', { name: /Make what’s missing/ }))
+    const dlg = screen.getByRole('alertdialog', { name: /Make 4 items with Other team’s keys/ })
+    expect(dlg.textContent).toMatch(/1 songs with Google’s Lyria/)
+    expect(dlg.textContent).toMatch(/2 full-motion clips with Gemini video \(16 s of AI video\)/)
+    expect(dlg.textContent).toMatch(/1 animations drawn by the space’s animation AI/)
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Make them' }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path === '/api/operator/library/make')).toBe(true))
+    expect(calls.find((c) => c.path === '/api/operator/library/make')!.body).toEqual({ workspaceId: 'w2', kinds: ['music', 'motion', 'animation'] })
+  })
+
+  it('leaves out what isn’t ticked', async () => {
+    signIn('owner', true)
+    handler = (c) => (c.path === '/api/operator/library' ? { body: items() } : { body: { queued: [] } })
+    at('/operator')
+    fireEvent.click(screen.getByRole('tab', { name: 'Media library' }))
+    await screen.findByRole('table', { name: 'The media library' })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Animations/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Music/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Make what’s missing/ }))
+    expect(screen.getByRole('alertdialog', { name: /Make 2 items/ }).textContent).not.toMatch(/Lyria|animations/)
   })
 })

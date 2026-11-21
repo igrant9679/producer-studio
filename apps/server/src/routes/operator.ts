@@ -9,7 +9,7 @@ import type { OperatorJob, OperatorUser, OperatorUserDetail, StorageUsageRow } f
 import { type AppEnv, appUrl, clientIp, endSessions } from '../auth'
 import { ctx } from '../context'
 import { assets, auditLog, devices, jobs, memberships, sessions, users, workspaces } from '../db/schema'
-import { HttpError, body, invalid, notFound } from '../http'
+import { HttpError, body, invalid, notFound, requireRole } from '../http'
 import { cancelJob, getJob, requeueJob } from '../jobs/queue'
 import { mailEnabled, sendMail } from '../mail'
 import { resetMail } from '../mail/messages'
@@ -18,6 +18,7 @@ import { issueToken } from '../services/account'
 import { audit, listAudit } from '../services/audit'
 import { requireOperator } from '../services/operator'
 import { dryRunOrphans, removeOrphans } from '../services/orphans'
+import { libraryStatus, makeLibrary } from '../services/media-library'
 
 export const operatorRoutes = new Hono<AppEnv>()
 
@@ -265,4 +266,18 @@ operatorRoutes.get('/audit', async (c) => {
       ...(c.req.query('q') ? { q: c.req.query('q')!.trim().slice(0, 200) } : {}),
     }),
   )
+})
+
+// ---------------- the media library (21 Nov 2026) ----------------
+
+operatorRoutes.get('/library', async (c) => c.json(await libraryStatus()))
+
+operatorRoutes.post('/library/make', async (c) => {
+  const u = requireOperator(c)
+  const b = await body(c, z.object({ workspaceId: z.string().min(1), kinds: z.array(z.enum(['music', 'motion', 'animation'])).max(3).optional() }))
+  // made with that space's keys, on its credit: its owner says so
+  await requireRole(u.id, b.workspaceId, 'owner')
+  const r = await makeLibrary({ workspaceId: b.workspaceId, userId: u.id, kinds: b.kinds })
+  if (r.queued.length) await audit(c, { kind: 'operator.library.make', workspaceId: b.workspaceId, data: { items: r.queued.length, kinds: b.kinds ?? ['music', 'motion', 'animation'] } })
+  return c.json(r)
 })

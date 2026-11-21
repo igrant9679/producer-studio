@@ -148,6 +148,10 @@
 /* hover preview (real proxy frames following the pointer) and failed clips (23 Oct 2026) */
 .ed-asset .thumb .hoverprev { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .12s; pointer-events: none; background: #000; }
 .ed-asset .thumb .hoverprev.on { opacity: 1; }
+/* a clip of the clip library: no drag (+ adds it), and what it is under its name */
+.ed-asset.ed-libclip { cursor: default; }
+.ed-asset.ed-libclip .sub { font-size: 0.625rem; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-asset.ed-libclip .add:focus-visible { opacity: 1; transform: none; }
 .ed-asset.failed { opacity: 1; }
 .ed-asset .proc.failed { grid-auto-flow: row; gap: 7px; justify-items: center; background: color-mix(in srgb, var(--danger) 22%, var(--media-dim)); text-align: center; padding: 6px; }
 .ed-asset .proc.failed .why { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }

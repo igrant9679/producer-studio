@@ -98,6 +98,7 @@ const WHAT: Partial<Record<JobKind, string>> = {
   'media.smooth': 'Smooth slow motion',
   'media.sketch': 'Sketching the picture in',
   'asset.copy': 'Copying the clip',
+  'library.make': 'Making a media library item',
 }
 
 /**

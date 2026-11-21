@@ -53,7 +53,7 @@ import type {
   Workspace,
   WriteRequest,
 } from '@producer/core'
-import type { LibraryTrack, MultipartPlan, TranscriptionInfo } from '@producer/core'
+import type { LibraryClip, LibraryEntry, LibraryTrack, MultipartPlan, TranscriptionInfo } from '@producer/core'
 import { MULTIPART_FROM_BYTES, rememberUpload, resumeKey, savedUpload, sendParts, UploadPausedError, xhrTransport } from './multipartUpload'
 
 export class HttpError extends Error {
@@ -373,9 +373,16 @@ export const api = {
   voices: (workspaceId?: string) => req<Voice[]>('GET', `/ai/voices${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   voiceSampleUrl: (id: string) => `/api/ai/voices/${encodeURIComponent(id)}/sample`,
   /** The music library (server routes/music.ts): its tracks, one to listen to, and the space's clip of one. */
-  musicLibrary: () => req<Array<LibraryTrack & { ready: boolean }>>('GET', '/music'),
+  musicLibrary: () => req<Array<LibraryEntry<LibraryTrack>>>('GET', '/music'),
   musicPreviewUrl: (id: string) => `/api/music/${encodeURIComponent(id)}/preview`,
   addLibraryMusic: (id: string, body: { workspaceId: string; projectId?: string }) => req<AssetRecord>('POST', `/music/${encodeURIComponent(id)}/add`, body),
+  /** A sample of a music style, as a video's own music sounds (the brief's Listen). */
+  styleSampleUrl: (style: string) => `/api/music/style/${encodeURIComponent(style)}/preview`,
+  /** The clip library (server routes/clips.ts): animations and full-motion clips to watch and add. */
+  clipLibrary: () => req<Array<LibraryEntry<LibraryClip>>>('GET', '/clips'),
+  clipPreviewUrl: (id: string) => `/api/clips/${encodeURIComponent(id)}/preview`,
+  clipPosterUrl: (id: string) => `/api/clips/${encodeURIComponent(id)}/poster`,
+  addLibraryClip: (id: string, body: { workspaceId: string; projectId?: string }) => req<AssetRecord>('POST', `/clips/${encodeURIComponent(id)}/add`, body),
   /** One take of a sound effect from a kit (the brief's preview of its sound effects). */
   sfxPreviewUrl: (kit: string, role: string) => `/api/music/sfx/${encodeURIComponent(kit)}/${encodeURIComponent(role)}`,
   write: (body: WriteRequest, onDelta: (text: string) => void, signal?: AbortSignal) =>

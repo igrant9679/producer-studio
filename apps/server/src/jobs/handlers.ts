@@ -12,6 +12,7 @@ import { assetRecord } from '../dto'
 import { exportRender } from '../render/export'
 import { failAsset, reopenAsset } from '../services/asset-recovery'
 import { copyAssetJob } from '../services/library'
+import { makeLibraryJob } from '../services/media-library'
 import { limitMessage, registerHandler, stopReason } from './worker'
 
 let done = false
@@ -53,4 +54,5 @@ export function registerHandlers() {
   registerHandler('media.smooth', makeSmoothCopy)
   registerHandler('media.sketch', sketchPicture)
   registerHandler('asset.copy', copyAssetJob)
+  registerHandler('library.make', makeLibraryJob)
 }

@@ -99,7 +99,7 @@ export function TopBar() {
       <div className="row ed-top-r">
         <PresenceAvatars />
         <ThemeMenu />
-        <button className="ed-tbtn ed-top-wide" {...tipProps('Help', 'Every shortcut in the editor, and how to use the music library.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
+        <button className="ed-tbtn ed-top-wide" {...tipProps('Help', 'Every shortcut in the editor, and how to use the media library.', '?')} onClick={() => useEditor.setState({ shortcutsOpen: true })}>
           <CircleHelp size={16} />
         </button>
         <button className="btn sm" onClick={share} {...tipProps('Share', 'Review links to this project: make one, copy it, and set its expiry, password, downloads and comments.')}>

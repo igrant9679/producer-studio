@@ -1,7 +1,7 @@
 // Left icon rail + collapsible asset panel.
 import type { Asset, AssetRecord, AudioItem } from '@producer/core'
 import { useVoices } from '../shell/components/VoiceCard'
-import { MUSIC_LIBRARY, MUSIC_STYLES, TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, isPathShape, itemEnd, shapePath, usedAssetIds, type LibraryTrack, type ShapeItem } from '@producer/core'
+import { CLIP_LIBRARY, DRAWING_STYLES, MUSIC_LIBRARY, TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, isPathShape, itemEnd, shapePath, usedAssetIds, type LibraryClip, type LibraryEntry, type LibraryTrack, type ShapeItem } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -45,9 +45,10 @@ import { CommentsPanel } from './collab/CommentsPanel'
 import { shortDuration } from './timelineMath'
 import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, trashUnused, upsertRecord, uploadFiles, useLibrary } from './uploads'
 import { tipProps } from '../lib/tooltip'
+import { useSystem } from '../shell/system'
 
 const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
-  { id: 'media', label: 'Media', icon: <Clapperboard size={18} />, desc: 'Your uploaded videos and images. Hover a clip to preview it; press + or drag it onto the timeline.' },
+  { id: 'media', label: 'Media', icon: <Clapperboard size={18} />, desc: 'Your uploaded videos and images, and a free clip library of animations and full-motion clips. Hover a clip to preview it; press + or drag it onto the timeline.' },
   { id: 'audio', label: 'Audio', icon: <AudioLines size={18} />, desc: 'Voiceovers generated from text, a free music library to listen to and add, and your audio uploads.' },
   { id: 'text', label: 'Text', icon: <Type size={18} />, desc: 'Headings, body text, styled titles and shapes.' },
   { id: 'captions', label: 'Captions', icon: <Subtitles size={18} />, desc: 'Auto captions from speech, manual captions, caption styles, SRT import and export.' },
@@ -77,7 +78,7 @@ export function LeftRail() {
         </button>
       ))}
       <div className="spacer" />
-      <button onClick={() => useEditor.setState({ shortcutsOpen: true })} {...tipProps('Help', 'Every shortcut in the editor, and how to use the music library.', '?', 'right')}>
+      <button onClick={() => useEditor.setState({ shortcutsOpen: true })} {...tipProps('Help', 'Every shortcut in the editor, and how to use the media library.', '?', 'right')}>
         <CircleHelp size={18} />
         <span>Help</span>
       </button>
@@ -183,7 +184,12 @@ function MediaPanel() {
   const records = useLibrary((s) => s.records)
   const mine = (id: string) => !!projectAssets[id] || records.find((r) => r.asset.id === id)?.projectId === projectId
   const ours = list.filter((x) => mine(x.asset.id))
-  const [chosen, setChosen] = useState<'project' | 'library' | null>(null)
+  const [chosen, setChosen] = useState<'project' | 'library' | 'clips' | null>(null)
+  // the Help's "Open the clip library"
+  const clipAsk = useEditor((s) => s.clipLibraryAsk)
+  useEffect(() => {
+    if (clipAsk) setChosen('clips')
+  }, [clipAsk])
   const scope = chosen ?? (ours.length ? 'project' : 'library')
   const scoped = scope === 'project' ? ours : list
   const shown = scoped.filter((x) => filter === 'all' || x.asset.kind === filter)
@@ -204,12 +210,16 @@ function MediaPanel() {
     <>
       <UploadBox accept="video/*,image/*,audio/*" label="Upload from this device" />
       <div className="ed-seg ed-media-scope" role="tablist" aria-label="Which media">
-        {([['project', `This project${ours.length ? ` · ${ours.length}` : ''}`], ['library', `Library · ${list.length}`]] as const).map(([v, label]) => (
+        {([['project', `This project${ours.length ? ` · ${ours.length}` : ''}`], ['library', `Library · ${list.length}`], ['clips', 'Clip library']] as const).map(([v, label]) => (
           <button key={v} role="tab" aria-selected={scope === v} className={clsx(scope === v && 'on')} onClick={() => setChosen(v)}>
             {label}
           </button>
         ))}
       </div>
+      {scope === 'clips' ? (
+        <ClipLibrary />
+      ) : (
+        <>
       {unused.length > 0 && (
         <div className="ed-unusedbar" role="status">
           <span>{unused.length} {unused.length === 1 ? 'clip isn’t' : 'clips aren’t'} on the timeline</span>
@@ -274,6 +284,8 @@ function MediaPanel() {
           <AssetCard key={asset.id} asset={asset} ready={status === 'ready'} status={status} />
         ))}
       </div>
+        </>
+      )}
     </>
   )
 }
@@ -622,12 +634,16 @@ function AudioPanel() {
 }
 
 /**
- * The music library (19 Nov 2026): tracks the server composed with Producer's own composer, free to use in any video.
- * Listen first; + puts the track at the playhead (the first time in a space, as a new clip in its media).
+ * The music library (19 Nov 2026; AI songs since 21 Nov): MUSIC_LIBRARY's tracks that have been made (an operator has
+ * them made with Google's Lyria; server services/media-library.ts), free to use in any video. Listen first; + puts the
+ * track at the playhead (the first time in a space, as a new clip in its media).
  */
 function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; waiting: string | null; toggle: (key: string, url: string) => void }) {
   const demo = useEditor((s) => s.demo)
-  const [tracks, setTracks] = useState<Array<LibraryTrack & { ready?: boolean }>>(() => [...MUSIC_LIBRARY])
+  // the library is made on the cloud server: the desktop app's own server has none
+  const desktop = useSystem((s) => s.info?.mode === 'desktop')
+  // the demo has no server to ask: it shows what the library holds
+  const [tracks, setTracks] = useState<Array<LibraryEntry<LibraryTrack>> | null>(() => (demo ? MUSIC_LIBRARY.map((t) => ({ ...t, ready: true })) : null))
   const [adding, setAdding] = useState<string | null>(null)
   useEffect(() => {
     if (demo) return
@@ -635,7 +651,7 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
     api
       .musicLibrary()
       .then((t) => live && setTracks(t))
-      .catch(() => undefined)
+      .catch(() => live && setTracks([]))
     return () => {
       live = false
     }
@@ -656,27 +672,31 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
       setAdding(null)
     }
   }
-  const style = (id: string) => MUSIC_STYLES.find((m) => m.id === id)?.label ?? id
+  const ready = (tracks ?? []).filter((t) => t.ready)
   return (
     <div className="ed-group" role="group" aria-label="Music library">
-      <div className="eyebrow">Music library · {tracks.length}</div>
-      <p className="ed-note">Free to use in any video. Listen first; + adds the track at the playhead.</p>
-      {tracks.map((t) => {
+      <div className="eyebrow">Music library{tracks ? ` · ${ready.length}` : ''}</div>
+      {!tracks ? (
+        <p className="ed-note">
+          <Loader2 size={12} className="spin" /> Loading the library…
+        </p>
+      ) : !ready.length ? (
+        <p className="ed-note">{desktop ? 'The music library is on producerstudio.app; it isn’t in the desktop app yet.' : 'The library’s music is being made. Each track appears here when it is ready.'}</p>
+      ) : (
+        <p className="ed-note">Free to use in any video. Listen first; + adds the track at the playhead.</p>
+      )}
+      {ready.map((t) => {
         const key = `library:${t.id}`
         return (
           <div key={t.id} className="ed-audiorow">
-            <button
-              className="pl"
-              onClick={() => (A.demoBlocked('the music library') ? undefined : toggle(key, api.musicPreviewUrl(t.id)))}
-              aria-label={`${playing === key ? 'Stop' : 'Listen to'} ${t.title}`}
-              title={t.ready === false ? 'Listen (the first listen takes a little while as the track is made)' : 'Listen'}
-            >
+            <button className="pl" onClick={() => (A.demoBlocked('the music library') ? undefined : toggle(key, api.musicPreviewUrl(t.id)))} aria-label={`${playing === key ? 'Stop' : 'Listen to'} ${t.title}`} title="Listen">
               {waiting === key ? <Loader2 size={13} className="spin" /> : playing === key ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
             </button>
             <div className="meta">
               <div className="nm">{t.title}</div>
               <div className="sub">
-                {style(t.style)} · {t.mood} · {shortDuration(t.seconds)}
+                {t.genre} · {t.mood}
+                {t.seconds ? ` · ${shortDuration(t.seconds)}` : ''}
               </div>
             </div>
             <button className="add" aria-label={`Add ${t.title} at the playhead`} title="Add at playhead" disabled={adding === t.id} onClick={() => void add(t)}>
@@ -685,6 +705,111 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * The clip library (21 Nov 2026): CLIP_LIBRARY's animations (drawn by AI) and full-motion clips (AI video) that have
+ * been made, free to use in any video. A clip plays on hover; + puts it at the playhead (the first time in a space, as
+ * a new clip in its media).
+ */
+export function ClipLibrary() {
+  const demo = useEditor((s) => s.demo)
+  const desktop = useSystem((s) => s.info?.mode === 'desktop')
+  const [clips, setClips] = useState<Array<LibraryEntry<LibraryClip>> | null>(() => (demo ? CLIP_LIBRARY.map((c) => ({ ...c, ready: true })) : null))
+  const [kind, setKind] = useState<LibraryClip['kind']>('animation')
+  const [adding, setAdding] = useState<string | null>(null)
+  useEffect(() => {
+    if (demo) return
+    let live = true
+    api
+      .clipLibrary()
+      .then((c) => live && setClips(c))
+      .catch(() => live && setClips([]))
+    return () => {
+      live = false
+    }
+  }, [demo])
+  const add = async (c: LibraryClip) => {
+    if (A.demoBlocked('the clip library')) return
+    const s = useEditor.getState()
+    if (!s.workspaceId) return
+    setAdding(c.id)
+    try {
+      const rec = await api.addLibraryClip(c.id, { workspaceId: s.workspaceId, projectId: s.projectId || undefined })
+      upsertRecord(rec)
+      A.addAssetAt(rec.asset, useEditor.getState().playhead)
+      toast(`Added “${c.title}” at the playhead`)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setAdding(null)
+    }
+  }
+  const ready = (clips ?? []).filter((c) => c.ready)
+  const count = (k: LibraryClip['kind']) => ready.filter((c) => c.kind === k).length
+  const shown = ready.filter((c) => c.kind === kind)
+  const style = (id?: string) => DRAWING_STYLES.find((d) => d.id === id)?.label
+  return (
+    <div className="ed-group" role="group" aria-label="Clip library">
+      <p className="ed-note">Free to use in any video: animations drawn by AI, and full-motion AI video. Hover to watch; + adds the clip at the playhead.</p>
+      <div className="ed-chiprow" style={{ margin: '4px 0 10px' }}>
+        {(['animation', 'motion'] as const).map((k) => (
+          <button key={k} className={clsx('chip', kind === k && 'active')} aria-pressed={kind === k} onClick={() => setKind(k)}>
+            {k === 'animation' ? 'Animations' : 'Full motion'}
+            {clips ? ` · ${count(k)}` : ''}
+          </button>
+        ))}
+      </div>
+      {!clips ? (
+        <div className="ed-grid2">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="skeleton" style={{ aspectRatio: '16/10' }} />
+          ))}
+        </div>
+      ) : !shown.length ? (
+        <p className="ed-note">{ready.length ? 'None of these are ready yet.' : desktop ? 'The clip library is on producerstudio.app; it isn’t in the desktop app yet.' : 'The clips are being made. Each one appears here when it is ready.'}</p>
+      ) : (
+        <div className="ed-grid2">
+          {shown.map((c) => (
+            <LibraryClipCard key={c.id} clip={c} detail={c.kind === 'animation' ? (style(c.style) ?? 'Animation') : 'Full motion'} adding={adding === c.id} onAdd={() => void add(c)} demo={demo} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One clip of the clip library: its poster frame, the clip itself on hover, and + to add it. */
+function LibraryClipCard({ clip, detail, adding, onAdd, demo }: { clip: LibraryEntry<LibraryClip>; detail: string; adding: boolean; onAdd: () => void; demo: boolean }) {
+  const [hovering, setHovering] = useState(false)
+  const [videoOk, setVideoOk] = useState(false)
+  const [posterFailed, setPosterFailed] = useState(false)
+  const timer = useRef<number | undefined>(undefined)
+  return (
+    <div className="ed-asset ed-libclip" {...tipProps(clip.title, `${detail}. ${clip.prompt}`)}>
+      <div
+        className="thumb"
+        onMouseEnter={() => {
+          if (demo) return
+          timer.current = window.setTimeout(() => setHovering(true), 150)
+        }}
+        onMouseLeave={() => {
+          window.clearTimeout(timer.current)
+          setHovering(false)
+          setVideoOk(false)
+        }}
+      >
+        {!demo && !posterFailed ? <img src={api.clipPosterUrl(clip.id)} alt="" draggable={false} loading="lazy" onError={() => setPosterFailed(true)} /> : <div className="ph" />}
+        {hovering && <video className={clsx('hoverprev', videoOk && 'on')} src={api.clipPreviewUrl(clip.id)} muted loop autoPlay playsInline preload="auto" onLoadedData={() => setVideoOk(true)} onError={() => setVideoOk(false)} />}
+        <span className="dur">{shortDuration(clip.seconds)}</span>
+        <button className="add" aria-label={`Add ${clip.title} at the playhead`} disabled={adding} onClick={onAdd} title="Add at playhead">
+          {adding ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+        </button>
+      </div>
+      <div className="nm">{clip.title}</div>
+      <div className="sub">{detail}</div>
     </div>
   )
 }

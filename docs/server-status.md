@@ -401,20 +401,12 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   known yet:** which fault the first tries met on production (nothing kept it); the next export that needs a second try
   says so in the server log.
   **Asked for on 19 Nov 2026** (the owner): sounds heard before they are used, a music library, and caption choices.
-  *Music library* (`MUSIC_LIBRARY` in core `music.ts`, 20 tracks, at least one per `MUSIC_STYLES` style;
-  `routes/music.ts`): composed by the server with the videos' own composer (so free to use anywhere), each from a fixed
-  seed in 8-second sections (`libraryCuts`), at the louder level of music heard alone. A track is composed the first
-  time it is asked for (one composition however many ask; tens of seconds) and kept on the data volume
-  (`<dataDir>/music-library/<id>-l<library version>-m<composer version>.m4a`); a cloud API server also composes the
-  missing ones in the background, one at a time, from three minutes after it starts (`warmMusicLibrary`;
-  `MUSIC_LIBRARY_WARM=0` turns that off; a desktop composes on first listen). `GET /api/music` lists them with `ready`,
-  `GET /api/music/:id/preview` serves one (Range supported), `POST /api/music/:id/add {workspaceId, projectId?}` copies it
-  into the space as an audio clip (`meta.generated.kind 'library'`, found again by track and version, so adding it twice
-  reuses it). The editor's Audio panel lists the library under the project's own sounds: Listen (a spinner until it
-  plays) and + (adds it at the playhead). The editor's Help (?, the rail's and the top bar's Help buttons; it was the
-  Keyboard shortcuts dialog) has a Music library tab explaining it, with a button that opens the Audio tab; the app's
-  Help → About points to it. *Hearing the brief*: Music has "Listen to <style>" (that style's first library
-  track; another style picked stops it) and Sound effects "Listen to the effects" (whoosh, pop and ding of the kit that
+  *Music library*: 20 tracks composed by the server, replaced on 21 Nov by AI songs (below). The editor's Audio panel
+  lists the library under the project's own sounds: Listen (a spinner until it plays) and + (adds it at the playhead).
+  The editor's Help (?, the rail's and the top bar's Help buttons; it was the Keyboard shortcuts dialog) explains it;
+  the app's Help → About points to it. *Hearing the brief*: Music has "Listen to <style>" (since 21 Nov a sample of
+  that style composed by the server, `GET /api/music/style/:style/preview`, kept in `<dataDir>/style-samples`; another
+  style picked stops it) and Sound effects "Listen to the effects" (whoosh, pop and ding of the kit that
   goes with the music, `sfxKitFor`, `GET /api/music/sfx/:kit/:role`). The Audio panel's play buttons now say when a
   sound is still on its way and when it can't be played. *Captions in the brief*: with Captions on, a look
   (`CAPTION_PRESETS`), a font (`FONTS`, else the brand's body font), a size (small/medium/large, `CAPTION_SIZES`) and a
@@ -422,6 +414,27 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   stored on the brief (`captionPreset`, `captionFont`, `captionSize`, `captionPosition`) and applied at assembly by
   `captionStyleForBrief` (absent: the brand kit's look in its body font, as before). The editor's Captions panel already
   turns a video's captions on and off and restyles them.
+  **Asked for on 21 Nov 2026** (the owner): "remove the current music samples and create 20 additional music clip
+  samples (a mix of genres) as well as 10 different animation video clips, and 10 different full motion video clips".
+  The *media library* (`MUSIC_LIBRARY`, `CLIP_LIBRARY` in core `mediaLibrary.ts`; `services/media-library.ts`): 20
+  instrumental songs of 20 genres from Google's Lyria (`ai/generate/music.ts`: Interactions API, `lyria-3.5` then
+  `lyria-3-pro-preview`, MP3, billed per song), 10 animations drawn by the space's animation AI in ten drawing styles
+  (8 s, 1920×1080, no words; two are 3D) and 10 full-motion Gemini clips (8 s, 16:9, 720p; Gemini only, whatever the
+  space's video choice: `generateVideo({provider})`). Made once, on the cloud server, with the keys of a space an
+  operator owns: Operator → Media library ("Make what's missing…", which says what it spends first; audit
+  `operator.library.make`), as `library.make` jobs, one at a time (each queues the next, music, then full motion, then
+  animations; a failed item doesn't stop the rest, and the next go makes only what is missing). Kept in storage under
+  `library/music/<id>.v<version>.*` and `library/clips/<id>.v<version>.mp4|.jpg`, each with a `.json` saying its file,
+  length, model and the space that paid; shared by every space. Routes: `GET /api/music` and `GET /api/clips` (each
+  item with `ready` and `seconds`), `GET /api/music/:id/preview`, `GET /api/clips/:id/preview|poster` (from storage,
+  Range), `POST /api/music|clips/:id/add {workspaceId, projectId?}` (the space's own copy, `meta.generated.kind
+  'library'`, reused when added again), `GET /api/operator/library`, `POST /api/operator/library/make {workspaceId,
+  kinds?}`. In the editor: Audio → Music library (made songs only, genre · mood · length) and Media → Clip library
+  (Animations | Full motion, poster frames, plays on hover, + at the playhead); the Help's Media library tab explains
+  both. The old composed tracks (`<dataDir>/music-library`) are deleted at start-up; spaces keep copies they added.
+  Not in the desktop app (made on the cloud server; the panels say so there). **Not known yet:** whether the owner's
+  Gemini key may use Lyria and Gemini video, and how the AI's drawings come out, until the library is made on
+  production.
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
