@@ -88,6 +88,21 @@ describe('a song for the library', () => {
     expect(create.mock.calls.map((c) => c[0].model)).toEqual(['lyria-3.5', 'lyria-3-pro-preview'])
   })
 
+  it('asks once more for an original piece when Google’s copyright filter stops the wording', async () => {
+    create.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('400 Request blocked due to copyright/recitation content. Please modify your input and retry.'), { status: 400 })
+    })
+    create.mockResolvedValueOnce({ id: 'int-4', status: 'completed', output_audio: { data: MP3.toString('base64'), mime_type: 'audio/mpeg' } })
+    const song = await generateMusic({ workspaceId, prompt: 'Instrumental only. Lo-fi.', outDir: path.join(t.dataDir, 'lyria-out') })
+    expect(song.model).toBe('lyria-3.5')
+    expect(create.mock.calls.map((c) => c[0].input)).toEqual(['Instrumental only. Lo-fi.', expect.stringMatching(/^An original composition, not based on or imitating any existing song.*Instrumental only\. Lo-fi\.$/)])
+    // blocked again: said, not tried a third time
+    create.mockReset()
+    create.mockRejectedValue(Object.assign(new Error('400 Request blocked due to copyright/recitation content.'), { status: 400 }))
+    await expect(generateMusic({ workspaceId, prompt: 'x', outDir: path.join(t.dataDir, 'lyria-out') })).rejects.toThrow(/recitation/)
+    expect(create).toHaveBeenCalledTimes(2)
+  })
+
   it('says so when Google answers without a song, and when the space has no Gemini key', async () => {
     create.mockResolvedValue({ id: 'int-3', status: 'completed', outputs: [{ type: 'text', text: 'I can’t do that' }] })
     await expect(generateMusic({ workspaceId, prompt: 'x', outDir: path.join(t.dataDir, 'lyria-out') })).rejects.toThrow(/without a song/)

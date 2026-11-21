@@ -11,6 +11,10 @@ import { type GenInteraction, GEMINI_MUSIC_MODELS, accountProblem, describeFile,
 
 /** A whole song takes Google a minute or two; past this it has stalled. */
 const MUSIC_TIMEOUT_MS = 6 * 60_000
+/** Google's copyright filter, as its 400 words it. */
+const RECITATION = /recitation|copyright/i
+const ORIGINAL = 'An original composition, not based on or imitating any existing song, artist or channel.'
+const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err ?? ''))
 
 export interface MadeSong {
   file: string
@@ -39,7 +43,16 @@ export async function generateMusic(o: { workspaceId: string; prompt: string; ou
   const signal = o.signal ? AbortSignal.any([o.signal, timer]) : timer
   try {
     const { value, model } = await tryModels(k, 'music', GEMINI_MUSIC_MODELS, async (m) => {
-      const it = await client.interactions.create({ model: m.id, input: o.prompt }, { signal })
+      let it: GenInteraction
+      try {
+        it = await client.interactions.create({ model: m.id, input: o.prompt }, { signal })
+      } catch (err) {
+        // Google's copyright filter ("blocked due to copyright/recitation content") stops wording that sounds like a
+        // known song or channel (seen on the library's first run, 21 Nov 2026): asked once more for an original piece
+        if (!RECITATION.test(messageOf(err))) throw err
+        log.info('lyria: blocked as recitation, asking once more for an original piece', { model: m.id })
+        it = await client.interactions.create({ model: m.id, input: `${ORIGINAL} ${o.prompt}` }, { signal })
+      }
       if (it.status && ['failed', 'cancelled', 'incomplete'].includes(it.status)) {
         const why = it.errors?.map((e) => e.message).filter(Boolean).join('; ')
         throw new HttpError(502, 'server', `Google didn’t finish the song${why ? `: ${why}` : '.'}`)
