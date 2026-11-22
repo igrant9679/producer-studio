@@ -602,7 +602,9 @@ function MediaLibraryHelp({ onOpenMusic, onOpenClips }: { onOpenMusic: () => voi
         <li>
           Open the <b>Media</b> tab on the left and choose <b>Clip library</b>, then <b>Animations</b> or <b>Full motion</b>.
         </li>
-        <li>Hold the pointer over a clip to watch it.</li>
+        <li>
+          Hold the pointer over a clip for a glance, or press <Play {...icon} aria-label="Watch" fill="currentColor" /> on it to watch it with sound, then add it from there.
+        </li>
         <li>
           Press <Plus {...icon} aria-label="Add" /> on a clip to put it on the timeline at the playhead. It joins this project’s media like any clip you upload: trim it, speed it up or slow it down, and put titles or a voiceover over it.
         </li>

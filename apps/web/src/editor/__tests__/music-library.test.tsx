@@ -232,3 +232,36 @@ describe('making a library item your own (21 Nov 2026: “customize based on the
     expect(song.fadeOut).toBe(2)
   })
 })
+
+describe('watching a clip before it goes on the timeline (21 Nov 2026: “play/sample the videos in the library before deciding”)', () => {
+  it('a library clip plays with sound and controls, and can be added from the player', async () => {
+    const c = CLIP_LIBRARY.find((x) => x.kind === 'motion')!
+    const rec: AssetRecord = { asset: { id: 'as_w1', kind: 'video', name: `Clip · ${c.title}`, src: '/api/media/as_w1/source', duration: 8, width: 1280, height: 720 }, workspaceId: 'w1', status: 'ready', origin: 'ai', createdAt: 1, projectId: 'p1' }
+    const add = vi.spyOn(api, 'addLibraryClip').mockResolvedValue(rec)
+    open('media')
+    fireEvent.click(screen.getByRole('tab', { name: 'Clip library' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Full motion/ }))
+    fireEvent.click(screen.getByRole('button', { name: `Watch ${c.title}` }))
+    const dlg = screen.getByRole('dialog', { name: c.title })
+    const video = within(dlg).getByLabelText(`${c.title}, preview`) as HTMLVideoElement
+    expect(video.getAttribute('src')).toBe(`/api/clips/${c.id}/preview`)
+    expect(video.hasAttribute('controls')).toBe(true)
+    expect(video.muted).toBe(false)
+    expect(within(dlg).getByRole('button', { name: /Make it your own/ })).toBeTruthy()
+    fireEvent.click(within(dlg).getByRole('button', { name: /Add at playhead/ }))
+    await waitFor(() => expect(S().project.tracks.some((tr) => tr.items.some((it) => 'assetId' in it && it.assetId === 'as_w1'))).toBe(true))
+    expect(add).toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('the space’s own clips can be watched too', () => {
+    const rec: AssetRecord = { asset: { id: 'as_own', kind: 'video', name: 'beach.mp4', src: '', duration: 12, width: 1920, height: 1080 }, workspaceId: 'w1', status: 'ready', origin: 'upload', createdAt: 1 }
+    open('media', undefined, [rec])
+    fireEvent.click(screen.getByRole('tab', { name: /^Library/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Watch beach.mp4' }))
+    const dlg = screen.getByRole('dialog', { name: 'beach.mp4' })
+    expect((within(dlg).getByLabelText('beach.mp4, preview') as HTMLVideoElement).getAttribute('src')).toMatch(/as_own/)
+    expect(within(dlg).getByRole('button', { name: /Add at playhead/ })).toBeTruthy()
+    expect(within(dlg).queryByRole('button', { name: /Make it your own/ })).toBeNull()
+  })
+})

@@ -152,6 +152,14 @@
 .ed-asset.ed-libclip { cursor: default; }
 .ed-asset.ed-libclip .sub { font-size: 0.625rem; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ed-asset.ed-libclip .add:focus-visible { opacity: 1; transform: none; }
+/* Watch: a clip played with sound before it is used (bottom left of the frame) */
+.ed-asset .watch { position: absolute; left: 5px; bottom: 5px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--media-scrim); color: var(--on-media); border: 0; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.ed-asset:hover .watch, .ed-asset .watch:focus-visible { opacity: 1; }
+@media (hover: none) { .ed-asset .watch, .ed-asset .add { opacity: 1; transform: none; } }
+.ed-asset .used + .watch { left: 18px; }
+.ed-clip-preview { padding: 16px 20px 20px; display: grid; gap: 12px; }
+.ed-clip-preview video { width: 100%; max-height: 60vh; background: #000; border-radius: 8px; }
+.ed-clip-preview p { margin: 0; font-size: 0.75rem; }
 /* the wand beside + on a library clip: make it your own */
 .ed-asset.ed-libclip .add.mine { right: auto; left: 5px; background: var(--media-scrim); color: var(--on-media); }
 /* the Make it your own dialog */

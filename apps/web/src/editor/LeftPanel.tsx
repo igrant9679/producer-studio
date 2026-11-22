@@ -47,6 +47,7 @@ import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, trashUnused, 
 import { tipProps } from '../lib/tooltip'
 import { useSystem } from '../shell/system'
 import { type CustomizableItem, LibraryCustomize, fitSongToVideo } from './LibraryCustomize'
+import { ClipPreview } from './ClipPreview'
 
 const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
   { id: 'media', label: 'Media', icon: <Clapperboard size={18} />, desc: 'Your uploaded videos and images, and a free clip library of animations and full-motion clips. Hover a clip to preview it; press + or drag it onto the timeline.' },
@@ -327,6 +328,7 @@ function clipState(status: string, progress?: { p: number; message: string }, lo
 }
 
 function AssetCard({ asset, ready, status }: { asset: Asset; ready: boolean; status: string }) {
+  const [watching, setWatching] = useState(false)
   const [frac, setFrac] = useState<number | null>(null)
   const [hovering, setHovering] = useState(false)
   const [videoOk, setVideoOk] = useState(false)
@@ -468,6 +470,19 @@ function AssetCard({ asset, ready, status }: { asset: Asset; ready: boolean; sta
           </span>
         )}
         {inProject && <span className="used" {...tipProps('Used in this project')} />}
+        {canPreview && (
+          <button
+            className="watch"
+            onClick={(e) => {
+              e.stopPropagation()
+              setWatching(true)
+            }}
+            {...tipProps('Watch', 'Play this clip with sound before you use it.')}
+            aria-label={`Watch ${asset.name}`}
+          >
+            <Play size={14} fill="currentColor" />
+          </button>
+        )}
         {ready && (
           <button
             className="add"
@@ -482,6 +497,7 @@ function AssetCard({ asset, ready, status }: { asset: Asset; ready: boolean; sta
         )}
       </div>
       <div className="nm">{asset.name}</div>
+      {watching && <ClipPreview title={asset.name} detail={asset.duration !== undefined ? shortDuration(asset.duration) : undefined} src={assetUrl(asset, asset.id, 'proxy')} poster={th} onAdd={add} onClose={() => setWatching(false)} />}
     </div>
   )
 }
@@ -760,7 +776,7 @@ export function ClipLibrary() {
   const [custom, setCustom] = useState<CustomizableItem | null>(null)
   return (
     <div className="ed-group" role="group" aria-label="Clip library">
-      <p className="ed-note">Free to use in any video: animations drawn by AI, and full-motion AI video. Hover to watch; + adds the clip at the playhead; the wand makes it your own (your brand, your topic).</p>
+      <p className="ed-note">Free to use in any video: animations drawn by AI, and full-motion AI video. Hover for a glance, or press play to watch with sound; + adds the clip at the playhead; the wand makes it your own (your brand, your topic).</p>
       <div className="ed-chiprow" style={{ margin: '4px 0 10px' }}>
         {(['animation', 'motion'] as const).map((k) => (
           <button key={k} className={clsx('chip', kind === k && 'active')} aria-pressed={kind === k} onClick={() => setKind(k)}>
@@ -791,6 +807,7 @@ export function ClipLibrary() {
 
 /** One clip of the clip library: its poster frame, the clip itself on hover, and + to add it. */
 function LibraryClipCard({ clip, detail, adding, onAdd, onCustomize, demo }: { clip: LibraryEntry<LibraryClip>; detail: string; adding: boolean; onAdd: () => void; onCustomize: () => void; demo: boolean }) {
+  const [watching, setWatching] = useState(false)
   const [hovering, setHovering] = useState(false)
   const [videoOk, setVideoOk] = useState(false)
   const [posterFailed, setPosterFailed] = useState(false)
@@ -818,9 +835,15 @@ function LibraryClipCard({ clip, detail, adding, onAdd, onCustomize, demo }: { c
         <button className="add mine" aria-label={`Make ${clip.title} your own`} onClick={onCustomize} title="Make it your own">
           <Wand2 size={13} />
         </button>
+        {!demo && (
+          <button className="watch" aria-label={`Watch ${clip.title}`} title="Watch it, with sound" onClick={() => setWatching(true)}>
+            <Play size={14} fill="currentColor" />
+          </button>
+        )}
       </div>
       <div className="nm">{clip.title}</div>
       <div className="sub">{detail}</div>
+      {watching && <ClipPreview title={clip.title} detail={`${detail} · ${shortDuration(clip.seconds)}`} src={api.clipPreviewUrl(clip.id)} poster={api.clipPosterUrl(clip.id)} onAdd={onAdd} onCustomize={onCustomize} onClose={() => setWatching(false)} />}
     </div>
   )
 }
