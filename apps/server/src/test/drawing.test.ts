@@ -380,7 +380,7 @@ describe('writing a drawing', () => {
 
 describe('the writer and the API', () => {
   it('a drawn scene comes from the writer’s note, and the API takes its code back', () => {
-    const blank = { points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '', animStyle: 'none', objects: [], labels: [] } as const
+    const blank = { points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '', libraryId: '', animStyle: 'none', objects: [], labels: [] } as const
     expect(toSceneVisual({ ...blank, kind: 'drawn', prompt: ' A seed grows on "grow" ' } as never, ['motion', 'drawn'])).toEqual({ kind: 'drawn', prompt: 'A seed grows on "grow"' })
     expect(toSceneVisual({ ...blank, kind: 'drawn', prompt: '' } as never, ['motion', 'drawn']).kind).toBe('motion')
     expect(toSceneVisual({ ...blank, kind: 'drawn', prompt: 'x' } as never, ['motion']).kind).toBe('motion')

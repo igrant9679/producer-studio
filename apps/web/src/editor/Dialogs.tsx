@@ -121,8 +121,9 @@ export function ExportDialog() {
   const [captionTrackId, setCaptionTrackId] = useState('')
   const [coverAt, setCoverAt] = useState<number | undefined>(undefined)
   // a branded cover (22 Nov 2026): the title and the brand's stamp over the cover frame
-  const [brandCover, setBrandCover] = useState(false)
-  const [coverTitle, setCoverTitle] = useState(project.name)
+  // a video Producer made starts branded (23 Nov 2026), its brief's title on the cover
+  const [brandCover, setBrandCover] = useState(!!project.ai?.brief)
+  const [coverTitle, setCoverTitle] = useState(project.ai?.brief?.title?.trim() || project.name)
   const coverBrand = useCoverBrand(brandCover)
   const [prev, setPrev] = useState<ExportRecord[]>([])
   const [shareUrl, setShareUrl] = useState<string | null>(null)
@@ -677,13 +678,22 @@ function MediaLibraryHelp({ onOpenMusic, onOpenClips }: { onOpenMusic: () => voi
         </li>
         <li>What it makes goes into this project’s media and onto the timeline at the playhead.</li>
       </ul>
+      <div className="eyebrow">In videos Producer makes</div>
+      <ul>
+        <li>
+          <b>Music</b>: a new brief starts with the library song that suits its tone. Pick another song from the library under <b>Music</b> in the brief and press <b>Listen</b> to hear it first. The song is cut to your video’s length, fades out at the end and gets quieter while the narrator speaks. Music composed for your video’s scenes is still there in the same list.
+        </li>
+        <li>
+          <b>Clips</b>: when <b>Library clip</b> is ticked under the visuals, Producer shows a library clip in a scene where one shows what that scene says. In the script you can choose another clip for a scene, or another kind of visual.
+        </li>
+        <li>
+          <b>Your brand</b>: the brief’s <b>Your logo</b> option stamps your brand kit’s logo (or its name, until you add a logo) in the bottom-right corner, and a kit’s logo also goes on the title and closing cards. When you export, <b>Brand the cover</b> starts ticked, with the video’s title.
+        </li>
+      </ul>
       <div className="eyebrow">Good to know</div>
       <ul>
         <li>An item shows up once it has been made. While the library is still being made, some may be missing for a little while.</li>
         <li>Your own sounds in the Audio tab can be heard before you add them too.</li>
-        <li>
-          Making a video with Producer? Its brief has <b>Listen</b> buttons for the music style and the sound effects. That music is composed for your video’s scenes, separately from this library.
-        </li>
       </ul>
       <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
         <button type="button" className="btn sm" onClick={onOpenMusic}>

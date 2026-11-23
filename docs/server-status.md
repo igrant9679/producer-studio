@@ -452,9 +452,20 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   (else the brand's name) top right, at 720 px on the short side, by fixed code in the export's sandboxed browser
   (`render/cover.ts`, `testDrawing`); it becomes the export's thumbnail and share-page poster, and Exports & sharing
   shows each export's own cover with a Thumbnail download. A cover that can't be drawn leaves the plain 360p frame.
-  Not in the desktop app (made on the cloud server; the panels say so there). **Not known yet:** whether the owner's
-  Gemini key may use Lyria and Gemini video, and how the AI's drawings come out, until the library is made on
-  production.
+  Not in the desktop app (made on the cloud server; the panels say so there). All 40 items were made on production
+  on 21-22 Nov (Lyria 3.5 songs, Gemini Omni clips).
+  *Producer uses the library* (23 Nov): a new brief's music is `'library'` (the library song that suits the tone:
+  `librarySongFor`, `LIBRARY_SONGS_BY_TONE`), or `'library:<id>'` for one picked in the brief and heard there first;
+  `musicChoice` falls back to the tone's composed style where no song is made (a desktop). The song is fitted per
+  video (`ai/soundtrack.ts` `fitSong`/`makeLibraryMusic`: cut, or looped with a 3 s crossfade, faded out over 2.5 s,
+  two-pass loudnorm to the composed music's level; reused for the same length) and the effects use `libraryKitFor`.
+  Scenes may show a library clip (visual kind `library {id, assetId?}`, on by default once clips are made: the writer
+  gets them by id and in words, `readyLibraryClips`; the space's copy is made by `addLibraryItem` at assembly and
+  fills the frame like a stock clip; one that can't be added shows the scene's words and the script keeps the pick).
+  The brief's `logoStamp` (on for new briefs) puts the kit's logo, or its name while it has none, small in the
+  bottom-right corner through the scenes (`stampCorner`/`logoStamp` in core brand.ts, shared with the editor's In your
+  brand), and a kit's logo also goes above the title and on the closing card. The export of a video Producer made
+  starts with Brand the cover ticked and the brief's title.
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import * as z from 'zod/v4'
-import { AI_LOOKS, CAPTION_PRESETS, DRAWING_STYLES, FONTS, MAX_AI_CLIPS_FULL_MOTION, MUSIC_STYLES, PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
+import { AI_LOOKS, CAPTION_PRESETS, DRAWING_STYLES, FONTS, MAX_AI_CLIPS_FULL_MOTION, MUSIC_LIBRARY, MUSIC_STYLES, PRODUCE_LIMITS, VOICES, isProfileVoice, profileIdOf, uid, type AssistantRequest, type ProduceCapabilities, type Project } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { ctx } from '../context'
 import { jobDto } from '../dto'
@@ -159,12 +159,14 @@ const BriefSchema = z.object({
   source: z.enum(['recordings', 'idea']).optional(),
   idea: z.string().max(PRODUCE_LIMITS.ideaChars).optional(),
   lengthSec: z.number().int().min(15).max(600).optional(),
-  visualKinds: z.array(z.enum(['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo'])).max(9).optional(),
+  visualKinds: z.array(z.enum(['motion', 'diagram', 'animation', 'drawn', 'library', 'image', 'photo', 'stock', 'aiVideo'])).max(10).optional(),
   drawingStyle: z.enum(DRAWING_STYLES.map((s) => s.id) as [string, ...string[]]).optional(),
   aiLook: z.enum(AI_LOOKS.map((l) => l.id) as [string, ...string[]]).optional(),
   motion: z.enum(['full']).optional(),
   brandKitId: z.string().max(80).optional(),
-  music: z.enum(['off', 'auto', ...MUSIC_STYLES.map((m) => m.id)]).optional(),
+  // a composed style, or a library song ('library': the one that suits the tone; 'library:<id>': that one)
+  music: z.enum(['off', 'auto', 'library', ...MUSIC_STYLES.map((m) => m.id), ...MUSIC_LIBRARY.map((t) => `library:${t.id}`)]).optional(),
+  logoStamp: z.boolean().optional(),
   soundEffects: z.boolean().optional(),
   narration: z.boolean().optional(),
   captions: z.boolean().optional(),
@@ -237,7 +239,7 @@ aiRoutes.get('/produce/capabilities', async (c) => {
   const caps = await generationCapabilities(ws)
   const { blenderCapability } = await import('../media/blender')
   const blender = await blenderCapability(ws)
-  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'animation', 'drawn', 'image', 'photo', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS, maxAiClipsFullMotion: MAX_AI_CLIPS_FULL_MOTION, ...(blender ? { blender } : {}) } satisfies ProduceCapabilities)
+  return c.json({ ...caps, kinds: await allowedVisualKinds(ws, ['motion', 'diagram', 'animation', 'drawn', 'library', 'image', 'photo', 'stock', 'aiVideo']), maxAiClips: MAX_AI_CLIPS, maxAiClipsFullMotion: MAX_AI_CLIPS_FULL_MOTION, ...(blender ? { blender } : {}) } satisfies ProduceCapabilities)
 })
 
 aiRoutes.post('/produce/assemble', async (c) => {

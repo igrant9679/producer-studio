@@ -1,3 +1,5 @@
+import { librarySongFor } from './mediaLibrary'
+
 /**
  * Background music for videos made by Producer: the styles its composer plays (apps/server/scripts/music, from
  * huashu-motion), named for people, and the one a tone gets when the brief leaves the choice to it.
@@ -37,6 +39,32 @@ export function musicStyleFor(music: string | undefined, tone: string): MusicSty
   const t = tone.trim().toLowerCase()
   return BY_TONE[t] ?? Object.entries(BY_TONE).find(([k]) => t.includes(k))?.[1] ?? 'mallet'
 }
+
+/** What a brief's music setting plays: a library song (by id) or a composed style. */
+export type MusicChoice = { library: string } | { style: MusicStyle }
+
+/**
+ * What a brief's music setting plays. 'library:<id>' is that song; 'library' the library song that suits the tone
+ * (librarySongFor). `ready` is the library songs made: with none (a desktop, or
+ * a library not made yet) the library choices fall back to music composed in the tone's style. The rest as
+ * musicStyleFor. Undefined: no music.
+ */
+export function musicChoice(music: string | undefined, tone: string, ready: readonly string[]): MusicChoice | undefined {
+  if (!music || music === 'off') return undefined
+  if (music === 'library' || music.startsWith('library:')) {
+    const asked = music.startsWith('library:') ? music.slice('library:'.length) : ''
+    if (asked && ready.includes(asked)) return { library: asked }
+    const id = librarySongFor(tone, ready)
+    if (id) return { library: id }
+    const style = musicStyleFor('auto', tone)
+    return style ? { style } : undefined
+  }
+  const style = musicStyleFor(music, tone)
+  return style ? { style } : undefined
+}
+
+/** A brief's music setting is a library one ('library' or 'library:<id>'). */
+export const isLibraryMusic = (music: string | undefined) => !!music && (music === 'library' || music.startsWith('library:'))
 
 /** The sound-effect kit that suits a music style: soft and organic under quiet styles, crisp under bright ones, punchy under beats. */
 export function sfxKitFor(style: MusicStyle | undefined): 'calm' | 'crisp' | 'launch' {

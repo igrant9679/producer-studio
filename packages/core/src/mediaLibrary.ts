@@ -89,6 +89,49 @@ export const CLIP_LIBRARY: readonly LibraryClip[] = [
 
 export type LibraryKind = 'music' | 'animation' | 'motion'
 
+/** A clip as Producer's script writer reads it: what it shows, without the drawing instructions it was made with. */
+export function libraryClipAbout(c: Pick<LibraryClip, 'prompt'>): string {
+  return c.prompt.replace(/\s*No words, letters, numbers or logos anywhere in the picture\.\s*$/, '').trim()
+}
+
+// ---------------- the library in videos Producer makes (23 Nov 2026) ----------------
+// The owner asked for the clips and songs "to insert into their videos"; Producer uses them on its own: a song that
+// suits the brief's tone under the narration, and clips where they show what a scene says.
+
+/** The library songs that suit each tone, best first (a video plays the first that has been made). */
+export const LIBRARY_SONGS_BY_TONE: Record<string, readonly string[]> = {
+  confident: ['midnight-groove', 'bright-ideas', 'garage-anthem', 'neon-pulse'],
+  friendly: ['bright-ideas', 'morning-espresso', 'front-porch', 'island-breeze'],
+  professional: ['bright-ideas', 'still-water', 'velvet-strings', 'dream-drift'],
+  energetic: ['neon-pulse', 'arena-stomp', 'city-rush', 'garage-anthem'],
+  calm: ['still-water', 'dream-drift', 'rainy-desk', 'bossa-sunset'],
+  playful: ['fiesta-brass', 'afro-sun', 'island-breeze', 'notebook-beats'],
+  warm: ['morning-espresso', 'front-porch', 'bossa-sunset', 'bright-ideas'],
+}
+const ANY_TONE = ['bright-ideas', 'morning-espresso', 'dream-drift', 'midnight-groove']
+
+/** The tone's songs (best first; a few that suit most videos for a tone it doesn't know). */
+export function librarySongsForTone(tone: string): readonly string[] {
+  const t = tone.trim().toLowerCase()
+  return LIBRARY_SONGS_BY_TONE[t] ?? Object.entries(LIBRARY_SONGS_BY_TONE).find(([k]) => t.includes(k))?.[1] ?? ANY_TONE
+}
+
+/**
+ * The library song a video in this tone plays, of those made (`ready`): the tone's best, so the brief can say which
+ * one before the video is made. Undefined when none is made.
+ */
+export function librarySongFor(tone: string, ready: readonly string[]): string | undefined {
+  return [...librarySongsForTone(tone), ...ANY_TONE, ...ready].find((id) => ready.includes(id))
+}
+
+/** The sound-effect kit that goes with a library song: soft under quiet ones, punchy under beats, crisp otherwise. */
+export function libraryKitFor(t: Pick<LibraryTrack, 'genre'>): 'calm' | 'crisp' | 'launch' {
+  const g = t.genre.toLowerCase()
+  if (/piano|classical|downtempo|lo-fi|bossa|jazz|blues|country|reggae/.test(g)) return 'calm'
+  if (/house|drum and bass|rock|orchestral|hip-hop|funk|afrobeats|latin/.test(g)) return 'launch'
+  return 'crisp'
+}
+
 /** Any item of the library, by id. */
 export function libraryItem(id: string): ({ kind: 'music' } & LibraryTrack) | LibraryClip | undefined {
   const t = MUSIC_LIBRARY.find((x) => x.id === id)

@@ -105,8 +105,10 @@ export function defaultBrief(opts: { prompt?: string; aspect?: Brief['aspect']; 
     voice: opts.voice ?? 'af_heart',
     aspect: opts.aspect ?? '16:9',
     notes: '',
-    music: 'auto',
+    // a song from the media library that suits the tone (music composed in the tone's style where there is none)
+    music: 'library',
     soundEffects: true,
+    logoStamp: true,
   }
 }
 
@@ -163,14 +165,14 @@ const ANIMATED: NonNullable<Brief['visualKinds']> = ['animation', 'drawn']
 /**
  * The visuals a film without words is made of, from the kinds the person ticked. Their choice stays theirs, and no
  * kind is ticked for them while they have a moving one (an AI-drawn scene is paid for, and so is an AI clip):
- *  - animations, AI-drawn scenes and AI clips they ticked stay (an AI clip is never ticked by default, so one that is
- *    ticked was asked for);
+ *  - animations, AI-drawn scenes, library clips (they have no words in them) and AI clips they ticked stay (an AI clip
+ *    is never ticked by default, so one that is ticked was asked for);
  *  - with none of those, stock footage stays if it is ticked (it usually is, by default, which is why it doesn't ride
  *    along with the kinds above: real footage in a film asked for as animation);
  *  - with nothing that moves ticked (only stills, diagrams or text), the two animated kinds.
  */
 export function animationKinds(ticked: Brief['visualKinds']): NonNullable<Brief['visualKinds']> {
-  const made = (ticked ?? []).filter((k) => k === 'animation' || k === 'drawn' || k === 'aiVideo')
+  const made = (ticked ?? []).filter((k) => k === 'animation' || k === 'drawn' || k === 'library' || k === 'aiVideo')
   if (made.length) return made
   return ticked?.includes('stock') ? ['stock'] : [...ANIMATED]
 }

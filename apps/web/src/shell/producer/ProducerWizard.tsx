@@ -1,4 +1,4 @@
-import { AI_LOOKS, CAPTION_PLACES, CAPTION_PRESETS, CAPTION_SIZES, DRAWING_STYLES, FONTS, MUSIC_STYLES, PRODUCE_LIMITS, SFX_PREVIEW_ROLES, aiLookOf, captionStyleFromPreset, sfxKitFor, drawingStyleOf, is3dDrawingStyle, isBlenderStyle, musicStyleFor, videoParts, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
+import { AI_LOOKS, CAPTION_PLACES, CAPTION_PRESETS, CAPTION_SIZES, DRAWING_STYLES, FONTS, MUSIC_STYLES, PRODUCE_LIMITS, SFX_PREVIEW_ROLES, aiLookOf, captionStyleFromPreset, sfxKitFor, drawingStyleOf, is3dDrawingStyle, isBlenderStyle, isLibraryMusic, libraryClipAbout, libraryKitFor, librarySongFor, musicChoice, musicStyleFor, videoParts, type LibraryClip, type LibraryEntry, type AnimationStyle, type AssetRecord, type DiagramType, type ProduceCapabilities, type SceneVisual, type ScriptScene, type SystemInfo, type TemplateSummary, type VisualKind, type Voice } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -38,6 +38,7 @@ import { sysFetch, systemApi, useIsDesktop, useSystem } from '../system'
 import { Modal, Popover, Progress, RadioCards, Spinner, Thumb, useAsync, useFilePicker, usePageTitle } from '../ui'
 import { formatBytes, formatDuration, formatTime, ssGet } from '../util'
 import { ANIMATION_INFO, DIAGRAM_INFO, VISUAL_KIND_INFO, defaultVisual, diagramFromText, diagramToText, objectsFromText, objectsToText, withPrompt } from './sceneVisuals'
+import { useLibraryClips, useLibrarySongs } from './useLibrary'
 import { handoffSource, takeProducerHandoff } from './handoff'
 import {
   briefTitleFromPrompt,
@@ -326,8 +327,8 @@ function PartToggle({ label, hint, on, disabled, onChange }: { label: string; hi
   )
 }
 
-const ALL_KINDS: Array<Exclude<VisualKind, 'footage'>> = ['motion', 'diagram', 'animation', 'drawn', 'photo', 'stock', 'image', 'aiVideo']
-const DEFAULT_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'drawn', 'photo', 'stock', 'image']
+const ALL_KINDS: Array<Exclude<VisualKind, 'footage'>> = ['motion', 'diagram', 'animation', 'drawn', 'library', 'photo', 'stock', 'image', 'aiVideo']
+const DEFAULT_KINDS: VisualKind[] = ['motion', 'diagram', 'animation', 'drawn', 'library', 'photo', 'stock', 'image']
 
 /** "Pexels, Wikimedia Commons" → "from Pexels or Wikimedia Commons". */
 const fromLibraries = (names: string[] | undefined) => (names?.length ? ` (free, from ${names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names[0]})` : '')
@@ -337,6 +338,10 @@ function kindStatus(k: Exclude<VisualKind, 'footage'>, caps: ProduceCapabilities
   if (k === 'motion' || k === 'diagram') return { available: true, note: VISUAL_KIND_INFO[k].hint }
   if (k === 'animation') return caps?.kinds && !caps.kinds.includes('animation') ? { available: false, note: 'Illustrations are turned off on this server' } : { available: true, note: `${VISUAL_KIND_INFO.animation.hint} (free, open-source art)` }
   if (k === 'drawn') return caps?.kinds && !caps.kinds.includes('drawn') ? { available: false, note: 'Needs the export’s browser on this server' } : { available: true, note: `${VISUAL_KIND_INFO.drawn.hint}. Your AI writes each drawing, then checks its own frames: about 5 to 20 minutes a scene, and the most AI credit of any visual.` }
+  if (k === 'library')
+    return caps?.kinds && !caps.kinds.includes('library')
+      ? { available: false, note: 'The media library hasn’t been made on this server yet' }
+      : { available: true, note: `${VISUAL_KIND_INFO.library.hint}, where one shows what a scene says. Free and instant.` }
   if (k === 'photo') return caps?.stockSources?.photo.length ? { available: true, note: `${VISUAL_KIND_INFO.photo.hint}${fromLibraries(caps.stockSources.photo)}.` } : { available: false, note: 'Stock photos aren’t set up on this server yet' }
   const who = (p: 'openai' | 'gemini' | 'fal') => (p === 'openai' ? 'your OpenAI account' : p === 'fal' ? 'your fal.ai account (Wan)' : 'your Google account')
   if (k === 'image') return caps?.image ? { available: true, note: `${VISUAL_KIND_INFO.image.hint}. Billed to ${who(caps.image.provider)}.` } : { available: false, note: 'Needs an OpenAI or Gemini key in Settings → AI' }
@@ -598,13 +603,22 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
   const idea = b.source === 'idea'
   const onlyAnimation = idea && !parts.narration && !parts.onScreenText && !parts.cards
   const sound = useBriefSound()
-  const music = musicStyleFor(b.music, b.tone)
-  // another style picked while one plays: that one stops, so the button offers the new one
-  const heard = useRef(music)
+  // a library song (the one picked, or the tone's), else a composed style: what the server will play
+  const songs = useLibrarySongs()
+  const songIds = (songs ?? []).map((t) => t.id)
+  const choice = musicChoice(b.music, b.tone, songIds)
+  const song = choice && 'library' in choice ? songs?.find((t) => t.id === choice.library) : undefined
+  const music = choice && 'style' in choice ? choice.style : undefined
+  const toneSong = songs?.find((t) => t.id === librarySongFor(b.tone, songIds))
+  // the list shows a library setting as its composed fallback where the library has no songs (a desktop)
+  const musicValue = songs && !songs.length && isLibraryMusic(b.music) ? 'auto' : (b.music ?? 'off')
+  // another style or song picked while one plays: that one stops, so the button offers the new one
+  const listening = song ? `song:${song.id}` : music
+  const heard = useRef(listening)
   useEffect(() => {
-    if (heard.current !== music && sound.on === 'music') sound.stop()
-    heard.current = music
-  }, [music, sound])
+    if (heard.current !== listening && sound.on === 'music') sound.stop()
+    heard.current = listening
+  }, [listening, sound])
   const kit = kits.data?.find((k) => (b.brandKitId ? k.id === b.brandKitId : k.default))?.doc
   const brandPreset = kit?.captionPreset
   return (
@@ -651,20 +665,40 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
         </div>
         <div className="ps-field">
           <label className="label" htmlFor="b-music">Music</label>
-          <select id="b-music" className="input" value={b.music ?? 'off'} onChange={(e) => set({ music: e.target.value })}>
-            <option value="auto">Suits the tone ({MUSIC_STYLES.find((m) => m.id === musicStyleFor('auto', b.tone))?.label})</option>
-            {MUSIC_STYLES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          <select id="b-music" className="input" value={musicValue} onChange={(e) => set({ music: e.target.value })}>
+            {songs === undefined && isLibraryMusic(b.music) && <option value={b.music}>From the media library…</option>}
+            {!!songs?.length && (
+              <optgroup label="Songs from the media library">
+                <option value="library">Suits the tone ({toneSong?.title})</option>
+                {songs.map((t) => <option key={t.id} value={`library:${t.id}`}>{t.title} · {t.genre}</option>)}
+              </optgroup>
+            )}
+            <optgroup label="Composed for your video">
+              <option value="auto">Suits the tone ({MUSIC_STYLES.find((m) => m.id === musicStyleFor('auto', b.tone))?.label})</option>
+              {MUSIC_STYLES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </optgroup>
             <option value="off">No music</option>
           </select>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            {musicStyleFor(b.music, b.tone) ? `${MUSIC_STYLES.find((m) => m.id === musicStyleFor(b.music, b.tone))?.about}. Composed for this video on its scene changes${parts.narration ? ', and quieter while the narrator speaks' : ''}. Free.` : parts.narration ? 'The video has narration only.' : 'The video has no sound but any effects you add.'}
+            {song
+              ? `${song.genre}, ${song.mood.charAt(0).toLowerCase()}${song.mood.slice(1)}. A finished song from the media library, cut to your video’s length with a fade at the end${parts.narration ? ', and quieter while the narrator speaks' : ''}. Free.`
+              : music
+                ? `${MUSIC_STYLES.find((m) => m.id === music)?.about}. Composed for this video on its scene changes${parts.narration ? ', and quieter while the narrator speaks' : ''}. Free.`
+                : parts.narration
+                  ? 'The video has narration only.'
+                  : 'The video has no sound but any effects you add.'}
           </div>
+          {song && (
+            <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} aria-pressed={sound.on === 'music'} onClick={() => sound.play('music', [api.musicPreviewUrl(song.id)])}>
+              {sound.on === 'music' ? <Pause size={13} /> : <Play size={13} />} {sound.on === 'music' ? 'Stop' : `Listen to ${song.title}`}
+            </button>
+          )}
           {music && (
             <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} aria-pressed={sound.on === 'music'} onClick={() => sound.play('music', [api.styleSampleUrl(music)])}>
               {sound.on === 'music' ? <Pause size={13} /> : <Play size={13} />} {sound.on === 'music' ? 'Stop' : `Listen to ${MUSIC_STYLES.find((m) => m.id === music)?.label}`}
             </button>
           )}
-          {music && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>A sample of this style, made the way your video’s own music is (composed for its scenes); the first listen can take a little while. The editor’s Audio tab also has a music library of other genres.</div>}
+          {music && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>A sample of this style, made the way your video’s own music is (composed for its scenes); the first listen can take a little while.</div>}
         </div>
         <div className="ps-field">
           <span className="label">Sound effects</span>
@@ -672,7 +706,7 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
             <input type="checkbox" checked={b.soundEffects === true} onChange={(e) => set({ soundEffects: e.target.checked })} />
             <span>A whoosh on each scene change and a soft pop as graphics appear{parts.cards ? ', with a ding on the close card' : ''}. Free, and each one is a clip you can move or delete.</span>
           </label>
-          <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} aria-pressed={sound.on === 'sfx'} onClick={() => sound.play('sfx', SFX_PREVIEW_ROLES.map((r) => api.sfxPreviewUrl(sfxKitFor(music), r)), 900)}>
+          <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} aria-pressed={sound.on === 'sfx'} onClick={() => sound.play('sfx', SFX_PREVIEW_ROLES.map((r) => api.sfxPreviewUrl(song ? libraryKitFor(song) : sfxKitFor(music), r)), 900)}>
             {sound.on === 'sfx' ? <Pause size={13} /> : <Play size={13} />} {sound.on === 'sfx' ? 'Stop' : 'Listen to the effects'}
           </button>
         </div>
@@ -761,6 +795,19 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
           </select>
         </div>
       )}
+
+      <div className="ps-field">
+        <span className="label">Your logo</span>
+        <label className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+          <input type="checkbox" checked={b.logoStamp === true} onChange={(e) => set({ logoStamp: e.target.checked })} />
+          <span>Stamp {kit?.logoAssetId ? 'your logo' : `“${kit?.name || 'your brand’s name'}”`} small in the bottom-right corner through the scenes.</span>
+        </label>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          {kit?.logoAssetId
+            ? `Your logo also opens and closes the video${parts.cards ? ', above the title and on the closing card' : ' when the title and closing cards are on'}.`
+            : 'Your brand kit has no logo yet, so its name is stamped. Add a logo on the Brand kit page and it’s used instead, and on the title and closing cards too.'}
+        </div>
+      </div>
 
       {parts.narration && <div className="ps-field">
         <div className="row" style={{ marginBottom: 8 }}>
@@ -974,8 +1021,9 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
   const [diagType, setDiagType] = useState<DiagramType>(v.kind === 'diagram' ? v.diagram.type : 'steps')
   const [err, setErr] = useState<string>()
   const options = kinds.includes(v.kind) ? kinds : [...kinds, v.kind]
+  const clips = useLibraryClips()
   const setKind = (k: Exclude<VisualKind, 'footage'>) => {
-    const nv = defaultVisual(k, scene, media.map((a) => a.assetId!))
+    const nv = defaultVisual(k, scene, media.map((a) => a.assetId!), (clips ?? []).map((c) => c.id))
     setErr(undefined)
     if (nv.kind === 'diagram') {
       setDiagType(nv.diagram.type)
@@ -989,8 +1037,8 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
     setErr(r.error)
     if (r.diagram) onChange({ kind: 'diagram', diagram: r.diagram })
   }
-  // something made at assembly (your own media isn't made, it's chosen)
-  const made = v.kind !== 'media' && 'assetId' in v && v.assetId
+  // something made at assembly (your own media and library clips aren't made, they're chosen)
+  const made = v.kind !== 'media' && v.kind !== 'library' && 'assetId' in v && v.assetId
   const credit = (v.kind === 'stock' || v.kind === 'photo') && v.credit && /^https:\/\//.test(v.credit.url) ? v.credit : undefined
   return (
     <div className="ps-visual">
@@ -1066,6 +1114,7 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
         />
       )}
       {v.kind === 'media' && <MediaChoice v={v} media={media} onChange={onChange} />}
+      {v.kind === 'library' && <LibraryChoice v={v} clips={clips} onChange={onChange} />}
       {v.kind === 'stock' && <input className="input" aria-label="Stock footage search" placeholder="A short, concrete search, e.g. team meeting whiteboard" value={v.query} onChange={(e) => onChange(withPrompt(v, e.target.value))} />}
       {v.kind === 'photo' && <input className="input" aria-label="Stock photo search" placeholder="A short, concrete search, e.g. farmer in a wheat field" value={v.query} onChange={(e) => onChange(withPrompt(v, e.target.value))} />}
       {v.kind === 'animation' && (
@@ -1115,6 +1164,34 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
 }
 
 /** Which of your clips or images a scene shows, and where a clip starts. */
+/** Which library clip a scene shows: its poster, the list of clips made (animations, then filmed) and what it shows. */
+function LibraryChoice({ v, clips, onChange }: { v: Extract<SceneVisual, { kind: 'library' }>; clips?: Array<LibraryEntry<LibraryClip>>; onChange: (v: SceneVisual) => void }) {
+  const cur = clips?.find((c) => c.id === v.id)
+  const group = (kind: LibraryClip['kind']) => (clips ?? []).filter((c) => c.kind === kind)
+  return (
+    <div className="ps-visual-made ps-media-choice">
+      <img src={api.clipPosterUrl(v.id)} alt="" className="ps-win-thumb" loading="lazy" />
+      <select className="input" aria-label="Which library clip" value={v.id} onChange={(e) => onChange({ kind: 'library', id: e.target.value })}>
+        {!cur && <option value={v.id}>{clips ? 'A clip no longer in the library' : 'Loading the library…'}</option>}
+        {(['animation', 'motion'] as const).map((k) =>
+          group(k).length ? (
+            <optgroup key={k} label={k === 'animation' ? 'Animations' : 'Full motion'}>
+              {group(k).map((c) => (
+                <option key={c.id} value={c.id}>{c.title}</option>
+              ))}
+            </optgroup>
+          ) : null,
+        )}
+      </select>
+      {cur && (
+        <span>
+          {libraryClipAbout(cur)} {Math.max(1, Math.round(cur.seconds ?? 8))} s; a longer scene holds its last frame.
+        </span>
+      )}
+    </div>
+  )
+}
+
 function MediaChoice({ v, media, onChange }: { v: Extract<SceneVisual, { kind: 'media' }>; media: WizardAsset[]; onChange: (v: SceneVisual) => void }) {
   const cur = media.find((a) => a.assetId === v.assetId)
   const clip = !!cur?.duration

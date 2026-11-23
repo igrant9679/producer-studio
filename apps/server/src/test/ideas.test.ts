@@ -15,7 +15,7 @@ beforeAll(async () => {
 })
 
 type FlatVisual = IdeaScriptOutput['scenes'][number]['visual']
-const blank: FlatVisual = { kind: 'motion', points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '', animStyle: 'none', objects: [], labels: [] }
+const blank: FlatVisual = { kind: 'motion', points: [], diagramType: 'none', items: [], details: [], values: [], unit: '', center: '', leftTitle: '', leftPoints: [], rightTitle: '', rightPoints: [], prompt: '', query: '', mediaId: '', libraryId: '', animStyle: 'none', objects: [], labels: [] }
 const scene = (visual: Partial<FlatVisual>, narration = 'We plan, then build, then ship it.') => ({ id: 'x', title: 'T', headline: 'Head', narration, visual: { ...blank, ...visual } })
 
 describe("the writer's scenes", () => {

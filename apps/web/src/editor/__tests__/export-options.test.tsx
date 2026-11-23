@@ -150,6 +150,16 @@ describe('export options (E-5)', { timeout: 20_000 }, () => {
     expect(document.querySelector('.ed-cover-brandover b')?.textContent).toBe('Morning ritual')
     expect(await screen.findByText('Northwind')).toBeTruthy()
   })
+
+  it('a video Producer made starts with the branded cover ticked, its brief’s title on it', async () => {
+    vi.spyOn(api, 'brand').mockResolvedValue({ name: 'Northwind', colors: ['#0b1830', '#ff5a5f'], fonts: { headline: 'Montserrat', body: 'Inter' } } as never)
+    const p = S().project
+    act(() => S().set({ workspaceId: 'w1', demo: false, project: { ...p, ai: { brief: { title: 'Morning ritual', audience: '', goal: '', tone: 'Friendly', template: 'studio-dark', voice: 'af_heart', aspect: '16:9' } } } } as never))
+    render(<ExportDialog />)
+    expect((screen.getByRole('checkbox', { name: /Brand the cover/ }) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByRole('textbox', { name: 'Cover title' }) as HTMLInputElement).value).toBe('Morning ritual')
+    expect((await exportNow()).coverBrand).toEqual({ title: 'Morning ritual' })
+  })
 })
 
 describe('exporting in the background (E-5)', { timeout: 20_000 }, () => {

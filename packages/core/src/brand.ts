@@ -143,3 +143,29 @@ export function contrastPairs(colors: string[]): ContrastPair[] {
     }
   return out.sort((a, b) => b.ratio - a.ratio)
 }
+
+// ---------------- the brand's stamp (22-23 Nov 2026) ----------------
+// The owner: branding is "the Narrative Text, Titles, Thumbnail, company stamp/logo". A library clip added in the
+// brand (web editor/libraryBrand.ts) and a video Producer makes with the logo stamp on both put the kit's logo, or its
+// name while it has none, small in the bottom-right corner.
+
+type Frame = { width: number; height: number }
+
+/** Where a `w`×`h` px stamp sits: the bottom-right corner, inset by 3% of the frame's shorter side (x, y are its
+ * centre from the frame's centre, as item transforms are). */
+export function stampCorner(canvas: Frame, w: number, h: number): { x: number; y: number } {
+  const m = Math.round(Math.min(canvas.width, canvas.height) * 0.03)
+  return { x: Math.round(canvas.width / 2 - m - w / 2), y: Math.round(canvas.height / 2 - m - h / 2) }
+}
+
+/**
+ * A logo as a corner stamp: the scale that makes it about `frac` of the frame across (or tall, for a tall logo) when
+ * an image item fits it to the frame at scale 1, its size in px at that scale, and its place.
+ */
+export function logoStamp(canvas: Frame, logo: Frame, frac = 0.12): { scale: number; w: number; h: number; x: number; y: number } {
+  const fit = Math.min(canvas.width / logo.width, canvas.height / logo.height)
+  const scale = Math.min((frac * canvas.width) / (logo.width * fit), (frac * canvas.height) / (logo.height * fit))
+  const w = logo.width * fit * scale
+  const h = logo.height * fit * scale
+  return { scale, w, h, ...stampCorner(canvas, w, h) }
+}

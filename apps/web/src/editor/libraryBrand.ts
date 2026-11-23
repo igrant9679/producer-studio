@@ -3,7 +3,7 @@
 // kit's words and mark laid over it as ordinary editor items, all editable afterwards: a title in the brand's headline
 // font on its colours, a line of narrative text in its body font, and its logo stamped in a corner (or its name, while
 // the kit has no logo). No AI and no cost.
-import { type Asset, type BrandKitDoc, type ImageItem, type Item, type TextItem, addAsset, addItem, clone, contrastRatio, createImageItem, createTextItem, insertTrack, itemEnd } from '@producer/core'
+import { type Asset, type BrandKitDoc, type ImageItem, type Item, type TextItem, addAsset, addItem, clone, contrastRatio, createImageItem, createTextItem, insertTrack, itemEnd, logoStamp, stampCorner } from '@producer/core'
 import * as A from './actions'
 import { useEditor } from './store'
 
@@ -23,12 +23,6 @@ export function brandColours(b: Pick<BrandKitDoc, 'colors'>) {
 /** White or near-black, whichever reads better on `bg`. */
 export function textOn(bg: string): string {
   return contrastRatio(bg, '#ffffff') >= contrastRatio(bg, '#111111') ? '#ffffff' : '#111111'
-}
-
-/** Where a stamp `w`×`h` px sits: the bottom-right corner, inset by 3% of the frame's shorter side. */
-function corner(canvas: { width: number; height: number }, w: number, h: number) {
-  const m = Math.round(Math.min(canvas.width, canvas.height) * 0.03)
-  return { x: Math.round(canvas.width / 2 - m - w / 2), y: Math.round(canvas.height / 2 - m - h / 2) }
 }
 
 /**
@@ -76,12 +70,9 @@ export function addClipInBrand(clip: Asset, brand: BrandKitDoc, o: BrandOverlay,
   if (o.stamp) {
     if (logo && logo.width && logo.height) {
       // the logo, about 12% of the frame across (or tall, for a tall logo), in the corner
-      const fit = Math.min(canvas.width / logo.width, canvas.height / logo.height)
-      const scale = Math.min((0.12 * canvas.width) / (logo.width * fit), (0.12 * canvas.height) / (logo.height * fit))
-      const w = logo.width * fit * scale
-      const h = logo.height * fit * scale
+      const { scale, x, y } = logoStamp(canvas, { width: logo.width, height: logo.height })
       const img: ImageItem = createImageItem(logo, start, { name: `${brand.name} logo`, duration: span, opacity: 0.9 })
-      img.transform = { ...img.transform, ...corner(canvas, w, h), scale }
+      img.transform = { ...img.transform, x, y, scale }
       added.push(img)
     } else {
       // no logo in the kit yet: its name, small, in the headline font
@@ -89,7 +80,7 @@ export function addClipInBrand(clip: Asset, brand: BrandKitDoc, o: BrandOverlay,
       const it = createTextItem(start, 'body', {}, canvas)
       const name = brand.name || 'Your brand'
       const w = Math.min(canvas.width * 0.5, name.length * size * 0.6)
-      added.push({ ...it, name: `${name} stamp`, text: name, duration: span, opacity: 0.85, style: { ...it.style, fontFamily: brand.fonts.headline, fontSize: size, fontWeight: 700, color: '#ffffff' }, transform: { ...it.transform, ...corner(canvas, w, size * 1.3) }, animations: {} })
+      added.push({ ...it, name: `${name} stamp`, text: name, duration: span, opacity: 0.85, style: { ...it.style, fontFamily: brand.fonts.headline, fontSize: size, fontWeight: 700, color: '#ffffff' }, transform: { ...it.transform, ...stampCorner(canvas, w, size * 1.3) }, animations: {} })
     }
   }
   if (!added.length) return clipId

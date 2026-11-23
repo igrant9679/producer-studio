@@ -12,6 +12,7 @@ export const VISUAL_KIND_INFO: Record<Exclude<VisualKind, 'footage'>, { label: s
   stock: { label: 'Stock footage', hint: 'A real video clip found for the scene' },
   aiVideo: { label: 'AI video clip', hint: 'A generated moving shot (slow, and billed per second)' },
   media: { label: 'Your clip or image', hint: 'One you added, filling the screen (images get a slow pan and zoom)' },
+  library: { label: 'Library clip', hint: 'A ready-made animation or filmed clip from the media library, filling the screen' },
 }
 
 export const DIAGRAM_INFO: Record<DiagramType, { label: string; placeholder: string }> = {
@@ -126,12 +127,15 @@ export function diagramToText(d: SceneDiagram): string {
 
 /**
  * A fresh visual of `kind` for a scene (keeping what can carry over, e.g. its headline as the first point). Your own
- * media starts on the first clip or image you added (animated text when there is none).
+ * media starts on the first clip or image you added, a library clip on the first clip of the library (`library`, the
+ * ids of the clips made); animated text when there is none.
  */
-export function defaultVisual(kind: Exclude<VisualKind, 'footage'>, scene: { headline: string; narration: string }, media: string[] = []): SceneVisual {
+export function defaultVisual(kind: Exclude<VisualKind, 'footage'>, scene: { headline: string; narration: string }, media: string[] = [], library: string[] = []): SceneVisual {
   switch (kind) {
     case 'media':
       return media[0] ? { kind, assetId: media[0] } : { kind: 'motion', points: [] }
+    case 'library':
+      return library[0] ? { kind, id: library[0] } : { kind: 'motion', points: [] }
     case 'motion':
       return { kind, points: [] }
     case 'diagram':

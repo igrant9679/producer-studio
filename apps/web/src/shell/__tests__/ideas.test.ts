@@ -114,8 +114,8 @@ describe('starting from an idea', () => {
 })
 
 describe('music and sound effects', () => {
-  it('a new brief has music that suits the tone and sound effects; one saved before has neither', () => {
-    expect(defaultBrief()).toMatchObject({ music: 'auto', soundEffects: true })
+  it('a new brief has a library song that suits the tone, sound effects and the brand’s stamp; one saved before has none of them', () => {
+    expect(defaultBrief()).toMatchObject({ music: 'library', soundEffects: true, logoStamp: true })
     const s = stateFromProject({
       summary: { id: 'p1', workspaceId: 'ws', name: 'Old' } as never,
       project: { assets: {}, ai: { brief: { title: 'Old', audience: '', goal: '', tone: 'warm', template: '', voice: 'af_heart', aspect: '16:9' } } } as never,
@@ -123,6 +123,7 @@ describe('music and sound effects', () => {
     })
     expect(s.brief.music).toBeUndefined()
     expect(s.brief.soundEffects).toBeUndefined()
+    expect(s.brief.logoStamp).toBeUndefined()
   })
 
   it('composing the music adds about the video’s length to the wait', () => {
@@ -149,7 +150,9 @@ describe('a video without some of its parts', () => {
     expect(animationOnly({ ...b, visualKinds: ['drawn', 'image', 'stock'] }).visualKinds).toEqual(['drawn'])
     expect(animationOnly({ ...b, visualKinds: ['animation', 'motion'] }).visualKinds).toEqual(['animation'])
     expect(animationOnly({ ...b, visualKinds: ['image'] }).visualKinds).toEqual(['animation', 'drawn'])
-    expect(only.music).toBe('auto')
+    // library clips have no words in them: ticked, they stay
+    expect(animationOnly({ ...b, visualKinds: ['motion', 'animation', 'drawn', 'library', 'photo', 'stock', 'image'] }).visualKinds).toEqual(['animation', 'drawn', 'library'])
+    expect(only.music).toBe('library')
     const back = everything(only)
     expect(videoParts(back)).toEqual({ narration: true, captions: true, onScreenText: true, cards: true })
     expect(back.visualKinds).toBeUndefined()

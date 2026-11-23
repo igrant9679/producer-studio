@@ -538,6 +538,9 @@ export type SceneVisual =
   | { kind: 'photo'; query: string; assetId?: Id; credit?: MediaCredit }
   | { kind: 'aiVideo'; prompt: string; assetId?: Id }
   | { kind: 'media'; assetId: Id; start?: number; end?: number }
+  /** A clip from the shared media library (mediaLibrary.ts CLIP_LIBRARY, by `id`); `assetId` is the space's copy once
+   * added, so re-assembling reuses it. */
+  | { kind: 'library'; id: string; assetId?: Id }
   | { kind: 'animation'; style: AnimationStyle; objects: SceneObject[] }
   /** Drawn in code by the space's AI from `prompt` (canvas, Rough.js and anidoodle's media), kept as `code` and rendered
    * to a clip; `style` is the drawing style the code was written for (absent: 'clean'). */
@@ -633,9 +636,12 @@ export interface ProducerMeta {
     visualKinds?: VisualKind[]
     /** The space's brand kit the video uses (absent: the default kit). */
     brandKitId?: string
-    /** Background music composed for the video on its scene cuts: a style from MUSIC_STYLES, or 'auto' (one that
-     * suits the tone). Absent or 'off': none. */
+    /** Background music: a song from the media library ('library:<id>', or 'library' for the one that suits the tone,
+     * see musicChoice), or music composed for the video on its scene cuts (a style from MUSIC_STYLES, or 'auto': the
+     * one that suits the tone). Absent or 'off': none. */
     music?: string
+    /** The brand kit's logo (its name, while it has none) small in a corner through the scenes (absent: none). */
+    logoStamp?: boolean
     /** Sound effects on the cuts, on graphics as they appear and on the title and close cards (absent: none). */
     soundEffects?: boolean
     /** Parts a video can go without (false: left out; absent: included; see videoParts). */

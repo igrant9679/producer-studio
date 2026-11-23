@@ -18,7 +18,14 @@ import {
   MAX_AI_CLIPS_FULL_MOTION,
   withAiLook,
   generateCaptions,
-  musicStyleFor,
+  isLibraryMusic,
+  libraryClipAbout,
+  libraryItem,
+  libraryKitFor,
+  logoStamp,
+  stampCorner,
+  musicChoice,
+  DRAWING_STYLES,
   videoParts,
   round,
   uid,
@@ -59,9 +66,10 @@ import { houseRules } from './rules'
 import { ensureTranscript, synthesizeToAsset, transcribeAsset } from './speech'
 import { whisperAvailable } from './whisper'
 import { SOURCE_NAMES, type StockSource, downloadStock, findIllustration, generateImage, generateVideo, generationCapabilities, illustrationPng, searchStock } from './generate'
-import { IDEA_SYSTEM, type IdeaMedia, IdeaScriptSchema, VISUAL_KINDS, buildIdeaPrompt, normalizeIdeaScript } from './scenes'
+import { IDEA_SYSTEM, type IdeaLibraryClip, type IdeaMedia, IdeaScriptSchema, VISUAL_KINDS, buildIdeaPrompt, normalizeIdeaScript } from './scenes'
 import { type AnimObject, type Placed, type SceneFrame, animationItems, diagramItems, motionItems, slotIndex } from './scene-layout'
-import { type SceneSpan, type VideoSound, addSound, kitFor, makeMusic, planSfx, sfxAsset, sfxCues, sfxManifest } from './soundtrack'
+import { type SceneSpan, type VideoSound, addSound, kitFor, makeLibraryMusic, makeMusic, planSfx, sfxAsset, sfxCues, sfxManifest } from './soundtrack'
+import { addLibraryItem, listClips, listMusic, requireItem } from '../services/media-library'
 
 export type Brief = NonNullable<ProducerMeta['brief']>
 
@@ -232,10 +240,12 @@ async function workspaceAssets(workspaceId: string, ids: string[]): Promise<Asse
 export async function allowedVisualKinds(workspaceId: string, requested?: VisualKind[], opts: { fullMotion?: boolean } = {}): Promise<VisualKind[]> {
   const caps = await generationCapabilities(workspaceId)
   // AI video is opt-in (slow, and billed per second to the workspace's key); the rest default on when available
-  const want = new Set<VisualKind>(requested?.length ? requested : ['motion', 'diagram', 'animation', 'image', 'photo', 'stock'])
+  const want = new Set<VisualKind>(requested?.length ? requested : ['motion', 'diagram', 'animation', 'library', 'image', 'photo', 'stock'])
   want.add('motion')
   // full motion is the opt-in: every scene a clip
   if (opts.fullMotion) want.add('aiVideo')
+  // clips from the shared media library, once an operator has had them made (none on a desktop)
+  const library = want.has('library') && (await readyLibraryClips()).length > 0
   const can = (k: VisualKind) =>
     k === 'image'
       ? !!caps.image
@@ -249,8 +259,21 @@ export async function allowedVisualKinds(workspaceId: string, requested?: Visual
               ? ctx().config.freeMedia
               : k === 'drawn'
                 ? !!ctx().config.chromePath && fs.existsSync(ctx().config.chromePath!)
-                : true
+                : k === 'library'
+                  ? library
+                  : true
   return VISUAL_KINDS.filter((k) => want.has(k) && can(k))
+}
+
+/** The clips of the shared media library that have been made, as the script writer reads them. */
+export async function readyLibraryClips(): Promise<IdeaLibraryClip[]> {
+  const clips = await listClips().catch((err) => {
+    log.warn('media library: the clips could not be listed', { err })
+    return []
+  })
+  return clips
+    .filter((c) => c.ready)
+    .map((c) => ({ id: c.id, title: c.title, kind: c.kind, ...(c.kind === 'animation' && c.style ? { style: DRAWING_STYLES.find((d) => d.id === c.style)?.label ?? c.style } : {}), about: libraryClipAbout(c), seconds: c.seconds }))
 }
 
 /**
@@ -284,6 +307,7 @@ async function produceIdeaScript(jc: JobContext, input: { projectId: string; bri
     return { ref: `m${i + 1}`, assetId: r.id, kind: r.kind as 'video' | 'image', name: r.name, duration: r.meta?.duration, ...(speech ? { speech } : {}) }
   })
   if (media.length) kinds.push('media')
+  const library = kinds.includes('library') ? await readyLibraryClips() : []
   const images: Array<{ label: string; mediaType: 'image/jpeg'; data: string }> = []
   const work = tmpDir('idea-media')
   try {
@@ -305,10 +329,10 @@ async function produceIdeaScript(jc: JobContext, input: { projectId: string; bri
   }
   const { rules, example } = houseRules()
   jc.progress(0.15, 'Writing the script')
-  const raw = await provider.structured({ system: IDEA_SYSTEM, prompt: buildIdeaPrompt({ brief: input.brief, kinds, rules, example, media }), images, schema: IdeaScriptSchema, signal: jc.signal })
+  const raw = await provider.structured({ system: IDEA_SYSTEM, prompt: buildIdeaPrompt({ brief: input.brief, kinds, rules, example, media, library }), images, schema: IdeaScriptSchema, signal: jc.signal })
   const check = IdeaScriptSchema.safeParse(raw)
   if (!check.success) throw new HttpError(502, 'server', 'The AI response did not match the script format')
-  const scenes = normalizeIdeaScript(check.data, kinds, media)
+  const scenes = normalizeIdeaScript(check.data, kinds, media, library)
   // the characters that return, as the writer described them: every picture and clip of them is made from these words
   const cast = normalizeCast(check.data.cast)
   jc.check()
@@ -422,6 +446,8 @@ export interface AssembleInput {
   /** The illustrations animation scenes use (by asset id) */
   illustrations?: Map<string, Asset>
   brand?: import('@producer/core').BrandKitDoc | null
+  /** The brand kit's logo (an image asset): on the title and close cards, and the corner stamp when the brief asks. */
+  logo?: Asset
   /** Background music and sound effects (made beforehand; see makeSound). */
   sound?: VideoSound
 }
@@ -441,6 +467,19 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   const cards = createTrack('text', { name: 'Headlines' })
   const labels = createTrack('text', { name: 'Labels' })
   const voice = createTrack('audio', { name: 'Voiceover' })
+  // the brand's mark: its logo on the cards and, when the brief asks, the stamp in the corner through the scenes
+  const marks = createTrack('overlay', { name: 'Logo' })
+  const stampText = createTrack('text', { name: 'Brand stamp' })
+  const logo = inp.logo?.width && inp.logo.height ? inp.logo : undefined
+  /** The logo centred above a card's words, at most 30% of the frame across and 16% tall. */
+  const cardLogo = (at: number, duration: number, y: number, name: string) => {
+    const lg = logo!
+    const fit = Math.min(width / lg.width!, height / lg.height!)
+    const k = Math.min((0.3 * width) / (lg.width! * fit), (0.16 * height) / (lg.height! * fit))
+    const img = createImageItem(lg, round(at, 4), { name, duration: round(duration, 3), animations: { in: { preset: 'fade', duration: 0.5 }, out: { preset: 'fade', duration: 0.3 } } })
+    img.transform = { ...img.transform, x: 0, y: round(y, 1), scale: round(k, 4) }
+    marks.items.push(img)
+  }
   const mainItems: Item[] = []
   const graphics: Placed[][] = []
   const addAsset = (a: Asset) => {
@@ -452,6 +491,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     const titleShape = createShapeItem(0, { name: 'Title card', duration: TITLE_CARD, width, height, fill: pal.canvas, radius: 0 })
     titleShape.transitionOut = { type: 'crossfade', duration: 0.5 }
     mainItems.push(titleShape)
+    if (logo) cardLogo(0.2, TITLE_CARD - 0.2, -height * 0.3, 'Title logo')
     cards.items.push(
       createTextItem(0.25, 'heading', {
         name: 'Title',
@@ -488,7 +528,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     const clip = (id: string) => inp.footage.get(id) ?? (gen?.id === id ? gen : undefined)
     // footage windows: the recordings' own, or the whole stock / AI clip made for this scene (filling the frame)
     let windows = visual.kind === 'footage' ? scene.footage.filter((f) => inp.footage.has(f.assetId) && f.end > f.start) : []
-    const madeClip = gen?.kind === 'video' && (visual.kind === 'stock' || visual.kind === 'aiVideo' || visual.kind === 'drawn')
+    const madeClip = gen?.kind === 'video' && (visual.kind === 'stock' || visual.kind === 'aiVideo' || visual.kind === 'drawn' || visual.kind === 'library')
     if (madeClip) windows = [{ assetId: gen.id, start: 0, end: gen.duration ?? dur }]
     // the person's own clip (from its start, or the part they chose) or image, filling the frame like a made one
     const own = visual.kind === 'media' ? inp.footage.get(visual.assetId) : undefined
@@ -614,6 +654,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   const closeStart = t
   if (parts.cards) {
     mainItems.push(createShapeItem(closeStart, { name: 'Close card', duration: CLOSE_CARD, width, height, fill: pal.canvas, radius: 0 }))
+    if (logo) cardLogo(closeStart + 0.2, CLOSE_CARD - 0.2, -height * 0.28, 'Close logo')
     cards.items.push(
       createTextItem(round(closeStart + 0.3, 4), 'heading', {
         name: 'Close',
@@ -637,6 +678,33 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   }
 
   main.items = mainItems
+  // the stamp: the logo (or the brand's name, while the kit has none) small in the bottom-right corner, over the scenes
+  const scenesFrom = parts.cards ? TITLE_CARD : 0
+  if (inp.brief.logoStamp && closeStart - scenesFrom > 0.5 && (logo || inp.brand?.name)) {
+    const span = round(closeStart - scenesFrom, 3)
+    const canvas = { width, height }
+    if (logo) {
+      const st = logoStamp(canvas, { width: logo.width!, height: logo.height! }, 0.1)
+      const img = createImageItem(logo, scenesFrom, { name: 'Logo stamp', duration: span, opacity: 0.9 })
+      img.transform = { ...img.transform, x: st.x, y: st.y, scale: round(st.scale, 4) }
+      marks.items.push(img)
+    } else {
+      const name = inp.brand!.name
+      const size = Math.round(Math.min(width, height) * 0.03)
+      const w = Math.min(width * 0.4, name.length * size * 0.6)
+      const at = stampCorner(canvas, w, size * 1.3)
+      stampText.items.push(
+        createTextItem(scenesFrom, 'body', {
+          name: 'Brand stamp',
+          text: name,
+          duration: span,
+          opacity: 0.85,
+          style: { ...defaultTextStyle(), fontFamily: pal.headlineFont, fontSize: size, fontWeight: 700, color: '#ffffff', align: 'right', boxWidth: Math.round(w + size), shadow: { color: 'rgba(0,0,0,0.6)', blur: 6, x: 0, y: 1 } },
+          transform: { x: at.x, y: at.y, scale: 1, rotation: 0 },
+        }),
+      )
+    }
+  }
   // graphics: each scene fills slots 1..n of shared stacks (shape tracks below text tracks); scenes never overlap
   const shapeTracks: Track[] = []
   const textTracks: Track[] = []
@@ -650,7 +718,9 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     }
   }
   for (const tr of [...shapeTracks, ...textTracks]) tr.items.sort((a, b) => a.start - b.start)
-  p.tracks = [voice, main, ...shapeTracks, ...textTracks, cards, labels].filter((tr) => tr.main || tr.items.length)
+  // the logo's items show the kit's logo: the project has it among its media
+  if (logo && marks.items.length) p.assets[logo.id] = logo
+  p.tracks = [voice, main, ...shapeTracks, ...textTracks, cards, labels, marks, stampText].filter((tr) => tr.main || tr.items.length)
   if (inp.sound) {
     const sounded = addSound(p, inp.sound, parts.cards ? closeStart + CLOSE_CARD : closeStart)
     p.tracks = sounded.tracks
@@ -722,6 +792,11 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const { getBrandKit } = await import('../services/brand')
   const brand = await getBrandKit(row.workspaceId, brief.brandKitId, { fallback: true })
   if (!input.scenes?.length) throw invalid('No scenes to assemble')
+  // the kit's logo, for the cards and the stamp (a logo deleted or not ready since: the brand's name stands in)
+  const logoRow = brand?.logoAssetId
+    ? (await ctx().db.select().from(assets).where(and(eq(assets.workspaceId, row.workspaceId), eq(assets.id, brand.logoAssetId), eq(assets.status, 'ready'), isNull(assets.trashedAt))).limit(1))[0]
+    : undefined
+  const logo = logoRow?.kind === 'image' ? assetDoc(logoRow) : undefined
   const footageIds = [...new Set(input.scenes.flatMap((s) => [...s.footage.map((f) => f.assetId), ...(s.visual?.kind === 'media' ? [s.visual.assetId] : [])]))]
   const footageRows = await ctx().db.select().from(assets).where(and(eq(assets.workspaceId, row.workspaceId), inArray(assets.id, footageIds.length ? footageIds : ['-'])))
   const footage = new Map(footageRows.map((r) => [r.id, assetDoc(r)]))
@@ -768,7 +843,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const allowed = await allowedVisualKinds(row.workspaceId, brief.visualKinds, { fullMotion: brief.motion === 'full' })
   const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing, look: brief.aiLook, fullMotion: brief.motion === 'full', allowed, cast: doc.ai?.script?.cast })
   // 3b. music composed on the cuts, and sound effects where things move (both free: made on this server)
-  const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand })
+  const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, logo })
   const sounded = await makeSound(subContext(jc, 0.9, 0.92, 'Adding music and sound'), { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, jobId: jc.job.id, brief, scenes: made.scenes, voices, probe, seed: brand?.name || row.id })
   made.notes.push(...sounded.notes)
   // 4. timeline, built on the project as it is now (a rename or script edit saved meanwhile stays); a timeline
@@ -779,7 +854,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   // the timeline shows text where nothing else could be made; the script keeps what it asked for there
   const script = scenes.map((s) => (made.asked.has(s.id) ? { ...s, visual: made.asked.get(s.id) } : s))
   const build = (cur: Project) => {
-    const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, sound: sounded.sound })
+    const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, logo, sound: sounded.sound })
     built.ai = { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes: script }, status: 'assembled', assembled: { fingerprint: timelineFingerprint(built), at: Date.now() } }
     return built
   }
@@ -822,16 +897,28 @@ async function makeSound(
   jc: JobContext,
   o: { workspaceId: string; userId: string; projectId: string; jobId: string; brief: Brief; scenes: ScriptScene[]; voices: Map<string, Voice>; probe: () => Project; seed: string },
 ): Promise<{ sound?: VideoSound; notes: string[] }> {
-  const style = musicStyleFor(o.brief.music, o.brief.tone)
+  // a library song (the one asked for, or the one that suits the tone), else music composed in a style
+  const songs = isLibraryMusic(o.brief.music) ? (await listMusic().catch(() => [])).filter((t) => t.ready).map((t) => t.id) : []
+  const choice = musicChoice(o.brief.music, o.brief.tone, songs)
+  const style = choice && 'style' in choice ? choice.style : undefined
+  const song = choice && 'library' in choice ? libraryItem(choice.library) : undefined
   const effects = o.brief.soundEffects === true
-  if (!style && !effects) return { notes: [] }
+  if (!choice && !effects) return { notes: [] }
   const parts = videoParts(o.brief)
   const layout = sceneSpans(o.scenes, o.voices, parts.cards)
   const notes: string[] = []
   const sound: VideoSound = {}
   const work = tmpDir('sound')
   try {
-    if (style) {
+    if (song?.kind === 'music') {
+      try {
+        sound.music = await makeLibraryMusic(subContext(jc, 0, effects ? 0.8 : 1), { ...o, song, duration: layout.duration, work, voiced: parts.narration })
+      } catch (err) {
+        if (jc.signal.aborted) throw err
+        log.warn('library music could not be fitted', { err, song: song.id })
+        notes.push(`No music: “${song.title}” from the library couldn’t be added (${err instanceof Error ? err.message : String(err)})`)
+      }
+    } else if (style) {
       try {
         sound.music = await makeMusic(subContext(jc, 0, effects ? 0.8 : 1), { ...o, style, spans: layout.spans, duration: layout.duration, work, voiced: parts.narration, cards: parts.cards })
       } catch (err) {
@@ -844,7 +931,7 @@ async function makeSound(
     if (effects && !m) notes.push('No sound effects: this install has none')
     if (m) {
       try {
-        const plan = planSfx(sfxCues(o.probe(), layout.spans, layout.closeStart), kitFor(style), m)
+        const plan = planSfx(sfxCues(o.probe(), layout.spans, layout.closeStart), song?.kind === 'music' ? libraryKitFor(song) : kitFor(style), m)
         const byFile = new Map<string, Asset>()
         sound.effects = []
         for (const e of plan) {
@@ -917,6 +1004,23 @@ async function makeSceneVisuals(
   const asked = new Map<string, NonNullable<ScriptScene['visual']>>()
   const written = new Map(o.scenes.map((s) => [s.id, s.visual]))
   const scenes = o.scenes.map((s) => ({ ...s }))
+  // clips from the shared media library: the space's copy (added once, then used by every video that shows it)
+  for (const s of scenes) {
+    const v = s.visual
+    if (v?.kind !== 'library') continue
+    jc.check()
+    try {
+      const row = await addLibraryItem({ it: requireItem(v.id, 'clip'), workspaceId: o.workspaceId, userId: o.userId, projectId: o.projectId, signal: jc.signal })
+      generated.set(s.id, assetDoc(row))
+      s.visual = { kind: 'library', id: v.id, assetId: row.id }
+    } catch (err) {
+      if (jc.signal.aborted) throw err
+      log.warn('a library clip could not be added', { scene: s.id, clip: v.id, err })
+      notes.push(`${s.id}: the library clip couldn’t be added (${err instanceof HttpError ? err.message : 'it could not be copied'}), so the scene shows its words`)
+      asked.set(s.id, v)
+      s.visual = { kind: 'motion', points: [] }
+    }
+  }
   const todo = scenes.filter((s) => s.visual && (s.visual.kind === 'image' || s.visual.kind === 'stock' || s.visual.kind === 'photo' || s.visual.kind === 'aiVideo' || s.visual.kind === 'animation' || s.visual.kind === 'drawn'))
   if (!todo.length) return { scenes, generated, illustrations, notes, asked }
   const work = tmpDir('scene-visuals')

@@ -1,11 +1,11 @@
 // Sound for videos made by Producer: background music composed on the video's scene cuts (scripts/music, from
-// huashu-motion), and sound effects from earshot's bank (sfx/, its kits' takes rendered once and shipped as files) on
+// huashu-motion) or a song from the shared media library fitted to the video's length, and sound effects from earshot's bank (sfx/, its kits' takes rendered once and shipped as files) on
 // the cuts, on graphics as they appear and on the title and close cards. Both are free: no key, no network.
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { and, eq, sql } from 'drizzle-orm'
-import { type Asset, type Item, type MusicStyle, type Project, createAudioItem, createTrack, sfxKitFor } from '@producer/core'
+import { type Asset, type Item, type LibraryTrack, type MusicStyle, type Project, MUSIC_LIBRARY_VERSION, createAudioItem, createTrack, sfxKitFor } from '@producer/core'
 import { SERVER_ROOT } from '../config'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
@@ -14,7 +14,9 @@ import { HttpError } from '../http'
 import type { JobContext } from '../jobs/worker'
 import { ffmpeg, run } from '../media/proc'
 import { processAsset } from '../media/process'
+import { measureLoudness } from '../render/loudness'
 import { type AssetRow, createAssetFromFile } from '../services/assets'
+import { madeItem } from '../services/media-library'
 
 /** Bumped when the composer changes what it writes: music made before is composed again. */
 export const MUSIC_VERSION = 1
@@ -94,6 +96,103 @@ export async function makeMusic(
     kind: 'audio',
     origin: 'ai',
     meta: { generated: { kind: 'music', prompt: key, provider: 'huashu-motion', model: o.style }, jobId: o.jobId },
+  })
+  jc.progress(0.9, 'Preparing the music for the editor')
+  return assetDoc(await processAsset(row.id, { ...jc, progress: (f, m) => jc.progress(0.9 + 0.1 * Math.max(0, f), m) }))
+}
+
+// ---------------- a song from the media library (23 Nov 2026) ----------------
+// A library song is a finished piece (Lyria, about two minutes), not music written on the cuts: it is cut to the
+// video's length and faded out at the end (looped with a crossfade under a video longer than the song), and set to the
+// level composed music sits at, so the narration reads over it the same way (and the music track ducks under it).
+
+/** Seconds the song fades out over at the end of the video. */
+export const LIBRARY_FADE_OUT = 2.5
+/** Seconds two plays of a song overlap where a video longer than it loops it. */
+const LOOP_CROSSFADE = 3
+
+/** The music file for a video `duration` long from `src` (a song `seconds` long): looped if short, cut, faded out and
+ * set to `lufs` integrated loudness, as AAC. */
+export async function fitSong(o: { src: string; seconds: number; duration: number; lufs: number; out: string; signal?: AbortSignal }): Promise<void> {
+  const d = Math.max(1, o.duration)
+  const fade = Math.round(Math.min(LIBRARY_FADE_OUT, d / 3) * 100) / 100
+  const wav = o.out.replace(/\.[^.]+$/, '') + '.fit.wav'
+  const tail = `atrim=0:${d.toFixed(3)},asetpts=N/SR/TB,afade=t=out:st=${(d - fade).toFixed(3)}:d=${fade}`
+  const loops = o.seconds >= d ? 1 : o.seconds > LOOP_CROSSFADE * 2 ? Math.min(12, Math.ceil((d - o.seconds) / (o.seconds - LOOP_CROSSFADE)) + 1) : 0
+  const args = ['-y', '-v', 'error']
+  let graph: string
+  if (loops === 1) {
+    args.push('-i', o.src)
+    graph = `[0:a]${tail}[out]`
+  } else if (loops > 1) {
+    for (let i = 0; i < loops; i++) args.push('-i', o.src)
+    const steps: string[] = []
+    let prev = '[0:a]'
+    for (let i = 1; i < loops; i++) {
+      steps.push(`${prev}[${i}:a]acrossfade=d=${LOOP_CROSSFADE}:c1=tri:c2=tri[x${i}]`)
+      prev = `[x${i}]`
+    }
+    graph = `${steps.join(';')};${prev}${tail}[out]`
+  } else {
+    // a clip too short to crossfade with itself: played over and over
+    args.push('-stream_loop', '-1', '-i', o.src)
+    graph = `[0:a]${tail}[out]`
+  }
+  try {
+    await ffmpeg([...args, '-filter_complex', graph, '-map', '[out]', '-ar', '48000', '-ac', '2', wav], { signal: o.signal })
+    const m = await measureLoudness(wav, o.signal)
+    // two passes: measured, then one gain for the whole song (its dynamics stay), with a true-peak ceiling
+    const level =
+      m && m.i > -70
+        ? `loudnorm=I=${o.lufs}:TP=-1.5:LRA=11:measured_I=${m.i}:measured_TP=${m.tp}:measured_LRA=${m.lra}:measured_thresh=${m.thresh}:offset=${m.offset}:linear=true:print_format=summary`
+        : 'anull'
+    await ffmpeg(['-y', '-v', 'error', '-i', wav, '-af', level, '-ar', '48000', '-c:a', 'aac', '-b:a', '192k', o.out], { signal: o.signal })
+  } finally {
+    fs.rm(wav, { force: true }, () => undefined)
+  }
+  if (!fs.existsSync(o.out)) throw new HttpError(500, 'server', 'The song could not be fitted to the video')
+}
+
+/** What a library song fitted to a video is keyed on: the same song, length and level reuse the file made before. */
+export function librarySongKey(song: Pick<LibraryTrack, 'id'>, duration: number, voiced = true): string {
+  return `library ${song.id} v${MUSIC_LIBRARY_VERSION}${voiced ? '' : ' alone'} ${duration.toFixed(2)}s`
+}
+
+/** The music track for a video from a library song: fitted before for the same length (this project's), or now. */
+export async function makeLibraryMusic(
+  jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
+  o: { workspaceId: string; userId: string; projectId: string; jobId: string; song: LibraryTrack & { kind: 'music' }; duration: number; work: string; voiced?: boolean },
+): Promise<Asset> {
+  const voiced = o.voiced !== false
+  const key = librarySongKey(o.song, o.duration, voiced)
+  const prev = (
+    await ctx()
+      .db.select()
+      .from(assets)
+      .where(and(eq(assets.workspaceId, o.workspaceId), eq(assets.projectId, o.projectId), eq(assets.status, 'ready'), sql`${assets.meta}->'generated'->>'kind' = 'music'`, sql`${assets.meta}->'generated'->>'prompt' = ${key}`))
+      .limit(1)
+  )[0]
+  if (prev) return assetDoc(prev)
+  jc.progress(0.1, `Fitting “${o.song.title}” to the video`)
+  const info = await madeItem(o.song)
+  const tag = crypto.randomBytes(4).toString('hex')
+  const src = path.join(o.work, `song-${tag}${path.extname(info.key) || '.m4a'}`)
+  await ctx().storage.download(info.key, src)
+  jc.check()
+  const file = path.join(o.work, `music-${tag}.m4a`)
+  await fitSong({ src, seconds: info.seconds, duration: o.duration, lufs: voiced ? MUSIC_LUFS : MUSIC_ALONE_LUFS, out: file, signal: jc.signal })
+  fs.rm(src, { force: true }, () => undefined)
+  jc.check()
+  const row = await createAssetFromFile({
+    workspaceId: o.workspaceId,
+    userId: o.userId,
+    projectId: o.projectId,
+    filePath: file,
+    name: `Music · ${o.song.title}`.slice(0, 200),
+    mime: 'audio/mp4',
+    kind: 'audio',
+    origin: 'ai',
+    meta: { generated: { kind: 'music', prompt: key, provider: 'library', model: o.song.id }, jobId: o.jobId },
   })
   jc.progress(0.9, 'Preparing the music for the editor')
   return assetDoc(await processAsset(row.id, { ...jc, progress: (f, m) => jc.progress(0.9 + 0.1 * Math.max(0, f), m) }))
