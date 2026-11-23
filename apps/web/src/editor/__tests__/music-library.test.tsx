@@ -50,7 +50,7 @@ beforeEach(() => {
   vi.stubGlobal('Audio', FakeAudio)
   vi.spyOn(api, 'voices').mockResolvedValue([])
   vi.spyOn(api, 'musicLibrary').mockResolvedValue(someMade())
-  vi.spyOn(api, 'clipLibrary').mockResolvedValue(CLIP_LIBRARY.map((c, i) => ({ ...c, ready: i !== 1, seconds: 8 })))
+  vi.spyOn(api, 'clipLibrary').mockResolvedValue(CLIP_LIBRARY.map((c, i) => ({ ...c, ready: i !== 1, seconds: 8.04 })))
 })
 afterEach(() => {
   cleanup()

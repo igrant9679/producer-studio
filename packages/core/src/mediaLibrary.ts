@@ -107,7 +107,7 @@ export type LibraryCustomMode = 'topic'
 /** What a remake for a topic costs the space, in words: said before it starts. */
 export function libraryCustomCost(it: { kind: LibraryKind; seconds?: number }): string {
   if (it.kind === 'music') return 'One song from Google’s Lyria, on this space’s Gemini key.'
-  if (it.kind === 'motion') return `One ${it.seconds ?? 8}-second AI clip, on this space’s video key (Gemini or fal.ai).`
+  if (it.kind === 'motion') return `One ${Math.round(it.seconds ?? 8)}-second AI clip, on this space’s video key (Gemini or fal.ai).`
   return 'One drawing by this space’s animation AI, on its key (minutes; a 3D one can take a quarter of an hour).'
 }
 
