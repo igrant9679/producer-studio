@@ -432,15 +432,20 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   kinds?}`. In the editor: Audio → Music library (made songs only, genre · mood · length) and Media → Clip library
   (Animations | Full motion, poster frames, plays on hover, + at the playhead); the Help's Media library tab explains
   both. The old composed tracks (`<dataDir>/music-library`) are deleted at start-up; spaces keep copies they added.
-  *Making an item your own* (the owner, same day: "customize based on their needs/brand/topic"): the wand on a song or
-  clip opens Make it your own (`editor/LibraryCustomize.tsx`): an animation drawn again from its kept code
-  (`library/clips/<id>.v1.drawing.js`) in the space's brand kit colours and fonts (free, only the render; the same brand
-  again reuses the space's copy), or any item remade for the video's topic on the space's own keys (an animation
-  redrawn by its animation AI from the library's drawing, a clip filmed again in the video's shape on its video key, a
-  song written again in the same genre on its Gemini key); each says what it costs first (`libraryCustomCost`). A
-  `library.custom` job in the space (`POST /api/clips|music/:id/customize {workspaceId, projectId?, mode, topic?,
-  aspect?}`); the result goes into the project's media and onto the timeline at the playhead. A library song added at
-  the playhead is cut to end with the video's last picture, with a 2 s fade out (`fitSongToVideo`).
+  *Making an item your own* (the owner, same day: "customize based on their needs/brand/topic", then "the branding
+  doesn't need to affect the animations so much as the Narrative Text, Titles, Thumbnail, company stamp/logo"): the wand
+  on a song or clip opens Make it your own (`editor/LibraryCustomize.tsx`). *In your brand* (clips): the clip goes on
+  the timeline with an optional title (a lower third in the brand's headline font on its background colour), an
+  optional line of narrative text (its body font on its accent) and the kit's logo stamped bottom-right over the whole
+  clip on its own overlay track (the brand's name while the kit has no logo); free, made in the editor
+  (`editor/libraryBrand.ts`), every piece editable. A recolouring of the animations from their kept code was tried on
+  production first and dropped: the AI writes most colours into a drawing as fixed values, so a new palette barely
+  changed them. *For your topic*: any item remade about the video's topic on the space's own keys (an animation redrawn
+  by its animation AI from the library's drawing, a clip filmed again in the video's shape on its video key, a song
+  written again in the same genre on its Gemini key); it says what it costs first (`libraryCustomCost`); a
+  `library.custom` job (`POST /api/clips|music/:id/customize {workspaceId, projectId?, mode: 'topic', topic, aspect?}`).
+  A library song added at the playhead is cut to end with the video's last picture, with a 2 s fade out
+  (`fitSongToVideo`). Every clip (the library's and the space's own) has Watch: a player with sound before it is added.
   Not in the desktop app (made on the cloud server; the panels say so there). **Not known yet:** whether the owner's
   Gemini key may use Lyria and Gemini video, and how the AI's drawings come out, until the library is made on
   production.

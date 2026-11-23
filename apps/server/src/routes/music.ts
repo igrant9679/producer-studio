@@ -131,7 +131,7 @@ musicRoutes.post('/:id/add', async (c) => {
 musicRoutes.post('/:id/customize', async (c) => {
   const u = requireUser(c)
   const it = requireItem(c.req.param('id'), 'music')
-  const b = await body(c, z.object({ workspaceId: z.string().min(1), projectId: z.string().max(80).optional(), mode: z.enum(['brand', 'topic']), topic: z.string().max(300).optional(), aspect: z.enum(['16:9', '9:16', '1:1']).optional() }))
+  const b = await body(c, z.object({ workspaceId: z.string().min(1), projectId: z.string().max(80).optional(), mode: z.literal('topic'), topic: z.string().max(300).optional(), aspect: z.enum(['16:9', '9:16', '1:1']).optional() }))
   await requireRole(u.id, b.workspaceId, 'editor')
   if (b.projectId) await assertProjectInWorkspace(b.projectId, b.workspaceId)
   const job = await queueCustom({ it, mode: b.mode, topic: b.topic, aspect: b.aspect, workspaceId: b.workspaceId, userId: u.id, projectId: b.projectId })

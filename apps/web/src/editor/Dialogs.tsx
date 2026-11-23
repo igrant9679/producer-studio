@@ -615,7 +615,7 @@ function MediaLibraryHelp({ onOpenMusic, onOpenClips }: { onOpenMusic: () => voi
           Press <Wand2 {...icon} aria-label="Make it your own" /> on a song or a clip.
         </li>
         <li>
-          <b>In your brand</b> (animations): drawn again in your brand kit’s colours and fonts. Free; it takes a minute or two.
+          <b>In your brand</b> (clips): the clip goes on with your title, a line of narrative text and your logo stamped in the corner, in your brand kit’s fonts and colours. Free, and each piece can be changed or removed on the timeline.
         </li>
         <li>
           <b>For your topic</b>: say what your video is about, and the animation is drawn again about it, the clip filmed again for it, or the song written again in the same genre to suit it. This uses your space’s own AI keys, and says what it costs before it starts.

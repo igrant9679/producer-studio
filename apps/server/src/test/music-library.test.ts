@@ -265,25 +265,12 @@ describe('making a library item a space’s own (21 Nov 2026: “customize based
     return out
   }
 
-  it('draws an animation again in the space’s brand colours and fonts, free, once per brand', async () => {
+  it('leaves the brand to the editor: no recolouring job (the owner: titles, text and a logo, not the animations)', async () => {
     const { client, workspaceId } = await signup(t.app, 'Brand owner')
-    expect((await client.json('PUT', `/api/workspaces/${workspaceId}/brand`, { name: 'Northwind', colors: ['#0b1830', '#ff5a5f', '#f3f5fa'], fonts: { headline: 'Montserrat', body: 'Inter' } })).status).toBe(200)
-    const anim = CLIP_LIBRARY.find((c) => c.kind === 'animation' && c.style === 'clean')!
-    asked.length = 0
-    const job = await client.json('POST', `/api/clips/${anim.id}/customize`, { workspaceId, mode: 'brand' })
-    expect(job.status).toBe(200)
-    expect(job.body).toMatchObject({ kind: 'library.custom', status: 'queued' })
-    const out = await run(job.body.id)
-    expect(out.asset.asset).toMatchObject({ kind: 'video', name: `Animation · ${anim.title} (your brand)` })
-    // the library's own code, drawn in the brand (no AI asked)
-    expect(asked.map((a) => a.what)).toEqual(['render'])
-    expect(asked[0]).toMatchObject({ code: '// clean', fonts: { headline: 'Montserrat' } })
-    expect(JSON.stringify(asked[0].palette)).toMatch(/#ff5a5f/i)
-    // the same brand again: the space's copy, not another render
-    const again = await run((await client.json('POST', `/api/clips/${anim.id}/customize`, { workspaceId, mode: 'brand' })).body.id)
-    expect(again.reused).toBe(true)
-    expect(again.asset.asset.id).toBe(out.asset.asset.id)
-    expect(asked).toHaveLength(1)
+    const anim = CLIP_LIBRARY.find((c) => c.kind === 'animation')!
+    const r = await client.json('POST', `/api/clips/${anim.id}/customize`, { workspaceId, mode: 'brand' })
+    expect(r.status).toBe(400)
+    expect(asked).toHaveLength(0)
   })
 
   it('remakes any item for the space’s topic on its own keys: an animation from the library’s drawing, a clip in the video’s shape, a song in the same genre', async () => {

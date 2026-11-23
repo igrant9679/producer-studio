@@ -166,6 +166,8 @@
 .ed-custom section { margin-bottom: 18px; }
 .ed-custom textarea { width: 100%; resize: vertical; margin: 4px 0 6px; }
 .ed-custom-label { display: block; font-weight: 600; color: var(--text); margin-top: 2px; }
+.ed-custom input.ed-input { width: 100%; margin: 4px 0 8px; }
+.ed-custom-check { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0 10px; color: var(--text-2); }
 .ed-custom-progress { display: grid; gap: 6px; margin-top: 4px; }
 .ed-asset.failed { opacity: 1; }
 .ed-asset .proc.failed { grid-auto-flow: row; gap: 7px; justify-items: center; background: color-mix(in srgb, var(--danger) 22%, var(--media-dim)); text-align: center; padding: 6px; }

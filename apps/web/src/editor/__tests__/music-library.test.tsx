@@ -3,7 +3,7 @@
 // animations and 10 full-motion clips): what has been made is listed, can be heard or watched first, and + puts it at
 // the playhead; the space's own sounds can be heard too.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { CLIP_LIBRARY, MUSIC_LIBRARY, addAsset, addItem, createProject, createVideoItem, type AssetRecord, type AudioItem, type Project } from '@producer/core'
+import { CLIP_LIBRARY, MUSIC_LIBRARY, addAsset, addItem, createProject, createVideoItem, type AssetRecord, type AudioItem, type ImageItem, type Project, type TextItem } from '@producer/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
 import { AssetPanel } from '../LeftPanel'
@@ -178,22 +178,61 @@ describe('making a library item your own (21 Nov 2026: “customize based on the
   const clipRec = (id: string, name: string): AssetRecord => ({ asset: { id, kind: 'video', name, src: `/api/media/${id}/source`, duration: 8, width: 1920, height: 1080 }, workspaceId: 'w1', status: 'ready', origin: 'ai', createdAt: 1, projectId: 'p1' })
   const finished = (asset: AssetRecord) => ({ id: 'j1', kind: 'library.custom', status: 'done', progress: 1, message: 'Done', result: { asset }, createdAt: 1, updatedAt: 2 }) as never
 
-  it('draws an animation in the space’s brand, free, and puts it at the playhead', async () => {
+  it('adds a clip in the space’s brand: its title, narrative text and logo stamp over it, in the brand’s fonts and colours, free', async () => {
     const anim = CLIP_LIBRARY.find((c) => c.kind === 'animation')!
-    const custom = vi.spyOn(api, 'customizeLibrary').mockResolvedValue({ id: 'j1', kind: 'library.custom', status: 'queued', progress: 0, message: '' } as never)
-    vi.spyOn(api, 'job').mockResolvedValue(finished(clipRec('as_brand', `Animation · ${anim.title} (your brand)`)))
+    vi.spyOn(api, 'brand').mockResolvedValue({ name: 'Northwind', colors: ['#0b1830', '#ff5a5f', '#f3f5fa'], fonts: { headline: 'Montserrat', body: 'Inter' }, logoAssetId: 'as_logo' } as never)
+    vi.spyOn(api, 'asset').mockResolvedValue({ asset: { id: 'as_logo', kind: 'image', name: 'logo.png', src: '/api/media/as_logo/source', width: 400, height: 200 }, workspaceId: 'w1', status: 'ready', origin: 'upload', createdAt: 1 })
+    vi.spyOn(api, 'addLibraryClip').mockResolvedValue(clipRec('as_anim', `Animation · ${anim.title}`))
+    const custom = vi.spyOn(api, 'customizeLibrary')
     open('media')
     fireEvent.click(screen.getByRole('tab', { name: 'Clip library' }))
     fireEvent.click(await screen.findByRole('button', { name: `Make ${anim.title} your own` }))
     const dlg = screen.getByRole('dialog', { name: `Make “${anim.title}” your own` })
-    expect(within(dlg).getByText(/Free: the animation is drawn again in your brand kit’s colours and fonts/)).toBeTruthy()
-    fireEvent.click(within(dlg).getByRole('button', { name: /Draw it in my brand/ }))
-    await waitFor(() => expect(S().project.tracks.some((tr) => tr.items.some((it) => 'assetId' in it && it.assetId === 'as_brand'))).toBe(true))
-    expect(custom).toHaveBeenCalledWith('clip', anim.id, { workspaceId: 'w1', projectId: 'p1', mode: 'brand', aspect: '16:9' })
+    fireEvent.change(await within(dlg).findByLabelText('Title (optional)'), { target: { value: 'Spring launch' } })
+    fireEvent.change(within(dlg).getByLabelText('Narrative text (optional)'), { target: { value: 'Faster checkout for everyone' } })
+    expect((within(dlg).getByRole('checkbox', { name: /Stamp your logo in the corner/ }) as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(within(dlg).getByRole('button', { name: /Add it in my brand/ }))
+    await waitFor(() => expect(S().project.tracks.some((tr) => tr.items.some((it) => 'assetId' in it && it.assetId === 'as_anim'))).toBe(true))
+    expect(custom).not.toHaveBeenCalled()
+    const items = S().project.tracks.flatMap((tr) => tr.items)
+    const clip = items.find((it) => 'assetId' in it && it.assetId === 'as_anim')!
+    const texts = items.filter((it): it is TextItem => it.type === 'text')
+    const titleItem = texts.find((x) => x.text === 'Spring launch')!
+    const textItem = texts.find((x) => x.text === 'Faster checkout for everyone')!
+    expect(titleItem.style).toMatchObject({ fontFamily: 'Montserrat', color: '#f3f5fa', background: expect.objectContaining({ color: '#0b1830' }) })
+    expect(textItem.style).toMatchObject({ fontFamily: 'Inter', background: expect.objectContaining({ color: '#ff5a5f' }) })
+    // the title over the first half, the text over the rest
+    expect(titleItem.start).toBeGreaterThanOrEqual(clip.start)
+    expect(textItem.start).toBeCloseTo(titleItem.start + titleItem.duration, 3)
+    // the logo, small, in the bottom-right corner, over the whole clip, on its own track above the clip
+    const stampTrack = S().project.tracks.find((tr) => tr.items.some((it) => 'assetId' in it && it.assetId === 'as_logo'))!
+    const logoItem = stampTrack.items.find((it) => 'assetId' in it && it.assetId === 'as_logo') as ImageItem
+    expect(stampTrack.kind).toBe('overlay')
+    expect(logoItem).toMatchObject({ start: clip.start, duration: clip.duration })
+    expect(logoItem.transform.scale).toBeLessThan(0.25)
+    expect(logoItem.transform.x).toBeGreaterThan(0)
+    expect(logoItem.transform.y).toBeGreaterThan(0)
+    expect(S().project.assets.as_logo).toBeTruthy()
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('remakes a clip for the video’s topic, saying what it costs first; a full-motion clip has no brand choice', async () => {
+  it('stamps the brand’s name while the kit has no logo', async () => {
+    const motion = CLIP_LIBRARY.find((c) => c.kind === 'motion')!
+    vi.spyOn(api, 'brand').mockResolvedValue({ name: 'Northwind', colors: ['#0b1830', '#ff5a5f', '#f3f5fa'], fonts: { headline: 'Montserrat', body: 'Inter' } } as never)
+    vi.spyOn(api, 'addLibraryClip').mockResolvedValue(clipRec('as_m', `Clip · ${motion.title}`))
+    open('media')
+    fireEvent.click(screen.getByRole('tab', { name: 'Clip library' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Full motion/ }))
+    fireEvent.click(screen.getByRole('button', { name: `Make ${motion.title} your own` }))
+    const dlg = screen.getByRole('dialog', { name: `Make “${motion.title}” your own` })
+    expect(await within(dlg).findByRole('checkbox', { name: /Stamp “Northwind” in the corner/ })).toBeTruthy()
+    fireEvent.click(within(dlg).getByRole('button', { name: /Add it in my brand/ }))
+    await waitFor(() => expect(S().project.tracks.flatMap((tr) => tr.items).some((it) => it.type === 'text' && (it as TextItem).text === 'Northwind')).toBe(true))
+    const stamp = S().project.tracks.flatMap((tr) => tr.items).find((it) => it.type === 'text' && (it as TextItem).text === 'Northwind') as TextItem
+    expect(stamp.style.fontFamily).toBe('Montserrat')
+  })
+
+  it('remakes a clip for the video’s topic, saying what it costs first', async () => {
     const motion = CLIP_LIBRARY.find((c) => c.kind === 'motion')!
     const custom = vi.spyOn(api, 'customizeLibrary').mockResolvedValue({ id: 'j1', kind: 'library.custom', status: 'queued', progress: 0, message: '' } as never)
     vi.spyOn(api, 'job').mockResolvedValue(finished(clipRec('as_topic', `Clip · ${motion.title} (“a bakery at dawn”)`)))
@@ -202,7 +241,6 @@ describe('making a library item your own (21 Nov 2026: “customize based on the
     fireEvent.click(await screen.findByRole('button', { name: /^Full motion/ }))
     fireEvent.click(screen.getByRole('button', { name: `Make ${motion.title} your own` }))
     const dlg = screen.getByRole('dialog', { name: `Make “${motion.title}” your own` })
-    expect(within(dlg).queryByRole('button', { name: /Draw it in my brand/ })).toBeNull()
     expect(within(dlg).getByText(/One 8-second AI clip, on this space’s video key/)).toBeTruthy()
     const remake = within(dlg).getByRole('button', { name: /Remake it for this topic/ }) as HTMLButtonElement
     expect(remake.disabled).toBe(true)

@@ -39,7 +39,7 @@ describe('the editor’s Help', () => {
     expect(within(dlg).queryByText('Playback')).toBeNull()
     // making an item your own: in the brand, for the topic
     expect(within(panel).getByRole('img', { name: 'Make it your own' })).toBeTruthy()
-    expect(text).toMatch(/In your brand \(animations\): drawn again in your brand kit’s colours and fonts\. Free/)
+    expect(text).toMatch(/In your brand \(clips\): the clip goes on with your title, a line of narrative text and your logo stamped in the corner/)
     expect(text).toMatch(/For your topic: say what your video is about/)
     expect(CLIP_LIBRARY).toHaveLength(20)
   })
