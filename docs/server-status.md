@@ -446,6 +446,12 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   `library.custom` job (`POST /api/clips|music/:id/customize {workspaceId, projectId?, mode: 'topic', topic, aspect?}`).
   A library song added at the playhead is cut to end with the video's last picture, with a 2 s fade out
   (`fitSongToVideo`). Every clip (the library's and the space's own) has Watch: a player with sound before it is added.
+  *A branded cover* (22 Nov, the owner's "Thumbnail" among the brand's places): Export → Cover → "Brand the cover"
+  with a title (the project's name to start with; `ExportRequest.coverBrand {title}`). The export draws the cover
+  frame with a dark fade, the title in the brand's headline font (up to two lines) over an accent bar, and the logo
+  (else the brand's name) top right, at 720 px on the short side, by fixed code in the export's sandboxed browser
+  (`render/cover.ts`, `testDrawing`); it becomes the export's thumbnail and share-page poster, and Exports & sharing
+  shows each export's own cover with a Thumbnail download. A cover that can't be drawn leaves the plain 360p frame.
   Not in the desktop app (made on the cloud server; the panels say so there). **Not known yet:** whether the owner's
   Gemini key may use Lyria and Gemini video, and how the AI's drawings come out, until the library is made on
   production.

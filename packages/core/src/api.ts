@@ -663,6 +663,8 @@ export interface ExportRequest {
   captionTrackId?: string
   /** The frame (seconds into the export) used for its thumbnail and share-page poster. */
   coverAt?: number
+  /** A branded cover (22 Nov 2026): the title in the brand's headline font and its logo over the cover frame, at 720p. */
+  coverBrand?: { title: string }
   /** A quick draft for the export dialog's player: small and fast, kept only until the next one, not an export. */
   preview?: boolean
 }

@@ -35,6 +35,8 @@ describe('<ExportsPage> downloads', () => {
     expect(link.getAttribute('href')).toBe('/api/media/as_r/source?download=1')
     // no hard-coded ".mp4": a WebM or GIF export keeps its own extension
     expect(link.getAttribute('download')).toBe('')
+    // its cover (branded when it was asked for) can be saved too
+    expect(screen.getByRole('link', { name: /^Thumbnail of / }).getAttribute('href')).toBe('/api/media/as_r/thumb?download=1')
   })
 })
 

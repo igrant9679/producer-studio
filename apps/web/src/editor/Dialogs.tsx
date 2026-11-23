@@ -120,6 +120,10 @@ export function ExportDialog() {
   const [captionFormat, setCaptionFormat] = useState<'srt' | 'vtt'>('srt')
   const [captionTrackId, setCaptionTrackId] = useState('')
   const [coverAt, setCoverAt] = useState<number | undefined>(undefined)
+  // a branded cover (22 Nov 2026): the title and the brand's stamp over the cover frame
+  const [brandCover, setBrandCover] = useState(false)
+  const [coverTitle, setCoverTitle] = useState(project.name)
+  const coverBrand = useCoverBrand(brandCover)
   const [prev, setPrev] = useState<ExportRecord[]>([])
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -179,6 +183,7 @@ export function ExportDialog() {
     ...(aspect && !audio ? { aspect } : {}),
     ...(tracks.length && !audio ? { captions, ...(captions === 'sidecar' ? { captionFormat } : {}), ...(captionTrackId && tracks.some((t) => t.id === captionTrackId) ? { captionTrackId } : {}) } : {}),
     ...(coverAt !== undefined && !audio ? { coverAt: Math.min(coverAt, outDuration) } : {}),
+    ...(brandCover && !audio ? { coverBrand: { title: coverTitle.trim() || project.name } } : {}),
     ...(loudness !== 'off' && format !== 'gif' ? { loudness } : {}),
   })
 
@@ -292,8 +297,17 @@ export function ExportDialog() {
                 </Field>
               )}
               <Field label="Cover">
-                <CoverPicker project={exportProject} value={coverAt} duration={outDuration} onChange={setCoverAt} offset={range?.from ?? 0} />
+                <CoverPicker project={exportProject} value={coverAt} duration={outDuration} onChange={setCoverAt} offset={range?.from ?? 0} overlay={brandCover ? { title: coverTitle.trim() || project.name, ...coverBrand } : undefined} />
               </Field>
+              <label className="ed-cover-brand">
+                <input type="checkbox" checked={brandCover} onChange={(e) => setBrandCover(e.target.checked)} />
+                Brand the cover: your title in your brand’s font, and your logo
+              </label>
+              {brandCover && (
+                <Field label="Cover title">
+                  <CoverTitleInput value={coverTitle} onChange={setCoverTitle} />
+                </Field>
+              )}
             </>
           )}
           <div className="ed-export-sum">
@@ -391,14 +405,14 @@ function FieldSelect({ value, onChange, children }: { value: string; onChange: (
  * The export's cover frame (its library thumbnail and share-page poster): a slider over the exported part, the
  * playhead's frame, or automatic. The picture is the export's own (its range, shape and captions) at that moment.
  */
-function CoverPicker({ project, value, duration, offset, onChange }: { project: Project; value: number | undefined; duration: number; offset: number; onChange: (v: number | undefined) => void }) {
+function CoverPicker({ project, value, duration, offset, onChange, overlay }: { project: Project; value: number | undefined; duration: number; offset: number; onChange: (v: number | undefined) => void; overlay?: CoverOverlay }) {
   const playhead = useEditor((s) => s.playhead)
   const fps = project.fps
   const t = value ?? Math.min(1, duration / 2)
   const atPlayhead = playhead - offset
   return (
     <div className="ed-cover-pick">
-      <CoverPreview project={project} t={t} />
+      <CoverPreview project={project} t={t} overlay={overlay} />
       <div className="ed-cover-ctl">
         <input
           type="range"
@@ -430,8 +444,36 @@ function CoverPicker({ project, value, duration, offset, onChange }: { project: 
 
 const COVER_W = 132
 
-/** One frame of `project` at `t`, drawn by the preview renderer at thumbnail size. */
-function CoverPreview({ project, t }: { project: Project; t: number }) {
+/** What a branded cover adds over the frame (the server draws the real one: render/cover.ts). */
+interface CoverOverlay {
+  title: string
+  font?: string
+  accent?: string
+  stamp?: string
+  logoUrl?: string
+}
+
+/** The space's brand kit, as a branded cover uses it: the headline font, the accent, the logo or the name. */
+function useCoverBrand(on: boolean): Omit<CoverOverlay, 'title'> {
+  const workspaceId = useEditor((s) => s.workspaceId)
+  const demo = useEditor((s) => s.demo)
+  const [b, setB] = useState<Omit<CoverOverlay, 'title'>>({})
+  useEffect(() => {
+    if (!on || demo || !workspaceId) return
+    let live = true
+    api
+      .brand(workspaceId)
+      .then((k) => live && setB({ font: k.fonts.headline, accent: k.colors[1] ?? k.colors[0], ...(k.logoAssetId ? { logoUrl: `/api/media/${k.logoAssetId}/source` } : { stamp: k.name }) }))
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [on, demo, workspaceId])
+  return b
+}
+
+/** One frame of `project` at `t`, drawn by the preview renderer at thumbnail size (with a branded cover's look over it). */
+function CoverPreview({ project, t, overlay }: { project: Project; t: number; overlay?: CoverOverlay }) {
   const ref = useRef<HTMLDivElement>(null)
   const renderer = useRef<StageRenderer | null>(null)
   const scale = COVER_W / project.width
@@ -449,6 +491,13 @@ function CoverPreview({ project, t }: { project: Project; t: number }) {
   return (
     <div className="ed-cover" style={{ width: COVER_W, height: Math.round(project.height * scale) }} aria-hidden="true">
       <div ref={ref} className="ed-cover-stage" style={{ width: project.width, height: project.height, background: project.background, transform: `scale(${scale})` }} />
+      {overlay && (
+        <div className="ed-cover-brandover">
+          {overlay.logoUrl ? <img src={overlay.logoUrl} alt="" className="stamp-logo" /> : overlay.stamp ? <span className="stamp">{overlay.stamp}</span> : null}
+          <i style={{ background: overlay.accent ?? 'var(--accent)' }} />
+          <b style={{ fontFamily: overlay.font ? `"${overlay.font}", sans-serif` : undefined }}>{overlay.title}</b>
+        </div>
+      )}
     </div>
   )
 }
@@ -506,6 +555,12 @@ function DraftPreview({ draft, busy, range, fps, onStart }: { draft: DraftState;
       {draft.result && <video className="ed-draft-player" src={draft.result.previewUrl} controls autoPlay playsInline aria-label="Draft preview player" />}
     </section>
   )
+}
+
+/** A branded cover's title, named by its Field label. */
+function CoverTitleInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const field = useFieldIds()
+  return <input className="ed-input" id={field?.control} maxLength={120} value={value} onChange={(e) => onChange(e.target.value)} />
 }
 
 /** The export's name field, named by its Field label; focused first when the dialog opens. */

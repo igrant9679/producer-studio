@@ -1,5 +1,5 @@
 import type { ExportRequest, SpaceExport } from '@producer/core'
-import { CalendarClock, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Film, Link2, Link2Off, RotateCcw, Search, Send, Trash2, X } from 'lucide-react'
+import { CalendarClock, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Film, ImageDown, Link2, Link2Off, RotateCcw, Search, Send, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../../lib/api'
@@ -211,7 +211,7 @@ export default function ExportsPage() {
             return (
               <div key={r.exportId} className="ps-export" role="listitem">
                 <div style={{ width: 120, flex: 'none' }}>
-                  <Thumb src={r.projectThumbnailUrl} seed={r.projectId}>
+                  <Thumb src={audio ? r.projectThumbnailUrl : `/api/media/${r.assetId}/thumb`} seed={r.projectId}>
                     <span className="ps-thumb-badge">{formatDuration(r.duration)}</span>
                   </Thumb>
                 </div>
@@ -230,6 +230,11 @@ export default function ExportsPage() {
                 <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
                   <a className="btn sm" href={r.url} target="_blank" rel="noreferrer" data-tip="Open in a new tab" aria-label={`Open ${title} in a new tab`}><ExternalLink size={13} /></a>
                   <a className="btn sm" href={downloadUrl(r.url)} download><Download size={13} /> Download</a>
+                  {!audio && (
+                    <a className="btn sm" href={downloadUrl(`/api/media/${r.assetId}/thumb`)} download data-tip="Download its thumbnail" data-tip-desc="The cover picked when it was exported (branded, when Brand the cover was ticked)" aria-label={`Thumbnail of ${title}`}>
+                      <ImageDown size={13} /> Thumbnail
+                    </a>
+                  )}
                   <button className="btn sm primary" onClick={() => share(r)} disabled={sharing === r.exportId || !gate.canEdit} data-tip={gate.tip}>
                     {sharing === r.exportId ? <Spinner size={13} /> : copied === r.exportId ? <Check size={13} /> : <Link2 size={13} />} {copied === r.exportId ? 'Copied' : 'Copy link'}
                   </button>

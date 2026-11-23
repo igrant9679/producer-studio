@@ -35,6 +35,7 @@ const ExportSchema = z.object({
   captionFormat: z.enum(['srt', 'vtt']).optional(),
   captionTrackId: z.string().max(100).optional(),
   coverAt: z.number().min(0).max(1e6).optional(),
+  coverBrand: z.object({ title: z.string().trim().max(120) }).optional(),
   preview: z.boolean().optional(),
 })
 

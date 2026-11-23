@@ -649,7 +649,22 @@ export async function exportRender(jc: JobContext, steps: RenderSteps = { lint: 
       if (!audioOnly)
         try {
           const thumb = path.join(dir, 'thumb.jpg')
-          await ffmpeg(['-ss', String(coverTime(input.coverAt, info?.duration ?? prep.duration)), '-i', out, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
+          const at = String(coverTime(input.coverAt, info?.duration ?? prep.duration))
+          // a branded cover (the title and the brand's stamp over the frame) when asked for; the plain frame otherwise,
+          // or when the branded one can't be drawn
+          let branded = false
+          if (input.coverBrand) {
+            try {
+              const frame = path.join(dir, 'cover-frame.jpg')
+              await ffmpeg(['-ss', at, '-i', out, '-frames:v', '1', '-q:v', '2', frame], { signal: jc.signal })
+              await brandCover(row.workspaceId, whole.brand, { frame, width: info?.width ?? tgt.w, height: info?.height ?? tgt.h, title: input.coverBrand.title || whole.name, out: thumb, dir, signal: jc.signal })
+              branded = true
+            } catch (err) {
+              if (jc.signal.aborted) throw err
+              log.warn('branded cover failed; the plain cover is used', { err })
+            }
+          }
+          if (!branded) await ffmpeg(['-ss', at, '-i', out, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '4', thumb], { signal: jc.signal })
           const key = `${assetPrefix(row.workspaceId, assetRow.id)}/thumb.jpg`
           await ctx().storage.putFile(key, thumb, 'image/jpeg')
           await updateAsset(assetRow.id, { thumbKey: key })
@@ -712,6 +727,20 @@ export function renderPlan(p: Pick<Project, 'width' | 'height'>, input: ExportRe
 }
 
 /** The thumbnail's time: the cover picked (inside the file), else 1 s in or half way. */
+/** The branded cover: the project's brand kit (else the space's), its logo when it has one, drawn by render/cover.ts. */
+async function brandCover(workspaceId: string, projectBrand: Project['brand'], o: { frame: string; width: number; height: number; title: string; out: string; dir: string; signal: AbortSignal }) {
+  const [{ getBrandKit }, { brandedCover }] = await Promise.all([import('../services/brand'), import('./cover')])
+  const space = await getBrandKit(workspaceId, undefined, { fallback: true }).catch(() => null)
+  const brand = { name: space?.name || projectBrand?.name || '', colors: projectBrand?.colors?.length ? projectBrand.colors : (space?.colors ?? []), fonts: projectBrand?.fonts ?? space?.fonts ?? { headline: 'Inter', body: 'Inter' } }
+  const logoId = projectBrand?.logoAssetId ?? space?.logoAssetId
+  let logo: string | undefined
+  if (logoId) {
+    const lr = (await ctx().db.select().from(assets).where(and(eq(assets.id, logoId), eq(assets.workspaceId, workspaceId))).limit(1))[0]
+    if (lr && lr.status === 'ready') logo = await localSource(lr, o.dir).catch(() => undefined)
+  }
+  await brandedCover({ frame: o.frame, width: o.width, height: o.height, title: o.title, brand, logo, out: o.out, signal: o.signal })
+}
+
 export function coverTime(coverAt: number | undefined, duration: number): number {
   if (coverAt === undefined || !Number.isFinite(coverAt)) return Math.min(1, duration / 2)
   return Math.round(Math.max(0, Math.min(coverAt, duration - 0.05)) * 1000) / 1000

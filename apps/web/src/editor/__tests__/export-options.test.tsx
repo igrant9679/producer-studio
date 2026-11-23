@@ -134,6 +134,22 @@ describe('export options (E-5)', { timeout: 20_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Auto' }))
     expect((await exportNow()).coverAt).toBeUndefined()
   })
+
+  it('a branded cover: off until ticked, then the title (the project’s name to start with) goes with the export', async () => {
+    vi.spyOn(api, 'brand').mockResolvedValue({ name: 'Northwind', colors: ['#0b1830', '#ff5a5f', '#f3f5fa'], fonts: { headline: 'Montserrat', body: 'Inter' } } as never)
+    S().set({ workspaceId: 'w1', demo: false } as never)
+    render(<ExportDialog />)
+    expect((await exportNow()).coverBrand).toBeUndefined()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Brand the cover/ }))
+    const title = screen.getByRole('textbox', { name: 'Cover title' }) as HTMLInputElement
+    expect(title.value).toBe(S().project.name)
+    expect((await exportNow()).coverBrand).toEqual({ title: S().project.name })
+    fireEvent.change(title, { target: { value: 'Morning ritual' } })
+    expect((await exportNow()).coverBrand).toEqual({ title: 'Morning ritual' })
+    // the preview shows the title over the frame
+    expect(document.querySelector('.ed-cover-brandover b')?.textContent).toBe('Morning ritual')
+    expect(await screen.findByText('Northwind')).toBeTruthy()
+  })
 })
 
 describe('exporting in the background (E-5)', { timeout: 20_000 }, () => {

@@ -149,6 +149,40 @@ describe('export a range, a shape, captions and a cover (E-5)', () => {
     expect(coverTime(99, 3)).toBe(2.95)
   })
 
+  it('a branded cover: the title and the brand’s stamp drawn over the cover frame at 720p, and the plain frame when that fails', async () => {
+    const { COVER } = await import('../render/cover')
+    const real = COVER.paint
+    const painted: Array<{ code: string; env: { width: number; height: number; fonts: { headline: string }; images?: Record<string, string> } }> = []
+    COVER.paint = async (code, env) => {
+      painted.push({ code, env: env as never })
+      return (await import('sharp')).default({ create: { width: env.width, height: env.height, channels: 3, background: '#123456' } }).png().toBuffer()
+    }
+    try {
+      vi.mocked(ffmpeg).mockClear()
+      const { result } = await exportVia({ coverAt: 1.5, coverBrand: { title: 'Morning ritual' } })
+      expect(painted).toHaveLength(1)
+      expect(painted[0].code).toContain('"title":"Morning ritual"')
+      expect(painted[0].env).toMatchObject({ width: 1280, height: 720 })
+      expect(painted[0].env.images?.frame).toMatch(/^data:image\/jpeg;base64,/)
+      // no plain 360p thumbnail when the branded one was drawn
+      expect(vi.mocked(ffmpeg).mock.calls.some((c) => c[0].includes('scale=-2:360'))).toBe(false)
+      const ex = (await ctx().db.select().from(exportsTable).where(eq(exportsTable.id, result.exportId)))[0]
+      const thumb = await client.req('GET', `/api/media/${ex.assetId}/thumb`)
+      expect(thumb.status).toBe(200)
+      const meta = await (await import('sharp')).default(Buffer.from(await thumb.arrayBuffer())).metadata()
+      expect([meta.width, meta.height]).toEqual([1280, 720])
+      // a cover that can't be drawn: the plain frame, and the export still finishes
+      COVER.paint = async () => {
+        throw new Error('no browser')
+      }
+      vi.mocked(ffmpeg).mockClear()
+      await exportVia({ coverBrand: { title: 'x' } })
+      expect(vi.mocked(ffmpeg).mock.calls.some((c) => c[0].includes('scale=-2:360'))).toBe(true)
+    } finally {
+      COVER.paint = real
+    }
+  })
+
   it('a viewer of another space cannot read the caption file', async () => {
     const { result } = await exportVia({ captions: 'sidecar' })
     const other = await signup((await setup()).app, 'Outsider')
