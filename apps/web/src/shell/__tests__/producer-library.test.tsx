@@ -39,12 +39,13 @@ class FakeAudio {
   pause() {}
 }
 const st = () => useWizard.getState().s
-const show = (s: WizardState) => {
+const show = (s: WizardState, path = '/producer/p1') => {
   markDraftSaved(s)
   useWizard.getState().replace(s)
   return render(
-    <MemoryRouter initialEntries={['/producer/p1']}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
+        <Route path="/producer/new" element={<ProducerWizard />} />
         <Route path="/producer/:projectId" element={<ProducerWizard />} />
       </Routes>
     </MemoryRouter>,
@@ -126,6 +127,12 @@ describe('the brand’s stamp in the brief', () => {
     expect(screen.getByText(/Your brand kit has no logo yet, so its name is stamped/)).toBeTruthy()
     fireEvent.click(box)
     expect(st().brief.logoStamp).toBe(false)
+  })
+
+  it('knows the brand of the space open now for a new video, which has no project (and no space) of its own yet', async () => {
+    show({ ...brief({ logoStamp: true }), projectId: undefined, workspaceId: undefined }, '/producer/new?step=brief')
+    expect(await screen.findByRole('checkbox', { name: /Stamp “Northwind” small/ })).toBeTruthy()
+    expect(brandApi.kits).toHaveBeenCalledWith('ws_a')
   })
 
   it('stamps the logo when the kit has one, and says it opens and closes the video', async () => {

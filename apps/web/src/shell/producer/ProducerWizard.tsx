@@ -596,7 +596,10 @@ function BriefStep({ s, templates, tplLoading }: { s: WizardState; templates: Te
   }, [s.workspaceId])
   const shown = filterVoices(voices, vf, '', favourites ?? [])
   // the space's brand kits: a video can use another than the default
-  const kits = useAsync(() => (s.workspaceId ? brandApi.kits(s.workspaceId).then((l) => l.items) : Promise.resolve([])), [s.workspaceId])
+  // (a new video has no space of its own until its project is made: it is made in the one open now)
+  const sessionWs = useSession((st) => st.workspaceId)
+  const kitWs = wizardWorkspace(s, sessionWs)
+  const kits = useAsync(() => (kitWs ? brandApi.kits(kitWs).then((l) => l.items) : Promise.resolve([])), [kitWs])
   const builtIn = templates.filter((t) => t.builtIn)
   const custom = !TONES.includes(b.tone)
   const parts = videoParts(b)
