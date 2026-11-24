@@ -11,10 +11,13 @@ let clips: Promise<Array<LibraryEntry<LibraryClip>>> | undefined
 function cached<T>(get: () => Promise<T[]>, read: () => Promise<T[]> | undefined, keep: (p: Promise<T[]> | undefined) => void): Promise<T[]> {
   const had = read()
   if (had) return had
-  const p = get().catch(() => {
-    keep(undefined)
-    return [] as T[]
-  })
+  // anything but a list (an answer from something else than this server) is no library
+  const p = get()
+    .then((l) => (Array.isArray(l) ? l : []))
+    .catch(() => {
+      keep(undefined)
+      return [] as T[]
+    })
   keep(p)
   return p
 }

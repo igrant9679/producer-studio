@@ -29,7 +29,13 @@ export interface LibraryClip {
   prompt: string
   /** The length asked for. */
   seconds: number
+  /** The library song a full-motion clip is heard with (23 Nov 2026, the owner: the music the video model made with
+   * the clips "seems to be out of tune"): the clip keeps its picture, its sound is a stretch of this song. */
+  song?: string
 }
+
+/** Bumped when the clips' songs change: each full-motion clip gets its song again (the picture is kept). */
+export const CLIP_SOUND_VERSION = 1
 
 /** Bumped when the music changes: every track is made again (and the old files are no longer listed). */
 export const MUSIC_LIBRARY_VERSION = 2
@@ -75,16 +81,16 @@ export const CLIP_LIBRARY: readonly LibraryClip[] = [
   { id: 'social-icons', title: 'Connected Icons', kind: 'animation', style: 'lottie', seconds: 8, prompt: drawn('Flat motion graphics: a phone, a chat bubble, a heart and a bell pop in one by one, bounce, and get joined by flowing lines.') },
   { id: 'clay-planet', title: 'Clay Planet', kind: 'animation', style: 'clay3d', seconds: 8, prompt: drawn('A soft clay planet with a ring turns slowly in space while a little clay satellite orbits it and stars twinkle.') },
   { id: 'tiny-factory', title: 'Tiny Factory', kind: 'animation', style: 'isometric3d', seconds: 8, prompt: drawn('A tidy isometric factory: boxes ride a conveyor belt, a robot arm lifts them onto a small truck, and the truck drives away.') },
-  { id: 'coastline-aerial', title: 'Coastline From Above', kind: 'motion', seconds: 8, prompt: 'Aerial drone shot gliding over a turquoise ocean coastline, waves breaking on white sand, golden-hour light, smooth cinematic movement.' },
-  { id: 'coffee-pour', title: 'Coffee Pour', kind: 'motion', seconds: 8, prompt: 'Slow-motion close-up of hot coffee being poured into a white cup on a wooden table, steam rising, warm morning window light.' },
-  { id: 'city-dusk', title: 'City at Dusk', kind: 'motion', seconds: 8, prompt: 'Time-lapse of a modern city skyline at dusk as the office lights switch on and car light trails stream along the streets below.' },
-  { id: 'ridge-hiker', title: 'Hiker on the Ridge', kind: 'motion', seconds: 8, prompt: 'A hiker with a backpack walks along a mountain ridge above a sea of clouds at sunrise, the camera following from behind.' },
-  { id: 'laptop-typing', title: 'Typing at Work', kind: 'motion', seconds: 8, prompt: 'Close-up of hands typing on a laptop keyboard in a bright, modern office, shallow depth of field, soft daylight.' },
-  { id: 'snowy-forest', title: 'Snowy Forest Night', kind: 'motion', seconds: 8, prompt: 'Snow falling softly in a quiet pine forest at night, cool blue moonlight, the camera slowly pushing forward between the trees.' },
-  { id: 'balloon-valley', title: 'Balloons at Dawn', kind: 'motion', seconds: 8, prompt: 'Colourful hot-air balloons rising slowly over a green valley at dawn, mist on the fields, a gentle wide shot.' },
-  { id: 'team-meeting', title: 'Team Brainstorm', kind: 'motion', seconds: 8, prompt: 'A small team of young professionals smiling and talking around a table covered in sticky notes in a sunny meeting room.' },
-  { id: 'rain-leaves', title: 'Rain on Leaves', kind: 'motion', seconds: 8, prompt: 'Macro shot of raindrops falling onto bright green leaves in a lush rainforest, droplets splashing, soft natural light.' },
-  { id: 'sunrise-run', title: 'Sunrise Run', kind: 'motion', seconds: 8, prompt: 'A runner jogs across a footbridge in a park at sunrise, the camera tracking alongside, warm backlight and long shadows.' },
+  { id: 'coastline-aerial', title: 'Coastline From Above', kind: 'motion', seconds: 8, song: 'island-breeze', prompt: 'Aerial drone shot gliding over a turquoise ocean coastline, waves breaking on white sand, golden-hour light, smooth cinematic movement.' },
+  { id: 'coffee-pour', title: 'Coffee Pour', kind: 'motion', seconds: 8, song: 'morning-espresso', prompt: 'Slow-motion close-up of hot coffee being poured into a white cup on a wooden table, steam rising, warm morning window light.' },
+  { id: 'city-dusk', title: 'City at Dusk', kind: 'motion', seconds: 8, song: 'neon-pulse', prompt: 'Time-lapse of a modern city skyline at dusk as the office lights switch on and car light trails stream along the streets below.' },
+  { id: 'ridge-hiker', title: 'Hiker on the Ridge', kind: 'motion', seconds: 8, song: 'highland-trail', prompt: 'A hiker with a backpack walks along a mountain ridge above a sea of clouds at sunrise, the camera following from behind.' },
+  { id: 'laptop-typing', title: 'Typing at Work', kind: 'motion', seconds: 8, song: 'rainy-desk', prompt: 'Close-up of hands typing on a laptop keyboard in a bright, modern office, shallow depth of field, soft daylight.' },
+  { id: 'snowy-forest', title: 'Snowy Forest Night', kind: 'motion', seconds: 8, song: 'still-water', prompt: 'Snow falling softly in a quiet pine forest at night, cool blue moonlight, the camera slowly pushing forward between the trees.' },
+  { id: 'balloon-valley', title: 'Balloons at Dawn', kind: 'motion', seconds: 8, song: 'dream-drift', prompt: 'Colourful hot-air balloons rising slowly over a green valley at dawn, mist on the fields, a gentle wide shot.' },
+  { id: 'team-meeting', title: 'Team Brainstorm', kind: 'motion', seconds: 8, song: 'bright-ideas', prompt: 'A small team of young professionals smiling and talking around a table covered in sticky notes in a sunny meeting room.' },
+  { id: 'rain-leaves', title: 'Rain on Leaves', kind: 'motion', seconds: 8, song: 'velvet-strings', prompt: 'Macro shot of raindrops falling onto bright green leaves in a lush rainforest, droplets splashing, soft natural light.' },
+  { id: 'sunrise-run', title: 'Sunrise Run', kind: 'motion', seconds: 8, song: 'garage-anthem', prompt: 'A runner jogs across a footbridge in a park at sunrise, the camera tracking alongside, warm backlight and long shadows.' },
 ]
 
 export type LibraryKind = 'music' | 'animation' | 'motion'

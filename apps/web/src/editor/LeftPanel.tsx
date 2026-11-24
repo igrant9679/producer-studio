@@ -1,7 +1,7 @@
 // Left icon rail + collapsible asset panel.
 import type { Asset, AssetRecord, AudioItem } from '@producer/core'
 import { useVoices } from '../shell/components/VoiceCard'
-import { CLIP_LIBRARY, DRAWING_STYLES, MUSIC_LIBRARY, TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, isPathShape, itemEnd, shapePath, usedAssetIds, type LibraryClip, type LibraryEntry, type LibraryTrack, type ShapeItem } from '@producer/core'
+import { CLIP_LIBRARY, DRAWING_STYLES, MUSIC_LIBRARY, TEXT_TEMPLATES, VOICES, addAsset, addItem, createAudioItem, createShapeItem, isPathShape, itemEnd, libraryItem, shapePath, usedAssetIds, type LibraryClip, type LibraryEntry, type LibraryTrack, type ShapeItem } from '@producer/core'
 import clsx from 'clsx'
 import {
   AlertTriangle,
@@ -843,7 +843,7 @@ function LibraryClipCard({ clip, detail, adding, onAdd, onCustomize, demo }: { c
       </div>
       <div className="nm">{clip.title}</div>
       <div className="sub">{detail}</div>
-      {watching && <ClipPreview title={clip.title} detail={`${detail} · ${shortDuration(clip.seconds)}`} src={api.clipPreviewUrl(clip.id)} poster={api.clipPosterUrl(clip.id)} onAdd={onAdd} onCustomize={onCustomize} onClose={() => setWatching(false)} />}
+      {watching && <ClipPreview title={clip.title} detail={`${detail} · ${shortDuration(clip.seconds)}${clip.song ? ` · Music: ${libraryItem(clip.song)?.title ?? clip.song}, from the music library` : ''}`} src={api.clipPreviewUrl(clip.id)} poster={api.clipPosterUrl(clip.id)} onAdd={onAdd} onCustomize={onCustomize} onClose={() => setWatching(false)} />}
     </div>
   )
 }

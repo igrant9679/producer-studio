@@ -452,6 +452,24 @@ export interface AssembleInput {
   sound?: VideoSound
 }
 
+/**
+ * About how many lines a card's heading wraps to in its box (at most `max`): its words laid out at 0.6 em a
+ * character, a little wider than the heavy headline faces measure, so a heading that only just fits counts as two.
+ */
+export function headingLines(text: string, size: number, boxWidth: number, max = 3): number {
+  const em = size * 0.6
+  let lines = 1
+  let line = 0
+  for (const w of text.trim().split(/\s+/).filter(Boolean)) {
+    const next = line ? line + em + w.length * em : w.length * em
+    if (next > boxWidth && line) {
+      lines++
+      line = w.length * em
+    } else line = next
+  }
+  return Math.min(max, lines)
+}
+
 /** Pure timeline construction from script + voices (unit-testable, no I/O). */
 export function buildProducerTimeline(inp: AssembleInput): Project {
   const look = getLook(inp.brief.template)
@@ -471,14 +489,25 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   const marks = createTrack('overlay', { name: 'Logo' })
   const stampText = createTrack('text', { name: 'Brand stamp' })
   const logo = inp.logo?.width && inp.logo.height ? inp.logo : undefined
-  /** The logo centred above a card's words, at most 30% of the frame across and 16% tall. */
-  const cardLogo = (at: number, duration: number, y: number, name: string) => {
+  /** The logo centred above a card's words (whose top edge is at `top`), at most 30% of the frame across and 16% tall:
+   * near the top of the frame, and higher still over a heading of several lines, but never off the frame. */
+  const cardLogo = (at: number, duration: number, top: number, name: string) => {
     const lg = logo!
     const fit = Math.min(width / lg.width!, height / lg.height!)
     const k = Math.min((0.3 * width) / (lg.width! * fit), (0.16 * height) / (lg.height! * fit))
+    const h = lg.height! * fit * k
+    const y = Math.max(-height / 2 + h / 2 + height * 0.03, Math.min(-height * 0.3, top - height * 0.04 - h / 2))
     const img = createImageItem(lg, round(at, 4), { name, duration: round(duration, 3), animations: { in: { preset: 'fade', duration: 0.5 }, out: { preset: 'fade', duration: 0.3 } } })
     img.transform = { ...img.transform, x: 0, y: round(y, 1), scale: round(k, 4) }
     marks.items.push(img)
+  }
+  /** A card's heading moves up by half a line for each line past the first, so its last line stays where a one-line
+   * heading's does and the label under it is never covered. Its centre and its top edge. */
+  const cardHeading = (text: string, size: number, y: number) => {
+    const lh = size * 1.05
+    const lines = headingLines(text, size, Math.round(width * 0.8))
+    const at = y - ((lines - 1) * lh) / 2
+    return { y: round(at, 1), top: at - (lines * lh) / 2 }
   }
   const mainItems: Item[] = []
   const graphics: Placed[][] = []
@@ -491,14 +520,17 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     const titleShape = createShapeItem(0, { name: 'Title card', duration: TITLE_CARD, width, height, fill: pal.canvas, radius: 0 })
     titleShape.transitionOut = { type: 'crossfade', duration: 0.5 }
     mainItems.push(titleShape)
-    if (logo) cardLogo(0.2, TITLE_CARD - 0.2, -height * 0.3, 'Title logo')
+    const title = inp.brief.title || inp.project.name
+    const titleSize = Math.round((vertical ? 104 : 120) * scale)
+    const head = cardHeading(title, titleSize, -30 * scale)
+    if (logo) cardLogo(0.2, TITLE_CARD - 0.2, head.top, 'Title logo')
     cards.items.push(
       createTextItem(0.25, 'heading', {
         name: 'Title',
-        text: inp.brief.title || inp.project.name,
+        text: title,
         duration: TITLE_CARD - 0.25,
-        style: headlineStyle(pal, width, Math.round((vertical ? 104 : 120) * scale)),
-        transform: { x: 0, y: -30 * scale, scale: 1, rotation: 0 },
+        style: headlineStyle(pal, width, titleSize),
+        transform: { x: 0, y: head.y, scale: 1, rotation: 0 },
         animations: { in: { preset: 'rise', duration: 0.6 }, out: { preset: 'fade', duration: 0.3 } },
       }),
     )
@@ -654,14 +686,17 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   const closeStart = t
   if (parts.cards) {
     mainItems.push(createShapeItem(closeStart, { name: 'Close card', duration: CLOSE_CARD, width, height, fill: pal.canvas, radius: 0 }))
-    if (logo) cardLogo(closeStart + 0.2, CLOSE_CARD - 0.2, -height * 0.28, 'Close logo')
+    const close = inp.brand?.name || inp.brief.title || inp.project.name
+    const closeSize = Math.round((vertical ? 96 : 110) * scale)
+    const head = cardHeading(close, closeSize, -20 * scale)
+    if (logo) cardLogo(closeStart + 0.2, CLOSE_CARD - 0.2, head.top, 'Close logo')
     cards.items.push(
       createTextItem(round(closeStart + 0.3, 4), 'heading', {
         name: 'Close',
-        text: inp.brand?.name || inp.brief.title || inp.project.name,
+        text: close,
         duration: CLOSE_CARD - 0.3,
-        style: headlineStyle(pal, width, Math.round((vertical ? 96 : 110) * scale)),
-        transform: { x: 0, y: -20 * scale, scale: 1, rotation: 0 },
+        style: headlineStyle(pal, width, closeSize),
+        transform: { x: 0, y: head.y, scale: 1, rotation: 0 },
         animations: { in: { preset: 'slideUp', duration: 0.6 } },
       }),
     )

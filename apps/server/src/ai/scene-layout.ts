@@ -174,7 +174,8 @@ export function motionItems(points: string[], f: SceneFrame): Placed[] {
   pts.forEach((p, i) => {
     const y = top + i * rowH
     out.push(box(f, times[i], { name: `Point ${i + 1} marker`, shape: 'ellipse', x: markerX, y, w: 22 * st.s, h: 22 * st.s, fill: f.pal.accent, anim: pop(0.35) }))
-    out.push(label(f, times[i], { text: p, x: 0, y, style: st.ink(vertical ? 46 : 50, textW, { align: 'left' }), anim: { in: { preset: 'slideRight', duration: 0.45 }, out: out_ } }))
+    // revealed left to right where it stands: a slide from the left would pass over its dot on the way in
+    out.push(label(f, times[i], { text: p, x: 0, y, style: st.ink(vertical ? 46 : 50, textW, { align: 'left' }), anim: { in: { preset: 'wipeRight', duration: 0.5 }, out: out_ } }))
   })
   return out
 }

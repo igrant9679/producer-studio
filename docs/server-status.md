@@ -466,6 +466,14 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   bottom-right corner through the scenes (`stampCorner`/`logoStamp` in core brand.ts, shared with the editor's In your
   brand), and a kit's logo also goes above the title and on the closing card. The export of a video Producer made
   starts with Brand the cover ticked and the brief's title.
+  Same day, after a real run: a title card's heading of two or more lines moves up by half a line per extra line
+  (`headingLines`, an estimate at 0.6 em a character) so the name under it is never covered, and the logo above it
+  moves up with it; and a motion scene's points are revealed in place (`wipeRight`) instead of sliding in from the
+  left across their dots. The full-motion clips' sound (made by the video model, "out of tune" to the owner) is
+  replaced by a stretch of a library song that suits each clip (`LibraryClip.song`, `CLIP_SOUND_VERSION`;
+  `scoreClip`/`scoreLibraryClips` run once by the cloud server 20 s after it starts: picture copied untouched, the
+  song from a quarter of the way in, faded, at -16 LUFS, `media/fit-song.ts`). The file as made is kept
+  (`LibraryInfo.sound.original`); a space's copies added before keep their old sound (the copy key gains ` s1`).
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI

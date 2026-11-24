@@ -45,8 +45,8 @@ shipped; check `git log --grep` before redoing an item. Still open there: the gr
 under "Not graded yet", some real-browser checks, and the owner's decisions and accounts
 (production AI key, code signing, mail, S3 CORS).
 
-Production has **no server AI key** (`/api/health` shows `ai:false`): each space adds its own in
-Settings → AI. Windows Smart App Control on this machine blocks newly built unsigned desktop exes,
+Production has had a **server AI key** since 23 Nov 2026 (the owner set `ANTHROPIC_API_KEY` on Railway;
+`/api/health` shows `ai:true`); a space can still add its own in Settings → AI. Windows Smart App Control on this machine blocks newly built unsigned desktop exes,
 so check desktop changes in dev mode.
 
 ## ⚠ House rules

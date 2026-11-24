@@ -11,6 +11,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import {
   CLIP_LIBRARY,
   CLIP_LIBRARY_VERSION,
+  CLIP_SOUND_VERSION,
   MUSIC_LIBRARY,
   MUSIC_LIBRARY_VERSION,
   type DrawingStyleId,
@@ -30,6 +31,7 @@ import { newId } from '../ids'
 import { enqueue } from '../jobs/queue'
 import type { JobContext } from '../jobs/worker'
 import { log } from '../log'
+import { fitSong } from '../media/fit-song'
 import { ffmpeg } from '../media/proc'
 import { processAsset } from '../media/process'
 import { type AssetRow, createAssetFromFile, tmpDir } from './assets'
@@ -51,13 +53,16 @@ export interface LibraryInfo {
   drawing?: { key: string; env: { width: number; height: number; fps: number; duration: number; palette: { canvas: string; accent: string; ink: string }; fonts: { headline: string; body: string } }; style: string }
   /** The space whose keys made it. */
   workspaceId: string
+  /** A full-motion clip heard with a library song instead of the sound its video model made (scoreClip): the song,
+   * the CLIP_SOUND_VERSION it was put on with, and the file as it was made (kept). */
+  sound?: { song: string; rev: number; original: string }
 }
 
 const version = (it: LibraryItem) => (it.kind === 'music' ? MUSIC_LIBRARY_VERSION : CLIP_LIBRARY_VERSION)
 const stem = (it: LibraryItem) => `library/${it.kind === 'music' ? 'music' : 'clips'}/${it.id}.v${version(it)}`
 const infoKey = (it: LibraryItem) => `${stem(it)}.json`
-/** What a space's copy of an item is known by, so adding it again finds it. */
-export const libraryAssetKey = (it: LibraryItem) => `${it.id} v${version(it)}`
+/** What a space's copy of an item is known by, so adding it again finds it (a clip given its song since is another copy). */
+export const libraryAssetKey = (it: LibraryItem, info?: Pick<LibraryInfo, 'sound'> | null) => `${it.id} v${version(it)}${info?.sound ? ` s${info.sound.rev}` : ''}`
 
 export function requireItem(id: string, kind?: 'music' | 'clip'): LibraryItem {
   const it = libraryItem(id)
@@ -109,9 +114,10 @@ export async function listMusic(): Promise<Array<LibraryEntry<LibraryTrack>>> {
 
 export async function listClips(): Promise<Array<LibraryEntry<LibraryClip>>> {
   return Promise.all(
-    CLIP_LIBRARY.map(async (c) => {
+    CLIP_LIBRARY.map(async ({ song: _planned, ...c }) => {
       const info = await libraryInfo(c)
-      return { ...c, ready: !!info, ...(info ? { seconds: info.seconds } : {}) }
+      // the song a clip is heard with once it has been put on (until then, the sound it was made with)
+      return { ...c, ready: !!info, ...(info ? { seconds: info.seconds } : {}), ...(info?.sound ? { song: info.sound.song } : {}) }
     }),
   )
 }
@@ -298,7 +304,8 @@ export async function makeLibraryJob(jc: JobContext): Promise<unknown> {
 
 /** A space's own copy of an item (made before in this space, or copied in now and prepared for the editor). */
 export async function addLibraryItem(o: { it: LibraryItem; workspaceId: string; userId: string; projectId?: string | null; signal: AbortSignal }): Promise<AssetRow> {
-  const key = libraryAssetKey(o.it)
+  const info = await madeItem(o.it)
+  const key = libraryAssetKey(o.it, info)
   const had = (
     await ctx()
       .db.select()
@@ -307,7 +314,6 @@ export async function addLibraryItem(o: { it: LibraryItem; workspaceId: string; 
       .limit(1)
   )[0]
   if (had) return had
-  const info = await madeItem(o.it)
   const work = tmpDir('library-add')
   try {
     const file = path.join(work, `item${path.extname(info.key)}`)
@@ -428,6 +434,69 @@ export async function customizeLibraryJob(jc: JobContext): Promise<unknown> {
   } finally {
     fs.rm(work, { recursive: true, force: true }, () => undefined)
   }
+}
+
+// ---------------- the full-motion clips' music (23 Nov 2026) ----------------
+// The owner: the music in the library's videos "seems to be out of tune". The full-motion clips came with the sound
+// their video model made (the animations have none); each is now heard with a stretch of a library song that suits it
+// (LibraryClip.song): the picture is copied untouched, the song cut to the clip with short fades, at the loudness of a
+// clip played on its own. Done once by the server after it starts (the clips already done are left alone); the file
+// as it was made is kept, and a space's copies added before stay as they were.
+
+/** How loud a clip's song is: a clip played on its own, like a song in the music library. */
+export const CLIP_LUFS = -16
+
+/** One full-motion clip heard with its library song: 'scored', or why not. */
+export async function scoreClip(it: LibraryClip, signal?: AbortSignal): Promise<'scored' | 'already' | 'not made' | 'no song'> {
+  if (it.kind !== 'motion' || !it.song) return 'no song'
+  forgetLibraryInfo(it.id)
+  const info = await libraryInfo(it)
+  if (!info) return 'not made'
+  if (info.sound?.song === it.song && info.sound.rev === CLIP_SOUND_VERSION) return 'already'
+  const song = requireItem(it.song, 'music')
+  const songInfo = await libraryInfo(song)
+  if (!songInfo) return 'no song'
+  const work = tmpDir('library-score')
+  try {
+    const original = info.sound?.original ?? info.key
+    const clip = path.join(work, 'clip.mp4')
+    await ctx().storage.download(original, clip)
+    const src = path.join(work, `song${path.extname(songInfo.key) || '.m4a'}`)
+    await ctx().storage.download(songInfo.key, src)
+    // a stretch from a quarter of the way in (past the song's intro), faded in and out
+    const music = path.join(work, 'music.m4a')
+    await fitSong({ src, seconds: songInfo.seconds, duration: info.seconds, lufs: CLIP_LUFS, out: music, from: Math.min(30, songInfo.seconds * 0.25), fadeIn: 0.6, fadeOut: 1.2, signal })
+    const out = path.join(work, 'scored.mp4')
+    await ffmpeg(['-y', '-v', 'error', '-i', clip, '-i', music, '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy', '-shortest', '-movflags', '+faststart', out], { signal })
+    const key = `${stem(it)}.s${CLIP_SOUND_VERSION}.mp4`
+    await ctx().storage.putFile(key, out, 'video/mp4')
+    const next: LibraryInfo = { ...info, key, mime: 'video/mp4', sound: { song: it.song, rev: CLIP_SOUND_VERSION, original } }
+    await ctx().storage.put(infoKey(it), Buffer.from(JSON.stringify(next)), { contentType: 'application/json' })
+    forgetLibraryInfo(it.id)
+    return 'scored'
+  } finally {
+    fs.rm(work, { recursive: true, force: true }, () => undefined)
+  }
+}
+
+let scoring: Promise<void> | undefined
+
+/** Every full-motion clip that has been made heard with its library song (one at a time; the done ones are left alone). */
+export function scoreLibraryClips(): Promise<void> {
+  scoring ??= (async () => {
+    for (const c of CLIP_LIBRARY) {
+      if (c.kind !== 'motion' || !c.song) continue
+      try {
+        const r = await scoreClip(c)
+        if (r === 'scored') log.info('media library: a full-motion clip now plays its library song', { clip: c.id, song: c.song })
+      } catch (err) {
+        log.warn('media library: a clip could not be given its song', { clip: c.id, err })
+      }
+    }
+  })().finally(() => {
+    scoring = undefined
+  })
+  return scoring
 }
 
 /** The library before 21 Nov 2026 was composed onto the server's disk: those files are no longer listed. */

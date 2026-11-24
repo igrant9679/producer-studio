@@ -56,7 +56,12 @@ if (config.mode === 'cloud') startStorageMonitor()
 // cloud only: the music library's tracks are composed in the background, so the first listen is instant (a desktop
 // composes a track when it is first played, on its owner's machine, rather than spend its CPU at every start)
 // the music library composed on the server's disk before 21 Nov 2026 (replaced by AI songs kept in storage)
-if (config.mode === 'cloud' && (config.role === 'all' || config.role === 'api')) (await import('./services/media-library')).removeOldMusicLibrary()
+if (config.mode === 'cloud' && (config.role === 'all' || config.role === 'api')) {
+  const library = await import('./services/media-library')
+  library.removeOldMusicLibrary()
+  // the full-motion clips heard with their library songs (23 Nov 2026), a little after the server is up
+  setTimeout(() => void library.scoreLibraryClips(), 20_000).unref?.()
+}
 if (desktop) await desktop.startDesktopServices()
 
 let closing = false

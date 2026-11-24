@@ -23,11 +23,15 @@ import {
   logoStamp,
   musicChoice,
   CLIP_LIBRARY,
+  CLIP_SOUND_VERSION,
   MUSIC_LIBRARY,
+  createProject,
 } from '@producer/core'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
-import { allowedVisualKinds, readyLibraryClips, sceneSpans } from '../ai/produce'
+import { allowedVisualKinds, buildProducerTimeline, headingLines, readyLibraryClips, sceneSpans } from '../ai/produce'
+import { motionItems } from '../ai/scene-layout'
+import { getLook, lookPalette } from '../services/looks'
 import { type IdeaScriptOutput, buildIdeaPrompt, normalizeIdeaScript } from '../ai/scenes'
 import { MUSIC_LUFS, fitSong } from '../ai/soundtrack'
 import { tts } from '../ai/tts'
@@ -37,7 +41,7 @@ import { ffmpeg } from '../media/proc'
 import { probe, processAsset } from '../media/process'
 import { measureLoudness } from '../render/loudness'
 import { createAssetFromFile } from '../services/assets'
-import { LIBRARY_MAKERS, forgetLibraryInfo, makeLibraryJob } from '../services/media-library'
+import { CLIP_LUFS, LIBRARY_MAKERS, addLibraryItem, forgetLibraryInfo, libraryInfo, listClips, makeLibraryJob, scoreClip } from '../services/media-library'
 import { type Client, produceAssembleHere, setup, signup } from './helpers'
 
 let client: Client
@@ -277,11 +281,99 @@ describe('a video Producer makes with the library', () => {
     expect(p.tracks.some((t) => t.items.some((i) => i.type === 'text' && (i as TextItem).text === 'The slow pour'))).toBe(true)
   }, 240_000)
 
+  it('gives a full-motion clip a library song in place of the sound it was made with, once, keeping the file as made', async () => {
+    await make('morning-espresso')
+    const clip = libraryItem('coffee-pour') as (typeof CLIP_LIBRARY)[number]
+    expect(clip.song).toBe('morning-espresso')
+    const before = (await libraryInfo(clip))!
+    expect(before.sound).toBeUndefined()
+    expect(await scoreClip(clip)).toBe('scored')
+    const after = (await libraryInfo(clip))!
+    expect(after.key).toBe('library/clips/coffee-pour.v1.s1.mp4')
+    expect(after.sound).toEqual({ song: 'morning-espresso', rev: CLIP_SOUND_VERSION, original: before.key })
+    expect(await ctx().storage.stat(before.key)).toBeTruthy()
+    // the picture as it was, with the song's sound, as long as the clip, at a clip's own loudness
+    const file = path.join(ctx().config.dataDir, 'scored.mp4')
+    await ctx().storage.download(after.key, file)
+    const p = await probe(file)
+    expect(p).toMatchObject({ kind: 'video', hasAudio: true })
+    expect(p.duration).toBeCloseTo(before.seconds, 0)
+    expect((await measureLoudness(file))!.i).toBeCloseTo(CLIP_LUFS, 0)
+    // done once; listed with its song; and a space adding it now gets the new sound, not the copy it had
+    expect(await scoreClip(clip)).toBe('already')
+    expect((await listClips()).find((c) => c.id === 'coffee-pour')).toMatchObject({ song: 'morning-espresso' })
+    expect((await listClips()).find((c) => c.id === 'rocket-launch')?.song).toBeUndefined()
+    const copy = await addLibraryItem({ it: clip, workspaceId, userId, signal: new AbortController().signal })
+    expect(copy.meta.generated).toMatchObject({ prompt: 'coffee-pour v1 s1' })
+    // a clip whose song isn't made, and an animation, are left as they are
+    expect(await scoreClip(libraryItem('city-dusk') as (typeof CLIP_LIBRARY)[number])).toBe('not made')
+    expect(await scoreClip(libraryItem('rocket-launch') as (typeof CLIP_LIBRARY)[number])).toBe('no song')
+  }, 120_000)
+
   it('takes library music and the stamp in a brief, and nothing outside the library', async () => {
     const id = await newProject('Brief check')
     const draft = (b: Record<string, unknown>) => client.json('PUT', '/api/ai/produce/draft', { projectId: id, brief: { ...brief, ...b }, scenes: [] })
     expect((await draft({ music: 'library:front-porch', logoStamp: true, visualKinds: ['motion', 'library'] })).status).toBe(200)
     expect((await draft({ music: 'library' })).status).toBe(200)
     expect((await draft({ music: 'library:no-such-song' })).status).toBe(400)
+  })
+})
+
+describe('the cards and the points', () => {
+  const voice = (id: string, text: string) => ({ asset: { id, kind: 'audio' as const, name: id, src: '', duration: 1.5 }, duration: 1.5, text })
+  const scenes: ScriptScene[] = [{ id: 's01', title: 'One', headline: 'One', narration: 'A line.', footage: [], visual: { kind: 'motion', points: ['Coffee', 'Quiet'] } }]
+  const build = (title: string, logo?: { width: number; height: number }) =>
+    buildProducerTimeline({
+      project: createProject({ id: 'p_cards', name: title }),
+      brief: { title, audience: '', goal: 'Try it', tone: 'Friendly', template: 'studio-dark', voice: 'af_heart', aspect: '16:9', source: 'idea' },
+      scenes,
+      footage: new Map(),
+      voices: new Map(scenes.map((sc) => [sc.id, voice(`as_vo_${sc.id}`, sc.narration)])),
+      brand: { name: 'LSI Media', colors: ['#0b1830', '#ff5a5f'], fonts: { headline: 'Montserrat', body: 'Inter' } },
+      ...(logo ? { logo: { id: 'as_logo', kind: 'image' as const, name: 'Logo', src: '', ...logo } } : {}),
+    })
+  const item = (p: ReturnType<typeof build>, name: string) => p.tracks.flatMap((t) => t.items).find((i) => i.name === name) as TextItem
+
+  it('counts the lines a heading wraps to', () => {
+    expect(headingLines('Morning ritual', 120, 1536)).toBe(1)
+    expect(headingLines('Start your morning right', 120, 1536)).toBe(2)
+    expect(headingLines('A very long title that goes on and on and on and on and on and on and on and on', 120, 1536)).toBe(3)
+    expect(headingLines('', 120, 1536)).toBe(1)
+  })
+
+  it('moves a title of two lines up by half a line, so the name under it is never covered (seen 23 Nov)', () => {
+    const one = build('Morning ritual')
+    const two = build('Start your morning right')
+    expect(item(one, 'Title').transform.y).toBe(-30)
+    const lh = 120 * 1.05
+    expect(item(two, 'Title').transform.y).toBeCloseTo(-30 - lh / 2, 0)
+    // its last line ends where a one-line title's does; the name stays put, under it
+    expect(item(two, 'Title').transform.y + lh).toBeCloseTo(item(one, 'Title').transform.y + lh / 2, 0)
+    expect(item(two, 'Title label').transform.y).toBe(90)
+    expect((item(two, 'Title label') as TextItem).text).toBe('LSI Media')
+  })
+
+  it('keeps the logo above a title of several lines, and on the frame', () => {
+    const two = build('Start your morning right', { width: 400, height: 200 })
+    const logo = item(two, "Title logo") as unknown as ImageItem
+    const title = item(two, 'Title')
+    const lh = 120 * 1.05
+    const fit = Math.min(1920 / 400, 1080 / 200)
+    const h = 200 * fit * logo.transform.scale
+    expect(logo.transform.y + h / 2).toBeLessThan(title.transform.y - lh)
+    expect(logo.transform.y - h / 2).toBeGreaterThan(-540)
+    const three = build('A very long title that goes on and on and on and on and on and on and on and on', { width: 400, height: 200 })
+    const top = item(three, "Title logo") as unknown as ImageItem
+    expect(top.transform.y - (200 * fit * top.transform.scale) / 2).toBeGreaterThanOrEqual(-540)
+  })
+
+  it('reveals each point where it stands, so it never passes over its dot', () => {
+    const f = { start: 0, duration: 6, voiceStart: 0.5, voiceDuration: 4, words: [], width: 1920, height: 1080, pal: lookPalette(getLook('studio-dark')) }
+    const items = motionItems(['Coffee', 'Quiet'], f).map((p) => p.item)
+    const words = items.filter((i) => i.type === 'text') as TextItem[]
+    expect(words.map((w) => w.text)).toEqual(['Coffee', 'Quiet'])
+    for (const w of words) expect(w.animations?.in?.preset).toBe('wipeRight')
+    const dot = items.find((i) => i.name === "Point 1 marker") as TextItem
+    expect(dot.transform.x).toBeLessThan(words[0].transform.x - words[0].style.boxWidth / 2)
   })
 })

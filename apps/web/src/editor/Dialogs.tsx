@@ -693,6 +693,7 @@ function MediaLibraryHelp({ onOpenMusic, onOpenClips }: { onOpenMusic: () => voi
       <div className="eyebrow">Good to know</div>
       <ul>
         <li>An item shows up once it has been made. While the library is still being made, some may be missing for a little while.</li>
+        <li>The animations have no sound. Each full-motion clip plays a stretch of a song from the music library; Watch says which.</li>
         <li>Your own sounds in the Audio tab can be heard before you add them too.</li>
       </ul>
       <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>

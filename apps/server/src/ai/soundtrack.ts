@@ -14,7 +14,7 @@ import { HttpError } from '../http'
 import type { JobContext } from '../jobs/worker'
 import { ffmpeg, run } from '../media/proc'
 import { processAsset } from '../media/process'
-import { measureLoudness } from '../render/loudness'
+import { fitSong } from '../media/fit-song'
 import { type AssetRow, createAssetFromFile } from '../services/assets'
 import { madeItem } from '../services/media-library'
 
@@ -106,52 +106,7 @@ export async function makeMusic(
 // video's length and faded out at the end (looped with a crossfade under a video longer than the song), and set to the
 // level composed music sits at, so the narration reads over it the same way (and the music track ducks under it).
 
-/** Seconds the song fades out over at the end of the video. */
-export const LIBRARY_FADE_OUT = 2.5
-/** Seconds two plays of a song overlap where a video longer than it loops it. */
-const LOOP_CROSSFADE = 3
-
-/** The music file for a video `duration` long from `src` (a song `seconds` long): looped if short, cut, faded out and
- * set to `lufs` integrated loudness, as AAC. */
-export async function fitSong(o: { src: string; seconds: number; duration: number; lufs: number; out: string; signal?: AbortSignal }): Promise<void> {
-  const d = Math.max(1, o.duration)
-  const fade = Math.round(Math.min(LIBRARY_FADE_OUT, d / 3) * 100) / 100
-  const wav = o.out.replace(/\.[^.]+$/, '') + '.fit.wav'
-  const tail = `atrim=0:${d.toFixed(3)},asetpts=N/SR/TB,afade=t=out:st=${(d - fade).toFixed(3)}:d=${fade}`
-  const loops = o.seconds >= d ? 1 : o.seconds > LOOP_CROSSFADE * 2 ? Math.min(12, Math.ceil((d - o.seconds) / (o.seconds - LOOP_CROSSFADE)) + 1) : 0
-  const args = ['-y', '-v', 'error']
-  let graph: string
-  if (loops === 1) {
-    args.push('-i', o.src)
-    graph = `[0:a]${tail}[out]`
-  } else if (loops > 1) {
-    for (let i = 0; i < loops; i++) args.push('-i', o.src)
-    const steps: string[] = []
-    let prev = '[0:a]'
-    for (let i = 1; i < loops; i++) {
-      steps.push(`${prev}[${i}:a]acrossfade=d=${LOOP_CROSSFADE}:c1=tri:c2=tri[x${i}]`)
-      prev = `[x${i}]`
-    }
-    graph = `${steps.join(';')};${prev}${tail}[out]`
-  } else {
-    // a clip too short to crossfade with itself: played over and over
-    args.push('-stream_loop', '-1', '-i', o.src)
-    graph = `[0:a]${tail}[out]`
-  }
-  try {
-    await ffmpeg([...args, '-filter_complex', graph, '-map', '[out]', '-ar', '48000', '-ac', '2', wav], { signal: o.signal })
-    const m = await measureLoudness(wav, o.signal)
-    // two passes: measured, then one gain for the whole song (its dynamics stay), with a true-peak ceiling
-    const level =
-      m && m.i > -70
-        ? `loudnorm=I=${o.lufs}:TP=-1.5:LRA=11:measured_I=${m.i}:measured_TP=${m.tp}:measured_LRA=${m.lra}:measured_thresh=${m.thresh}:offset=${m.offset}:linear=true:print_format=summary`
-        : 'anull'
-    await ffmpeg(['-y', '-v', 'error', '-i', wav, '-af', level, '-ar', '48000', '-c:a', 'aac', '-b:a', '192k', o.out], { signal: o.signal })
-  } finally {
-    fs.rm(wav, { force: true }, () => undefined)
-  }
-  if (!fs.existsSync(o.out)) throw new HttpError(500, 'server', 'The song could not be fitted to the video')
-}
+export { LIBRARY_FADE_OUT, fitSong } from '../media/fit-song'
 
 /** What a library song fitted to a video is keyed on: the same song, length and level reuse the file made before. */
 export function librarySongKey(song: Pick<LibraryTrack, 'id'>, duration: number, voiced = true): string {
