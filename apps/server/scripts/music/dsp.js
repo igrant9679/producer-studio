@@ -1,5 +1,6 @@
 // Vendored from huashu-motion (MIT, (c) 2026 Huashu, https://github.com/alchaincyf/huashu-motion) at 52467f99c602b76ba86d511d37acdfe93fa1e16e,
-// cli/lib/dsp.js, unchanged. See LICENSE in this folder.
+// cli/lib/dsp.js. See LICENSE in this folder. Changed by Producer on 24 Nov 2026: the piano's string stiffness (its
+// overtones' stretch) is a quarter of what it was, so its upper partials no longer beat against the other voices.
 // @ts-nocheck
 // Synthesis building blocks shared by the score (score.js) and the effects (sound.js). Mono Float32Array
 // at RATE; every function is deterministic given its rng, so the same source always gives the same file.
@@ -134,7 +135,7 @@ export function ks(f, sec, { bright = 0.5, keep = 0.996, bend = null } = {}, r) 
 // slow decay stage, a felt hammer thump. vel 0..1 also brightens.
 export function piano(f, sec, vel = 0.7, r = rng(f)) {
   const n = N(sec), o = new Float32Array(n);
-  const B = 0.00025 * Math.pow(f / 262, 0.5), base = 1.8 * Math.pow(262 / f, 0.45);
+  const B = 0.00006 * Math.pow(f / 262, 0.5), base = 1.8 * Math.pow(262 / f, 0.45);
   for (let k = 1; k <= 10; k++) {
     const fk = f * k * Math.sqrt(1 + B * k * k);
     if (fk > Math.min(RATE * 0.45, 2500 + 5000 * vel)) break;

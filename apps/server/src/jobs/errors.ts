@@ -32,6 +32,7 @@ const WHAT: Record<string, string> = {
   'media.sketch': 'Sketching the picture in',
   'library.make': 'Making a media library item',
   'library.custom': 'Customizing a library item',
+  'project.music': 'Changing the music',
 }
 
 /**

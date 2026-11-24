@@ -22,7 +22,8 @@ import { log } from '../log'
 import { MUSIC_VERSION, SFX_DIR, composeMusicFile, sfxManifest } from '../ai/soundtrack'
 import { serveObject } from '../media/serve'
 import { addLibraryItem, listMusic, madeItem, queueCustom, requireItem } from '../services/media-library'
-import { assertProjectInWorkspace } from '../services/projects'
+import { queueProjectMusic } from '../services/project-music'
+import { assertProjectInWorkspace, loadProjectRow } from '../services/projects'
 
 /** What composes a style sample (tests stand in a quick one: the real composer takes tens of seconds). */
 export const SAMPLES = { compose: composeMusicFile }
@@ -126,6 +127,18 @@ musicRoutes.post('/:id/add', async (c) => {
   if (b.projectId) await assertProjectInWorkspace(b.projectId, b.workspaceId)
   const row = await addLibraryItem({ it, workspaceId: b.workspaceId, userId: u.id, projectId: b.projectId, signal: c.req.raw.signal })
   return c.json(assetRecord(row, { light: true }))
+})
+
+/** The song as a video's music, in place of the music it has (services/project-music.ts): a job. */
+musicRoutes.post('/:id/use', async (c) => {
+  const u = requireUser(c)
+  const it = requireItem(c.req.param('id'), 'music')
+  const b = await body(c, z.object({ projectId: z.string().min(1).max(80) }))
+  const row = await loadProjectRow(b.projectId)
+  await requireRole(u.id, row.workspaceId, 'editor')
+  await madeItem(it)
+  const job = await queueProjectMusic({ projectId: row.id, songId: it.id, workspaceId: row.workspaceId, userId: u.id, title: it.title })
+  return c.json(jobDto(job))
 })
 
 musicRoutes.post('/:id/customize', async (c) => {

@@ -26,6 +26,10 @@ import {
   CLIP_SOUND_VERSION,
   MUSIC_LIBRARY,
   createProject,
+  createAudioItem,
+  createTrack,
+  type Asset,
+  type Project,
 } from '@producer/core'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
@@ -42,6 +46,7 @@ import { probe, processAsset } from '../media/process'
 import { measureLoudness } from '../render/loudness'
 import { createAssetFromFile } from '../services/assets'
 import { CLIP_LUFS, LIBRARY_MAKERS, addLibraryItem, forgetLibraryInfo, libraryInfo, listClips, makeLibraryJob, scoreClip } from '../services/media-library'
+import { isMusicItem, isVoiced, musicSpan, projectMusicJob, withMusic } from '../services/project-music'
 import { type Client, produceAssembleHere, setup, signup } from './helpers'
 
 let client: Client
@@ -310,6 +315,44 @@ describe('a video Producer makes with the library', () => {
     expect(await scoreClip(libraryItem('rocket-launch') as (typeof CLIP_LIBRARY)[number])).toBe('no song')
   }, 120_000)
 
+  it('changes a video’s music to a library song, in place of the music it had, and the brief keeps it', async () => {
+    const id = await newProject('Music change')
+    await assemble(id, scenes, { music: 'off', soundEffects: true })
+    const before = await load(id)
+    expect(before.tracks.some((t) => t.name === 'Music')).toBe(false)
+    const use = async (song: string) => {
+      const r = await client.json<{ id: string }>('POST', `/api/music/${song}/use`, { projectId: id })
+      expect(r.status, JSON.stringify(r.body)).toBe(200)
+      const job = (await getJob(r.body.id))!
+      expect(job.kind).toBe('project.music')
+      return projectMusicJob(inlineContext({ id: job.id, kind: 'project.music', workspaceId, userId: job.userId, projectId: id, input: job.input }))
+    }
+    // no music yet: the song plays the whole video, under the narrator
+    const end = Math.max(...before.tracks.flatMap((t) => t.items.map((i) => i.start + i.duration)))
+    await use('morning-espresso')
+    let p = await load(id)
+    let music = p.tracks.find((t) => t.name === 'Music')!
+    expect(music.items).toHaveLength(1)
+    expect(p.assets[(music.items[0] as AudioItem).assetId].name).toBe('Music · Morning Espresso')
+    expect(music.items[0].start).toBe(0)
+    expect(music.items[0].duration).toBeCloseTo(end, 0)
+    expect(music.duck).toBeGreaterThan(0)
+    expect(p.ai?.brief?.music).toBe('library:morning-espresso')
+    // the sound effects stay; another song replaces this one
+    expect(p.tracks.some((t) => t.name === 'Sound effects' && t.items.length > 0)).toBe(true)
+    await use('bright-ideas')
+    p = await load(id)
+    music = p.tracks.find((t) => t.name === 'Music')!
+    expect(music.items.map((i) => p.assets[(i as AudioItem).assetId].name)).toEqual(['Music · Bright Ideas'])
+    expect(p.ai?.brief?.music).toBe('library:bright-ideas')
+    // the version before each change is kept, to go back to
+    const versions = await client.json<Array<{ label: string; note?: string }>>('GET', `/api/projects/${id}/versions`)
+    expect(versions.body.filter((v) => v.label === 'before-ai').length).toBeGreaterThanOrEqual(2)
+    // only a song of the music library, on a project one can edit
+    expect((await client.json('POST', '/api/music/coffee-pour/use', { projectId: id })).status).toBe(404)
+    expect((await client.json('POST', '/api/music/no-such-song/use', { projectId: id })).status).toBe(404)
+  }, 240_000)
+
   it('takes library music and the stamp in a brief, and nothing outside the library', async () => {
     const id = await newProject('Brief check')
     const draft = (b: Record<string, unknown>) => client.json('PUT', '/api/ai/produce/draft', { projectId: id, brief: { ...brief, ...b }, scenes: [] })
@@ -375,5 +418,49 @@ describe('the cards and the points', () => {
     for (const w of words) expect(w.animations?.in?.preset).toBe('wipeRight')
     const dot = items.find((i) => i.name === "Point 1 marker") as TextItem
     expect(dot.transform.x).toBeLessThan(words[0].transform.x - words[0].style.boxWidth / 2)
+  })
+})
+
+describe('where a video’s music goes', () => {
+  const song = (name: string, duration = 20): Asset => ({ id: `as_${name.replace(/\W+/g, '')}`, kind: 'audio', name, src: '', duration })
+  function project(): Project {
+    const p = createProject({ id: 'p_music', name: 'Music' })
+    const voice = createTrack('audio', { name: 'Voiceover' })
+    voice.items = [createAudioItem(song('s01 voice', 4), 3, { name: 's01 voice' })]
+    const music = createTrack('audio', { name: 'Music' })
+    music.duck = 10
+    const composed = song('Music · ambient · C major · 78 BPM', 30)
+    music.items = [createAudioItem(composed, 0, { name: 'Music', duration: 30 })]
+    const extra = createTrack('audio', { name: 'Audio' })
+    const pulse = song('Music · pulse · E major · 117.75 BPM', 10)
+    extra.items = [createAudioItem(pulse, 10, { name: 'Pulse', duration: 10 })]
+    const fx = createTrack('audio', { name: 'Sound effects' })
+    const pop = song('Sound · pop (pop_1)', 0.3)
+    fx.items = [createAudioItem(pop, 5, { name: 'pop' })]
+    p.tracks = [voice, music, extra, fx, ...p.tracks]
+    p.assets = Object.fromEntries([composed, pulse, pop, song('s01 voice', 4)].map((a) => [a.id, a]))
+    return p
+  }
+
+  it('is the Music track’s span, every music clip comes off for the new song, and the rest stays', () => {
+    const p = project()
+    expect(musicSpan(p)).toEqual({ start: 0, end: 30 })
+    expect(isVoiced(p)).toBe(true)
+    const extra = p.tracks.find((t) => t.name === 'Audio')!
+    expect(isMusicItem(p, 'Audio', extra.items[0])).toBe(true)
+    expect(isMusicItem(p, 'Sound effects', p.tracks.find((t) => t.name === 'Sound effects')!.items[0])).toBe(false)
+    const next = withMusic(p, song('Music · Morning Espresso', 30), 0, true)
+    expect(next.tracks.map((t) => t.name)).not.toContain('Audio')
+    const music = next.tracks.find((t) => t.name === 'Music')!
+    expect(music.items.map((i) => next.assets[(i as AudioItem).assetId].name)).toEqual(['Music · Morning Espresso'])
+    expect(music.duck).toBe(10)
+    expect(next.tracks.find((t) => t.name === 'Sound effects')!.items).toHaveLength(1)
+    expect(next.tracks.find((t) => t.name === 'Voiceover')!.items).toHaveLength(1)
+    // no narrator: no duck; no Music track: one is made after the voiceover's place
+    expect(withMusic(p, song('Music · X'), 0, false).tracks.find((t) => t.name === 'Music')!.duck).toBeUndefined()
+    const bare = { ...p, tracks: p.tracks.filter((t) => t.name !== 'Music' && t.name !== 'Audio') }
+    expect(musicSpan(bare).start).toBe(0)
+    const made = withMusic(bare, song('Music · Y'), 0, true)
+    expect(made.tracks.findIndex((t) => t.name === 'Music')).toBe(made.tracks.findIndex((t) => t.name === 'Voiceover') + 1)
   })
 })

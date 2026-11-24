@@ -13,6 +13,7 @@ import { exportRender } from '../render/export'
 import { failAsset, reopenAsset } from '../services/asset-recovery'
 import { copyAssetJob } from '../services/library'
 import { customizeLibraryJob, makeLibraryJob } from '../services/media-library'
+import { projectMusicJob } from '../services/project-music'
 import { limitMessage, registerHandler, stopReason } from './worker'
 
 let done = false
@@ -56,4 +57,5 @@ export function registerHandlers() {
   registerHandler('asset.copy', copyAssetJob)
   registerHandler('library.make', makeLibraryJob)
   registerHandler('library.custom', customizeLibraryJob)
+  registerHandler('project.music', projectMusicJob)
 }

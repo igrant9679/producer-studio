@@ -474,6 +474,20 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   `scoreClip`/`scoreLibraryClips` run once by the cloud server 20 s after it starts: picture copied untouched, the
   song from a quarter of the way in, faded, at -16 LUFS, `media/fit-song.ts`). The file as made is kept
   (`LibraryInfo.sound.original`); a space's copies added before keep their old sound (the copy key gains ` s1`).
+  *A video's music changed to a library song* (24 Nov, the owner: the composed music in recent projects is "out of
+  tune"): `POST /api/music/:id/use {projectId}` queues a `project.music` job (`services/project-music.ts`): the song
+  fitted where the old music played (`musicSpan`), at the composed music's level under a narrator (louder without
+  one), as the only item on the Music track (ducked when voiced); other music clips come off (`isMusicItem`: the Music
+  track, or an asset named "Music · …"); saved with the version before kept (`before-ai`, note "Music changed to …");
+  `ai.brief.music` becomes `library:<id>` so assembling again keeps it. No editor button yet.
+  *The composer retuned* (24 Nov, same complaint): huashu-motion's synth voices only stand in for its sample pack,
+  which Producer doesn't ship, so they are all anyone heard. Their chorus detuning (copies of a note up to ~20 cents
+  apart) is now about 1-3 cents, struck voices' overtones sit on harmonics (marimba 4th partial was 24 cents flat;
+  kalimba, glockenspiel, bell, glass), the piano's stretch is a quarter, the cowbell's fifth is 3:2 (`scripts/music/
+  score.js`, `dsp.js`, headers say what changed). Measured by `scripts/music/tuning.js` (`node scripts/music-tuning.mjs
+  [styles] [--no-drums]`): tonal energy more than 4 cents off, before → after: mallet 56% → 5%, funk 41% → 10%,
+  ambient 20% → 9%, pulse 65% → 24%, cinematic 75% → 22% (9% without drums); what remains in rhythmic styles is
+  repeated-note and sidechain sidebands, not detuning. `MUSIC_VERSION` 2: music composed before is composed again.
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI

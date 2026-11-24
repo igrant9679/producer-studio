@@ -18,8 +18,8 @@ import { fitSong } from '../media/fit-song'
 import { type AssetRow, createAssetFromFile } from '../services/assets'
 import { madeItem } from '../services/media-library'
 
-/** Bumped when the composer changes what it writes: music made before is composed again. */
-export const MUSIC_VERSION = 1
+/** Bumped when the composer changes what it writes: music made before is composed again (2: retuned, 24 Nov 2026). */
+export const MUSIC_VERSION = 2
 /** The music's loudness: Kokoro narrates near -22.5 LUFS, so the bed sits ~7 LU under it between lines and, ducked,
  * ~17 LU under it while the narrator speaks (huashu-motion's rule of thumb is 12 under plus a 10 dB duck). */
 export const MUSIC_LUFS = -30

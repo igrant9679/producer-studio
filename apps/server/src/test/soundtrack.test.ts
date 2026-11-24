@@ -6,6 +6,7 @@ import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { MUSIC_STYLES, createProject, createTextItem, createTrack, musicStyleFor } from '@producer/core'
 import { composeMusic, STYLES } from '../../scripts/music/soundtrack.js'
+import { tuningOf } from '../../scripts/music/tuning.js'
 import { addSound, composeMusicFile, kitFor, planSfx, sfxCues, sfxManifest, SFX_DIR } from '../ai/soundtrack'
 import { ctx } from '../context'
 import { probe } from '../media/process'
@@ -138,4 +139,41 @@ describe('sound effects', () => {
     expect(out.tracks[2].items[0]).toMatchObject({ start: 1, volume: 0.4, duration: 0.2 })
     expect(Object.keys(out.assets).sort()).toEqual(['as_m', 'as_p'])
   })
+})
+
+/** A 16-bit stereo 48 kHz WAV of `sec` seconds of the sum of these sines (Hz). */
+function sines(freqs: number[], sec = 6): Buffer {
+  const n = Math.round(sec * 48000), b = Buffer.alloc(44 + n * 4)
+  for (let i = 0; i < n; i++) {
+    let v = 0
+    for (const f of freqs) v += Math.sin((2 * Math.PI * f * i) / 48000) / freqs.length
+    const x = Math.round(v * 0.5 * 32767)
+    b.writeInt16LE(x, 44 + i * 4)
+    b.writeInt16LE(x, 46 + i * 4)
+  }
+  return b
+}
+
+describe('the composer plays in tune (24 Nov 2026: the owner heard it as out of tune)', () => {
+  it('measures a chord in tune as in tune, and the same chord with a copy detuned 12 cents as off', () => {
+    const chord = [261.63, 329.63, 392.0]
+    const clean = tuningOf(sines(chord), 'test · C major · 100 BPM')
+    expect(clean.fine).toBeLessThan(0.02)
+    expect(clean.outKey).toBeLessThan(0.02)
+    const wavering = tuningOf(sines([...chord, ...chord.map((f) => f * 2 ** (12 / 1200))]), 'test · C major · 100 BPM')
+    expect(wavering.fine).toBeGreaterThan(0.3)
+    expect(tuningOf(sines([277.18, 311.13]), 'test · C major · 100 BPM').outKey).toBeGreaterThan(0.9)
+  })
+
+  it('keeps its voices within a few cents of the notes they play (they were up to 20 cents apart)', () => {
+    const cuts = [{ id: 'title', t: 0 }, { id: 's1', t: 3 }, { id: 's2', t: 9 }, { id: 's3', t: 15 }, { id: 'close', t: 20.5 }]
+    // before the fix: mallet 56%, ambient 20%, piano 3% of the tonal energy more than 4 cents off
+    for (const [style, most] of [['mallet', 0.1], ['ambient', 0.14], ['piano', 0.06]] as const) {
+      const r = composeMusic({ id: 'tuning', brand: 'tuning', duration: 24, cuts, style, voiced: false, lufs: -18 })
+      const t = tuningOf(r.wav, r.about)
+      expect(t.fine, style).toBeLessThan(most)
+      expect(t.off20, style).toBeLessThan(0.01)
+      expect(t.outKey, style).toBeLessThan(0.01)
+    }
+  }, 180_000)
 })

@@ -1,5 +1,11 @@
 // Vendored from huashu-motion (MIT, (c) 2026 Huashu, https://github.com/alchaincyf/huashu-motion) at 52467f99c602b76ba86d511d37acdfe93fa1e16e,
-// cli/lib/score.js, unchanged. See LICENSE in this folder.
+// cli/lib/score.js. See LICENSE in this folder. Changed by Producer on 24 Nov 2026 (the owner: the composed music "is
+// out of tune"): huashu-motion plays recorded instruments when its sample pack is installed and these synth voices
+// only without it, and Producer ships none, so the synth voices are all anyone hears. Their chorus detuning was set
+// for a supporting role (copies of a note up to ~20 cents apart, which beat and waver on held chords) and the struck
+// voices had untuned overtones (a marimba's 4th partial 24 cents flat, kalimba, glockenspiel, bell and glass partials
+// between the notes). Detuning is now a faint shimmer (about 1-3 cents), overtones sit on harmonics, and the cowbell's
+// fifth is a fifth. Measured with scripts/music-tuning (tonal energy more than 4 cents off pitch, per style).
 // @ts-nocheck
 // The score: music composed for this film from what it declares. A style is a small arrangement —
 // instruments plus 16-step patterns per layer, each layer entering above an energy gate — and the
@@ -17,7 +23,7 @@ const hash = (s) => [...String(s)].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0
 
 function padNote(f, sec, r) {
   const n = N(sec), o = new Float32Array(n), att = N(Math.min(0.35, sec / 3)), rel = N(Math.min(0.5, sec / 3));
-  for (const det of [-0.004, 0.004]) {
+  for (const det of [-0.0008, 0.0008]) {
     for (let k = 1; k <= 7; k++) {
       let ph = r(); const inc = (f * k * (1 + det)) / RATE, amp = (1 / k) * Math.exp(-k * 0.35);
       for (let i = 0; i < n; i++) { o[i] += sinp(ph) * amp; ph += inc; }
@@ -41,11 +47,11 @@ export const INSTRUMENTS = {
     return o;
   },
   pluck: (f, sec) => partials(f, sec, [1, 2, 3, 4, 5, 6, 7].map((k) => [k, 1 / Math.pow(k, 1.9), 0.5 / Math.pow(k, 0.9)]), 0.006),
-  bell: (f, sec) => partials(f, sec, [[1, 1, 1.1], [2, 0.42, 0.6], [3, 0.2, 0.35], [4.07, 0.1, 0.22], [5.4, 0.05, 0.12]], 0.002),
-  marimba: (f, sec) => partials(f, sec, [[1, 1, 0.38], [3.93, 0.28, 0.08], [9.2, 0.08, 0.03]], 0.002),
-  kalimba: (f, sec) => partials(f, sec, [[1, 1, 0.7], [5.4, 0.22, 0.05], [2.01, 0.12, 0.3]], 0.003),
-  glass: (f, sec) => partials(f, sec, [[1, 1, 1.4], [2.32, 0.35, 0.6], [4.25, 0.15, 0.3], [6.63, 0.06, 0.15]], 0.003),
-  glock: (f, sec) => partials(f, sec, [[1, 1, 1.6], [2.76, 0.32, 0.5], [5.4, 0.14, 0.2], [8.93, 0.06, 0.08]], 0.001),
+  bell: (f, sec) => partials(f, sec, [[1, 1, 1.1], [2, 0.42, 0.6], [3, 0.2, 0.35], [4, 0.1, 0.22], [5, 0.05, 0.12]], 0.002),
+  marimba: (f, sec) => partials(f, sec, [[1, 1, 0.38], [4, 0.28, 0.08], [10, 0.08, 0.03]], 0.002),
+  kalimba: (f, sec) => partials(f, sec, [[1, 1, 0.7], [6, 0.1, 0.05], [2, 0.12, 0.3]], 0.003),
+  glass: (f, sec) => partials(f, sec, [[1, 1, 1.4], [2, 0.35, 0.6], [4, 0.15, 0.3], [6, 0.06, 0.15]], 0.003),
+  glock: (f, sec) => partials(f, sec, [[1, 1, 1.6], [3, 0.2, 0.5], [6, 0.1, 0.2], [9, 0.05, 0.08]], 0.001),
   piano: (f, sec, v, r) => piano(f, sec, v, r),
   rhodes: (f, sec, v) => rhodes(f, sec, v, 0.35),
   guitar: (f, sec, v, r) => ks(f, sec, { bright: 0.45 + 0.3 * v, keep: 0.9975 }, r),
@@ -54,28 +60,28 @@ export const INSTRUMENTS = {
   pizz: (f, sec, v, r) => biquad(ks(f, Math.min(sec, 0.6), { bright: 0.3 + 0.2 * v, keep: 0.982 }, r), 'lp', 2600),
   guzheng: (f, sec, v, r) => ks(f, sec, { bright: 0.8, keep: 0.9988, bend: vibrato(0.004, 5, 0.18) }, r),
   pad: (f, sec, v, r) => padNote(f, sec, r),
-  warmpad: (f, sec, v, r) => ensemble(f, sec, { voices: 6, spread: 0.006, cutoff: 1500, att: Math.min(0.5, sec / 3), rel: 0.6 }, r),
-  strings: (f, sec, v, r) => ensemble(f, sec, { voices: 5, spread: 0.007, cutoff: 2600, att: Math.min(0.35, sec / 3), rel: 0.5 }, r),
-  stacc: (f, sec, v, r) => ensemble(f, Math.min(sec, 0.2), { voices: 4, spread: 0.006, cutoff: 1800 + 1800 * v, att: 0.006, rel: 0.08 }, r),
-  supersaw: (f, sec, v, r) => ensemble(f, sec, { voices: 7, spread: 0.012, cutoff: 4200, att: 0.02, rel: 0.4 }, r),
-  horn: (f, sec, v, r) => ensemble(f, sec, { voices: 3, spread: 0.004, cutoff: (u) => 700 + 1500 * Math.min(1, (u * sec) / 0.25), att: 0.06, rel: 0.25 }, r),
-  brass: (f, sec, v) => mix([synth(f, sec, { lo: 500, hi: 3600, close: 0.12, q: 1.4 })], [synth(f * 1.004, sec, { lo: 500, hi: 3600, close: 0.12, q: 1.4 }), 0.8]),
-  saw: (f, sec) => mix([synth(f, sec, { lo: 700, hi: 2400, close: 0.4, q: 0.8, bend: vibrato(0.004, 4.8, 0.35), rel: 0.15 })], [synth(f * 1.006, sec, { wave: 'square', lo: 600, hi: 1800, close: 0.4, q: 0.7, bend: vibrato(0.004, 4.8, 0.35), rel: 0.15 }), 0.5]),
-  sqlead: (f, sec) => biquad(env(osc('pulse', f, sec, { duty: 0.25, bend: vibrato(0.008, 6, 0.18) }), 0.003, 0.04), 'lp', 5500),
+  warmpad: (f, sec, v, r) => ensemble(f, sec, { voices: 6, spread: 0.0015, cutoff: 1500, att: Math.min(0.5, sec / 3), rel: 0.6 }, r),
+  strings: (f, sec, v, r) => ensemble(f, sec, { voices: 5, spread: 0.0015, cutoff: 2600, att: Math.min(0.35, sec / 3), rel: 0.5 }, r),
+  stacc: (f, sec, v, r) => ensemble(f, Math.min(sec, 0.2), { voices: 4, spread: 0.0015, cutoff: 1800 + 1800 * v, att: 0.006, rel: 0.08 }, r),
+  supersaw: (f, sec, v, r) => ensemble(f, sec, { voices: 7, spread: 0.002, cutoff: 4200, att: 0.02, rel: 0.4 }, r),
+  horn: (f, sec, v, r) => ensemble(f, sec, { voices: 3, spread: 0.001, cutoff: (u) => 700 + 1500 * Math.min(1, (u * sec) / 0.25), att: 0.06, rel: 0.25 }, r),
+  brass: (f, sec, v) => mix([synth(f, sec, { lo: 500, hi: 3600, close: 0.12, q: 1.4 })], [synth(f * 1.001, sec, { lo: 500, hi: 3600, close: 0.12, q: 1.4 }), 0.8]),
+  saw: (f, sec) => mix([synth(f, sec, { lo: 700, hi: 2400, close: 0.4, q: 0.8, bend: vibrato(0.003, 4.8, 0.35), rel: 0.15 })], [synth(f * 1.0015, sec, { wave: 'square', lo: 600, hi: 1800, close: 0.4, q: 0.7, bend: vibrato(0.003, 4.8, 0.35), rel: 0.15 }), 0.5]),
+  sqlead: (f, sec) => biquad(env(osc('pulse', f, sec, { duty: 0.25, bend: vibrato(0.0025, 6, 0.18) }), 0.003, 0.04), 'lp', 5500),
   chip: (f, sec) => env(osc('pulse', f, Math.min(sec, 0.25), { duty: 0.125 }), 0.001, 0.02),
   tri: (f, sec) => env(osc('tri', f, sec), 0.002, 0.02),
   clav: (f, sec, v, r) => biquad(biquad(ks(f, Math.min(sec, 0.25), { bright: 0.85, keep: 0.985 }, r), 'hp', 300), 'bp', 1400, 0.5),
-  cowbell: (f, sec) => decay(biquad(mix([osc('square', f, 0.4)], [osc('square', f * 1.48, 0.4), 0.7]), 'bp', f * 1.6, 1.4), 0.12),
+  cowbell: (f, sec) => decay(biquad(mix([osc('square', f, 0.4)], [osc('square', f * 1.5, 0.4), 0.7]), 'bp', f * 1.6, 1.4), 0.12),
   flute: (f, sec, v, r) => flute(f, sec, { breath: 0.1 }, r),
   dizi: (f, sec, v, r) => flute(f, sec, { breath: 0.2, vib: 0.009 }, r),
   bass: (f, sec) => { const o = partials(f, sec, [[1, 1, 1.2], [2, 0.3, 0.5], [3, 0.12, 0.3]], 0.008); return env(o, 0.008, 0.08); },
   synbass: (f, sec) => synth(f, sec, { lo: 140, hi: 1100, close: 0.1, q: 2.2, rel: 0.03 }),
   sub808: (f, sec, v, r, from) => sub808(f, sec, { from, tau: 0.8 }),
   sinebass: (f, sec) => env(osc('sine', f, sec), 0.25, 0.6),
-  synpluck: (f, sec) => mix([synth(f, Math.min(sec, 1.2), { lo: 250, hi: 3200, close: 0.11, q: 1.3, rel: 0.15 })], [synth(f * 1.005, Math.min(sec, 1.2), { lo: 250, hi: 3200, close: 0.11, q: 1.3, rel: 0.15 }), 0.7]),
+  synpluck: (f, sec) => mix([synth(f, Math.min(sec, 1.2), { lo: 250, hi: 3200, close: 0.11, q: 1.3, rel: 0.15 })], [synth(f * 1.001, Math.min(sec, 1.2), { lo: 250, hi: 3200, close: 0.11, q: 1.3, rel: 0.15 }), 0.7]),
   vibes: (f, sec) => shape(partials(f, sec, [[1, 1, 1.6], [4, 0.25, 0.4], [10, 0.05, 0.1]], 0.003), (u, t) => 1 - 0.25 * (1 - Math.cos(TAU * 5.5 * t))),
   erhu: (f, sec, v, r) => flute(f, sec, { breath: 0.06, vib: 0.012 }, r),
-  lowstr: (f, sec, v, r) => ensemble(f, sec, { voices: 4, spread: 0.005, cutoff: 900, att: 0.3, rel: 0.5 }, r),
+  lowstr: (f, sec, v, r) => ensemble(f, sec, { voices: 4, spread: 0.0012, cutoff: 900, att: 0.3, rel: 0.5 }, r),
 };
 
 // ---------- drums: (r) → mono ----------
@@ -492,11 +498,11 @@ export function renderScore(p, buses, r) {
       // pad: one voice-led chord per chord change, or held from the outro's start to the end
       if (S.pad) {
         const [pi, pg, po] = S.pad, center = p.root + 12 * po + 2;
-        if (fresh && s.outro) for (const n of voiceLead(chord(p, 0, po, 0), prevV.pad, center)) for (const side of [-0.8, 0.8]) put('pad', inst(pi)(mtof(n) * (side > 0 ? 1.003 : 1), end - s.t + 0.2, 0.6, r), t, pg * 0.8, side);
+        if (fresh && s.outro) for (const n of voiceLead(chord(p, 0, po, 0), prevV.pad, center)) for (const side of [-0.8, 0.8]) put('pad', inst(pi)(mtof(n) * (side > 0 ? 1.0008 : 1), end - s.t + 0.2, 0.6, r), t, pg * 0.8, side);
         else if (!s.outro && (fresh || (j === 0 && (barBase + bar) % cb === 0))) {
           const len = Math.min(16 * cb - (j + 16 * ((barBase + bar) % cb)), steps - k) * S16 + 0.25;
           const v = (prevV.pad = voiceLead(chord(p, c, po, S.ext >= 9 ? 9 : 0, dom), prevV.pad, center));
-          v.forEach((n) => { for (const side of [-0.8, 0.8]) put('pad', inst(pi)(mtof(n) * (side > 0 ? 1.003 : 1), len, 0.6, r), t, pg * 0.72 * (0.7 + 0.4 * e) / Math.sqrt(v.length / 3), side); });
+          v.forEach((n) => { for (const side of [-0.8, 0.8]) put('pad', inst(pi)(mtof(n) * (side > 0 ? 1.0008 : 1), len, 0.6, r), t, pg * 0.72 * (0.7 + 0.4 * e) / Math.sqrt(v.length / 3), side); });
         }
       }
       if (s.outro) {

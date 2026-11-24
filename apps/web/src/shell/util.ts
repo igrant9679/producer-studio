@@ -83,6 +83,7 @@ export const JOB_LABELS: Record<JobKind, string> = {
   'asset.copy': 'Copying a clip to another space',
   'library.make': 'Making the media library',
   'library.custom': 'Customizing a library item',
+  'project.music': 'Changing the music',
 }
 
 export function initials(name: string | undefined): string {
