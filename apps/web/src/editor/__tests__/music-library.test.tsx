@@ -59,6 +59,35 @@ afterEach(() => {
 })
 
 describe('the music library in the Audio panel', () => {
+  it('makes a song the video’s music after asking (24 Nov 2026), and takes the new version in', async () => {
+    open()
+    const t = MUSIC_LIBRARY[1]
+    const use = vi.spyOn(api, 'setVideoMusic').mockResolvedValue({ id: 'j9', kind: 'project.music', status: 'queued', progress: 0, message: '' } as never)
+    vi.spyOn(api, 'job').mockResolvedValue({ id: 'j9', kind: 'project.music', status: 'done', progress: 1, message: 'Done', result: { version: 2, song: t.id, seconds: 30 } } as never)
+    const changed = createProject({ id: 'p1', name: 'Film with new music' })
+    vi.spyOn(api, 'project').mockResolvedValue({ summary: { id: 'p1', workspaceId: 'w1', name: changed.name }, project: changed, version: 2 } as never)
+    const lib = screen.getByRole('group', { name: 'Music library' })
+    fireEvent.click(await within(lib).findByRole('button', { name: `Use ${t.title} as this video’s music` }))
+    // it asks first, saying what happens to the music there is
+    expect(screen.getByText(`Use “${t.title}” as this video’s music?`)).toBeTruthy()
+    expect(screen.getByText(/The version before is kept in Versions/)).toBeTruthy()
+    expect(use).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Use this song' }))
+    await waitFor(() => expect(use).toHaveBeenCalledWith(t.id, { projectId: 'p1' }))
+    await waitFor(() => expect(S().version).toBe(2))
+    expect(S().project.name).toBe('Film with new music')
+    await waitFor(() => expect(screen.queryByText(`Use “${t.title}” as this video’s music?`)).toBeNull())
+  })
+
+  it('offers no swap in the demo, which has no server to change the music', async () => {
+    S().load({ project: createProject({ id: 'p1', name: 'Film' }), version: 1, projectId: 'p1', demo: true, workspaceId: 'w1' })
+    S().set({ activeLeftTab: 'audio', leftCollapsed: false, readOnly: false })
+    render(<AssetPanel />)
+    const lib = screen.getByRole('group', { name: 'Music library' })
+    await within(lib).findByText(MUSIC_LIBRARY[1].title)
+    expect(within(lib).queryByRole('button', { name: /as this video’s music/ })).toBeNull()
+  })
+
   it('lists the songs that have been made, with their genre, mood and length', async () => {
     open()
     const lib = screen.getByRole('group', { name: 'Music library' })

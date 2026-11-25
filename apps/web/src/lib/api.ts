@@ -376,6 +376,8 @@ export const api = {
   musicLibrary: () => req<Array<LibraryEntry<LibraryTrack>>>('GET', '/music'),
   musicPreviewUrl: (id: string) => `/api/music/${encodeURIComponent(id)}/preview`,
   addLibraryMusic: (id: string, body: { workspaceId: string; projectId?: string }) => req<AssetRecord>('POST', `/music/${encodeURIComponent(id)}/add`, body),
+  /** The song as the video's music, in place of the music it has (a job; its result is the project's new version). */
+  setVideoMusic: (id: string, body: { projectId: string }) => req<Job<{ version: number; song: string; seconds: number }>>('POST', `/music/${encodeURIComponent(id)}/use`, body),
   /** A sample of a music style, as a video's own music sounds (the brief's Listen). */
   styleSampleUrl: (style: string) => `/api/music/style/${encodeURIComponent(style)}/preview`,
   /** The clip library (server routes/clips.ts): animations and full-motion clips to watch and add. */

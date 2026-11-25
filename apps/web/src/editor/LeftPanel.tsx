@@ -27,6 +27,7 @@ import {
   Type,
   Upload,
   Wand2,
+  Replace,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api, waitForJob } from '../lib/api'
@@ -47,6 +48,8 @@ import { libraryAssets, removeAsset, retryAsset, takeOutOfProject, trashUnused, 
 import { tipProps } from '../lib/tooltip'
 import { useSystem } from '../shell/system'
 import { type CustomizableItem, LibraryCustomize, fitSongToVideo } from './LibraryCustomize'
+import { flush, onProjectEvent } from './persistence'
+import { ConfirmDialog } from '../shell/ui'
 import { ClipPreview } from './ClipPreview'
 
 const TABS: Array<{ id: LeftTab; label: string; icon: React.ReactNode; desc: string }> = [
@@ -691,6 +694,29 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
   }
   const ready = (tracks ?? []).filter((t) => t.ready)
   const [custom, setCustom] = useState<CustomizableItem | null>(null)
+  // a song as the video's music (24 Nov 2026, after the owner asked twice for a video's music to be changed): the server
+  // fits it where the music plays, keeps the version before, and the editor takes the new version in
+  const [swapTo, setSwapTo] = useState<LibraryTrack | null>(null)
+  const [using, setUsing] = useState(false)
+  const projectId = useEditor((s) => s.projectId)
+  const applySong = async (t: LibraryTrack) => {
+    const s = useEditor.getState()
+    if (!s.projectId) return
+    setUsing(true)
+    try {
+      await flush()
+      const job = await api.setVideoMusic(t.id, { projectId: s.projectId })
+      const done = job.status === 'done' ? job : await waitForJob<{ version: number }>(job.id)
+      if (done.status !== 'done') throw new Error(done.error || 'The music couldn’t be changed')
+      await onProjectEvent({ id: s.projectId, version: done.result?.version ?? useEditor.getState().version + 1 })
+      toast(`The music is now “${t.title}”. The version before is in Versions.`)
+      setSwapTo(null)
+    } catch (e) {
+      toastError(e, 'Couldn’t change the music')
+    } finally {
+      setUsing(false)
+    }
+  }
   return (
     <div className="ed-group" role="group" aria-label="Music library">
       <div className="eyebrow">Music library{tracks ? ` · ${ready.length}` : ''}</div>
@@ -701,7 +727,7 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
       ) : !ready.length ? (
         <p className="ed-note">{desktop ? 'The music library is on producerstudio.app; it isn’t in the desktop app yet.' : 'The library’s music is being made. Each track appears here when it is ready.'}</p>
       ) : (
-        <p className="ed-note">Free to use in any video. Listen first; + adds the song at the playhead, cut to end with your video; the wand remakes it for your topic.</p>
+        <p className="ed-note">Free to use in any video. Listen first; + adds the song at the playhead, cut to end with your video; the swap button makes it this video’s music in place of the music it has; the wand remakes it for your topic.</p>
       )}
       {ready.map((t) => {
         const key = `library:${t.id}`
@@ -720,6 +746,11 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
             <button className="add ghost" aria-label={`Make ${t.title} your own`} title="Make it your own" onClick={() => setCustom({ kind: 'music', ...t })}>
               <Wand2 size={13} />
             </button>
+            {!demo && projectId && (
+              <button className="add ghost" aria-label={`Use ${t.title} as this video’s music`} title="Use as this video’s music" onClick={() => setSwapTo(t)}>
+                <Replace size={13} />
+              </button>
+            )}
             <button className="add" aria-label={`Add ${t.title} at the playhead`} title="Add at playhead" disabled={adding === t.id} onClick={() => void add(t)}>
               {adding === t.id ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
             </button>
@@ -727,6 +758,17 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
         )
       })}
       {custom && <LibraryCustomize item={custom} onClose={() => setCustom(null)} />}
+      {swapTo && (
+        <ConfirmDialog
+          title={`Use “${swapTo.title}” as this video’s music?`}
+          body="It takes the place of the music the video has now, on its Music track and anywhere else, cut to where that music plays (the whole video when it has none), and quieter while a narrator speaks. The version before is kept in Versions, to go back to."
+          confirmLabel="Use this song"
+          danger={false}
+          busy={using}
+          onConfirm={() => void applySong(swapTo)}
+          onClose={() => !using && setSwapTo(null)}
+        />
+      )}
     </div>
   )
 }

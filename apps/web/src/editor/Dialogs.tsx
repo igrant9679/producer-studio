@@ -2,7 +2,7 @@
 import type { ExportPreviewResult, ExportRecord, ExportRequest, Job, Project } from '@producer/core'
 import { EXPORT_FPS, EXPORT_PRESETS, EXPORT_RESOLUTIONS, CLIP_LIBRARY, MUSIC_LIBRARY, StageRenderer, aspectOf, filledCaptionTracks, isAudioFormat, presetCanvasSize, projectDuration, projectForExport, selectionRange } from '@producer/core'
 import clsx from 'clsx'
-import { AudioLines, Captions, Check, Clapperboard, Copy, Download, Film, Keyboard, Loader2, Music, Play, Plus, TriangleAlert, Wand2, X } from 'lucide-react'
+import { AudioLines, Captions, Check, Clapperboard, Copy, Download, Film, Keyboard, Loader2, Music, Play, Plus, Replace, TriangleAlert, Wand2, X } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, waitForJob } from '../lib/api'
 import { toast, toastError } from '../lib/toast'
@@ -652,6 +652,9 @@ function MediaLibraryHelp({ onOpenMusic, onOpenClips }: { onOpenMusic: () => voi
           Press <Plus {...icon} aria-label="Add" /> to put the song on the timeline at the playhead. It is cut to end where your video ends, with a fade out, and listed under <b>In this project</b>; adding it again uses the same file.
         </li>
         <li>On the timeline it is an ordinary audio clip: move it, trim it, and set its volume and fades in Properties.</li>
+        <li>
+          To change the music a video already has, press <Replace {...icon} aria-label="Use as this video’s music" /> on a song instead: it takes the place of the video’s music, cut to where that music plays and quieter under a narrator. The version before is kept in Versions.
+        </li>
       </ol>
       <div className="eyebrow">Clips</div>
       <ol>

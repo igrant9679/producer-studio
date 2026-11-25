@@ -65,7 +65,8 @@ import { BlenderUnavailableError, type BlenderRunner, openBlender } from '../med
 import { houseRules } from './rules'
 import { ensureTranscript, synthesizeToAsset, transcribeAsset } from './speech'
 import { whisperAvailable } from './whisper'
-import { SOURCE_NAMES, type StockSource, downloadStock, findIllustration, generateImage, generateVideo, generationCapabilities, illustrationPng, searchStock } from './generate'
+import { findIllustration, generateImage, generateVideo, generationCapabilities, illustrationPng } from './generate'
+import { findStock } from './stock-check'
 import { IDEA_SYSTEM, type IdeaLibraryClip, type IdeaMedia, IdeaScriptSchema, VISUAL_KINDS, buildIdeaPrompt, normalizeIdeaScript } from './scenes'
 import { type AnimObject, type Placed, type SceneFrame, animationItems, diagramItems, motionItems, slotIndex } from './scene-layout'
 import { type SceneSpan, type VideoSound, addSound, kitFor, makeLibraryMusic, makeMusic, planSfx, sfxAsset, sfxCues, sfxManifest } from './soundtrack'
@@ -1653,34 +1654,10 @@ async function makeOne(
     jc.progress(0.05, 'Making an image')
     file = await generateImage({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, outDir: o.work, signal: jc.signal })
   } else if (kind === 'stock' || kind === 'photo') {
-    const photo = kind === 'photo'
-    jc.progress(0.05, photo ? 'Searching stock photos' : 'Searching stock footage')
-    // the first that downloads (a library's file can be gone or too big); a library none of whose files download is
-    // passed over for the next
-    let got: { file: string; mime: string; provider: string; model: string } | undefined
-    let lastErr: unknown
-    const skip: StockSource[] = []
-    for (let round = 0; !got && round < 4; round++) {
-      const found = await searchStock({ query: o.ask, aspect: o.aspect, media: photo ? 'photo' : 'video', minSeconds: Math.min(20, o.seconds), signal: jc.signal, skip }).catch((err) => {
-        if (jc.signal.aborted || !lastErr) throw err
-        return []
-      })
-      if (!found.length) break
-      jc.progress(0.3, photo ? 'Downloading the photo' : 'Downloading footage')
-      for (const pick of found.slice(0, 3)) {
-        try {
-          got = await downloadStock(pick, o.work, jc.signal)
-          credit = { author: pick.author, url: pick.pageUrl, source: SOURCE_NAMES[pick.source ?? 'pexels'], ...(pick.licence ? { licence: pick.licence } : {}) }
-          break
-        } catch (err) {
-          if (jc.signal.aborted) throw err
-          lastErr = err
-        }
-      }
-      skip.push(found[0].source ?? 'pexels')
-    }
-    if (!got) throw lastErr ?? new HttpError(404, 'not_found', `no stock ${photo ? 'photo' : 'footage'} matched “${o.ask}”`)
-    file = got
+    // a stock photo or clip that shows what the scene searched for (the space's AI looks at each: ai/stock-check.ts)
+    const found = await findStock(jc, { workspaceId: o.workspaceId, photo: kind === 'photo', query: o.ask, aspect: o.aspect, seconds: o.seconds, scene: o.scene, work: o.work })
+    file = found.file
+    credit = found.credit
   } else {
     file = await makeAiClip({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, seconds: o.seconds, outDir: o.work, fromPicture: o.fromPicture, references: o.references, signal: jc.signal, progress: (f, m) => jc.progress(f, m) })
   }

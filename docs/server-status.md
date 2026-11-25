@@ -488,6 +488,13 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   [styles] [--no-drums]`): tonal energy more than 4 cents off, before → after: mallet 56% → 5%, funk 41% → 10%,
   ambient 20% → 9%, pulse 65% → 24%, cinematic 75% → 22% (9% without drums); what remains in rhythmic styles is
   repeated-note and sidechain sidebands, not detuning. `MUSIC_VERSION` 2: music composed before is composed again.
+  *Stock pictures looked at* (24 Nov; a real run's "person stretching by window morning" scene got a water tower):
+  `ai/stock-check.ts` `findStock` downloads each library's first results and has the space's AI (server key or the
+  space's own; `effort: 'low'`, one small call each) look at a 512 px JPEG of the photo, or of a clip's typical frame
+  in its first 8 s, against the search, headline and narration; one that doesn't show it is passed over, at most
+  `STOCK_LOOKS` (6) per scene, then the scene stands in as a failed visual does, the note naming what they showed.
+  Without an AI the first that downloads is used, as before. The editor's music library has a swap button (Use as
+  this video's music → `POST /api/music/:id/use`, confirm, then the editor adopts the new version).
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
