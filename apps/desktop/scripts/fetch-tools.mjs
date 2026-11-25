@@ -101,11 +101,16 @@ async function whisper() {
     // libraries only, next to the model, as a local build does
     const unzipped = path.join(os.tmpdir(), 'whisper-bin-x64')
     fs.rmSync(unzipped, { recursive: true, force: true })
-    execFileSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -Force '${zip}' '${unzipped}'`])
+    // Windows' own tar reads zips. (Expand-Archive broke on the build runners in Nov 2026: Windows PowerShell started
+    // from a PowerShell 7 step loads PowerShell 7's Archive module, which fails, and v0.7.2's first build shipped
+    // without the CLI while this step said "ok".)
+    fs.mkdirSync(unzipped, { recursive: true })
+    execFileSync(path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'tar.exe'), ['-xf', zip, '-C', unzipped])
     const bin = exists(path.join(unzipped, 'Release', exe)) ? path.join(unzipped, 'Release') : unzipped
     fs.rmSync(path.join(out, 'Release'), { recursive: true, force: true })
     for (const f of fs.readdirSync(bin)) if (f === exe || /\.dll$/i.test(f)) fs.copyFileSync(path.join(bin, f), path.join(out, f))
     fs.rmSync(unzipped, { recursive: true, force: true })
+    if (!exists(path.join(out, exe))) throw new Error(`whisper: ${exe} was not in the release zip after unzipping it`)
     if (await cachedOk(model, WHISPER_MODEL.sha256)) return 'ok (model cached)'
     await fetchVerified(WHISPER_MODEL, model)
     return 'ok'
