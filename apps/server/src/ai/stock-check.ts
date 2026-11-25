@@ -21,7 +21,7 @@ export const STOCK_LOOKS = 6
 
 export const StockVerdictSchema = z.object({
   shows: z.boolean().describe('true when the picture’s main subject is what the search names (or plainly the same thing) and it fits the scene; false otherwise'),
-  reason: z.string().describe('What the picture shows, in a few words'),
+  reason: z.string().describe('What the picture shows, in at most eight words, e.g. "a stone water tower in a park"'),
 })
 export type StockVerdict = z.infer<typeof StockVerdictSchema>
 
@@ -68,6 +68,28 @@ export const STOCK = {
   },
 }
 
+/**
+ * A search and the shorter ones tried after it when it finds nothing to use (its last words dropped, down to two). The
+ * free libraries match every word against titles and tags, so on 24 Nov "baker selling bread market stall" found
+ * nothing at all; the AI's look, which judges against the whole search and the scene, keeps broader results honest.
+ */
+export function searchesFor(query: string): string[] {
+  const words = query.trim().split(/\s+/).filter(Boolean)
+  const out: string[] = []
+  for (let n = words.length; n >= Math.min(2, words.length); n--) out.push(words.slice(0, n).join(' '))
+  return out
+}
+
+/** What the AI said a picture shows, short: its first clause, at most 60 characters, ending on a whole word. */
+export function shortReason(reason: string): string {
+  const first = reason.split(/[;.]/)[0].replace(/\s+/g, ' ').trim()
+  if (first.length <= 60) return first
+  const cut = first.slice(0, 60)
+  // a cut that falls between two words keeps the word before it
+  const space = first[60] === ' ' ? 60 : cut.lastIndexOf(' ')
+  return `${(space > 30 ? cut.slice(0, space) : cut).replace(/[,:\s]+$/, '')}…`
+}
+
 /** A small JPEG of a downloaded photo, or of a clip's most typical frame in its first seconds. */
 async function lookAt(file: string, photo: boolean, work: string, signal: AbortSignal): Promise<string | null> {
   const out = path.join(work, `look-${crypto.randomBytes(4).toString('hex')}.jpg`)
@@ -83,7 +105,8 @@ async function lookAt(file: string, photo: boolean, work: string, signal: AbortS
 
 /**
  * A stock photo or clip for a scene that shows what it searched for: each library in turn, its first results
- * downloaded and looked at until one shows it. Throws (and the scene stands in another way) when none does.
+ * downloaded and looked at until one shows it, then shorter searches (searchesFor) while looks are left. Throws (and
+ * the scene stands in another way) when none does.
  */
 export async function findStock(
   jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
@@ -92,39 +115,48 @@ export async function findStock(
   const what = o.photo ? 'photo' : 'footage'
   jc.progress(0.05, o.photo ? 'Searching stock photos' : 'Searching stock footage')
   let lastErr: unknown
-  const skip: StockSource[] = []
   const passed: string[] = []
+  // a result looked at under one search isn't looked at again under a shorter one
+  const seen = new Set<string>()
   let looks = 0
-  for (let round = 0; round < 4 && looks < STOCK_LOOKS; round++) {
-    const found = await STOCK.search({ query: o.query, aspect: o.aspect, media: o.photo ? 'photo' : 'video', minSeconds: Math.min(20, o.seconds), signal: jc.signal, skip }).catch((err) => {
-      if (jc.signal.aborted || (!lastErr && !passed.length)) throw err
-      return []
-    })
-    if (!found.length) break
-    jc.progress(0.3, o.photo ? 'Finding a photo that fits' : 'Finding footage that fits')
-    for (const pick of found.slice(0, 4)) {
-      if (looks >= STOCK_LOOKS) break
-      let got: { file: string; mime: string; provider: string; model: string }
-      try {
-        got = await STOCK.download(pick, o.work, jc.signal)
-      } catch (err) {
-        if (jc.signal.aborted) throw err
-        lastErr = err
-        continue
+  let searched = false
+  for (const query of searchesFor(o.query)) {
+    if (looks >= STOCK_LOOKS) break
+    const skip: StockSource[] = []
+    for (let round = 0; round < 4 && looks < STOCK_LOOKS; round++) {
+      const results = await STOCK.search({ query, aspect: o.aspect, media: o.photo ? 'photo' : 'video', minSeconds: Math.min(20, o.seconds), signal: jc.signal, skip }).catch((err) => {
+        if (jc.signal.aborted || (!lastErr && !passed.length && !searched)) throw err
+        return []
+      })
+      searched = true
+      if (!results.length) break
+      skip.push(results[0].source ?? 'pexels')
+      const found = results.filter((r) => !seen.has(r.url))
+      jc.progress(0.3, o.photo ? 'Finding a photo that fits' : 'Finding footage that fits')
+      for (const pick of found.slice(0, 4)) {
+        if (looks >= STOCK_LOOKS) break
+        seen.add(pick.url)
+        let got: { file: string; mime: string; provider: string; model: string }
+        try {
+          got = await STOCK.download(pick, o.work, jc.signal)
+        } catch (err) {
+          if (jc.signal.aborted) throw err
+          lastErr = err
+          continue
+        }
+        const picture = await lookAt(got.file, o.photo, o.work, jc.signal)
+        const verdict = picture ? await STOCK.shows({ workspaceId: o.workspaceId, picture, photo: o.photo, query: o.query, scene: o.scene, signal: jc.signal }) : null
+        jc.check()
+        if (verdict) looks++
+        if (verdict && !verdict.shows) {
+          passed.push(shortReason(verdict.reason))
+          fs.rm(got.file, { force: true }, () => undefined)
+          continue
+        }
+        const credit: MediaCredit = { author: pick.author, url: pick.pageUrl, source: SOURCE_NAMES[pick.source ?? 'pexels'], ...(pick.licence ? { licence: pick.licence } : {}) }
+        return { file: got, credit, passedOver: passed }
       }
-      const picture = await lookAt(got.file, o.photo, o.work, jc.signal)
-      const verdict = picture ? await STOCK.shows({ workspaceId: o.workspaceId, picture, photo: o.photo, query: o.query, scene: o.scene, signal: jc.signal }) : null
-      jc.check()
-      if (verdict) looks++
-      if (verdict && !verdict.shows) {
-        passed.push(verdict.reason.trim().slice(0, 80))
-        fs.rm(got.file, { force: true }, () => undefined)
-        continue
-      }
-      const credit: MediaCredit = { author: pick.author, url: pick.pageUrl, source: SOURCE_NAMES[pick.source ?? 'pexels'], ...(pick.licence ? { licence: pick.licence } : {}) }
-      return { file: got, credit, passedOver: passed }
     }
-    skip.push(found[0].source ?? 'pexels')
   }
   if (passed.length) throw new HttpError(404, 'not_found', `none of the ${passed.length} stock ${o.photo ? 'photos' : 'clips'} found showed “${o.query}” (${passed.slice(0, 3).join('; ')})`)
   throw lastErr ?? new HttpError(404, 'not_found', `no stock ${what} matched “${o.query}”`)

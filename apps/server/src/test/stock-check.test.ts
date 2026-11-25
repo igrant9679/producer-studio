@@ -5,7 +5,7 @@ import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { ctx } from '../context'
 import { type AiProvider, setProvider } from '../ai/provider'
-import { STOCK, STOCK_LOOKS, findStock, stockCheckPrompt } from '../ai/stock-check'
+import { STOCK, STOCK_LOOKS, findStock, searchesFor, shortReason, stockCheckPrompt } from '../ai/stock-check'
 import { inlineContext } from '../jobs/worker'
 import { ffmpeg } from '../media/proc'
 import { setup } from './helpers'
@@ -80,6 +80,26 @@ describe('a stock picture for a scene', () => {
     expect(looks).toBe(STOCK_LOOKS)
     expect(searched).toEqual([[], ['openverse']])
     expect((err as Error).message).toBe('none of the 6 stock photos found showed “person stretching by window morning” (a water tower; a water tower; a water tower)')
+  })
+
+  it('tries shorter searches when one finds nothing, and still judges them against the whole search (24 Nov)', async () => {
+    const asked: string[] = []
+    STOCK.search = (async (o: { query: string }) => (asked.push(o.query), o.query === 'baker selling' ? results('openverse', 2) : [])) as typeof STOCK.search
+    downloads()
+    const judged: string[] = []
+    STOCK.shows = async (o) => (judged.push(o.query), { shows: true, reason: 'a baker at a market stall' })
+    const r = await findStock(jc(), { workspaceId: 'ws_stock', photo: true, query: 'baker selling bread market stall', aspect: '16:9', seconds: 6, scene, work })
+    expect(r.file.model).toBe('openverse-0')
+    expect(asked).toEqual(['baker selling bread market stall', 'baker selling bread market', 'baker selling bread', 'baker selling'])
+    expect(judged).toEqual(['baker selling bread market stall'])
+    expect(searchesFor('farmers market vegetable crates')).toEqual(['farmers market vegetable crates', 'farmers market vegetable', 'farmers market'])
+    expect(searchesFor('rain')).toEqual(['rain'])
+  })
+
+  it('keeps what a picture showed short, ending on a whole word', () => {
+    expect(shortReason('Historic stone water tower in a park with lampposts; no person stretching by a window')).toBe('Historic stone water tower in a park with lampposts')
+    expect(shortReason('A wide aerial view of a sprawling industrial harbour full of cranes, containers and ships at dusk')).toBe('A wide aerial view of a sprawling industrial harbour full of…')
+    expect(shortReason('a water tower')).toBe('a water tower')
   })
 
   it('uses the first that downloads when there is no AI to look, as before', async () => {
