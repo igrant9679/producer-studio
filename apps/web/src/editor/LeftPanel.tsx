@@ -725,7 +725,7 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
           <Loader2 size={12} className="spin" /> Loading the library…
         </p>
       ) : !ready.length ? (
-        <p className="ed-note">{desktop ? 'The music library is on producerstudio.app; it isn’t in the desktop app yet.' : 'The library’s music is being made. Each track appears here when it is ready.'}</p>
+        <p className="ed-note">{desktop ? 'The music library comes from producerstudio.app: link this computer to your account (Settings → This computer) and its songs appear here.' : 'The library’s music is being made. Each track appears here when it is ready.'}</p>
       ) : (
         <p className="ed-note">Free to use in any video. Listen first; + adds the song at the playhead, cut to end with your video; the swap button makes it this video’s music in place of the music it has; the wand remakes it for your topic.</p>
       )}
@@ -743,9 +743,11 @@ function MusicLibrary({ playing, waiting, toggle }: { playing: string | null; wa
                 {t.seconds ? ` · ${shortDuration(t.seconds)}` : ''}
               </div>
             </div>
-            <button className="add ghost" aria-label={`Make ${t.title} your own`} title="Make it your own" onClick={() => setCustom({ kind: 'music', ...t })}>
-              <Wand2 size={13} />
-            </button>
+            {!desktop && (
+              <button className="add ghost" aria-label={`Make ${t.title} your own`} title="Make it your own" onClick={() => setCustom({ kind: 'music', ...t })}>
+                <Wand2 size={13} />
+              </button>
+            )}
             {!demo && projectId && (
               <button className="add ghost" aria-label={`Use ${t.title} as this video’s music`} title="Use as this video’s music" onClick={() => setSwapTo(t)}>
                 <Replace size={13} />
@@ -834,7 +836,7 @@ export function ClipLibrary() {
           ))}
         </div>
       ) : !shown.length ? (
-        <p className="ed-note">{ready.length ? 'None of these are ready yet.' : desktop ? 'The clip library is on producerstudio.app; it isn’t in the desktop app yet.' : 'The clips are being made. Each one appears here when it is ready.'}</p>
+        <p className="ed-note">{ready.length ? 'None of these are ready yet.' : desktop ? 'The clip library comes from producerstudio.app: link this computer to your account (Settings → This computer) and its clips appear here.' : 'The clips are being made. Each one appears here when it is ready.'}</p>
       ) : (
         <div className="ed-grid2">
           {shown.map((c) => (

@@ -16,7 +16,7 @@ import { ffmpeg, run } from '../media/proc'
 import { processAsset } from '../media/process'
 import { fitSong } from '../media/fit-song'
 import { type AssetRow, createAssetFromFile } from '../services/assets'
-import { madeItem } from '../services/media-library'
+import { libraryFile, madeItem } from '../services/media-library'
 
 /** Bumped when the composer changes what it writes: music made before is composed again (2: retuned, 24 Nov 2026). */
 export const MUSIC_VERSION = 2
@@ -130,9 +130,10 @@ export async function makeLibraryMusic(
   if (prev) return assetDoc(prev)
   jc.progress(0.1, `Fitting “${o.song.title}” to the video`)
   const info = await madeItem(o.song)
+  const file0 = await libraryFile(o.song)
   const tag = crypto.randomBytes(4).toString('hex')
-  const src = path.join(o.work, `song-${tag}${path.extname(info.key) || '.m4a'}`)
-  await ctx().storage.download(info.key, src)
+  const src = path.join(o.work, `song-${tag}${path.extname(file0.key) || '.m4a'}`)
+  await ctx().storage.download(file0.key, src)
   jc.check()
   const file = path.join(o.work, `music-${tag}.m4a`)
   await fitSong({ src, seconds: info.seconds, duration: o.duration, lufs: voiced ? MUSIC_LUFS : MUSIC_ALONE_LUFS, out: file, signal: jc.signal })

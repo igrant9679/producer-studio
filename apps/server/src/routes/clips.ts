@@ -13,7 +13,7 @@ import { type AppEnv, requireUser } from '../auth'
 import { assetRecord, jobDto } from '../dto'
 import { body, notFound, requireRole } from '../http'
 import { serveObject } from '../media/serve'
-import { addLibraryItem, listClips, madeItem, queueCustom, requireItem } from '../services/media-library'
+import { addLibraryItem, libraryFile, listClips, queueCustom, requireItem } from '../services/media-library'
 import { assertProjectInWorkspace } from '../services/projects'
 
 export const clipRoutes = new Hono<AppEnv>()
@@ -25,15 +25,14 @@ clipRoutes.get('/', async (c) => {
 
 clipRoutes.get('/:id/preview', async (c) => {
   requireUser(c)
-  const info = await madeItem(requireItem(c.req.param('id'), 'clip'))
-  return serveObject(c, { key: info.key, contentType: info.mime }, { cache: 'private, max-age=86400' })
+  const file = await libraryFile(requireItem(c.req.param('id'), 'clip'))
+  return serveObject(c, { key: file.key, contentType: file.mime }, { cache: 'private, max-age=86400' })
 })
 
 clipRoutes.get('/:id/poster', async (c) => {
   requireUser(c)
-  const info = await madeItem(requireItem(c.req.param('id'), 'clip'))
-  if (!info.poster) throw notFound('This clip has no poster frame')
-  return serveObject(c, { key: info.poster, contentType: 'image/jpeg' }, { cache: 'private, max-age=86400' })
+  const file = await libraryFile(requireItem(c.req.param('id'), 'clip'), 'poster')
+  return serveObject(c, { key: file.key, contentType: file.mime }, { cache: 'private, max-age=86400' })
 })
 
 clipRoutes.post('/:id/add', async (c) => {

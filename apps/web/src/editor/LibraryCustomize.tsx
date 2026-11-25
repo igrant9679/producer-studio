@@ -16,6 +16,7 @@ import { EditorDialog } from './Dialogs'
 import { addClipInBrand } from './libraryBrand'
 import { useEditor } from './store'
 import { upsertRecord } from './uploads'
+import { useSystem } from '../shell/system'
 
 export type CustomizableItem = ({ kind: 'music' } & LibraryTrack) | LibraryClip
 
@@ -62,6 +63,7 @@ function useBrand(enabled: boolean) {
 }
 
 export function LibraryCustomize({ item, onClose }: { item: CustomizableItem; onClose: () => void }) {
+  const desktop = useSystem((s) => s.info?.mode === 'desktop')
   const isClip = item.kind !== 'music'
   const { brand, logo } = useBrand(isClip)
   const [title, setTitle] = useState('')
@@ -162,7 +164,8 @@ export function LibraryCustomize({ item, onClose }: { item: CustomizableItem; on
             )}
           </section>
         )}
-        <section aria-label="For your topic">
+        {/* remaking an item reads the library's own files: on producerstudio.app only, not in the desktop app */}
+        {!desktop && <section aria-label="For your topic">
           <div className="eyebrow">For your topic</div>
           <label className="ed-custom-label" htmlFor="lib-topic">
             What is your video about?
@@ -174,7 +177,7 @@ export function LibraryCustomize({ item, onClose }: { item: CustomizableItem; on
           <button type="button" className="btn sm primary" disabled={!!busy || !topicOk} onClick={() => void forTopic()}>
             <Sparkles size={13} /> Remake it for this topic
           </button>
-        </section>
+        </section>}
         {progress && (
           <div role="status" className="ed-custom-progress">
             <div className="ed-bar">

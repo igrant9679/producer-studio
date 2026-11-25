@@ -7,6 +7,8 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import {
   CLIP_LIBRARY,
@@ -83,8 +85,9 @@ async function readJson(key: string): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
-/** The item's kept info, or null while it hasn't been made. */
+/** The item's kept info, or null while it hasn't been made (on a desktop: while the linked cloud hasn't made it). */
 export async function libraryInfo(it: LibraryItem): Promise<LibraryInfo | null> {
+  if (onDesktop()) return remoteInfo(it)
   const hit = cache.get(it.id)
   if (hit && hit.until > Date.now()) return hit.info
   let info: LibraryInfo | null = null
@@ -125,8 +128,124 @@ export async function listClips(): Promise<Array<LibraryEntry<LibraryClip>>> {
 /** The kept info of an item that has been made; 404 while it hasn't. */
 export async function madeItem(it: LibraryItem): Promise<LibraryInfo> {
   const info = await libraryInfo(it)
-  if (!info) throw notFound('This item of the library hasn’t been made yet')
+  if (!info) throw notFound(onDesktop() ? 'Link this computer to producerstudio.app (Settings → This computer) to use the media library' : 'This item of the library hasn’t been made yet')
   return info
+}
+
+// ---------------- the library on a desktop (24 Nov 2026) ----------------
+// A desktop makes no library of its own. Linked to producerstudio.app (Settings → This computer) it lists the cloud's
+// (GET /api/music and /api/clips, which a device token may read: auth.ts DEVICE_ROUTES) and fetches each file the first
+// time it is wanted into its own storage (library-cache/), so listening, adding an item, Producer's songs and clips and
+// the swap button all work as on the web. Unlinked, nothing is listed and the panels say how to get it. Remaking an
+// item for a topic stays on the web (it reads the library's drawing code, which the cloud doesn't serve).
+
+const onDesktop = () => ctx().config.mode === 'desktop'
+
+interface RemoteEntry {
+  id: string
+  ready: boolean
+  seconds?: number
+  /** A full-motion clip's library song (the cloud has put it on). */
+  song?: string
+}
+let remote: Partial<Record<'music' | 'clips', { until: number; items: RemoteEntry[] }>> = {}
+
+/** Forget the linked cloud's lists (a link or an unlink; tests). */
+export function forgetRemoteLibrary() {
+  remote = {}
+  cached.clear()
+}
+
+async function remoteList(kind: 'music' | 'clips'): Promise<RemoteEntry[]> {
+  const hit = remote[kind]
+  if (hit && hit.until > Date.now()) return hit.items
+  const { cloud } = await import('../desktop/link')
+  const client = cloud()
+  let items: RemoteEntry[] = []
+  if (client) {
+    try {
+      const res = await client.request('GET', `/api/${kind}`, { timeoutMs: 15_000 })
+      if (res.ok) items = ((await res.json()) as RemoteEntry[]).filter((e) => e && typeof e.id === 'string')
+      else log.warn('media library: the linked cloud did not list its library', { kind, status: res.status })
+    } catch (err) {
+      log.warn('media library: the linked cloud could not be reached for its library', { kind, err })
+    }
+  }
+  remote[kind] = { until: Date.now() + (items.some((e) => e.ready) ? HIT_MS : MISS_MS), items }
+  return items
+}
+
+/** What the linked cloud says of an item, as the info this server would keep (no file of its own yet). */
+async function remoteInfo(it: LibraryItem): Promise<LibraryInfo | null> {
+  const entry = (await remoteList(it.kind === 'music' ? 'music' : 'clips')).find((e) => e.id === it.id)
+  if (!entry?.ready) return null
+  const seconds = entry.seconds ?? (it.kind === 'music' ? 0 : it.seconds)
+  return {
+    key: `cloud:${it.id}`,
+    mime: '',
+    seconds,
+    madeAt: 0,
+    provider: 'producerstudio.app',
+    model: 'library',
+    workspaceId: '',
+    ...(it.kind !== 'music' ? { poster: `cloud-poster:${it.id}` } : {}),
+    ...(entry.song ? { sound: { song: entry.song, rev: CLIP_SOUND_VERSION, original: '' } } : {}),
+  }
+}
+
+const MIME_EXT: Record<string, string> = { 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/aac': 'aac', 'audio/ogg': 'ogg', 'video/mp4': 'mp4', 'video/webm': 'webm', 'image/jpeg': 'jpg', 'image/png': 'png' }
+/** Files fetched from the cloud this run (storage key and type), and the fetches under way. */
+const cached = new Map<string, { key: string; mime: string }>()
+const fetching = new Map<string, Promise<{ key: string; mime: string }>>()
+
+/** The cloud's file of an item (or a clip's poster) in this desktop's storage: fetched the first time. */
+async function fromCloud(it: LibraryItem, info: LibraryInfo, which: 'file' | 'poster'): Promise<{ key: string; mime: string }> {
+  const base = `library-cache/${it.kind === 'music' ? 'music' : 'clips'}/${it.id}.v${version(it)}${info.sound ? `.s${info.sound.rev}` : ''}${which === 'poster' ? '.poster' : ''}`
+  const known = cached.get(base)
+  if (known) return known
+  for (const [mime, ext] of Object.entries(MIME_EXT)) {
+    if (await ctx().storage.stat(`${base}.${ext}`)) {
+      cached.set(base, { key: `${base}.${ext}`, mime })
+      return cached.get(base)!
+    }
+  }
+  const going = fetching.get(base)
+  if (going) return going
+  const run = (async () => {
+    const { cloud } = await import('../desktop/link')
+    const client = cloud()
+    if (!client) throw notFound('Link this computer to producerstudio.app (Settings → This computer) to use the media library')
+    const res = await client.request('GET', `/api/${it.kind === 'music' ? 'music' : 'clips'}/${it.id}/${which === 'poster' ? 'poster' : 'preview'}`, { idleTimeoutMs: 60_000 })
+    if (!res.ok || !res.body) throw new HttpError(503, 'server', 'The media library on producerstudio.app couldn’t be reached just now. Try again in a minute.')
+    const mime = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+    const ext = MIME_EXT[mime] ?? (which === 'poster' ? 'jpg' : it.kind === 'music' ? 'm4a' : 'mp4')
+    const type = mime && MIME_EXT[mime] ? mime : Object.entries(MIME_EXT).find(([, e]) => e === ext)![0]
+    const work = tmpDir('library-fetch')
+    try {
+      const file = path.join(work, `item.${ext}`)
+      await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), fs.createWriteStream(file))
+      await ctx().storage.putFile(`${base}.${ext}`, file, type)
+    } finally {
+      fs.rm(work, { recursive: true, force: true }, () => undefined)
+    }
+    const got = { key: `${base}.${ext}`, mime: type }
+    cached.set(base, got)
+    return got
+  })().finally(() => fetching.delete(base))
+  fetching.set(base, run)
+  return run
+}
+
+/** Where an item's file (or a clip's poster) is in this server's storage, and its type: the library's own on the
+ * cloud, a copy fetched from the linked cloud on a desktop. */
+export async function libraryFile(it: LibraryItem, which: 'file' | 'poster' = 'file'): Promise<{ key: string; mime: string }> {
+  const info = await madeItem(it)
+  if (onDesktop()) return fromCloud(it, info, which)
+  if (which === 'poster') {
+    if (!info.poster) throw notFound('This clip has no poster frame')
+    return { key: info.poster, mime: 'image/jpeg' }
+  }
+  return { key: info.key, mime: info.mime }
 }
 
 // ---------------- the operator's view, and making ----------------
@@ -316,15 +435,16 @@ export async function addLibraryItem(o: { it: LibraryItem; workspaceId: string; 
   if (had) return had
   const work = tmpDir('library-add')
   try {
-    const file = path.join(work, `item${path.extname(info.key)}`)
-    await ctx().storage.download(info.key, file)
+    const src = await libraryFile(o.it)
+    const file = path.join(work, `item${path.extname(src.key) || (o.it.kind === 'music' ? '.m4a' : '.mp4')}`)
+    await ctx().storage.download(src.key, file)
     const row = await createAssetFromFile({
       workspaceId: o.workspaceId,
       userId: o.userId,
       projectId: o.projectId ?? null,
       filePath: file,
       name: `${o.it.kind === 'music' ? 'Music' : o.it.kind === 'motion' ? 'Clip' : 'Animation'} · ${o.it.title}`,
-      mime: info.mime,
+      mime: src.mime || info.mime,
       kind: o.it.kind === 'music' ? 'audio' : 'video',
       origin: 'ai',
       meta: { generated: { kind: 'library', prompt: key, provider: info.provider, model: info.model } },
@@ -350,6 +470,7 @@ export async function addLibraryItem(o: { it: LibraryItem; workspaceId: string; 
 
 /** Checks a customization can be asked for, and queues it as the space's job. */
 export async function queueCustom(o: { it: LibraryItem; mode: CustomMode; topic?: string; aspect?: string; workspaceId: string; userId: string; projectId?: string | null }) {
+  if (onDesktop()) throw new HttpError(400, 'invalid', 'Remaking a library item for your topic is on producerstudio.app.')
   await madeItem(o.it)
   if (o.mode !== 'topic') throw new HttpError(400, 'invalid', 'Your brand goes on in the editor, as titles, text and your logo over the clip.')
   const topic = (o.topic ?? '').trim()

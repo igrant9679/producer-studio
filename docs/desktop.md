@@ -274,3 +274,7 @@ fresh ticket for the same id and is sent again); cloud assets download on demand
 - Assets are uploaded in one request per file: a big file cut short starts again from its first byte (the resumable
   multipart protocol plugs in at `desktop/uploads.ts`).
 - The Kokoro model is the quantized ONNX only; whisper is `small.en` (English).
+- The media library (songs, animations, full-motion clips) is made on producerstudio.app: a linked desktop lists the
+  cloud's and keeps each file it uses in its own storage (`library-cache/`, fetched the first time), so it plays,
+  adds, goes into Producer's videos and swaps a video's music offline afterwards; an unlinked one has none, and
+  remaking an item for a topic is on the web only (0.7.3).

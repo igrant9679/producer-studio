@@ -31,11 +31,18 @@ export async function saveLink(l: Omit<StoredLink, 'token'>, token: string) {
   // remembered after unlink so relinking the same account keeps sync state (and linking another sets this one aside)
   await kvSet('lastLink', { cloudUrl: l.cloudUrl, cloudUserId: l.cloudUserId, account: l.account })
   current = { link, token }
+  forgetLibrary()
+}
+
+/** The media library is the linked cloud's (services/media-library.ts): a new link or an unlink lists it again. */
+function forgetLibrary() {
+  void import('../services/media-library').then((m) => m.forgetRemoteLibrary()).catch(() => undefined)
 }
 
 export async function clearLink() {
   await kvDelete('link')
   current = undefined
+  forgetLibrary()
 }
 
 export function linkInfo(): StoredLink | undefined {

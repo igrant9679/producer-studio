@@ -161,6 +161,10 @@ const DEVICE_ROUTES: Array<[string, RegExp]> = [
   ['GET', /^\/api\/workspaces\/[^/]+\/activity$/],
   // and a cloud space's settings and the person's own in it (desktop/settings-proxy.ts)
   ['GET|PUT', /^\/api\/workspaces\/[^/]+\/(voice-settings|voice-studio|onboarding)$/],
+  // and the media library, read-only and the same for everyone (services/media-library.ts, the library on a desktop)
+  ['GET', /^\/api\/(music|clips)$/],
+  ['GET', /^\/api\/music\/[a-z0-9-]+\/preview$/],
+  ['GET', /^\/api\/clips\/[a-z0-9-]+\/(preview|poster)$/],
 ]
 
 export function deviceMayUse(method: string, path: string): boolean {

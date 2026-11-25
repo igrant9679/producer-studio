@@ -21,7 +21,7 @@ import { HttpError, body, notFound, requireRole } from '../http'
 import { log } from '../log'
 import { MUSIC_VERSION, SFX_DIR, composeMusicFile, sfxManifest } from '../ai/soundtrack'
 import { serveObject } from '../media/serve'
-import { addLibraryItem, listMusic, madeItem, queueCustom, requireItem } from '../services/media-library'
+import { addLibraryItem, libraryFile, listMusic, madeItem, queueCustom, requireItem } from '../services/media-library'
 import { queueProjectMusic } from '../services/project-music'
 import { assertProjectInWorkspace, loadProjectRow } from '../services/projects'
 
@@ -115,8 +115,8 @@ musicRoutes.get('/style/:style/preview', async (c) => {
 
 musicRoutes.get('/:id/preview', async (c) => {
   requireUser(c)
-  const info = await madeItem(requireItem(c.req.param('id'), 'music'))
-  return serveObject(c, { key: info.key, contentType: info.mime }, { cache: 'private, max-age=86400' })
+  const file = await libraryFile(requireItem(c.req.param('id'), 'music'))
+  return serveObject(c, { key: file.key, contentType: file.mime }, { cache: 'private, max-age=86400' })
 })
 
 musicRoutes.post('/:id/add', async (c) => {
