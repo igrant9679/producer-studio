@@ -52,7 +52,7 @@ aiRoutes.get('/transcription', (c) => {
 
 aiRoutes.post('/tts', async (c) => {
   const u = requireUser(c)
-  const b = await body(c, z.object({ workspaceId: z.string().min(1), projectId: z.string().optional(), text: z.string().trim().min(1).max(10000), voice: z.string().max(80), speed: z.number().min(0.5).max(2).optional(), name: z.string().max(200).optional() }))
+  const b = await body(c, z.object({ workspaceId: z.string().min(1), projectId: z.string().optional(), text: z.string().trim().min(1).max(10000), voice: z.string().max(80), speed: z.number().min(0.5).max(2).optional(), name: z.string().max(200).optional(), emotion: z.string().trim().max(200).optional() }))
   await requireRole(u.id, b.workspaceId, 'editor')
   await assertProjectInWorkspace(b.projectId, b.workspaceId)
   const voice = validVoice(b.voice)

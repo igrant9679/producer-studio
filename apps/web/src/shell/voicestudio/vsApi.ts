@@ -11,12 +11,38 @@ export const VS_PROXY = '/api/voicestudio/x'
 /** URL of a VoiceStudio resource through the proxy (for <audio src> / downloads). */
 export const vsUrl = (vsPath: string) => `${VS_PROXY}${vsPath.startsWith('/') ? '' : '/'}${vsPath}`
 
+/** A model VoiceStudio wants its licence accepted for before it uses it (0.5.7+: its 403 `model_licence_required`). */
+export interface LicenceModel {
+  repo_id: string
+  license?: string
+  category?: string
+  fingerprint?: string
+}
+
+/** GET /models/licenses/details/{repo}: the terms, and whether they are accepted on this computer. */
+export interface LicenceDetails {
+  repo_id: string
+  info?: { license?: string; credit?: string; notes?: string; source_url?: string; evidence_url?: string; commercial_inference?: string; commercial_outputs?: string; license_category?: string }
+  acceptance: { required: boolean; accepted: boolean; state: string; fingerprint: string; license?: string; category?: string; accepted_at?: string | number | null }
+}
+
+/** Models a refused request asked a licence for: ModelLicences' LicenceAsk shows the terms and Accept. */
+export const useLicenceAsk = create<{ models?: LicenceModel[]; ask: (m: LicenceModel[]) => void; clear: () => void }>((set) => ({
+  ask: (models) => set({ models }),
+  clear: () => set({ models: undefined }),
+}))
+
 async function readError(res: Response): Promise<HttpError> {
   let err: ApiError = { error: res.statusText || `HTTP ${res.status}` }
   try {
     const j = (await res.json()) as ApiError & { detail?: unknown }
     // VoiceStudio errors come through the proxy as {detail}
     const d = j.detail
+    const licence = d && typeof d === 'object' && (d as { code?: unknown }).code === 'model_licence_required' ? ((d as { models?: LicenceModel[] }).models ?? []) : undefined
+    if (licence) {
+      if (licence.length) useLicenceAsk.getState().ask(licence)
+      return new HttpError(res.status, { error: `Accept the licence of ${licence.map((m) => m.repo_id).join(', ') || 'this model'} first (Voice Studio → Engine), then try again.` })
+    }
     err = j.error ? j : { error: typeof d === 'string' ? d : (d as { message?: string } | undefined)?.message ?? JSON.stringify(d ?? j).slice(0, 300) }
   } catch {
     /* non-JSON */
@@ -84,6 +110,46 @@ export async function* readSse(res: Response, signal?: AbortSignal): AsyncGenera
 
 export type VsStatus = VoiceStudioStatus & { sourceUrl?: string; log?: string[] }
 
+/** GET /api/sfx/status (0.5.8): the MOSS-SoundEffect sidecar, installed through /engines/sidecar/moss-soundeffect/install. */
+export interface SfxStatus {
+  engine_id: string
+  installed: boolean
+  available: boolean
+  /** This computer can run it (an NVIDIA graphics card). */
+  supported: boolean
+  reason?: string | null
+  reason_code?: string | null
+  install_allowed?: boolean
+  download_bytes?: number
+  license?: string
+  min_seconds: number
+  max_seconds: number
+  default_seconds: number
+  max_prompt_chars: number
+}
+
+/** POST /api/sfx/generate: the take, served from /audio. */
+export interface SfxTake {
+  id: string
+  audio_url: string
+  duration_s: number
+  gen_time_s?: number
+  seed: number
+  engine?: string
+}
+
+/** POST /convert (the voice changer): the take, and for a video the video with its voice swapped. */
+export interface ConvertTake {
+  id: string
+  audio_url: string
+  video_url?: string | null
+  duration_s: number
+  text?: string
+  engine?: string
+  notes?: string[]
+  message?: string
+}
+
 export const vsApi = {
   status: () => sysFetch<VsStatus>('GET', '/voicestudio/status'),
   install: () => sysFetch<Job>('POST', '/voicestudio/install'),
@@ -100,8 +166,12 @@ export const vsApi = {
   },
   adoptVoice: (b: { workspaceId: string; vsProfileId: string; name: string; kind?: 'clone' | 'design'; engine?: string; language?: string; description?: string; consent: { agreed: true; speaker?: string; statement: string } }) =>
     sysFetch<VoiceProfile>('POST', '/voicestudio/voices/adopt', b),
-  /** Send a library asset into VoiceStudio (dub upload, vocal isolation, transcription, audiobook import). */
-  async assetTo(target: 'dub' | 'batch' | 'gallery' | 'clean-audio' | 'transcribe' | 'audiobook-import', assetId: string, fields: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<Response> {
+  licenceDetails: (repo: string) => vsGet<LicenceDetails>(`/models/licenses/details/${repo}`),
+  acceptLicence: (repo_id: string, fingerprint: string) => vsGet<LicenceDetails['acceptance']>('/models/licenses/accept', { body: { repo_id, fingerprint, accepted: true } }),
+  sfxStatus: () => vsGet<SfxStatus>('/api/sfx/status'),
+  sfxGenerate: (b: { prompt: string; duration: number; seed?: number }, signal?: AbortSignal) => vsGet<SfxTake>('/api/sfx/generate', { body: b, signal }),
+  /** Send a library asset into VoiceStudio (dub upload, vocal isolation, transcription, audiobook import, the voice changer). */
+  async assetTo(target: 'dub' | 'batch' | 'gallery' | 'clean-audio' | 'transcribe' | 'audiobook-import' | 'convert', assetId: string, fields: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<Response> {
     const q = new URLSearchParams({ assetId })
     for (const [k, v] of Object.entries(fields)) if (v !== undefined) q.set(k, v)
     const res = await fetch(`/api/voicestudio/asset-to/${target}?${q}`, { method: 'POST', credentials: 'include', signal })
@@ -170,6 +240,10 @@ export const LICENSE_NOTES: Record<string, { license: string; commercial: boolea
   'omnivoice-subprocess': { license: 'CC-BY-NC (weights)', commercial: false },
   'omnivoice-gguf': { license: 'CC-BY-NC-4.0 (weights)', commercial: false },
   cosyvoice: { license: 'Apache-2.0', commercial: true },
+  'cosyvoice-gguf': { license: 'Apache-2.0', commercial: true },
+  'ming-tts': { license: 'MIT', commercial: true },
+  'audiocpp-dots': { license: 'Apache-2.0', commercial: true },
+  'moss-soundeffect': { license: 'Apache-2.0', commercial: true, note: 'Sound effects, not speech. NVIDIA graphics cards only.' },
   voxcpm2: { license: 'Apache-2.0', commercial: true },
   'moss-tts-nano': { license: 'Apache-2.0', commercial: true },
   'moss-tts-v15': { license: 'Apache-2.0', commercial: true },

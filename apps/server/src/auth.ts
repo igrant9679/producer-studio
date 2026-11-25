@@ -152,6 +152,8 @@ const DEVICE_ROUTES: Array<[string, RegExp]> = [
   ['POST', /^\/api\/assets\/[^/]+\/(complete|abort|restore)$/],
   ['GET|HEAD', /^\/api\/media\/[^/]+\/[^/]+$/],
   ['*', /^\/api\/voice\/(profiles|relay)(\/.*)?$/],
+  // what this desktop can make for the website (VoiceStudio sound effects; routes/voice.ts)
+  ['PUT', /^\/api\/voice\/abilities$/],
   ['GET', /^\/api\/events$/],
   // an offline desktop asks whether the cloud answers again (desktop/sync.ts probe)
   ['GET', /^\/api\/health(\/[a-z]+)?$/],

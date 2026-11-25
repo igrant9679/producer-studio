@@ -41,7 +41,7 @@ export function registerHandlers() {
     return { assetId, transcript: r.transcript }
   })
   registerHandler('ai.tts', async (jc) => {
-    const i = jc.job.input as { workspaceId: string; projectId?: string; text: string; voice: string; speed?: number; name?: string }
+    const i = jc.job.input as { workspaceId: string; projectId?: string; text: string; voice: string; speed?: number; name?: string; emotion?: string }
     const r = await synthesizeToAsset({ ...i, userId: jc.job.userId, jobId: jc.job.id }, jc)
     return { asset: r.asset, duration: r.duration }
   })

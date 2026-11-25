@@ -58,7 +58,7 @@ export const DUB_LANGUAGES: Array<{ code: string; label: string }> = 'af:Afrikaa
     return { code: p.slice(0, i), label: p.slice(i + 1) }
   })
 
-/** Engines that can design a voice from a description in VoiceStudio 0.5.6 (OmniVoice's instruct tags). */
+/** Engines that can design a voice from a description in VoiceStudio 0.5.8 (OmniVoice's instruct tags). */
 export const canDesign = (b: { id: string; supports_voice_design?: boolean }) => b.supports_voice_design === true || b.id.startsWith('omnivoice')
 
 export function LicenseChip({ engine }: { engine: string }) {

@@ -1,5 +1,6 @@
-// Audio tools (desktop): vocal isolation (VoiceStudio's demucs /clean-audio) and multilingual transcription
-// (/transcribe), from a library clip or a file. Results go back into the library or download as text/SRT.
+// Audio tools (desktop): sound effects from a description and the voice changer (VoiceStudio 0.5.8, NewAudioTools.tsx),
+// vocal isolation (VoiceStudio's demucs /clean-audio) and multilingual transcription (/transcribe), from a library clip or
+// a file. Results go back into the library or download as text/SRT.
 import type { AssetRecord } from '@producer/core'
 import { AudioLines, Copy, FileAudio, FileText, Library, Upload, Wand2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -10,17 +11,26 @@ import { uploadFiles } from '../stores'
 import { Spinner, useAsync } from '../ui'
 import { formatDuration } from '../util'
 import { DesktopOnly, EngineGate, LANGUAGES, useElapsed, useEngine } from './shared'
+import { CloudSoundEffects, SoundEffects, VoiceChanger } from './NewAudioTools'
 import { vsApi, vsFetch } from './vsApi'
 
 type Src = { file?: File; asset?: AssetRecord; label: string }
 
 export default function AudioTools({ onOpenEngine }: { onOpenEngine: () => void }) {
   const { desktop, status, running } = useEngine()
-  if (!desktop) return <DesktopOnly feature="Audio tools" />
+  // the website: sound effects come from a linked desktop; the other tools run only there
+  if (!desktop)
+    return (
+      <DesktopOnly feature="Audio tools">
+        <CloudSoundEffects />
+      </DesktopOnly>
+    )
   return (
     <EngineGate status={status} onOpenEngine={onOpenEngine}>
       {running && (
         <div className="vs-engine">
+          <SoundEffects />
+          <VoiceChanger />
           <Isolate />
           <Transcribe />
         </div>

@@ -121,6 +121,9 @@ export interface GenerateOptions {
   effectPreset?: string
   seed?: number
   instruct?: string
+  /** How the line is said ("warm and excited", 0.5.7+): IndexTTS2 takes it as its emotion, CosyVoice 3 and VoxCPM2 as a
+   * spoken direction, other engines ignore it (VoiceStudio's own Stories [emotion:] tag). */
+  emotion?: string
   signal?: AbortSignal
 }
 
@@ -135,6 +138,7 @@ export async function generateToFile(vsProfileId: string, outFile: string, o: Ge
   if (o.effectPreset) form.set('effect_preset', o.effectPreset)
   if (o.seed != null) form.set('seed', String(o.seed))
   if (o.instruct) form.set('instruct', o.instruct)
+  if (o.emotion?.trim()) form.set('emotion', o.emotion.trim().slice(0, 200))
   const res = await vsOk('/generate', { method: 'POST', form, signal: o.signal, timeoutMs: 30 * 60_000 })
   const buf = Buffer.from(await res.arrayBuffer())
   if (buf.length < 64) throw new Error('VoiceStudio returned no audio')

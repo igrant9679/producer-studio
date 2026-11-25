@@ -1,5 +1,5 @@
 import type { AssetRecord } from '@producer/core'
-import { addAsset, addItem, createAudioItem, scriptSeconds } from '@producer/core'
+import { addAsset, addItem, createAudioItem, isProfileVoice, scriptSeconds } from '@producer/core'
 import clsx from 'clsx'
 import { AudioLines, BookA, BookOpen, Columns3, FileSpreadsheet, Layers, Library, Users, ChevronRight, Clapperboard, Cpu, Download, History, Languages, Mic, MoreHorizontal, Pause, Pencil, Play, Search, SlidersHorizontal, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -23,6 +23,7 @@ const Gallery = lazy(() => import('../voicestudio/Gallery'))
 const Stories = lazy(() => import('../voicestudio/Stories'))
 const AudioTools = lazy(() => import('../voicestudio/AudioTools'))
 const EnginePanel = lazy(() => import('../voicestudio/EnginePanel'))
+const LicenceAsk = lazy(() => import('../voicestudio/ModelLicences').then((m) => ({ default: m.LicenceAsk })))
 import { downloadUrl, formatDuration, relativeTime } from '../util'
 
 const EXAMPLES: Array<{ label: string; text: string }> = [
@@ -44,7 +45,7 @@ async function generateVoiceover(workspaceId: string, voice: string, voiceName: 
   if (!text || d.gen) return
   d.set({ gen: { progress: -1, message: 'Queued…' } })
   try {
-    const job = await api.tts({ workspaceId, text, voice, speed: d.speed, name: d.name.trim() || `${text.split(/\s+/).slice(0, 5).join(' ')}… — ${voiceName}` })
+    const job = await api.tts({ workspaceId, text, voice, speed: d.speed, ...(isProfileVoice(voice) && d.emotion.trim() ? { emotion: d.emotion.trim() } : {}), name: d.name.trim() || `${text.split(/\s+/).slice(0, 5).join(' ')}… — ${voiceName}` })
     const done = await waitForJob<{ asset: AssetRecord; duration: number }>(job.id, (j) => {
       useJobs.getState().upsert(j)
       useTtsDraft.getState().set({ gen: { progress: j.progress, message: j.message || 'Generating…' } })
@@ -222,7 +223,7 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
   const workspaceId = useSession((s) => s.workspaceId)
   const voices = useVoices()
   const gate = useEditGate()
-  const { text, name, speed, gen, made, set } = useTtsDraft()
+  const { text, name, speed, emotion, gen, made, set } = useTtsDraft()
   const favourites = useTtsDraft((s) => (workspaceId ? s.favourites[workspaceId] : undefined)) ?? NO_FAVOURITES
   const setText = (t: string | ((t: string) => string)) => set((d) => ({ text: typeof t === 'function' ? t(d.text) : t }))
   const [filter, setFilter] = useState<VoiceFilter>('All')
@@ -467,6 +468,13 @@ function TextToSpeech({ voice, setVoice, onOpenVoices, onOpenTab }: { voice: str
               </div>
               <input id="vs-speed" type="range" min={0.5} max={2} step={0.05} value={speed} onChange={(e) => set({ speed: Number(e.target.value) })} className="ps-range" />
             </div>
+            {isProfileVoice(voice) && (
+              <div className="ps-vs-speed">
+                <label className="label" htmlFor="vs-emotion" style={{ margin: 0 }}>How it’s said</label>
+                <input id="vs-emotion" className="input" maxLength={200} placeholder="e.g. warm and excited, a calm whisper" value={emotion} onChange={(e) => set({ emotion: e.target.value })} />
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Followed by engines that take a direction (IndexTTS2, CosyVoice 3, VoxCPM2); others read the script plainly.</div>
+              </div>
+            )}
             {gen ? (
               <div className="ps-vs-gen">
                 <div className="row" style={{ fontSize: '0.7812rem' }}><Spinner size={13} /> {gen.message}</div>
@@ -516,7 +524,7 @@ const HEAD: Record<Tab, { title: string; body: string }> = {
   stories: { title: 'Stories & stems', body: 'Cast a multi-voice script, then export a mix plus perfectly aligned stems per character — or open it as a project with a track per voice.' },
   batch: { title: 'Batch dubbing', body: 'Queue many videos into one or more languages and let them render in the background. Finished dubs land in your library.' },
   audiobook: { title: 'Audiobooks', body: 'Turn a manuscript, EPUB or PDF into a narrated audiobook with chapters, character voices and mastering.' },
-  tools: { title: 'Audio tools', body: 'Isolate vocals from music and noise, and transcribe speech in hundreds of languages.' },
+  tools: { title: 'Audio tools', body: 'Make sound effects from a description, change the voice in a recording or video, isolate vocals from music and noise, and transcribe speech in hundreds of languages.' },
   engine: { title: 'VoiceStudio engine', body: 'The local engine behind cloning, design, dubbing and audiobooks: setup, models, licences and status.' },
 }
 
@@ -586,6 +594,8 @@ export default function VoiceStudio() {
           {tab === 'audiobook' && <Audiobooks onOpenEngine={() => setTab('engine')} />}
           {tab === 'tools' && <AudioTools onOpenEngine={() => setTab('engine')} />}
           {tab === 'engine' && <EnginePanel />}
+          {/* a request VoiceStudio refused for an unaccepted model licence, on any tab (desktop) */}
+          {desktop && <LicenceAsk />}
         </Suspense>
       </TabPanel>
     </div>

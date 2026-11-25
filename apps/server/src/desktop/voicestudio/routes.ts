@@ -232,6 +232,8 @@ const ASSET_TARGETS: Record<string, { path: string; field: string; variant?: 'au
   'clean-audio': { path: '/clean-audio', field: 'audio', variant: 'audio' },
   transcribe: { path: '/transcribe', field: 'audio', variant: 'audio' },
   'audiobook-import': { path: '/audiobook/import', field: 'file' },
+  // the voice changer: a sound clip, or a video whose voice is swapped with its picture kept (MP4, MOV, M4V, MKV)
+  convert: { path: '/convert', field: 'audio' },
 }
 
 /** POST /api/voicestudio/asset-to/:target?assetId=… plus extra form fields as query (e.g. input_type, source_lang,
@@ -323,6 +325,10 @@ const ALLOW: Array<[RegExp, RegExp]> = [
   [/^POST$/, /^\/stories\//],
   [/^(GET|POST|DELETE)$/, /^\/batch\//],
   [/^POST$/, /^\/(transcribe|clean-audio)$/],
+  // 0.5.8: sound effects from a description (MOSS-SoundEffect sidecar, installed through /engines/sidecar/…) and the
+  // voice changer (speech to speech; "keep my delivery" keeps the speaker's timing, a video keeps its picture)
+  [/^(GET|POST)$/, /^\/api\/sfx\/(status|generate)$/],
+  [/^POST$/, /^\/convert$/],
   [/^(GET|POST)$/, /^\/api\/settings\/license(\/|$)/],
   [/^(GET|POST)$/, /^\/dictation\/(models|readiness|prefs)$/],
   [/^(GET|POST)$/, /^\/community\/(sources|manifest|items)(\/|$)/],

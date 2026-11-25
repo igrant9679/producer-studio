@@ -1,6 +1,6 @@
 # VoiceStudio in Producer Studio
 
-Producer Studio's **Voice Studio** page integrates [VoiceStudio](https://github.com/debpalash/VoiceStudio) (v0.5.6, AGPL-3.0,
+Producer Studio's **Voice Studio** page integrates [VoiceStudio](https://github.com/debpalash/VoiceStudio) (v0.5.8, AGPL-3.0,
 by Palash Debnath and contributors): voice cloning, voice design, preset voices, multi-engine TTS, video dubbing and a
 voice changer, audiobooks, vocal isolation and multilingual transcription.
 
@@ -21,7 +21,7 @@ Web UI (Voice Studio tabs) ── same-origin fetches only
   content hash of the runtime sources, `VS_TREE_SHA256`), never patch it, and talk to it over HTTP. This keeps Producer
   Studio's own code out of the AGPL; the Engine tab shows the AGPL notice and links the complete corresponding source.
 - **Runtime** (`apps/server/src/desktop/voicestudio/runtime.ts`) mirrors VoiceStudio's own Electron setup: checksum-pinned
-  uv 0.12.13 → `uv sync --frozen --no-dev --managed-python --python 3.11` (torch 2.8 cu128 on Windows) → cuDNN 8 compat
+  uv 0.12.13 → `uv sync --frozen --no-dev --managed-python --python 3.11` (torch 2.10 cu128 on Windows since 0.5.8; the sources include config/ since 0.5.7) → cuDNN 8 compat
   libs on CUDA hosts → import probe → `.runtime-ready` stamp. Launch: `python -m uvicorn main:app --app-dir backend`.
 - **Isolation:** everything lives under `%LOCALAPPDATA%\Producer Studio\VoiceStudio` (or `voiceStudioDir`):
   `OMNIVOICE_DATA_DIR=data`, `OMNIVOICE_CACHE_DIR=models`, `OMNIVOICE_ENV_FILE=env` (so `~/.config/omnivoice/env` is
@@ -34,7 +34,7 @@ Web UI (Voice Studio tabs) ── same-origin fetches only
   Blocked: `/system/*`, other `/api/settings/*`, telephony, marketplace, MCP, auth. `POST /api/voicestudio/import` only
   fetches output paths (`/audio`, `/voice_audio`, `/dub`, `/batch`, `/audiobook`, `/preview`) and refuses `..`, `%2e`
   and backslashes, which fetch() would otherwise resolve onto other routes.
-- **No auth on the backend port (known limit).** VoiceStudio 0.5.6 trusts every loopback caller: `OMNIVOICE_API_KEY`
+- **No auth on the backend port (known limit).** VoiceStudio 0.5.8 still trusts every loopback caller: `OMNIVOICE_API_KEY`
   only gates non-loopback clients (`core/auth.py`, `BearerKeyMiddleware`), so a per-launch key wouldn't keep other
   local processes (or other Windows users on the machine) off the port. The allow-list above guards our own API, not
   the backend itself. Closing this needs an upstream option to require the key on loopback.
@@ -55,9 +55,16 @@ Web UI (Voice Studio tabs) ── same-origin fetches only
 - Profiles sync like projects (change feed + `voice_profile` tombstones). Deleting a voice anywhere deletes the
   VoiceStudio profile on the owning desktop.
 - **Relay:** on the cloud, TTS with a `vs:` voice becomes a `voice.relay` job (never claimed by the cloud worker). The
-  owning desktop polls `GET /api/voice/relay/claim` every 5 s (only when it has local voices), generates, pushes the asset
+  owning desktop polls `GET /api/voice/relay/claim` every 5 s (only when it has local voices, or can make sound effects), generates, pushes the asset
   (same id, origin `tts`) through sync, then `POST /relay/:id/done`. Progress heartbeats carry cancellation back. Producer AI
   and the assistant wait on relay jobs inline. A device counts as online if it talked to the cloud in the last 2 minutes.
+  A relay carries the speech's `emotion` (how it is said) when one was given.
+- **Sound effects from the website (0.7.4):** `POST /api/voice/sfx {workspaceId, prompt, duration}` relays to the user's
+  online desktop that said it can make them (`devices.abilities`, migration v20: the desktop checks VoiceStudio's
+  `/api/sfx/status` every minute while it runs and `PUT /api/voice/abilities {sfx}` when that changes or every 5 minutes;
+  it then polls the relay even without local voices). The relay job has `op: 'sfx'`; the desktop calls `/api/sfx/generate`
+  and imports the take (`desktop/voicestudio/sfx.ts`, origin `voicestudio`). `GET /api/voice/sfx/available` tells the
+  website's Audio tools whether to offer it.
 
 ## Feature map (Voice Studio tabs)
 
@@ -70,8 +77,9 @@ Web UI (Voice Studio tabs) ── same-origin fetches only
 | Stories & stems | Each line via `/generate`, decoded and laid out client-side (`lib/storyStems.ts`): mixdown + **timeline-aligned stems** (one per character, full length, silent elsewhere — unlike VoiceStudio's own back-to-back stems), uploaded to the library or opened as a project with one audio track per character; mastered single file via `POST /longform/render` (SSE) → `/audio/<output>` |
 | Batch dubbing | `POST /batch/enqueue` (via `asset-to/batch` for library videos), `/batch/jobs[/{id}]`, `cancel`/`retry`/`DELETE`, `/batch/download/{id}/{lang}`; jobs queued with "add to library" are tracked in desktop_kv and a 15 s watcher imports each finished language as a `dub` asset (`desktop/voicestudio/batch.ts`) |
 | Audiobooks | `/audiobook/import`, `/audiobook/plan`, `/audiobook/preview`, `POST /audiobook` (SSE), `/audio/<output>` |
-| Audio tools | `/clean-audio`, `/transcribe` |
-| Engine | `/engines/tts`, `/engines/select`, `/engines/sidecar/{id}/install`, `/api/settings/license`, `/models`, `/models/install[/status|/cancel]`, `DELETE /models/{repo}` |
+| Text to speech (0.7.4) | "How it's said" sends `emotion` with `/generate` for `vs:` voices (IndexTTS2 takes it as its emotion, CosyVoice 3 and VoxCPM2 as a direction, others ignore it); Stories lines take `[emotion: …]` or the box under each line |
+| Audio tools | `/clean-audio`, `/transcribe`; since 0.7.4 sound effects (`GET /api/sfx/status`, `POST /api/sfx/generate {prompt, duration, seed?}`, installed with `/engines/sidecar/moss-soundeffect/install`; NVIDIA only) and the voice changer (`POST /convert` multipart `audio`, `profile_id`, `keep_delivery`; via `asset-to/convert` for library clips; a video returns `video_url` with its picture kept) |
+| Engine | `/engines/tts`, `/engines/select`, `/engines/sidecar/{id}/install`, `/api/settings/license`, `/models`, `/models/install[/status|/cancel]`, `DELETE /models/{repo}`, model licences (`GET /models/licenses/details/{repo}`, `POST /models/licenses/accept {repo_id, fingerprint, accepted}`) |
 
 Results come into the library with `POST /api/voicestudio/import` (server fetches a VoiceStudio output path into an asset)
 and library media goes to VoiceStudio with `POST /api/voicestudio/asset-to/:target` (no browser round trip).
@@ -99,6 +107,14 @@ VoiceStudio's code is AGPL-3.0. Model weights have their own terms: the default 
 (non-commercial)**; CosyVoice 3, VoxCPM2, MOSS-TTS, dots.tts, Confucius4-TTS are Apache-2.0; GPT-SoVITS is MIT; NLLB
 (translation) is CC-BY-NC. The UI shows a licence chip per engine (`LICENSE_NOTES` in `vsApi.ts`) — informational, not legal
 advice. Decision (Oct 2026): expose all engines with warnings; Producer Studio isn't used to produce videos commercially.
+
+**Model licence acceptance (0.5.7+).** VoiceStudio refuses to load a model whose weights aren't licensed for commercial use
+(`k2-fsa/OmniVoice`, the default engine; `facebook/nllb-200-distilled-600M`; `IndexTeam/IndexTTS-2.5`;
+`Serveurperso/OmniVoice-GGUF`) until its terms are accepted once on that computer: 403
+`{detail: {code: 'model_licence_required', models: [{repo_id, fingerprint, …}]}}`. The Engine tab lists those models with
+Review & accept (`ModelLicences.tsx`); a refused request on any tab opens the same dialog (`vsApi` readError →
+`useLicenceAsk` → `LicenceAsk`); a job refused on the server (a voiceover, a relay from the website) says to accept it in
+Voice Studio → Engine (`vsErrorMessage`).
 
 ## Gaps / next
 

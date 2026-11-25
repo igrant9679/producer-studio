@@ -22,8 +22,22 @@ function qs(q?: VsInit['query']): string {
   return str ? `?${str}` : ''
 }
 
+/** The models whose licence VoiceStudio wants accepted before it uses them (its 403 `model_licence_required`, 0.5.7+). */
+export function licenceModels(body: unknown): Array<{ repo_id: string; license?: string; category?: string; fingerprint?: string }> | undefined {
+  const d = (body as { detail?: unknown } | undefined)?.detail
+  if (!d || typeof d !== 'object' || (d as { code?: unknown }).code !== 'model_licence_required') return undefined
+  const models = (d as { models?: unknown }).models
+  return Array.isArray(models) ? models.filter((m): m is { repo_id: string } => typeof (m as { repo_id?: unknown })?.repo_id === 'string') : []
+}
+
 /** Human message from a VoiceStudio error body ({detail: string | {message} | [{msg}]}). */
 export function vsErrorMessage(body: unknown, status: number): string {
+  // a model whose licence hasn't been accepted on this computer: say where to accept it (jobs relayed from the web land here)
+  const unaccepted = licenceModels(body)
+  if (unaccepted) {
+    const names = unaccepted.map((m) => m.repo_id).join(', ')
+    return `VoiceStudio needs the licence of ${names || 'a voice model'} accepted first, once on this computer: open Voice Studio → Engine in the desktop app and accept it, then try again.`
+  }
   const d = (body as { detail?: unknown } | undefined)?.detail ?? body
   if (typeof d === 'string') return d
   if (Array.isArray(d)) return d.map((x) => (x as { msg?: string }).msg ?? JSON.stringify(x)).join('; ')

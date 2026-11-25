@@ -25,6 +25,8 @@ export interface ProfileTtsInput {
   voice: string
   speed?: number
   name?: string
+  /** How it is said (see TtsInput.emotion). */
+  emotion?: string
   /** The job making this voice, recorded on the clip (see AssetMeta.jobId). */
   jobId?: string
 }
@@ -46,7 +48,7 @@ export async function enqueueRelay(input: ProfileTtsInput): Promise<JobRow> {
   // the device's owner must still be in the space
   const member = await ctx().db.select().from(memberships).where(and(eq(memberships.workspaceId, row.workspaceId), eq(memberships.userId, dev.userId))).limit(1)
   if (!member.length) throw new HttpError(409, 'conflict', `The owner of “${row.name}” is no longer in this space.`)
-  const relay: RelayInput = { profileId: row.id, deviceId: row.deviceId, text: input.text, speed: input.speed, name: input.name || `${autoName(input.text)} — ${row.name}`, language: row.language ?? undefined }
+  const relay: RelayInput = { profileId: row.id, deviceId: row.deviceId, text: input.text, speed: input.speed, name: input.name || `${autoName(input.text)} — ${row.name}`, language: row.language ?? undefined, ...(input.emotion?.trim() ? { emotion: input.emotion.trim() } : {}) }
   return enqueue('voice.relay', { ...relay, workspaceId: input.workspaceId, projectId: input.projectId ?? undefined }, { workspaceId: input.workspaceId, userId: input.userId, projectId: input.projectId, message: `Waiting for ${dev.name}` })
 }
 
@@ -92,7 +94,7 @@ export async function synthesizeProfileToAsset(input: ProfileTtsInput, jc: Step,
     const out = path.join(work, 'voice.wav')
     // VoiceStudio can't pause or stress on cue: the dictionary applied, the markup said plainly (A-20)
     const { spokenPlain } = await import('../ai/voiceScript')
-    const r = await generateToFile(prof.vsProfileId, out, { text: await spokenPlain(input.text, input.workspaceId), speed: input.speed, language: prof.language ?? undefined, engine: prof.engine || undefined, signal: jc.signal })
+    const r = await generateToFile(prof.vsProfileId, out, { text: await spokenPlain(input.text, input.workspaceId), speed: input.speed, language: prof.language ?? undefined, engine: prof.engine || undefined, emotion: input.emotion, signal: jc.signal })
     jc.check()
     const created = await createAssetFromFile({
       ...(assetId ? { id: assetId } : {}),
@@ -104,7 +106,7 @@ export async function synthesizeProfileToAsset(input: ProfileTtsInput, jc: Step,
       mime: 'audio/wav',
       kind: 'audio',
       origin: 'tts',
-      meta: { tts: { text: input.text, voice: input.voice, speed: input.speed ?? 1 }, duration: Math.round(r.duration * 1000) / 1000, ...(input.jobId ? { jobId: input.jobId } : {}) },
+      meta: { tts: { text: input.text, voice: input.voice, speed: input.speed ?? 1, ...(input.emotion?.trim() ? { emotion: input.emotion.trim() } : {}) }, duration: Math.round(r.duration * 1000) / 1000, ...(input.jobId ? { jobId: input.jobId } : {}) },
     })
     jc.progress(0.8, 'Analysing audio')
     const row = await processAsset(created.id, { signal: jc.signal, check: jc.check, progress: () => undefined })

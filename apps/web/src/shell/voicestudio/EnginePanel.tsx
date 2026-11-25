@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { toast, toastError } from '../../lib/toast'
 import { systemApi } from '../system'
 import { Modal, Progress, Spinner, useAsync } from '../ui'
+import { ModelLicences } from './ModelLicences'
 import { LicenseChip, canDesign, engineName, fmtBytes, useTtsEngines, type TtsBackend } from './shared'
 import { LICENSE_NOTES, useVsStatus, vsApi, vsFetch, vsGet, vsRunning } from './vsApi'
 
@@ -101,6 +102,7 @@ export default function EnginePanel() {
         {showLog && <pre className="vs-log">{(s?.log ?? []).join('\n') || 'No log output yet.'}</pre>}
       </section>
 
+      {running && <ModelLicences />}
       {running && <Engines />}
       {running && <Models />}
 

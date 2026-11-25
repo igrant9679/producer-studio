@@ -8,6 +8,8 @@ export interface StoryLine {
   character: string
   text: string
   kind: 'line' | 'heading'
+  /** How the line is said (`[emotion: excited]`, VoiceStudio's own Stories tag), sent with it to /generate. */
+  emotion?: string
 }
 
 export const NARRATOR = 'Narrator'
@@ -15,12 +17,21 @@ export const NARRATOR = 'Narrator'
 let n = 0
 const lid = () => `l${Date.now().toString(36)}${(n++).toString(36)}`
 
+const EMOTION = /^\[emotion:\s*([^\]]{1,200})\]\s*(.+)$/i
+
+/** A line's leading `[emotion: …]` taken off its words. */
+function withEmotion(line: Omit<StoryLine, 'emotion'>): StoryLine {
+  const m = EMOTION.exec(line.text)
+  return m && m[1].trim() ? { ...line, text: m[2].trim(), emotion: m[1].trim() } : line
+}
+
 /**
  * One line per non-empty input line:
  *   `# Chapter title`  → heading
  *   `[Alice] Hello`    → Alice
  *   `ALICE: Hello` / `Alice: Hello` (name ≤ 32 chars, no sentence punctuation) → Alice
  *   anything else      → narrator
+ * Any line can then start with `[emotion: whispering]`, how it is said (`[Maya] [emotion: excited] We did it!`).
  */
 export function parseStory(text: string): StoryLine[] {
   const out: StoryLine[] = []
@@ -32,14 +43,19 @@ export function parseStory(text: string): StoryLine[] {
       out.push({ id: lid(), character: '', text: h[1].trim(), kind: 'heading' })
       continue
     }
+    // the narrator's own emotion, before "[emotion: …]" could be read as a character called "emotion: …"
+    if (EMOTION.test(line)) {
+      out.push(withEmotion({ id: lid(), character: '', text: line, kind: 'line' }))
+      continue
+    }
     const br = /^\[([^\]]{1,32})\]\s*(.+)$/.exec(line)
     if (br) {
-      out.push({ id: lid(), character: tidyName(br[1]), text: br[2].trim(), kind: 'line' })
+      out.push(withEmotion({ id: lid(), character: tidyName(br[1]), text: br[2].trim(), kind: 'line' }))
       continue
     }
     const co = /^([A-Za-z][\w .'-]{0,31}):\s+(.+)$/.exec(line)
     if (co && !/[.!?]/.test(co[1])) {
-      out.push({ id: lid(), character: tidyName(co[1]), text: co[2].trim(), kind: 'line' })
+      out.push(withEmotion({ id: lid(), character: tidyName(co[1]), text: co[2].trim(), kind: 'line' }))
       continue
     }
     out.push({ id: lid(), character: '', text: line, kind: 'line' })

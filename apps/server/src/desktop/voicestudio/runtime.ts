@@ -1,6 +1,6 @@
 // VoiceStudio runtime (desktop only): installs the pinned, unmodified VoiceStudio backend (AGPL-3.0,
 // github.com/debpalash/VoiceStudio) into an app-private folder and runs it as a separate loopback process that the
-// Producer server talks to over HTTP. Mirrors VoiceStudio 0.5.6's own Electron runtime setup
+// Producer server talks to over HTTP. Mirrors VoiceStudio 0.5.8's own Electron runtime setup
 // (electron/src/main/runtime-project.ts + backend.ts): uv-managed CPython 3.11, `uv sync --frozen --no-dev`, the cuDNN 8
 // compat libraries on CUDA hosts, an import probe, then `python -m uvicorn main:app --app-dir backend`.
 //
@@ -21,14 +21,15 @@ import { log } from '../../log'
 import { killTree, run } from '../../media/proc'
 import { getSettings } from '../settings'
 
-export const VS_VERSION = '0.5.6'
-export const VS_COMMIT = '3915a62cb482bb43117aaebab57d22745bd1cc21'
+export const VS_VERSION = '0.5.8'
+export const VS_COMMIT = 'c1050c16d9b3881e5d4161ee58ccc0582b3f20f9'
 const VS_ARCHIVE_URL = `https://github.com/debpalash/VoiceStudio/archive/${VS_COMMIT}.zip`
 /** Content hash of the extracted runtime sources (treeHash below); stable even if GitHub regenerates the zip. */
-export const VS_TREE_SHA256 = 'c1a0c8eaa71297edae978302cddb0ab7528dff83fc51a132e46377f8789d74de'
+export const VS_TREE_SHA256 = 'a191e51df62ea113f1dbdfb13051ae7554ffbb30f2e1c8ad1ada65290d13da73'
 export const VS_SOURCE_URL = `https://github.com/debpalash/VoiceStudio/tree/v${VS_VERSION}`
-/** What VoiceStudio's runtime copies into its project folder. */
-export const VS_SOURCES = ['backend', 'omnivoice', 'pyproject.toml', 'uv.lock', 'README.md', 'LICENSE']
+/** What VoiceStudio's runtime copies into its project folder. Since 0.5.7 also config/ (the backend reads app.json and
+ * analytics.json from it at start); upstream's own list adds two AMD ROCm scripts, not used here. */
+export const VS_SOURCES = ['backend', 'config', 'omnivoice', 'pyproject.toml', 'uv.lock', 'README.md', 'LICENSE']
 
 const UV_VERSION = '0.12.13'
 const UV_URL = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-pc-windows-msvc.zip`
@@ -208,7 +209,7 @@ export function backendEnv(port: number): NodeJS.ProcessEnv {
   if (process.platform === 'win32') {
     Object.assign(env, { TORCHDYNAMO_DISABLE: '1', HF_HUB_DISABLE_SYMLINKS: '1', HF_HUB_DISABLE_SYMLINKS_WARNING: '1', FOR_DISABLE_CONSOLE_CTRL_HANDLER: '1' })
   }
-  // No API key: VoiceStudio 0.5.6 only asks non-loopback clients for one (core/auth.py resolve_principal and
+  // No API key: VoiceStudio 0.5.8 still only asks non-loopback clients for one (core/auth.py resolve_principal and
   // BearerKeyMiddleware let every 127.0.0.1 caller through), so a per-launch key wouldn't keep other local processes
   // out. Binding to loopback only is the boundary we have (see docs/voicestudio.md).
   for (const k of ['OMNIVOICE_SERVER_MODE', 'OMNIVOICE_API_KEY', 'OMNIVOICE_BIND_HOST', 'OMNIVOICE_BACKEND_CMD']) delete env[k]

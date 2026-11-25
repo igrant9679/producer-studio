@@ -350,7 +350,7 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
   })
 
   it('starts the engine and proxies only allow-listed VoiceStudio routes (without an Origin header)', async () => {
-    expect((await desk.json('POST', '/api/voicestudio/start')).body).toMatchObject({ state: 'running', supported: true, version: '0.5.6' })
+    expect((await desk.json('POST', '/api/voicestudio/start')).body).toMatchObject({ state: 'running', supported: true, version: '0.5.8' })
     const eng = await desk.json('GET', '/api/voicestudio/x/engines/tts')
     expect(eng.status).toBe(200)
     expect(eng.body.backends[0].id).toBe('omnivoice')
@@ -452,6 +452,99 @@ describe('VoiceStudio voices (fake VoiceStudio backend)', () => {
     // fetch() would resolve these to /system/info: refused before anything is queued
     for (const source of ['/audio/../system/info', '/audio/%2e%2e/system/info', '/audio\\..\\system\\info'])
       expect((await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source, name: 'x', kind: 'audio' })).status, source).toBe(400)
+  })
+
+  it('VoiceStudio 0.5.8: sound effects, the voice changer and model licences get through the proxy; library media goes to the voice changer', async () => {
+    for (const [m, p, b] of [
+      ['GET', '/api/sfx/status', undefined],
+      ['POST', '/api/sfx/generate', { prompt: 'a door creaks', duration: 4 }],
+      ['GET', '/models/licenses/details/k2-fsa/OmniVoice', undefined],
+      ['POST', '/models/licenses/accept', { repo_id: 'k2-fsa/OmniVoice', fingerprint: `v2:${'a'.repeat(64)}`, accepted: true }],
+    ] as const) {
+      expect((await desk.json(m, `/api/voicestudio/x${p}`, b)).status, `${m} ${p}`).toBe(200)
+    }
+    // still closed: other settings, other sfx paths
+    expect((await desk.json('POST', '/api/voicestudio/x/api/settings/cuda-device', { device: 0 })).status).toBe(403)
+    expect((await desk.json('GET', '/api/voicestudio/x/api/sfx/../system/info')).status).not.toBe(200)
+    // a library clip goes to the voice changer as the `audio` upload, with the voice and "keep my delivery"
+    const imp = await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source: '/audio/h9.wav', name: 'To change', kind: 'audio' })
+    const asset = (await waitJob(desk, imp.body.id)).result.asset.asset.id as string
+    const conv = await app.request(`/api/voicestudio/asset-to/convert?assetId=${asset}&profile_id=p1&keep_delivery=true`, { method: 'POST', headers: { cookie: desk.cookie } })
+    expect(conv.status).toBe(200)
+    expect(await conv.json()).toMatchObject({ audio_url: expect.stringMatching(/^\/audio\/conv-/), engine: 'cosyvoice' })
+    const sent = fake.requests.filter((r) => r.path === '/convert').at(-1)!
+    expect(sent.body).toMatch(/name="audio"; filename="To_change\.wav"/)
+    expect(sent.body).toMatch(/name="keep_delivery"\r\n\r\ntrue/)
+    expect(sent.body).toMatch(/name="profile_id"\r\n\r\np1/)
+    // the changed recording comes into the library like any VoiceStudio output
+    const back = await desk.json('POST', '/api/voicestudio/import', { workspaceId: cloudWs, source: '/audio/conv-1.wav', name: 'Changed', kind: 'audio' })
+    expect((await waitJob(desk, back.body.id)).status).toBe('done')
+  })
+
+  it('speech said a certain way: the direction reaches VoiceStudio, from the desktop and from the website; an unaccepted licence says where to accept it', async () => {
+    const job = await desk.json('POST', '/api/ai/tts', { workspaceId: cloudWs, text: 'We did it!', voice: `vs:${voiceId}`, emotion: 'warm and excited' })
+    const done = await waitJob(desk, job.body.id)
+    expect(done.status).toBe('done')
+    expect(fake.requests.filter((r) => r.path === '/generate').at(-1)!.body).toMatch(/name="emotion"\r\n\r\nwarm and excited/)
+    // asked for on the website: relayed with it
+    const relayed = await cloudHttp.json('POST', '/api/ai/tts', { workspaceId: cloudWs, text: 'From the browser.', voice: `vs:${voiceId}`, emotion: 'a calm whisper' })
+    expect(relayed.body.kind).toBe('voice.relay')
+    await (engine as unknown as { relayTick: () => Promise<void> }).relayTick()
+    expect((await waitJob(cloudHttp, relayed.body.id)).status).toBe('done')
+    expect(fake.requests.filter((r) => r.path === '/generate').at(-1)!.body).toMatch(/name="emotion"\r\n\r\na calm whisper/)
+    // none given: nothing sent
+    const plain = await desk.json('POST', '/api/ai/tts', { workspaceId: cloudWs, text: 'Plainly.', voice: `vs:${voiceId}` })
+    await waitJob(desk, plain.body.id)
+    expect(fake.requests.filter((r) => r.path === '/generate').at(-1)!.body).not.toMatch(/name="emotion"/)
+    // the default model's licence not accepted yet: the voiceover says where to accept it
+    fake.settings.licenceAccepted = false
+    try {
+      const refused = await desk.json('POST', '/api/ai/tts', { workspaceId: cloudWs, text: 'Not yet.', voice: `vs:${voiceId}` })
+      const failed = await waitJob(desk, refused.body.id)
+      expect(failed.status).toBe('error')
+      expect(failed.error).toMatch(/licence of k2-fsa\/OmniVoice accepted first.*Voice Studio → Engine/)
+      // the proxy passes the 403 and its models through for the page's licence dialog
+      const viaProxy = await app.request('/api/voicestudio/x/generate', { method: 'POST', headers: { cookie: desk.cookie }, body: (() => { const f = new FormData(); f.set('text', 'x'); return f })() })
+      expect(viaProxy.status).toBe(403)
+      expect((await viaProxy.json()).detail).toMatchObject({ code: 'model_licence_required', models: [{ repo_id: 'k2-fsa/OmniVoice', fingerprint: `v2:${'a'.repeat(64)}` }] })
+    } finally {
+      fake.settings.licenceAccepted = true
+    }
+  })
+
+  it('the website makes a sound effect through a linked desktop that can make one', async () => {
+    const e = engine as unknown as { relayCheckAt: number; relaySaidSfx?: unknown; relayBusy: boolean; relayTick: () => Promise<void> }
+    // the engine's own 5 s relay timer runs too: wait out a tick of its before checking now (a busy relay skips the call)
+    const checkNow = async () => {
+      while (e.relayBusy) await new Promise((r) => setTimeout(r, 25))
+      e.relayCheckAt = 0
+      await e.relayTick()
+    }
+    // a desktop that hasn't said it can: refused plainly
+    fake.settings.sfxAvailable = false
+    e.relaySaidSfx = undefined
+    await checkNow()
+    expect((await cloudHttp.json('GET', '/api/voice/sfx/available')).body).toEqual({ available: false })
+    const no = await cloudHttp.json('POST', '/api/voice/sfx', { workspaceId: cloudWs, prompt: 'rain on a tin roof', duration: 6 })
+    expect(no.status).toBe(409)
+    expect(no.body.error).toMatch(/linked desktop with VoiceStudio’s sound effects installed/)
+    // sound effects installed: the desktop says so on its next check, and the website sends it the request
+    fake.settings.sfxAvailable = true
+    await checkNow()
+    const avail = (await cloudHttp.json('GET', '/api/voice/sfx/available')).body
+    expect(avail).toMatchObject({ available: true, device: expect.any(String) })
+    const job = await cloudHttp.json('POST', '/api/voice/sfx', { workspaceId: cloudWs, prompt: 'rain on a tin roof', duration: 6 })
+    expect(job.status).toBe(200)
+    expect(job.body.kind).toBe('voice.relay')
+    await checkNow()
+    const done = await waitJob(cloudHttp, job.body.id)
+    expect(done.status).toBe('done')
+    expect(JSON.parse(fake.requests.filter((r) => r.path === '/api/sfx/generate').at(-1)!.body)).toEqual({ prompt: 'rain on a tin roof', duration: 6 })
+    const id = done.result.asset.asset.id
+    expect((await cloudHttp.json('GET', `/api/assets/${id}`)).body).toMatchObject({ origin: 'voicestudio', asset: { kind: 'audio', name: expect.stringMatching(/^Sound effect · rain on a tin roof(\.wav)?$/) } })
+    // a prompt or length out of range is refused
+    expect((await cloudHttp.json('POST', '/api/voice/sfx', { workspaceId: cloudWs, prompt: '', duration: 6 })).status).toBe(400)
+    expect((await cloudHttp.json('POST', '/api/voice/sfx', { workspaceId: cloudWs, prompt: 'x', duration: 31 })).status).toBe(400)
   })
 
   it('proxies the live dictation WebSocket only for this app’s signed-in pages, without leaking Origin or cookies', async () => {

@@ -54,6 +54,8 @@ export interface TtsInput {
   voice: string
   speed?: number
   name?: string
+  /** How it is said, in a few words ("warm and excited"): VoiceStudio voices on engines that take a direction; others ignore it. */
+  emotion?: string
   /** The job making this voice (recorded on the clip, so a crash can't leave it "processing" for good). */
   jobId?: string
 }

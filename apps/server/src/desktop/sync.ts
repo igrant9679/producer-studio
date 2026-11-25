@@ -216,6 +216,10 @@ export class SyncEngine {
   private relayBusy = false
   private relayCheckAt = 0
   private relayHasVoices = false
+  /** VoiceStudio here can make sound effects (0.5.8's sidecar, installed and running): the website may send them. */
+  private relayCanSfx = false
+  /** What was last told to the cloud about it, and when (it is told again when it changes, or every 5 minutes). */
+  private relaySaidSfx?: { sfx: boolean; at: number }
   /** After a failed claim, the relay waits until this time (doubling up to 5 minutes; a success starts it over). */
   private relayRetryAt = 0
   private relayBackoffMs = 0
@@ -1738,8 +1742,22 @@ export class SyncEngine {
       this.relayCheckAt = Date.now()
       const n = await rawQuery<{ n: string }>(sql`SELECT count(*)::text AS n FROM voice_profiles WHERE vs_profile_id IS NOT NULL`).catch(() => [{ n: '0' }])
       this.relayHasVoices = Number(n[0]?.n ?? 0) > 0
+      // sound effects for the website: only while VoiceStudio runs with them installed (its own status says)
+      this.relayCanSfx = false
+      if (voiceStudio.status().state === 'running') {
+        const { vsJson } = await import('./voicestudio/client')
+        this.relayCanSfx = await vsJson<{ available?: boolean }>('/api/sfx/status', { timeoutMs: 10_000 }).then((s) => s.available === true, () => false)
+      }
+      const said = this.relaySaidSfx
+      if (!said || said.sfx !== this.relayCanSfx || Date.now() - said.at > 5 * 60_000) {
+        const sfx = this.relayCanSfx
+        await c.json('PUT', '/api/voice/abilities', { sfx }).then(
+          () => (this.relaySaidSfx = { sfx, at: Date.now() }),
+          () => undefined,
+        )
+      }
     }
-    if (!this.relayHasVoices || Date.now() < this.relayRetryAt) return
+    if ((!this.relayHasVoices && !this.relayCanSfx) || Date.now() < this.relayRetryAt) return
     this.relayBusy = true
     try {
       const r = await c.json<{ job: RelayClaim | null }>('GET', '/api/voice/relay/claim')
@@ -1784,10 +1802,15 @@ export class SyncEngine {
       const { synthesizeProfileToAsset } = await import('../services/voice')
       // the project may not be on this desktop; the asset still lands in the space's library
       const projectId = job.projectId && (await ctx().db.select({ id: projects.id }).from(projects).where(eq(projects.id, job.projectId)).limit(1)).length ? job.projectId : undefined
-      const r = await synthesizeProfileToAsset(
-        { workspaceId: job.workspaceId, userId: job.userId, projectId, text: job.input.text, voice: `vs:${job.input.profileId}`, speed: job.input.speed, name: job.input.name },
-        { signal: ac.signal, progress: (f, m) => progress(f < 0 ? -1 : Math.min(0.9, f * 0.9), m), check: () => ac.signal.throwIfAborted() },
-      )
+      const step = { signal: ac.signal, progress: (f: number, m?: string) => progress(f < 0 ? -1 : Math.min(0.9, f * 0.9), m), check: () => ac.signal.throwIfAborted() }
+      const input = job.input
+      const r =
+        input.op === 'sfx'
+          ? await (await import('./voicestudio/sfx')).makeSoundEffect({ workspaceId: job.workspaceId, userId: job.userId, projectId, prompt: input.prompt, duration: input.duration, name: input.name }, step)
+          : await synthesizeProfileToAsset(
+              { workspaceId: job.workspaceId, userId: job.userId, projectId, text: input.text, voice: `vs:${input.profileId}`, speed: input.speed, name: input.name, emotion: input.emotion },
+              step,
+            )
       progress(0.92, 'Uploading')
       await this.syncNow()
       if (!(await syncRow('asset', r.row.id))?.uploaded) throw new Error('The audio could not be uploaded to the cloud')
@@ -1857,5 +1880,5 @@ interface RelayClaim {
   userId: string
   workspaceId: string
   projectId?: string
-  input: { profileId: string; text: string; speed?: number; name?: string }
+  input: { op?: undefined; profileId: string; text: string; speed?: number; name?: string; emotion?: string } | { op: 'sfx'; prompt: string; duration: number; name?: string }
 }

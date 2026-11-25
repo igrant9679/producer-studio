@@ -423,6 +423,9 @@ export interface TtsRequest {
   voice: string
   speed?: number
   name?: string
+  /** How it is said, in a few words ("warm and excited"): a VoiceStudio voice on an engine that takes a direction
+   * (IndexTTS2, CosyVoice 3, VoxCPM2); built-in voices and other engines ignore it. */
+  emotion?: string
 }
 
 export interface Voice {

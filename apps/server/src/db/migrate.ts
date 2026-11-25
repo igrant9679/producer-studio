@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -721,6 +721,14 @@ CREATE TABLE IF NOT EXISTS ai_key_shares (
 CREATE INDEX IF NOT EXISTS ai_key_shares_from_idx ON ai_key_shares(from_workspace_id, provider);
 `
 
+/**
+ * v20 — what a linked desktop can make for the cloud (VoiceStudio 0.5.8's sound effects): the desktop reports it
+ * (PUT /api/voice/abilities), and the website sends a sound effect only to a desktop that can make one.
+ */
+export const DDL_V20 = `
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS abilities jsonb;
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -744,4 +752,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [17, DDL_V17],
   [18, DDL_V18],
   [19, DDL_V19],
+  [20, DDL_V20],
 ]

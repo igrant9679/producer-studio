@@ -9,7 +9,7 @@ import { ctx } from '../context'
 import { assets, devices, jobs, memberships, voiceProfiles } from '../db/schema'
 import { assetRecord, jobDto } from '../dto'
 import { HttpError, body, forbidden, notFound, requireRole } from '../http'
-import { emitJob, failJob, finishJob, getJob, updateProgress } from '../jobs/queue'
+import { emitJob, enqueue, failJob, finishJob, getJob, updateProgress } from '../jobs/queue'
 
 export type VoiceProfileRow = typeof voiceProfiles.$inferSelect
 
@@ -184,7 +184,52 @@ export interface RelayInput {
   speed?: number
   name?: string
   language?: string
+  /** How it is said (see TtsInput.emotion); absent from relays queued before 0.7.4. */
+  emotion?: string
 }
+
+/** A sound effect made on a linked desktop (VoiceStudio 0.5.8's MOSS-SoundEffect), relayed the same way as speech. */
+export interface SfxRelayInput {
+  op: 'sfx'
+  deviceId: string
+  prompt: string
+  /** Seconds, 1–30. */
+  duration: number
+  name?: string
+}
+
+export type AnyRelayInput = RelayInput | SfxRelayInput
+export const isSfxRelay = (i: AnyRelayInput): i is SfxRelayInput => (i as SfxRelayInput).op === 'sfx'
+
+/** A desktop's abilities count while it is online and said so lately (it re-says them every minute or so). */
+const ABILITIES_FRESH_MS = 10 * 60_000
+
+/** The user's online desktop that can make sound effects (the one seen most recently), if any. */
+async function sfxDevice(userId: string, now = Date.now()) {
+  const mine = await ctx().db.select().from(devices).where(eq(devices.userId, userId))
+  return mine
+    .filter((d) => d.abilities?.sfx && (d.abilities.at ?? 0) > now - ABILITIES_FRESH_MS && !!d.lastSeenAt && now - d.lastSeenAt <= DEVICE_ONLINE_MS)
+    .sort((a, b) => (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0))[0]
+}
+
+// GET /api/voice/sfx/available → { available, device? }: whether the website can make a sound effect now
+voiceRoutes.get('/sfx/available', async (c) => {
+  const u = requireUser(c)
+  const d = await sfxDevice(u.id)
+  return c.json(d ? { available: true, device: d.name } : { available: false })
+})
+
+// POST /api/voice/sfx {workspaceId, projectId?, prompt, duration, name?} → Job (the sound lands in the library)
+voiceRoutes.post('/sfx', async (c) => {
+  const u = requireUser(c)
+  const b = await body(c, z.object({ workspaceId: z.string().min(1), projectId: z.string().optional(), prompt: z.string().trim().min(1).max(500), duration: z.number().min(1).max(30), name: z.string().trim().max(200).optional() }))
+  await requireRole(u.id, b.workspaceId, 'editor')
+  const d = await sfxDevice(u.id)
+  if (!d) throw new HttpError(409, 'conflict', 'Sound effects are made on a linked desktop with VoiceStudio’s sound effects installed (Voice Studio → Audio tools there), and none of yours is online with them now.')
+  const relay: SfxRelayInput = { op: 'sfx', deviceId: d.id, prompt: b.prompt, duration: Math.round(b.duration), name: b.name || `Sound effect · ${b.prompt.slice(0, 60)}` }
+  const j = await enqueue('voice.relay', { ...relay, workspaceId: b.workspaceId, projectId: b.projectId }, { workspaceId: b.workspaceId, userId: u.id, projectId: b.projectId, message: `Waiting for ${d.name}` })
+  return c.json(jobDto(j))
+})
 
 function requireDevice(c: Parameters<typeof requireUser>[0]): { userId: string; deviceId: string } {
   const u = requireUser(c)
@@ -216,7 +261,15 @@ voiceRoutes.get('/relay/claim', async (c) => {
   const j = rows[0]
   if (!j) return c.json({ job: null })
   emitJob(j)
-  return c.json({ job: { ...jobDto(j), input: j.input as unknown as RelayInput, userId: j.userId } })
+  return c.json({ job: { ...jobDto(j), input: j.input as unknown as AnyRelayInput, userId: j.userId } })
+})
+
+// PUT /api/voice/abilities {sfx} (a linked desktop): what it can make for the website now
+voiceRoutes.put('/abilities', async (c) => {
+  const { deviceId } = requireDevice(c)
+  const b = await body(c, z.object({ sfx: z.boolean() }))
+  await ctx().db.update(devices).set({ abilities: { sfx: b.sfx, at: Date.now() } }).where(eq(devices.id, deviceId))
+  return c.json({ ok: true })
 })
 
 voiceRoutes.post('/relay/:id/progress', async (c) => {

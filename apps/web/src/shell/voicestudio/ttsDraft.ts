@@ -13,6 +13,8 @@ export interface TtsDraft {
   text: string
   name: string
   speed: number
+  /** How it is said (a VoiceStudio voice on an engine that takes a direction); kept on this device only. */
+  emotion: string
   /** The voice picked for it (unset: the brand kit's default). */
   voice?: string
   gen?: { progress: number; message: string }
@@ -29,7 +31,7 @@ export interface TtsDraft {
   set: (p: Partial<TtsDraft> | ((s: TtsDraft) => Partial<TtsDraft>)) => void
 }
 
-const EMPTY = { text: '', name: '', speed: 1, voice: undefined as string | undefined }
+const EMPTY = { text: '', name: '', speed: 1, emotion: '', voice: undefined as string | undefined }
 
 export const useTtsDraft = create<TtsDraft>((set) => ({ ...EMPTY, shown: 0, byWs: {}, favourites: {}, loaded: {}, set: (p) => set(p) }))
 onUserReset(() => useTtsDraft.setState({ ...EMPTY, ws: undefined, gen: undefined, made: undefined, byWs: {}, favourites: {}, loaded: {} }))

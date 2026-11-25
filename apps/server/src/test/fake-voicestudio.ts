@@ -1,5 +1,6 @@
 // A tiny stand-in for the VoiceStudio backend (the endpoints Producer uses), for tests: /health, /profiles,
-// /generate (returns a real WAV), /engines/tts, /audio/<file>. Records every request.
+// /generate (returns a real WAV), /engines/tts, /audio/<file>, and 0.5.8's sound effects (/api/sfx/*), voice changer
+// (/convert) and model licences (/models/licenses/*, with /generate refusing 403 until accepted). Records every request.
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -53,7 +54,9 @@ export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
   const batch = new Map<string, { id: string; status: string; filename: string; langs: string[]; outputs: Record<string, string> }>()
   const profiles = new Map<string, { id: string; name: string; kind: string }>()
   /** Tests change these while it runs. */
-  const settings = { generateDelayMs: 0 }
+  const settings = { generateDelayMs: 0, licenceAccepted: true, sfxAvailable: true }
+  const FINGERPRINT = `v2:${"a".repeat(64)}`
+  const acceptance = () => ({ repo_id: "k2-fsa/OmniVoice", license: "CC-BY-NC", category: "noncommercial", required: true, accepted: settings.licenceAccepted, state: settings.licenceAccepted ? "accepted" : "not_accepted", fingerprint: FINGERPRINT })
   let n = 0
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
@@ -63,11 +66,11 @@ export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
       const body = Buffer.concat(chunks).toString('latin1')
       requests.push({ method: req.method ?? 'GET', path: url.pathname + url.search, contentType: req.headers['content-type'], body, origin: req.headers.origin as string | undefined })
       const json = (code: number, o: unknown) => {
-        res.writeHead(code, { 'content-type': 'application/json', 'x-omnivoice-backend': '0.5.6' })
+        res.writeHead(code, { 'content-type': 'application/json', 'x-omnivoice-backend': '0.5.8' })
         res.end(JSON.stringify(o))
       }
       const field = (name: string) => new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`).exec(body)?.[1]
-      if (url.pathname === '/health') return json(200, { status: 'ok', device: 'cpu', version: '0.5.6' })
+      if (url.pathname === '/health') return json(200, { status: 'ok', device: 'cpu', version: '0.5.8' })
       if (url.pathname === '/engines/tts') return json(200, { active: 'omnivoice', backends: [{ id: 'omnivoice', display_name: 'VoiceStudio (OmniVoice)', available: true, supports_cloning: true, supports_voice_design: true }] })
       if (url.pathname === '/profiles' && req.method === 'POST') {
         const kind = field('kind') ?? 'clone'
@@ -83,11 +86,15 @@ export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
         return json(200, { deleted: del[1] })
       }
       if (url.pathname === '/generate' && req.method === 'POST') {
+        if (!settings.licenceAccepted) {
+          const { required: _r, accepted: _a, state: _s, ...m } = acceptance()
+          return json(403, { detail: { code: 'model_licence_required', message: 'Licence not accepted for k2-fsa/OmniVoice. Review and accept it in Model Catalogue.', models: [m] } })
+        }
         const pid = field('profile_id')
         if (pid && !profiles.has(pid)) return json(404, { detail: 'Profile not found' })
         const wav = makeWav(1.5)
         const send = () => {
-          res.writeHead(200, { 'content-type': 'audio/wav', 'x-omnivoice-backend': '0.5.6', 'x-audio-id': `h${++n}`, 'x-seed': '42', 'x-audio-duration': '1.5', 'content-length': String(wav.length) })
+          res.writeHead(200, { 'content-type': 'audio/wav', 'x-omnivoice-backend': '0.5.8', 'x-audio-id': `h${++n}`, 'x-seed': '42', 'x-audio-duration': '1.5', 'content-length': String(wav.length) })
           res.end(wav)
         }
         if (settings.generateDelayMs) return void setTimeout(send, settings.generateDelayMs)
@@ -106,12 +113,34 @@ export async function startFakeVoiceStudio(opts: FakeOptions = {}) {
       if (bj) return batch.has(bj[1]) ? json(200, batch.get(bj[1])) : json(404, { detail: 'Job not found' })
       if (url.pathname.startsWith('/batch/download/') && opts.batchMp4) {
         const buf = fs.readFileSync(opts.batchMp4)
-        res.writeHead(200, { 'content-type': 'video/mp4', 'content-disposition': 'attachment; filename="clip_es.mp4"', 'content-length': String(buf.length), 'x-omnivoice-backend': '0.5.6' })
+        res.writeHead(200, { 'content-type': 'video/mp4', 'content-disposition': 'attachment; filename="clip_es.mp4"', 'content-length': String(buf.length), 'x-omnivoice-backend': '0.5.8' })
         return res.end(buf)
+      }
+      if (url.pathname === '/models/licenses/details/k2-fsa/OmniVoice') return json(200, { repo_id: 'k2-fsa/OmniVoice', info: { license: 'CC-BY-NC', commercial_inference: 'restricted', source_url: 'https://huggingface.co/k2-fsa/OmniVoice' }, acceptance: acceptance(), history: [] })
+      if (url.pathname === '/models/licenses/accept' && req.method === 'POST') {
+        const b = JSON.parse(body || '{}') as { repo_id?: string; fingerprint?: string; accepted?: boolean }
+        if (b.accepted !== true) return json(400, { detail: { code: 'acceptance_required' } })
+        if (b.fingerprint !== FINGERPRINT) return json(409, { detail: { code: 'terms_changed' } })
+        settings.licenceAccepted = true
+        return json(200, acceptance())
+      }
+      if (url.pathname === '/api/sfx/status') return json(200, { engine_id: 'moss-soundeffect', installed: settings.sfxAvailable, available: settings.sfxAvailable, supported: true, reason: settings.sfxAvailable ? null : 'Not installed', min_seconds: 1, max_seconds: 30, default_seconds: 10, max_prompt_chars: 500 })
+      if (url.pathname === '/api/sfx/generate' && req.method === 'POST') {
+        if (!settings.sfxAvailable) return json(409, { detail: { code: 'sfx_not_installed', message: 'Sound effects are not installed. Install them from Tools > Sound effects.' } })
+        const b = JSON.parse(body || '{}') as { prompt?: string; duration?: number }
+        return json(200, { id: `s${++n}`, audio_url: `/audio/sfx-${n}.wav`, duration_s: b.duration ?? 10, gen_time_s: 1, seed: 7, engine: 'moss-soundeffect' })
+      }
+      if (url.pathname === '/convert' && req.method === 'POST') {
+        const file = /name="audio"; filename="([^"]+)"/.exec(body)?.[1]
+        if (!file) return json(422, { detail: 'audio is required' })
+        const pid = field('profile_id')
+        if (!pid || !profiles.has(pid)) return json(404, { detail: "That voice profile doesn't exist." })
+        const video = /\.(mp4|mov|m4v|mkv)$/i.test(file)
+        return json(200, { id: `c${++n}`, audio_url: `/audio/conv-${n}.wav`, text: '', duration_s: 1, engine: 'cosyvoice', ...(video ? { video_url: `/audio/conv-${n}.mp4`, notes: [], message: '' } : {}) })
       }
       if (url.pathname.startsWith('/audio/')) {
         const wav = makeWav(1)
-        res.writeHead(200, { 'content-type': 'audio/wav', 'content-disposition': 'attachment; filename="take.wav"', 'content-length': String(wav.length), 'x-omnivoice-backend': '0.5.6' })
+        res.writeHead(200, { 'content-type': 'audio/wav', 'content-disposition': 'attachment; filename="take.wav"', 'content-length': String(wav.length), 'x-omnivoice-backend': '0.5.8' })
         return res.end(wav)
       }
       json(404, { detail: `not in fake: ${req.method} ${url.pathname}` })

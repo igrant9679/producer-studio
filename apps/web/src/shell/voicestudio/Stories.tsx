@@ -86,7 +86,7 @@ function StoryStudio() {
   }
 
   const voiceFor = (l: StoryLine) => cast[l.character || NARRATOR] || voices[0]?.vsProfileId
-  const keyFor = (l: StoryLine) => `${voiceFor(l)}|${speed}|${language}|${l.text}`
+  const keyFor = (l: StoryLine) => `${voiceFor(l)}|${speed}|${language}|${l.emotion ?? ''}|${l.text}`
 
   async function renderLine(l: StoryLine): Promise<Float32Array> {
     const k = keyFor(l)
@@ -98,6 +98,8 @@ function StoryStudio() {
     if (v) f.set('profile_id', v)
     f.set('speed', String(speed))
     if (language !== 'Auto') f.set('language', language)
+    // how the line is said (VoiceStudio 0.5.7+; engines without emotion read it plainly)
+    if (l.emotion) f.set('emotion', l.emotion)
     const res = await vsFetch('/generate', { body: f })
     const s = await decodeMono(await res.arrayBuffer(), RATE)
     cache.current.set(k, s)
@@ -231,7 +233,7 @@ function StoryStudio() {
       <div className="ps-vs-main">
         <div className="ps-vs-editor">
           <input className="ps-vs-name" placeholder="Story title" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Story title" />
-          <textarea className="ps-vs-text" style={{ minHeight: 220 }} value={script} onChange={(e) => setScript(e.target.value)} aria-label="Story script" placeholder={'One line per sentence or speech.\n# Chapter title starts a chapter · [Maya] or MAYA: for a character · anything else is the narrator.'} />
+          <textarea className="ps-vs-text" style={{ minHeight: 220 }} value={script} onChange={(e) => setScript(e.target.value)} aria-label="Story script" placeholder={'One line per sentence or speech.\n# Chapter title starts a chapter · [Maya] or MAYA: for a character · anything else is the narrator.\n[emotion: excited] after the name says how a line is said.'} />
           <div className="ps-vs-bar">
             {!script && <button className="chip" onClick={() => setScript(SAMPLE)}>Try a sample</button>}
             <span className="spacer" />
@@ -256,7 +258,18 @@ function StoryStudio() {
                             {characters.map((c) => <option key={c}>{c}</option>)}
                           </select>
                         </td>
-                        <td><textarea className="input" value={l.text} onChange={(e) => setLines((cur) => cur.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} /></td>
+                        <td>
+                          <textarea className="input" value={l.text} onChange={(e) => setLines((cur) => cur.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} />
+                          <input
+                            className="input"
+                            style={{ marginTop: 4, fontSize: '0.8125rem' }}
+                            maxLength={200}
+                            placeholder="How it’s said (optional): excited, whispering…"
+                            aria-label="How the line is said"
+                            value={l.emotion ?? ''}
+                            onChange={(e) => setLines((cur) => cur.map((x, j) => (j === i ? { ...x, emotion: e.target.value || undefined } : x)))}
+                          />
+                        </td>
                         <td>
                           <button className="btn ghost icon sm" disabled={!!busy} onClick={() => void playLine(l)} aria-label="Preview line">
                             {busy === `line:${l.id}` ? <Spinner size={12} /> : playing === `story:${l.id}` ? <Pause size={13} /> : <Play size={13} />}

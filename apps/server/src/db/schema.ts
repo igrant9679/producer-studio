@@ -116,7 +116,7 @@ export interface AssetMeta {
   waveformFull?: boolean
   transcript?: import('@producer/core').Transcript
   silences?: Array<{ start: number; end: number }>
-  tts?: { text: string; voice: string; speed: number }
+  tts?: { text: string; voice: string; speed: number; /** How it was said (VoiceStudio voices, see TtsInput.emotion). */ emotion?: string }
   codec?: string
   /** Made for a scene of a video made from an idea: what was asked for (re-assembling reuses it while that's unchanged). */
   generated?: {
@@ -332,6 +332,8 @@ export const devices = pgTable('devices', {
   tokenHash: text('token_hash').notNull(),
   createdAt: ms('created_at').notNull(),
   lastSeenAt: ms('last_seen_at'),
+  /** v20: what this desktop can make for the cloud, as it last said (sfx: VoiceStudio sound effects installed and running). */
+  abilities: jsonb('abilities').$type<{ sfx?: boolean; at?: number }>(),
 })
 
 /** Non-secret AI settings per workspace (AiSettingsDoc in ai/store.ts). Not synced. */
