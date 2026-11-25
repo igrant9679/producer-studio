@@ -26,7 +26,10 @@ const say = (e: TtsEngine, text: string, signal?: AbortSignal, progress?: (f: nu
   e.synthesize(text, path.join(os.tmpdir(), 'unused.wav'), { voice: 'af_heart', speed: 1, signal, progress })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-describe('voice engine', () => {
+// Retried: each test starts one or two voice processes, and when the machine runs out of memory (other builds and test
+// suites at once, seen on 2026-11-23/24) starting one fails ("Resource temporarily unavailable"). Ten processes at
+// full CPU didn't make them fail; only spawning without memory does. The logic under test is deterministic.
+describe('voice engine', { retry: 2 }, () => {
   it('cancelling a queued voiceover drops only that one (PIP-10)', async () => {
     const e = engine()
     const running = say(e, 'wait:300')

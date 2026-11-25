@@ -503,16 +503,19 @@ export of a 20 s 1080p project at 720p draft ~50 s.
 
 ## Known gaps
 
-- Claude routes (`write`, `produce/script`, `assistant`) are unit-tested (prompt building, tool handlers) but have not been run against
-  the live API here: no `ANTHROPIC_API_KEY` or `ant` profile on this machine.
-- `webm`/`gif` export formats are wired but only `mp4` was rendered end-to-end.
-- S3 storage is implemented but untested against a real bucket (browser uploads need bucket CORS allowing PUT from the app origin).
-- Postgres (`DATABASE_URL`) path is implemented (same SQL, LISTEN/NOTIFY bridge for split api/worker services) but only PGlite was run.
+(Reviewed 24 Nov 2026: entries proven by production since are gone. Production runs Postgres and S3 on Railway, and
+the Claude routes run there on spaces' own keys and, since 23 Nov, the server's `ANTHROPIC_API_KEY`.)
+
+- Claude routes (`write`, `produce/script`, `assistant`) are unit-tested here against stand-in providers; this machine
+  has no key of its own, so live checks happen on production.
+- `webm`/`gif` export formats are wired but only `mp4` has been rendered end-to-end.
+- Browser uploads straight to S3 need the bucket's CORS to allow PUT from the app's origin (an owner setting; uploads
+  through the server work without it).
 - Change feed: a write whose transaction commits after a later seq was already read could be skipped (writes here are single-statement,
   so the window is tiny); a desktop client can re-read with a small lookback (`since = cursor - 100`) to be safe.
 - Template thumbnails are the skill's `preview.png`; workspace templates use their first clip's thumbnail. No `previewUrl` videos yet.
-- Desktop mode (`MODE=desktop`, see [desktop.md](desktop.md)) is implemented: `POST /api/desktop/session` (per-launch secret),
-  `POST /api/desktop/claude/login`, `GET/PUT /api/settings`, `/api/sync/link|unlink|now|status`, `POST /api/projects/:id/sync`,
-  on-demand cloud media in `/api/media`, and the Claude Code CLI provider (`src/ai/cli.ts` + `src/ai/cli/`, MCP server in
-  `scripts/mcp-server.mjs`). `GET /api/system?refresh=1` re-probes the AI provider. Tests: `cli.test.ts`, `desktop-sync.test.ts`.
+- Desktop mode (`MODE=desktop`, see [desktop.md](desktop.md)): the media library comes from the linked cloud
+  (`services/media-library.ts`, "the library on a desktop"); unlinked it lists nothing, and remaking an item for a
+  topic stays on the web. The desktop's Claude Code CLI provider (`src/ai/cli.ts`) and sync are covered by
+  `cli.test.ts`, `desktop-sync*.test.ts` and `desktop-library.test.ts`.
 - `/api/health` `features.ai` still reflects only the Anthropic API credentials (use `/api/system` for the active provider).

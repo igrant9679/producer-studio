@@ -17,5 +17,7 @@ export default defineConfig({
   // `testTimeout` is vitest's own; testing-library's `findBy*`/`waitFor` budget is separate and
   // defaults to 1 s — `src/test-setup.ts` raises that one. The races that made full runs flaky on a
   // busy box were fixed on 2026-11-06 (see `src/test-setup.ts`).
-  test: { environment: 'jsdom', testTimeout: 20_000, setupFiles: ['./src/test-setup.ts'] },
+  // Half the cores at most: each worker holds a jsdom, and with other builds running on the same machine three of them
+  // ran it out of memory on 2026-11-24 (a worker died "JavaScript heap out of memory" and the run reported errors).
+  test: { environment: 'jsdom', testTimeout: 20_000, setupFiles: ['./src/test-setup.ts'], maxWorkers: '50%' },
 } as never)
