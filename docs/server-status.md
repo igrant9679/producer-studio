@@ -497,6 +497,23 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   this video's music → `POST /api/music/:id/use`, confirm, then the editor adopts the new version).
   **Failed clips in the editor**: the tile says why (`failedReason`), Retry shows only when the file reached storage,
   failed clips sort last, and two or more get "Remove all" (to the media trash).
+  **Flow-style clips** (asked for on 24 Nov 2026: "add the Flow-style features"; Google's Flow app has no API, and it is
+  built on Gemini Omni, which Producer already uses). Two brief options under Full motion, both off by default:
+  *Flowing scenes* (`brief.flow`): an AI clip whose scene follows another AI clip starts on that clip's last frame
+  (`produce.ts` `lastFrame`: ffmpeg, the last second of the stored original, JPEG). Gemini gets the frame as the only
+  picture, task `image_to_video`, its words prefixed with `FROM_FRAME`, and no reference pictures (two pictures read as
+  first and last frames; the cast is still described in words); Wan on fal takes it as its first frame instead of a
+  painted one. The clip records `meta.generated.from` (the clip it follows): turning flow on remakes the clips that
+  follow another, a changed clip remakes the ones flowing on from it, and turning it off keeps them. Google refusing
+  the picture makes the clip from the words, with a note. *Long shots* (`brief.longShots`, Gemini only:
+  `capabilities.video.extendTo`, 30 for Omni 1.2): a scene 2 s or more past one generation (15 s) is extended 3–10 s a
+  turn with `previous_interaction_id` (`generate/video.ts` `extendShot`, task `extend`, `EXTEND_WORDS` before the words)
+  up to its length or 30 s. Google's guide doesn't say whether a turn returns the whole shot or only what it adds, so
+  each turn's measured length decides: the whole shot replaces the file, a continuation is joined after it
+  (`genDeps().join`, ffmpeg concat, re-encoded). Interactions are deleted once the shot is saved. A failed turn keeps
+  the shot as far as it got (`notExtended`, a note on the assembly); `meta.generated.long` keeps a long clip when long
+  shots are turned off and remakes a short one when they are turned on. The Usage page counts the whole shot's
+  seconds. Neither request shape has been tried on a live key yet: only Google's docs vouch for them.
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

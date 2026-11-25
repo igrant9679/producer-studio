@@ -631,6 +631,12 @@ export interface ProducerMeta {
     /** 'full': every scene is an AI video clip (source = idea; needs a key that makes clips). Absent: AI clips only
      * where they matter most. */
     motion?: 'full'
+    /** Flowing scenes: an AI clip that follows another starts from that clip's last frame, so the film runs on from
+     * shot to shot instead of cutting (absent: each clip starts on its own). */
+    flow?: boolean
+    /** Long shots: a scene longer than one AI clip gets one shot extended to its length, up to the model's extendTo
+     * (Gemini Omni, 30 s), instead of its clip repeated (absent: repeated). Billed per second generated. */
+    longShots?: boolean
     /** Scene visuals the writer may use (source = idea); AI images and clips also need a key that can make them. Your
      * own clips and images (`media`) come with the script request's asset ids, not this list. */
     visualKinds?: VisualKind[]

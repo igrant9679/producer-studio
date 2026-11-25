@@ -190,3 +190,52 @@ describe('Blender scenes', () => {
     expect(screen.queryByLabelText('RunPod (Blender scenes)')).toBeNull()
   })
 })
+
+describe('flowing scenes and long shots', () => {
+  const geminiCaps: ProduceCapabilities = {
+    ...falCaps,
+    video: { provider: 'gemini', model: 'gemini-omni-1.2-flash', maxSeconds: 15, references: 6, extendTo: 30 },
+  }
+
+  it('are offered with AI clips (long shots only where clips can be extended) and go in the brief', async () => {
+    vi.spyOn(api, 'produceCapabilities').mockResolvedValue(geminiCaps)
+    showIdea({ motion: 'full', visualKinds: ['motion', 'aiVideo'] })
+    const flow = await screen.findByRole('checkbox', { name: /Flowing scenes/ })
+    expect(screen.getByText(/starts on that clip’s last frame/)).toBeTruthy()
+    expect(screen.getByText(/sent that frame instead of the characters’ pictures/)).toBeTruthy()
+    fireEvent.click(flow)
+    expect(st().brief.flow).toBe(true)
+    const long = screen.getByRole('checkbox', { name: /Long shots/ })
+    expect(screen.getByText(/A scene longer than 15 s gets one shot extended to its length \(up to 30 s\)/)).toBeTruthy()
+    fireEvent.click(long)
+    expect(st().brief.longShots).toBe(true)
+    fireEvent.click(long)
+    expect(st().brief.longShots).toBeUndefined()
+    cleanup()
+    // Wan on fal: clips can flow, but not be extended
+    vi.spyOn(api, 'produceCapabilities').mockResolvedValue(falCaps)
+    showIdea({ motion: 'full', visualKinds: ['motion', 'aiVideo'] })
+    await screen.findByRole('checkbox', { name: /Flowing scenes/ })
+    expect(screen.queryByRole('checkbox', { name: /Long shots/ })).toBeNull()
+    cleanup()
+    // no AI clips in the video: neither
+    vi.spyOn(api, 'produceCapabilities').mockResolvedValue(geminiCaps)
+    showIdea({ visualKinds: ['motion', 'image'] })
+    await screen.findByRole('checkbox', { name: /Full motion/ })
+    expect(screen.queryByRole('checkbox', { name: /Flowing scenes/ })).toBeNull()
+  })
+
+  it('long shots count a long scene’s clip as long as the scene, up to what a clip can be extended to', () => {
+    const sc = (id: string, narration: string): ScriptScene => ({ id, title: id, headline: id, narration, footage: [], visual: { kind: 'aiVideo', prompt: id } })
+    const words = (n: number) => Array.from({ length: n }, () => 'word').join(' ')
+    // about 21 s, 8 s and 60 s of narration
+    const scenes = [sc('s1', words(55)), sc('s2', words(20)), sc('s3', words(160))]
+    const plain = aiClipEstimate(scenes, geminiCaps)!
+    const long = aiClipEstimate(scenes, geminiCaps, false, true)!
+    expect(plain.seconds).toBe(15 + aiClipEstimate([scenes[1]], geminiCaps)!.seconds + 15)
+    expect(long.seconds).toBe(aiClipEstimate([scenes[0]], geminiCaps, false, true)!.seconds + aiClipEstimate([scenes[1]], geminiCaps)!.seconds + 30)
+    expect(aiClipEstimate([scenes[0]], geminiCaps, false, true)!.seconds).toBeGreaterThan(17)
+    // a model that can't extend: long shots change nothing
+    expect(aiClipEstimate(scenes, falCaps, false, true)!.seconds).toBe(aiClipEstimate(scenes, falCaps)!.seconds)
+  })
+})

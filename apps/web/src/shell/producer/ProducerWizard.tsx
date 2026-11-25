@@ -354,15 +354,18 @@ function kindStatus(k: Exclude<VisualKind, 'footage'>, caps: ProduceCapabilities
 
 /**
  * The AI clips a script will make and roughly what they cost: clips not made yet (one made before for the same shot
- * is reused, free), each as long as its scene up to the model's longest clip, at the key's price a second when its
- * price list gave one. The image painted first for each clip is billed to the image key and isn't counted.
+ * is reused, free), each as long as its scene up to the model's longest clip (with long shots, up to the longest it
+ * can be extended to, for a scene 2 s or more past one clip), at the key's price a second when its price list gave one.
+ * The image painted first for each clip is billed to the image key and isn't counted.
  */
-export function aiClipEstimate(scenes: ScriptScene[], caps: ProduceCapabilities | undefined, fullMotion = false): { clips: number; seconds: number; cost?: number } | undefined {
+export function aiClipEstimate(scenes: ScriptScene[], caps: ProduceCapabilities | undefined, fullMotion = false, longShots = false): { clips: number; seconds: number; cost?: number } | undefined {
   if (!caps?.video) return undefined
   const max = fullMotion ? (caps.maxAiClipsFullMotion ?? caps.maxAiClips) : caps.maxAiClips
   const todo = scenes.filter((sc) => sc.visual?.kind === 'aiVideo' && !sc.visual.assetId).slice(0, max)
   if (!todo.length) return undefined
-  const seconds = todo.reduce((t, sc) => t + Math.min(caps.video!.maxSeconds, Math.max(2, Math.round(narrationSeconds(sc.narration) + 1))), 0)
+  const { maxSeconds, extendTo } = caps.video
+  const shot = (want: number) => (longShots && extendTo && want - maxSeconds >= 2 ? Math.min(extendTo, want) : Math.min(maxSeconds, want))
+  const seconds = todo.reduce((t, sc) => t + shot(Math.max(2, Math.round(narrationSeconds(sc.narration) + 1))), 0)
   return { clips: todo.length, seconds, ...(caps.video.pricePerSecond ? { cost: Math.round(seconds * caps.video.pricePerSecond * 100) / 100 } : {}) }
 }
 
@@ -460,6 +463,33 @@ function IdeaPanel({ s, workspaceId }: { s: WizardState; workspaceId: string }) 
             </span>
           </span>
         </label>
+      )}
+      {caps.data?.video && (b.motion === 'full' || kinds.includes('aiVideo')) && (
+        <>
+          <label className={clsx('ps-kind', b.flow && 'on')} style={{ marginTop: 8 }}>
+            <input type="checkbox" checked={b.flow === true} disabled={caps.loading} onChange={() => set({ flow: b.flow ? undefined : true })} />
+            <span>
+              <strong>Flowing scenes</strong>
+              <span>
+                An AI clip that follows another starts on that clip’s last frame, so the film runs on from shot to shot instead of cutting
+                {caps.data.video.references ? ' (it is sent that frame instead of the characters’ pictures; their looks are still described)' : ''}. Turning it on remakes the clips
+                that follow another the next time the video is made.
+              </span>
+            </span>
+          </label>
+          {caps.data.video.extendTo && (
+            <label className={clsx('ps-kind', b.longShots && 'on')} style={{ marginTop: 8 }}>
+              <input type="checkbox" checked={b.longShots === true} disabled={caps.loading} onChange={() => set({ longShots: b.longShots ? undefined : true })} />
+              <span>
+                <strong>Long shots</strong>
+                <span>
+                  A scene longer than {caps.data.video.maxSeconds} s gets one shot extended to its length (up to {caps.data.video.extendTo} s), instead of its clip slowed down or held on
+                  its last frame. The extra seconds are billed to your Google account.
+                </span>
+              </span>
+            </label>
+          )}
+        </>
       )}
       {(caps.data?.image || caps.data?.video) && (kinds.includes('image') || kinds.includes('aiVideo') || b.motion === 'full') && (
         <div className="ps-field" style={{ marginTop: 12 }}>
@@ -1384,7 +1414,7 @@ function ReviewStep({ s, onRewrite, onRenarrate }: { s: WizardState; onRewrite: 
   const kinds: Array<Exclude<VisualKind, 'footage'>> = [...ALL_KINDS.filter((k) => kindStatus(k, caps.data).available), ...(idea && readyAssetIds(s).length ? (['media'] as const) : [])]
   const totalWords = s.scenes.reduce((t, sc) => t + sceneWords(sc.narration), 0)
   const totalSecs = s.scenes.reduce((t, sc) => t + Math.max(narrationSeconds(sc.narration), sc.footage.reduce((a, f) => a + Math.max(0, f.end - f.start), 0)), 0)
-  const clipCost = idea ? aiClipEstimate(s.scenes, caps.data, s.brief.motion === 'full') : undefined
+  const clipCost = idea ? aiClipEstimate(s.scenes, caps.data, s.brief.motion === 'full', !!s.brief.longShots) : undefined
   return (
     <div className="ps-wz-body">
       <div className="ps-wz-intro row" style={{ alignItems: 'flex-end' }}>

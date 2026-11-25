@@ -46,6 +46,9 @@ export interface GeminiVideoModel {
   maxSeconds: number
   /** Reference pictures a request may carry, to keep characters and objects the same from clip to clip. */
   references?: number
+  /** Seconds a clip can be extended to, 3–10 s a turn, each turn continuing from the clip so far (Omni's extensions;
+   * Google's Omni guide: up to 30 s in all). Absent: one generation is the longest clip. */
+  extendTo?: number
 }
 
 /** gpt-image-1 shut down on 2026-10-23; gpt-image-1.5 shuts down on 2026-12-01. */
@@ -67,7 +70,7 @@ export const GEMINI_IMAGE_MODELS: GeminiImageModel[] = [
 // Omni 1.2 first (Google's current model, 3-15 s); 1.1 (3-10 s) after it: Google routes 1.1 to 1.2 from 3 Dec 2026
 export const GEMINI_VIDEO_MODELS: GeminiVideoModel[] = [
   // (Google's Omni guide: up to 6 reference images a request, 3 per character for up to 2 characters)
-  { id: 'gemini-omni-1.2-flash', minSeconds: 3, maxSeconds: 15, references: 6 },
+  { id: 'gemini-omni-1.2-flash', minSeconds: 3, maxSeconds: 15, references: 6, extendTo: 30 },
   { id: 'gemini-omni-1.1-flash', minSeconds: 3, maxSeconds: 10 },
 ]
 
@@ -136,6 +139,8 @@ export interface GenerateDeps {
   now: () => number
   /** Wait, or throw CancelledError when the signal fires. */
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>
+  /** Clips joined end to end into one file (ffmpeg): an extended shot whose turns came back as separate pieces. */
+  join: (files: string[], out: string, signal?: AbortSignal) => Promise<void>
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -164,6 +169,18 @@ const realDeps: GenerateDeps = {
   },
   now: () => Date.now(),
   sleep,
+  join: async (files, out, signal) => {
+    const { ffmpeg } = await import('../../media/proc')
+    // the concat demuxer's list (the pieces come from one model: the same size, rate and streams), re-encoded so the
+    // joins are clean whatever each piece's keyframes
+    const list = `${out}.txt`
+    await fs.promises.writeFile(list, files.map((f) => `file '${f.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'))
+    try {
+      await ffmpeg(['-v', 'error', '-f', 'concat', '-safe', '0', '-i', list, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', out], { signal })
+    } finally {
+      fs.rm(list, { force: true }, () => undefined)
+    }
+  },
 }
 let deps: GenerateDeps = realDeps
 
@@ -264,6 +281,8 @@ export async function generationCapabilities(workspaceId: string): Promise<GenCa
     // a film's characters stay the same from clip to clip when each clip is given their pictures: the clip model has
     // to take them, and this space has to be able to paint them
     if (video.provider === 'gemini' && m.references && out.image) out.video.references = m.references
+    // a scene longer than one generation can be one long shot: the clip extended (Gemini Omni), not repeated
+    if (video.provider === 'gemini' && m.extendTo) out.video.extendTo = m.extendTo
     // Wan starts each clip from a picture when this space can paint one; fal's price list says what a second costs
     // (the price is the model's it names: none once clips have moved on to another model)
     if (video.provider === 'fal') {

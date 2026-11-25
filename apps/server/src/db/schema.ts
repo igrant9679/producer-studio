@@ -129,6 +129,10 @@ export interface AssetMeta {
     credit?: import('@producer/core').MediaCredit
     /** A stock photo or clip: what the AI said the results it passed over showed (ai/stock-check.ts), first first. */
     passedOver?: string[]
+    /** An AI clip of flowing scenes: the clip (asset id) whose last frame it starts from. */
+    from?: string
+    /** An AI clip made as a long shot (extended to its scene's length, or tried to be). */
+    long?: boolean
     /** A drawn scene's clip: what it was asked for (the note and the style, hashed) and the code that draws it, so a
      * later assembly of the same video uses a drawing an earlier run finished (a stopped or failed run keeps them). */
     ask?: string

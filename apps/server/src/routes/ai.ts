@@ -163,6 +163,8 @@ const BriefSchema = z.object({
   drawingStyle: z.enum(DRAWING_STYLES.map((s) => s.id) as [string, ...string[]]).optional(),
   aiLook: z.enum(AI_LOOKS.map((l) => l.id) as [string, ...string[]]).optional(),
   motion: z.enum(['full']).optional(),
+  flow: z.boolean().optional(),
+  longShots: z.boolean().optional(),
   brandKitId: z.string().max(80).optional(),
   // a composed style, or a library song ('library': the one that suits the tone; 'library:<id>': that one)
   music: z.enum(['off', 'auto', 'library', ...MUSIC_STYLES.map((m) => m.id), ...MUSIC_LIBRARY.map((t) => `library:${t.id}`)]).optional(),

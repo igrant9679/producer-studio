@@ -13,6 +13,7 @@ import { setKeyClients } from '../ai/keys'
 import { downloadStock, findIllustration, generateImage, generateVideo, generationCapabilities, illustrationPng, searchStock, type StockClip } from '../ai/generate'
 import { commonsLicence } from '../ai/generate/stock'
 import { type GenInteraction, type MediaInfo, setGenerateClients } from '../ai/generate/capabilities'
+import { EXTEND_WORDS, FROM_FRAME } from '../ai/generate/video'
 import { CancelledError } from '../jobs/worker'
 import { setup, signup, type TestEnv } from './helpers'
 
@@ -34,6 +35,8 @@ const keysSeen: string[] = []
 const openai = { generate: vi.fn() }
 const gemini = { generateContent: vi.fn(), create: vi.fn(), get: vi.fn(), cancel: vi.fn(), delete: vi.fn() }
 const fetchMock = vi.fn()
+/** Joins pieces of an extended shot: the bytes one after another (ffmpeg's job, not tested here). */
+const joinMock = vi.fn(async (files: string[], out: string) => fs.writeFileSync(out, Buffer.concat(files.map((x) => fs.readFileSync(x)))))
 let probeResult: (file: string) => Promise<MediaInfo>
 let clock = 0
 const sleeps: number[] = []
@@ -72,6 +75,7 @@ afterAll(() => {
 
 beforeEach(() => {
   for (const f of [openai.generate, ...Object.values(gemini), fetchMock]) f.mockReset()
+  joinMock.mockClear()
   gemini.cancel.mockResolvedValue({})
   gemini.delete.mockResolvedValue(undefined)
   keysSeen.length = 0
@@ -103,6 +107,7 @@ beforeEach(() => {
       sleeps.push(ms)
       clock += ms
     },
+    join: joinMock,
   })
 })
 
@@ -160,7 +165,8 @@ describe('generationCapabilities', () => {
     expect(await generationCapabilities(ws)).toEqual({
       image: { provider: 'gemini', model: 'gemini-nano-banana-2.1' },
       // (a clip can be given reference pictures of a film's characters: the model takes them, and this key paints them)
-      video: { provider: 'gemini', model: 'gemini-omni-1.2-flash', maxSeconds: 15, references: 6 },
+      // (and a scene longer than one clip can be one shot: Omni 1.2 extends a clip up to 30 s)
+      video: { provider: 'gemini', model: 'gemini-omni-1.2-flash', maxSeconds: 15, references: 6, extendTo: 30 },
       stock: false,
       stockSources: NONE,
     })
@@ -501,6 +507,133 @@ describe('generateVideo', () => {
     gemini.create.mockRejectedValue(geminiError(400, 'The prompt was blocked by our safety policy'))
     expect((await failure(generateVideo({ workspaceId: ws, prompt: 'x', aspect: '16:9', seconds: 6, outDir, references: [pic] }))).status).toBe(422)
     expect(gemini.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('a start frame begins the clip: the only picture, as image_to_video, the words saying so (no reference pictures beside it)', async () => {
+    const ws = await space({ gemini: GEMINI_KEY })
+    fs.mkdirSync(outDir, { recursive: true })
+    const frame = path.join(outDir, 'last-frame.jpg')
+    const foxPic = path.join(outDir, 'ref-fox-3.png')
+    fs.writeFileSync(frame, JPEG)
+    fs.writeFileSync(foxPic, PNG)
+    gemini.create.mockResolvedValue(done())
+    const r = await generateVideo({ workspaceId: ws, prompt: 'the fox runs on', aspect: '16:9', seconds: 6, outDir, startFrame: frame, references: [foxPic] })
+    expect(r).toMatchObject({ fromFrame: true })
+    expect(r.references).toBeUndefined()
+    expect(gemini.create.mock.calls[0][0]).toEqual({
+      model: 'gemini-omni-1.2-flash',
+      input: [
+        { type: 'image', data: JPEG.toString('base64'), mime_type: 'image/jpeg' },
+        { type: 'text', text: `${FROM_FRAME}the fox runs on` },
+      ],
+      response_format: { type: 'video', aspect_ratio: '16:9', resolution: '720p', duration: '6s' },
+      generation_config: { video_config: { task: 'image_to_video' } },
+      background: true,
+    })
+    // Google not taking the picture: the clip is made from the words alone (not told about a picture it doesn't have), and says it didn't start there
+    gemini.create.mockReset()
+    gemini.create
+      .mockRejectedValueOnce(geminiError(400, 'Invalid value at generation_config.video_config.task: image_to_video'))
+      .mockRejectedValueOnce(geminiError(400, 'Image input is not supported for video output with this model'))
+      .mockResolvedValueOnce(done())
+    const words = await generateVideo({ workspaceId: ws, prompt: 'the fox runs on', aspect: '16:9', seconds: 6, outDir, startFrame: frame })
+    expect(words.fromFrame).toBe(false)
+    expect(gemini.create.mock.calls[2][0].input).toBe('the fox runs on')
+    // a start frame that isn't a picture is said plainly, before anything is asked of Google
+    const notPic = path.join(outDir, 'frame.txt')
+    fs.writeFileSync(notPic, 'hello')
+    gemini.create.mockClear()
+    expect((await failure(generateVideo({ workspaceId: ws, prompt: 'x', aspect: '16:9', seconds: 6, outDir, startFrame: notPic }))).message).toBe('The starting frame isn’t a JPEG, PNG or WebP image.')
+    expect(gemini.create).not.toHaveBeenCalled()
+  })
+
+  describe('long shots: a clip extended past one generation', () => {
+    /** Clip lengths as ffprobe would measure them: the first generation, each extension's answer, and a joined shot. */
+    const lengths = (first: number, more: number, joined?: number) => async (file: string) => {
+      const name = path.basename(file)
+      if (name.startsWith('ai-clip-more')) return { duration: more, width: 1280, height: 720 }
+      if (name.startsWith('ai-clip-long')) return joined === undefined ? {} : { duration: joined, width: 1280, height: 720 }
+      return { duration: first, width: 1280, height: 720 }
+    }
+    let n = 0
+    const finished = (): GenInteraction => ({ id: `int-${++n}`, status: 'completed', output_video: { data: MP4.toString('base64'), mime_type: 'video/mp4' } })
+    beforeEach(() => {
+      n = 0
+      gemini.create.mockImplementation(async () => finished())
+    })
+
+    it('extends 10 s at a time from the interaction before, joins what each turn adds, counts every second and deletes every interaction', async () => {
+      const ws = await space({ gemini: GEMINI_KEY })
+      // each turn answers with only what it adds (10 s, then the 3 s turn), and the pieces are joined into one 28 s shot
+      probeResult = lengths(15, 10, 28)
+      const progress: Array<[number, string]> = []
+      const r = await generateVideo({ workspaceId: ws, prompt: 'a long walk through the forest', aspect: '16:9', seconds: 27.6, outDir, extend: true, onProgress: (f, m) => progress.push([f, m]) })
+      expect(r).toMatchObject({ provider: 'gemini', model: 'gemini-omni-1.2-flash', seconds: 28, extendedFrom: 15, mime: 'video/mp4' })
+      expect(r.notExtended).toBeUndefined()
+      const sent = gemini.create.mock.calls.map((c) => c[0])
+      expect(sent).toHaveLength(3)
+      expect(sent[0].response_format.duration).toBe('15s')
+      expect(sent[1]).toEqual({
+        model: 'gemini-omni-1.2-flash',
+        input: `${EXTEND_WORDS}a long walk through the forest`,
+        previous_interaction_id: 'int-1',
+        response_format: { type: 'video', aspect_ratio: '16:9', resolution: '720p', duration: '10s' },
+        generation_config: { video_config: { task: 'extend' } },
+        background: true,
+      })
+      // the last turn adds what is left (2.6 s, so the shortest turn: 3 s), from the turn before it
+      expect(sent[2]).toMatchObject({ previous_interaction_id: 'int-2', response_format: { duration: '3s' } })
+      expect(joinMock).toHaveBeenCalledTimes(1)
+      expect(joinMock.mock.calls[0][0].map((x: string) => path.basename(x).startsWith('ai-clip-more'))).toEqual([false, true, true])
+      expect(path.basename(r.file)).toMatch(/^ai-clip-long/)
+      // every interaction is deleted once the shot is saved, not before (each turn needed the one before)
+      expect(gemini.delete.mock.calls.map((c) => c[0]).sort()).toEqual(['int-1', 'int-2', 'int-3'])
+      const fractions = progress.map(([f]) => f)
+      expect(fractions).toEqual([...fractions].sort((a, b) => a - b))
+      expect(progress.some(([, m]) => m === 'Extending the shot to 25 s')).toBe(true)
+      expect(progress.at(-1)).toEqual([1, 'Clip ready'])
+      // the Usage page counts the seconds of the whole shot
+      const counted = await ctx().db.select().from(usageDaily).where(eq(usageDaily.workspaceId, ws))
+      expect(counted.find((u) => u.metric === 'clip.seconds')?.amount).toBe(28)
+    })
+
+    it('a turn that answers with the whole shot so far replaces it; nothing is joined', async () => {
+      const ws = await space({ gemini: GEMINI_KEY })
+      probeResult = lengths(15, 24)
+      const r = await generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '9:16', seconds: 24, outDir, extend: true })
+      expect(r).toMatchObject({ seconds: 24, extendedFrom: 15 })
+      expect(path.basename(r.file)).toMatch(/^ai-clip-more/)
+      expect(gemini.create).toHaveBeenCalledTimes(2)
+      expect(gemini.create.mock.calls[1][0].response_format).toEqual({ type: 'video', aspect_ratio: '9:16', resolution: '720p', duration: '9s' })
+      expect(joinMock).not.toHaveBeenCalled()
+    })
+
+    it('an extension that fails keeps the clip already made, and says why', async () => {
+      const ws = await space({ gemini: GEMINI_KEY })
+      probeResult = lengths(15, 10)
+      gemini.create.mockImplementationOnce(async () => finished()).mockRejectedValueOnce(geminiError(400, 'previous_interaction_id: video extension is not supported for this interaction'))
+      const r = await generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '16:9', seconds: 25, outDir, extend: true })
+      expect(r).toMatchObject({ seconds: 15, model: 'gemini-omni-1.2-flash' })
+      expect(r.extendedFrom).toBeUndefined()
+      expect(r.notExtended).toBe('Gemini couldn’t extend it')
+      expect(path.basename(r.file)).not.toMatch(/^ai-clip-(more|long)/)
+      expect(fs.readFileSync(r.file).equals(MP4)).toBe(true)
+      expect(gemini.delete).toHaveBeenCalledWith('int-1', {}, expect.anything())
+    })
+
+    it('not asked for, a scene within a clip, or a little past one: one generation, as before', async () => {
+      const ws = await space({ gemini: GEMINI_KEY })
+      probeResult = lengths(15, 10)
+      await generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '16:9', seconds: 25, outDir })
+      await generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '16:9', seconds: 12, outDir, extend: true })
+      // 16.5 s: the timeline holds the last frame 1.5 s rather than pay for a 3 s turn
+      await generateVideo({ workspaceId: ws, prompt: 'waves', aspect: '16:9', seconds: 16.5, outDir, extend: true })
+      expect(gemini.create.mock.calls.map((c) => [c[0].response_format.duration, 'previous_interaction_id' in c[0]])).toEqual([
+        ['15s', false],
+        ['12s', false],
+        ['15s', false],
+      ])
+    })
   })
 
   it('a fired signal cancels the remote interaction and stops', async () => {

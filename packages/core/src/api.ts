@@ -580,6 +580,9 @@ export interface ProduceCapabilities {
     fromPicture?: boolean
     /** Reference pictures a clip can be given, so a film's characters look the same in every clip (Gemini Omni). */
     references?: number
+    /** Seconds a clip can be extended to, so a scene longer than maxSeconds is one long shot (Gemini Omni, up to 30 s;
+     * the brief's longShots). Absent: a long scene repeats its clip. */
+    extendTo?: number
     /** What a second of clip costs, from the provider's price list at the key's last test, e.g. 0.08 (USD). */
     pricePerSecond?: number
   }

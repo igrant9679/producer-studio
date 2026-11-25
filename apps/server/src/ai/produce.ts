@@ -877,7 +877,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const frameSize = sizeForAspect(brief.aspect || getLook(brief.template).aspect)
   const drawing = { ...frameSize, fps: doc.fps || 30, pal: lookPalette(getLook(brief.template), brand), silent: !parts.narration, noWords: !parts.onScreenText, style: drawingStyleOf(brief.drawingStyle) }
   const allowed = await allowedVisualKinds(row.workspaceId, brief.visualKinds, { fullMotion: brief.motion === 'full' })
-  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing, look: brief.aiLook, fullMotion: brief.motion === 'full', allowed, cast: doc.ai?.script?.cast })
+  const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing, look: brief.aiLook, fullMotion: brief.motion === 'full', allowed, cast: doc.ai?.script?.cast, flow: !!brief.flow, longShots: !!brief.longShots })
   // 3b. music composed on the cuts, and sound effects where things move (both free: made on this server)
   const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, logo })
   const sounded = await makeSound(subContext(jc, 0.9, 0.92, 'Adding music and sound'), { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, jobId: jc.job.id, brief, scenes: made.scenes, voices, probe, seed: brand?.name || row.id })
@@ -1030,6 +1030,10 @@ async function makeSceneVisuals(
     allowed?: VisualKind[]
     /** The script's returning characters (ai.script.cast): each is said, and where it can be shown, the same way in every picture and clip. */
     cast?: ScriptCharacter[]
+    /** Flowing scenes (the brief's flow): an AI clip that follows another starts from that clip's last frame. */
+    flow?: boolean
+    /** Long shots (the brief's longShots): a scene longer than one clip gets its clip extended, where the model can. */
+    longShots?: boolean
   },
 ): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[]; asked: Map<string, NonNullable<ScriptScene['visual']>> }> {
   const generated = new Map<string, Asset>()
@@ -1213,14 +1217,25 @@ async function makeSceneVisuals(
       // describes them; a clip is also given the reference pictures of (up to MAX_REFERENCED of) its characters, which
       // the words number in the order they are sent (the reuse below compares the whole request)
       const shown = v.kind === 'image' || v.kind === 'aiVideo' ? castIn(v.prompt, cast) : []
-      const pictured = v.kind === 'aiVideo' ? shown.filter((c) => pictures.has(c.name)).slice(0, MAX_REFERENCED) : []
+      // flowing scenes: a clip whose scene follows another clip (made or reused in this assembly) starts on that clip's
+      // last frame, and is sent that frame instead of the characters' pictures (their looks are still said in words)
+      const i = scenes.indexOf(s)
+      const before = o.flow && v.kind === 'aiVideo' && i > 0 && scenes[i - 1].visual?.kind === 'aiVideo' ? scenes[i - 1] : undefined
+      const from = before ? generated.get(before.id) : undefined
+      const pictured = v.kind === 'aiVideo' && !from ? shown.filter((c) => pictures.has(c.name)).slice(0, MAX_REFERENCED) : []
       // a clip that shows everyone on the size chart is sent it too, after their own pictures
       const sized = chart && chart.names.every((n) => pictured.some((c) => c.name === n)) ? chart : undefined
       const ask = v.kind === 'stock' || v.kind === 'photo' ? v.query : withCast(withAiLook(v.prompt, o.look), [...pictured, ...shown.filter((c) => !pictured.includes(c))], pictured.length, sized ? pictured.length + 1 : undefined)
-      // reuse what was made for this scene before, while the request is the same
+      const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
+      const seconds = voiceDur + LEAD + TAIL
+      // long shots: a scene noticeably longer than one clip, where the clip model can extend one
+      const long = !!o.longShots && v.kind === 'aiVideo' && !!caps?.video?.extendTo && seconds - caps.video.maxSeconds >= 2
+      // reuse what was made for this scene before, while the request is the same: the same words, flowing on from the
+      // same clip, and extended if it is to be long now (a clip that flowed or is long is kept when that is turned off)
       if (v.assetId) {
         const prev = (await ctx().db.select().from(assets).where(and(eq(assets.id, v.assetId), eq(assets.workspaceId, o.workspaceId))).limit(1))[0]
-        if (prev && prev.status === 'ready' && prev.meta?.generated?.kind === v.kind && prev.meta.generated.prompt === ask) {
+        const g = prev?.meta?.generated
+        if (prev && prev.status === 'ready' && g?.kind === v.kind && g.prompt === ask && (!from || g.from === from.id) && (!long || g.long)) {
           generated.set(s.id, assetDoc(prev))
           return
         }
@@ -1228,13 +1243,26 @@ async function makeSceneVisuals(
       let why: string
       if (v.kind === 'aiVideo' && clips >= maxClips) why = `only ${maxClips} AI clips are made per video`
       else {
-        const voiceDur = o.voices.get(s.id)?.duration ?? Math.max(2, s.narration.split(/\s+/).length / 2.6)
         try {
-          const made = await makeOne(slot(s, `${MAKING[v.kind]} for ${s.id}`), { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work, fromPicture, references: [...pictured.map((c) => pictures.get(c.name)!), ...(sized ? [sized.file] : [])] })
+          const sc = slot(s, `${MAKING[v.kind]} for ${s.id}`)
+          let startFrame: string | undefined
+          if (from) {
+            try {
+              startFrame = await lastFrame(from, work, jc.signal)
+            } catch (err) {
+              if (jc.signal.aborted) throw err
+              log.warn('the clip before could not give its last frame; the clip starts on its own', { scene: s.id, err })
+              notes.push(`${s.id}: the clip starts on its own (the last frame of ${before!.id}’s clip couldn’t be read)`)
+            }
+          }
+          const made = await makeOne(sc, { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds, work, fromPicture, references: [...pictured.map((c) => pictures.get(c.name)!), ...(sized ? [sized.file] : [])], ...(startFrame ? { startFrame, from: from!.id } : {}), ...(long ? { long } : {}) })
           if (v.kind === 'aiVideo') clips++
           generated.set(s.id, made.asset)
           s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}), ...(made.passedOver?.length ? { passedOver: made.passedOver } : {}) }
           if (v.kind === 'image') stoodIn(s, 'image')
+          if (startFrame && made.clip?.fromFrame === false) notes.push(`${s.id}: the clip starts on its own: the clip model wouldn’t start it from the last frame of ${before!.id}’s`)
+          if (made.clip?.notExtended)
+            notes.push(`${s.id}: the shot is ${Math.round(made.asset.duration ?? 0)} s, not the scene’s ${Math.round(seconds)} (it couldn’t be extended: ${made.clip.notExtended}), so it is slowed or holds its last frame`)
           return
         } catch (err) {
           if (jc.signal.aborted) throw err
@@ -1587,11 +1615,15 @@ export async function makeAiClip(o: {
   fromPicture?: boolean
   /** Reference pictures of the clip's characters (files), in the order the prompt numbers them. */
   references?: string[]
+  /** The frame the clip starts from (flowing scenes: the last frame of the clip before); no first frame is painted. */
+  startFrame?: string
+  /** Long shots: a clip asked for longer than one generation is extended, where the model can. */
+  long?: boolean
   signal: AbortSignal
   progress: (f: number, msg: string) => void
 }) {
   let image: string | undefined
-  if (o.fromPicture) {
+  if (o.fromPicture && !o.startFrame) {
     o.progress(0.03, 'Painting the first frame')
     try {
       image = (await generateImage({ workspaceId: o.workspaceId, prompt: firstFramePrompt(o.prompt), aspect: o.aspect, outDir: o.outDir, signal: o.signal })).file
@@ -1600,7 +1632,33 @@ export async function makeAiClip(o: {
       log.warn('first frame failed; the clip is made from the words', { err })
     }
   }
-  return generateVideo({ workspaceId: o.workspaceId, prompt: o.prompt, aspect: o.aspect, seconds: o.seconds, outDir: o.outDir, image, ...(o.references?.length ? { references: o.references } : {}), signal: o.signal, onProgress: (f, m) => o.progress(0.12 + f * 0.7, m) })
+  return generateVideo({
+    workspaceId: o.workspaceId,
+    prompt: o.prompt,
+    aspect: o.aspect,
+    seconds: o.seconds,
+    outDir: o.outDir,
+    image,
+    ...(o.references?.length ? { references: o.references } : {}),
+    ...(o.startFrame ? { startFrame: o.startFrame } : {}),
+    ...(o.long ? { extend: true } : {}),
+    signal: o.signal,
+    onProgress: (f, m) => o.progress(0.12 + f * 0.7, m),
+  })
+}
+
+/**
+ * The last frame of a clip (an asset), as a JPEG in `work`: where a flowing scene's clip starts. Read from the last
+ * second of the stored original, every frame written over the one before, so the file left is the very last.
+ */
+async function lastFrame(clip: Asset, work: string, signal: AbortSignal): Promise<string> {
+  const row = (await ctx().db.select().from(assets).where(eq(assets.id, clip.id)).limit(1))[0]
+  if (!row) throw new Error('the clip before is gone')
+  const src = await localSource(row, work)
+  const out = path.join(work, `last-${crypto.randomBytes(4).toString('hex')}.jpg`)
+  await ffmpeg(['-v', 'error', '-sseof', '-1', '-i', src, '-an', '-update', '1', '-q:v', '2', out], { signal })
+  if (!fs.existsSync(out)) throw new Error('no frame was written')
+  return out
 }
 
 /**
@@ -1645,12 +1703,31 @@ export const firstFramePrompt = (shot: string) =>
 
 async function makeOne(
   jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
-  o: { workspaceId: string; userId: string; projectId: string; jobId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: MadeKind }; ask: string; seconds: number; work: string; fromPicture?: boolean; references?: string[] },
-): Promise<{ asset: Asset; credit?: MediaCredit; passedOver?: string[] }> {
+  o: {
+    workspaceId: string
+    userId: string
+    projectId: string
+    jobId: string
+    aspect: Brief['aspect']
+    scene: ScriptScene
+    visual: { kind: MadeKind }
+    ask: string
+    seconds: number
+    work: string
+    fromPicture?: boolean
+    references?: string[]
+    /** A clip: the frame it starts from, and the clip (asset id) that frame ends. */
+    startFrame?: string
+    from?: string
+    /** A clip: extended to the scene's length where the model can. */
+    long?: boolean
+  },
+): Promise<{ asset: Asset; credit?: MediaCredit; passedOver?: string[]; clip?: { fromFrame?: boolean; notExtended?: string } }> {
   const { kind } = o.visual
   let file: { file: string; mime: string; provider: string; model: string }
   let credit: MediaCredit | undefined
   let passedOver: string[] = []
+  let clip: { fromFrame?: boolean; notExtended?: string } | undefined
   if (kind === 'image') {
     jc.progress(0.05, 'Making an image')
     file = await generateImage({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, outDir: o.work, signal: jc.signal })
@@ -1661,7 +1738,9 @@ async function makeOne(
     credit = found.credit
     passedOver = found.passedOver
   } else {
-    file = await makeAiClip({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, seconds: o.seconds, outDir: o.work, fromPicture: o.fromPicture, references: o.references, signal: jc.signal, progress: (f, m) => jc.progress(f, m) })
+    const made = await makeAiClip({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, seconds: o.seconds, outDir: o.work, fromPicture: o.fromPicture, references: o.references, startFrame: o.startFrame, long: o.long, signal: jc.signal, progress: (f, m) => jc.progress(f, m) })
+    file = made
+    clip = { ...(made.fromFrame !== undefined ? { fromFrame: made.fromFrame } : {}), ...(made.notExtended ? { notExtended: made.notExtended } : {}) }
   }
   jc.check()
   const row = await createAssetFromFile({
@@ -1673,10 +1752,13 @@ async function makeOne(
     mime: file.mime,
     kind: kind === 'image' || kind === 'photo' ? 'image' : 'video',
     origin: kind === 'stock' || kind === 'photo' ? 'stock' : 'ai',
-    meta: { generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}), ...(passedOver.length ? { passedOver } : {}) }, jobId: o.jobId },
+    meta: {
+      generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}), ...(passedOver.length ? { passedOver } : {}), ...(o.from ? { from: o.from } : {}), ...(o.long ? { long: true } : {}) },
+      jobId: o.jobId,
+    },
   })
   jc.progress(0.85, 'Preparing it for the editor')
   const ready = await processAsset(row.id, jc)
-  return { asset: assetDoc(ready), credit, ...(passedOver.length ? { passedOver } : {}) }
+  return { asset: assetDoc(ready), credit, ...(passedOver.length ? { passedOver } : {}), ...(clip ? { clip } : {}) }
 }
 

@@ -13,6 +13,7 @@ import { chartLayout, sizeChart } from '../media/size-chart'
 import { setKeyClients } from '../ai/keys'
 import { saveOnLatest } from '../ai/produce'
 import { setGenerateClients } from '../ai/generate/capabilities'
+import { EXTEND_WORDS, FROM_FRAME } from '../ai/generate/video'
 import { ctx } from '../context'
 import { assets } from '../db/schema'
 import { getJob } from '../jobs/queue'
@@ -187,6 +188,8 @@ let client: Client
 let workspaceId = ''
 let MP4: Buffer
 let PNG: Buffer
+/** A test's own lengths for the files the clip code measures (undefined: the usual 2 s clips and 64 px pictures). */
+let probeFor: ((file: string) => { duration?: number; width?: number; height?: number } | undefined) | undefined
 
 beforeAll(async () => {
   t = await setup()
@@ -219,6 +222,7 @@ afterAll(() => {
 })
 beforeEach(() => {
   for (const f of Object.values(gemini)) f.mockReset()
+  probeFor = undefined
   gemini.cancel.mockResolvedValue({})
   gemini.delete.mockResolvedValue(undefined)
   // a picture for every character asked for, a finished clip for every clip asked for
@@ -230,7 +234,7 @@ beforeEach(() => {
     openai: () => ({ images: { generate: vi.fn() } }),
     gemini: () => ({ models: { generateContent: gemini.generateContent }, interactions: { create: gemini.create, get: gemini.get, cancel: gemini.cancel, delete: gemini.delete } }),
     fetch: vi.fn() as unknown as typeof fetch,
-    probe: async (file: string) => (file.endsWith('.mp4') ? { duration: 2, width: 320, height: 180 } : { width: 64, height: 64 }),
+    probe: async (file: string) => probeFor?.(file) ?? (file.endsWith('.mp4') ? { duration: 2, width: 320, height: 180 } : { width: 64, height: 64 }),
     now: () => Date.now(),
     sleep: async () => undefined,
   } as never)
@@ -377,5 +381,104 @@ describe('a film assembled with a cast', () => {
     expect(plain.out.notes ?? []).toEqual([])
     expect(gemini.generateContent).not.toHaveBeenCalled()
     expect(bodies().map((b) => b.input)).toEqual(film.map((s) => `${(s.visual as { prompt: string }).prompt}\n\nVisual style: ${LOOK}`))
+  }, 240_000)
+})
+
+// ---------------------------------------------------------------- flowing scenes and long shots
+
+describe('flowing scenes and long shots', () => {
+  async function assembleWith(id: string, scenes: ScriptScene[], b: typeof brief & { flow?: boolean; longShots?: boolean }) {
+    const r = await client.json('POST', '/api/ai/produce/assemble', { projectId: id, scenes, brief: b })
+    expect(r.status).toBe(200)
+    const job = (await getJob(r.body.id))!
+    const out = await produceAssembleHere(inlineContext({ id: job.id, kind: 'ai.produce.assemble', workspaceId, userId: job.userId, projectId: id, input: job.input }))
+    return { out, p: (await client.json<ProjectDocResponse>('GET', `/api/projects/${id}`)).body.project }
+  }
+  const clipRows = async (id: string) => (await ctx().db.select().from(assets).where(eq(assets.projectId, id))).filter((r) => r.meta?.generated?.kind === 'aiVideo')
+
+  it('a clip that follows another starts on its last frame, sent instead of the characters’ pictures; nothing is made twice', async () => {
+    const flowing = { ...brief, flow: true }
+    const id = await newFilm([fox, bird, owl], 'Flowing fox film')
+    const { out, p } = await assembleWith(id, film, flowing)
+    expect(out.notes ?? []).toEqual([])
+    const sent = bodies()
+    expect(sent).toHaveLength(4)
+    // s01 opens the film: the characters' pictures, as without flowing scenes
+    expect(sent[0].generation_config).toEqual({ video_config: { task: 'reference_to_video' } })
+    expect(picturesOf(sent[0])).toHaveLength(2)
+    expect(textOf(sent[0]).startsWith(FROM_FRAME)).toBe(false)
+    // s02–s04 each start on the clip before's last frame: that one picture, image_to_video, and words that say so;
+    // the characters are described, not pictured (a second picture would be read as the shot's last frame)
+    for (const b of sent.slice(1)) {
+      expect(b.generation_config).toEqual({ video_config: { task: 'image_to_video' } })
+      expect(picturesOf(b).map((x) => x.mime_type)).toEqual(['image/jpeg'])
+      expect(textOf(b).startsWith(FROM_FRAME)).toBe(true)
+      expect(textOf(b)).not.toContain('reference picture')
+    }
+    expect(textOf(sent[1])).toContain(`- the old owl: ${owl.look}`)
+    // the frame is the test clip's own: orange
+    const { data } = await sharp(Buffer.from(picturesOf(sent[1])[0].data!, 'base64')).resize(1, 1).raw().toBuffer({ resolveWithObject: true })
+    expect([...data].every((v, i) => Math.abs(v - [255, 165, 0][i]) < 40)).toBe(true)
+    // each clip remembers the one it follows
+    const ids = new Map(p.ai!.script!.scenes.map((s) => [s.id, (s.visual as { assetId?: string }).assetId]))
+    const rows = await clipRows(id)
+    const fromOf = (scene: string) => rows.find((r) => r.id === ids.get(scene))!.meta!.generated!.from
+    expect([fromOf('s01'), fromOf('s02'), fromOf('s03'), fromOf('s04')]).toEqual([undefined, ids.get('s01'), ids.get('s02'), ids.get('s03')])
+
+    // assembled again as it is: every clip reused, nothing asked of Google
+    gemini.create.mockClear()
+    gemini.generateContent.mockClear()
+    const again = await assembleWith(id, p.ai!.script!.scenes, flowing)
+    expect(gemini.create).not.toHaveBeenCalled()
+
+    // turned off: a clip that only flowed is kept (s04, nobody in it); clips whose characters' pictures can be sent
+    // again are made again with them, each starting on its own
+    gemini.create.mockClear()
+    await assembleWith(id, again.p.ai!.script!.scenes, brief)
+    expect(bodies().map((b) => [textOf(b).startsWith(FROM_FRAME), picturesOf(b).length])).toEqual([
+      [false, 2],
+      [false, 1],
+    ])
+  }, 240_000)
+
+  it('long shots: a scene longer than one clip is one shot, extended from the clip and joined on (a real join)', async () => {
+    const longer = { ...brief, longShots: true }
+    // 45 words, no voice: about 17 s of scene and 19 s of clip asked for, past the 15 s of one generation
+    const words = Array.from({ length: 45 }, (_, i) => (i % 9 === 8 ? 'valley.' : 'mist')).join(' ')
+    const scenes = [clip('s01', words, 'A slow pan across a misty valley at dawn.')]
+    const id = await newFilm(undefined, 'A long shot')
+    // the first generation measures 15 s and the extension only what it adds (5 s): a continuation, joined by ffmpeg
+    probeFor = (file) => {
+      const name = path.basename(file)
+      if (name.startsWith('ai-clip-more')) return { duration: 5, width: 320, height: 180 }
+      if (name.startsWith('ai-clip-long')) return undefined
+      if (name.startsWith('ai-clip')) return { duration: 15, width: 320, height: 180 }
+      return undefined
+    }
+    // without long shots: one generation, its 15 s (the timeline slows it to fill the scene)
+    const short = await assembleWith(id, scenes, brief)
+    expect(gemini.create).toHaveBeenCalledTimes(1)
+    expect(gemini.create.mock.calls[0][0]).not.toHaveProperty('previous_interaction_id')
+    // long shots turned on: that clip is made again, as one long shot
+    gemini.create.mockClear()
+    const { out, p } = await assembleWith(id, short.p.ai!.script!.scenes, longer)
+    expect(out.notes ?? []).toEqual([])
+    const sent = gemini.create.mock.calls.map((c) => c[0] as Record<string, unknown>)
+    expect(sent).toHaveLength(2)
+    expect(sent[0].response_format).toMatchObject({ duration: '15s' })
+    expect(sent[1]).toMatchObject({ previous_interaction_id: 'int-2', response_format: { duration: '5s' }, generation_config: { video_config: { task: 'extend' } } })
+    expect(sent[1].input).toBe(`${EXTEND_WORDS}${(scenes[0].visual as { prompt: string }).prompt}\n\nVisual style: ${LOOK}`)
+    // the two 2 s test clips joined into one file of 4 s (measured by the real processing)
+    const now = (p.ai!.script!.scenes[0].visual as { assetId?: string }).assetId
+    expect(now).not.toBe((short.p.ai!.script!.scenes[0].visual as { assetId?: string }).assetId)
+    const row = (await clipRows(id)).find((r) => r.id === now)!
+    expect(row.meta!.generated!.long).toBe(true)
+    expect(p.assets[row.id].duration).toBeGreaterThan(3.8)
+    expect(p.assets[row.id].duration).toBeLessThan(4.3)
+    // assembled again, with long shots or without: the long one is kept
+    gemini.create.mockClear()
+    await assembleWith(id, p.ai!.script!.scenes, longer)
+    await assembleWith(id, p.ai!.script!.scenes, brief)
+    expect(gemini.create).not.toHaveBeenCalled()
   }, 240_000)
 })
