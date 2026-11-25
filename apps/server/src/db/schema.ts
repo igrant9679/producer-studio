@@ -127,6 +127,8 @@ export interface AssetMeta {
     provider?: string
     model?: string
     credit?: import('@producer/core').MediaCredit
+    /** A stock photo or clip: what the AI said the results it passed over showed (ai/stock-check.ts), first first. */
+    passedOver?: string[]
     /** A drawn scene's clip: what it was asked for (the note and the style, hashed) and the code that draws it, so a
      * later assembly of the same video uses a drawing an earlier run finished (a stopped or failed run keeps them). */
     ask?: string

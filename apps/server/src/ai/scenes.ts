@@ -42,8 +42,8 @@ export const VisualSchema: z.ZodType<SceneVisual> = z.union([
     ]),
   }),
   z.object({ kind: z.literal('image'), prompt: short(1000), assetId: z.string().max(80).optional() }),
-  z.object({ kind: z.literal('stock'), query: short(120), assetId: z.string().max(80).optional(), credit: CreditSchema.optional() }),
-  z.object({ kind: z.literal('photo'), query: short(120), assetId: z.string().max(80).optional(), credit: CreditSchema.optional() }),
+  z.object({ kind: z.literal('stock'), query: short(120), assetId: z.string().max(80).optional(), credit: CreditSchema.optional(), passedOver: z.array(short(80)).max(8).optional() }),
+  z.object({ kind: z.literal('photo'), query: short(120), assetId: z.string().max(80).optional(), credit: CreditSchema.optional(), passedOver: z.array(short(80)).max(8).optional() }),
   z.object({
     kind: z.literal('animation'),
     style: z.enum(ANIMATION_STYLES as [AnimationStyle, ...AnimationStyle[]]),

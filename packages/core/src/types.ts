@@ -534,8 +534,8 @@ export type SceneVisual =
   | { kind: 'motion'; points?: string[] }
   | { kind: 'diagram'; diagram: SceneDiagram }
   | { kind: 'image'; prompt: string; assetId?: Id }
-  | { kind: 'stock'; query: string; assetId?: Id; credit?: MediaCredit }
-  | { kind: 'photo'; query: string; assetId?: Id; credit?: MediaCredit }
+  | { kind: 'stock'; query: string; assetId?: Id; credit?: MediaCredit; passedOver?: string[] }
+  | { kind: 'photo'; query: string; assetId?: Id; credit?: MediaCredit; passedOver?: string[] }
   | { kind: 'aiVideo'; prompt: string; assetId?: Id }
   | { kind: 'media'; assetId: Id; start?: number; end?: number }
   /** A clip from the shared media library (mediaLibrary.ts CLIP_LIBRARY, by `id`); `assetId` is the space's copy once

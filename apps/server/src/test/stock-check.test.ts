@@ -57,6 +57,8 @@ describe('a stock picture for a scene', () => {
     expect(got).toEqual(['openverse-0', 'openverse-1', 'openverse-2'])
     expect(r.file.model).toBe('openverse-2')
     expect(r.credit).toMatchObject({ author: 'Author 2', url: 'https://example/openverse/2', licence: 'CC BY 2.0' })
+    // what it passed over is kept with the one it used
+    expect(r.passedOver).toEqual(['a water tower', 'a city street'])
     // each was looked at as a small JPEG
     for (const l of looked) expect(fs.readFileSync(l.picture).subarray(0, 2).toString('hex')).toBe('ffd8')
     expect(searched).toEqual([[]])

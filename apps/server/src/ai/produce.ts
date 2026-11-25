@@ -1233,7 +1233,7 @@ async function makeSceneVisuals(
           const made = await makeOne(slot(s, `${MAKING[v.kind]} for ${s.id}`), { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds: voiceDur + LEAD + TAIL, work, fromPicture, references: [...pictured.map((c) => pictures.get(c.name)!), ...(sized ? [sized.file] : [])] })
           if (v.kind === 'aiVideo') clips++
           generated.set(s.id, made.asset)
-          s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}) }
+          s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}), ...(made.passedOver?.length ? { passedOver: made.passedOver } : {}) }
           if (v.kind === 'image') stoodIn(s, 'image')
           return
         } catch (err) {
@@ -1646,10 +1646,11 @@ export const firstFramePrompt = (shot: string) =>
 async function makeOne(
   jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
   o: { workspaceId: string; userId: string; projectId: string; jobId: string; aspect: Brief['aspect']; scene: ScriptScene; visual: { kind: MadeKind }; ask: string; seconds: number; work: string; fromPicture?: boolean; references?: string[] },
-): Promise<{ asset: Asset; credit?: MediaCredit }> {
+): Promise<{ asset: Asset; credit?: MediaCredit; passedOver?: string[] }> {
   const { kind } = o.visual
   let file: { file: string; mime: string; provider: string; model: string }
   let credit: MediaCredit | undefined
+  let passedOver: string[] = []
   if (kind === 'image') {
     jc.progress(0.05, 'Making an image')
     file = await generateImage({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, outDir: o.work, signal: jc.signal })
@@ -1658,6 +1659,7 @@ async function makeOne(
     const found = await findStock(jc, { workspaceId: o.workspaceId, photo: kind === 'photo', query: o.ask, aspect: o.aspect, seconds: o.seconds, scene: o.scene, work: o.work })
     file = found.file
     credit = found.credit
+    passedOver = found.passedOver
   } else {
     file = await makeAiClip({ workspaceId: o.workspaceId, prompt: o.ask, aspect: o.aspect, seconds: o.seconds, outDir: o.work, fromPicture: o.fromPicture, references: o.references, signal: jc.signal, progress: (f, m) => jc.progress(f, m) })
   }
@@ -1671,10 +1673,10 @@ async function makeOne(
     mime: file.mime,
     kind: kind === 'image' || kind === 'photo' ? 'image' : 'video',
     origin: kind === 'stock' || kind === 'photo' ? 'stock' : 'ai',
-    meta: { generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}) }, jobId: o.jobId },
+    meta: { generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}), ...(passedOver.length ? { passedOver } : {}) }, jobId: o.jobId },
   })
   jc.progress(0.85, 'Preparing it for the editor')
   const ready = await processAsset(row.id, jc)
-  return { asset: assetDoc(ready), credit }
+  return { asset: assetDoc(ready), credit, ...(passedOver.length ? { passedOver } : {}) }
 }
 

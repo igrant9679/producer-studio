@@ -88,7 +88,7 @@ async function lookAt(file: string, photo: boolean, work: string, signal: AbortS
 export async function findStock(
   jc: Pick<JobContext, 'signal' | 'progress' | 'check'>,
   o: { workspaceId: string; photo: boolean; query: string; aspect: Parameters<typeof searchStock>[0]['aspect']; seconds: number; scene: Pick<ScriptScene, 'headline' | 'narration'>; work: string },
-): Promise<{ file: { file: string; mime: string; provider: string; model: string }; credit: MediaCredit }> {
+): Promise<{ file: { file: string; mime: string; provider: string; model: string }; credit: MediaCredit; passedOver: string[] }> {
   const what = o.photo ? 'photo' : 'footage'
   jc.progress(0.05, o.photo ? 'Searching stock photos' : 'Searching stock footage')
   let lastErr: unknown
@@ -122,7 +122,7 @@ export async function findStock(
         continue
       }
       const credit: MediaCredit = { author: pick.author, url: pick.pageUrl, source: SOURCE_NAMES[pick.source ?? 'pexels'], ...(pick.licence ? { licence: pick.licence } : {}) }
-      return { file: got, credit }
+      return { file: got, credit, passedOver: passed }
     }
     skip.push(found[0].source ?? 'pexels')
   }

@@ -1158,6 +1158,9 @@ function VisualEditor({ scene, kinds, caps, media, onChange }: { scene: ScriptSc
                 {credit.licence ? ` (${credit.licence}: the video credits it in the corner)` : ''}.
               </>
             )}
+            {(v.kind === 'stock' || v.kind === 'photo') && v.passedOver?.length ? (
+              <> Your AI passed over {v.passedOver.length === 1 ? 'one that didn’t fit' : `${v.passedOver.length} that didn’t fit`} first ({v.passedOver.join('; ')}).</>
+            ) : null}
           </span>
         </div>
       )}

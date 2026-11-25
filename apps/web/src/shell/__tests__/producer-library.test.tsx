@@ -144,6 +144,15 @@ describe('the brand’s stamp in the brief', () => {
   })
 })
 
+describe('a stock picture your AI looked at', () => {
+  it('says what it passed over before the one it used', async () => {
+    const scenes: ScriptScene[] = [{ id: 's01', title: 'Quiet', headline: 'Quiet before screens', narration: 'Take a quiet moment.', footage: [], visual: { kind: 'photo', query: 'person stretching by window', assetId: 'as_photo', credit: { author: 'Ann', url: 'https://example.com/p', source: 'Openverse' }, passedOver: ['a water tower', 'a city street'] } }]
+    const base = initialState()
+    show({ ...base, projectId: 'p1', workspaceId: 'ws_a', step: 'review', scenes, scriptBrief: { ...base.brief, source: 'idea', title: 'Morning' }, brief: { ...base.brief, source: 'idea', title: 'Morning', template: 'studio-dark' }, draft: { state: 'saved' } })
+    expect(await screen.findByText(/Your AI passed over 2 that didn’t fit first \(a water tower; a city street\)\./)).toBeTruthy()
+  })
+})
+
 describe('a library clip in a scene', () => {
   it('is a visual Producer may use, starting on the first clip made', () => {
     expect(VISUAL_KIND_INFO.library.label).toBe('Library clip')
