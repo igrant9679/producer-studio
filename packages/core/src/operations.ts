@@ -59,6 +59,12 @@ export type AuditKind =
   | 'operator.job.cancelled'
   | 'operator.storage.orphans'
   | 'operator.library.make'
+  // a membership website's provisioning (routes/provision.ts) and what it leads to
+  | 'signin.link'
+  | 'membership.provisioned'
+  | 'membership.updated'
+  | 'membership.link'
+  | 'membership.claim'
 
 export interface AuditEntry {
   id: string
@@ -91,6 +97,9 @@ export const SPACE_AUDIT_KINDS: readonly AuditKind[] = [
   'ai.key.shared',
   'ai.key.unshared',
   'ai.builtin',
+  'membership.provisioned',
+  'membership.updated',
+  'membership.claim',
   'workspace.deleted',
 ]
 
@@ -170,6 +179,16 @@ export function auditSentence(e: AuditEntry): string {
       return `Operator ${who} cancelled job ${t}`
     case 'operator.storage.orphans':
       return `Operator ${who} removed ${str(d.removed)} orphaned storage objects`
+    case 'signin.link':
+      return `${who} signed in with a link from the membership website`
+    case 'membership.provisioned':
+      return `The membership website ${d.workspaceCreated ? 'made this space' : 'put a membership on this space'} for ${t} (${str(d.plan)}${d.userCreated ? ', a new account' : ''})`
+    case 'membership.updated':
+      return `The membership website changed this space’s membership to ${str(d.plan)}, ${str(d.status).replace('_', ' ')}${d.seats ? `, ${str(d.seats)} seats` : ''}`
+    case 'membership.link':
+      return 'The membership website made a sign-in link'
+    case 'membership.claim':
+      return `${who} went to the membership website to get a membership for this space`
     default:
       return `${who}: ${String(e.kind)}`
   }

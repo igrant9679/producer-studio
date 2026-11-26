@@ -13,6 +13,7 @@ import { HttpError, body, memberRole, notFound, requireRole, roleAtLeast } from 
 import { newId, randomToken } from '../ids'
 import { jobsDeleted } from '../jobs/queue'
 import { changedMeanwhile, checkIfMatch, etagOf, matchRequired, setEtag } from '../etag'
+import { checkSeat, makeClaim, planOf, provisioningOn } from '../services/membership'
 
 export async function createWorkspace(userId: string, name: string, personal = false): Promise<Workspace> {
   const id = newId('ws')
@@ -336,6 +337,8 @@ workspaceRoutes.post('/:id/invites', async (c) => {
   const id = c.req.param('id')
   await requireRole(u.id, id, 'owner')
   const b = await body(c, z.object({ email: z.string().trim().email().max(254), role: z.enum(['owner', 'editor', 'viewer']).default('editor') }))
+  // a membership's seats: members and pending invitations together
+  await checkSeat(id)
   const token = randomToken(24)
   const now = Date.now()
   const expiresAt = now + INVITE_TTL_MS
@@ -343,6 +346,37 @@ workspaceRoutes.post('/:id/invites', async (c) => {
   const emailed = await mailInvite(c, row, u)
   await audit(c, { kind: 'invite.created', workspaceId: id, target: row.email, data: { role: b.role, emailed } })
   return c.json({ ok: true, inviteUrl: inviteUrl(token), expiresAt, emailed })
+})
+
+// ---------------- the space's membership (bought on the membership website) ----------------
+
+/** GET: the membership, if the space has one, and where to get or manage one; owners can start a claim. */
+workspaceRoutes.get('/:id/membership', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  const role = await requireRole(u.id, id, 'viewer')
+  const p = await planOf(id)
+  const on = ctx().config.mode === 'cloud' && provisioningOn()
+  return c.json({
+    ...(p ? { membership: { source: p.source, plan: p.plan, status: p.status, seats: p.seats, updatedAt: p.updatedAt } } : {}),
+    membershipUrl: ctx().config.membershipUrl,
+    canClaim: on && role === 'owner' && (!p || p.status !== 'active'),
+  })
+})
+
+/** POST (owners): a link to the membership website that puts the membership bought there on this space. */
+workspaceRoutes.post('/:id/membership/claim', async (c) => {
+  const u = requireUser(c)
+  const id = c.req.param('id')
+  await requireRole(u.id, id, 'owner')
+  if (ctx().config.mode !== 'cloud' || !provisioningOn()) throw new HttpError(404, 'not_found', 'Memberships aren’t set up on this server.')
+  const held = await planOf(id)
+  if (held?.status === 'active') throw new HttpError(409, 'conflict', 'This space already has an active membership')
+  const { token, expiresAt } = makeClaim(id, u.id)
+  const url = new URL(ctx().config.membershipUrl)
+  url.searchParams.set('ps_claim', token)
+  await audit(c, { kind: 'membership.claim', workspaceId: id })
+  return c.json({ url: url.toString(), claim: token, expiresAt })
 })
 
 workspaceRoutes.get('/:id/invites', async (c) => {
@@ -457,6 +491,8 @@ inviteRoutes.post('/:token/accept', async (c) => {
   }
   if (status === 'revoked') throw new HttpError(410, 'conflict', 'This invite was withdrawn by an owner of the space')
   if (status === 'expired') throw new HttpError(410, 'conflict', 'This invite has expired. Ask an owner of the space for a new one.')
+  const member = (await db.select({ role: memberships.role }).from(memberships).where(and(eq(memberships.workspaceId, inv.workspaceId), eq(memberships.userId, u.id))).limit(1))[0]
+  if (!member) await checkSeat(inv.workspaceId, { accepting: true })
   const now = Date.now()
   await db.transaction(async (tx) => {
     const claimed = await tx

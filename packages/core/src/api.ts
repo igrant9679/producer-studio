@@ -46,6 +46,8 @@ export interface Workspace {
 // POST /api/auth/logout                               -> {ok: true}
 // GET  /api/auth/me                                   -> MeResponse | 401
 export interface MeResponse {
+  /** An account a membership website made: it has no password until its person chooses one (Settings → Account). */
+  needsPassword?: boolean
   user: User
   workspaces: Workspace[]
   /** P-10: this account is an operator (OPERATOR_EMAILS): the Operator page is theirs. */
@@ -118,6 +120,18 @@ export function normalizePreferences(raw: unknown): UserPreferences {
 // POST /api/invites/:token/accept                     -> Workspace        (signed in as the invited email; single use)
 // GET  /api/workspaces/:id/brand                      -> BrandKitDoc
 // PUT  /api/workspaces/:id/brand  BrandKitDoc         -> BrandKitDoc
+// GET  /api/workspaces/:id/membership        -> SpaceMembershipResponse (any member)
+// POST /api/workspaces/:id/membership/claim  -> { url, claim, expiresAt } (owners: the membership website with ?ps_claim=)
+// A membership is bought on the membership website (meyousocial.com) and provisioned through /api/provision
+// (docs/integrations/meyousocial.md).
+export interface SpaceMembershipResponse {
+  membership?: { source: string; plan: string; status: 'active' | 'past_due' | 'paused' | 'cancelled' | 'expired'; seats: number | null; updatedAt: number }
+  /** Where to get or manage a membership. */
+  membershipUrl: string
+  /** This person (an owner) can buy a membership for this space on the website. */
+  canClaim: boolean
+}
+
 export interface Member {
   userId: string
   name: string

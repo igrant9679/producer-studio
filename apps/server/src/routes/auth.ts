@@ -29,13 +29,14 @@ import { isOperator } from '../services/operator'
 import { mailEnabled, sendMail } from '../mail'
 import { emailChangedNotice, passwordChangedNotice, resetMail, verifyMail } from '../mail/messages'
 import { checkTokenIpRate, consumeToken, issueToken, peekToken } from '../services/account'
+import { UNSET_PASSWORD_PREFIX } from '../services/membership'
 import { createWorkspace, listWorkspaces } from './workspaces'
 
 export const AVATAR_COLORS = ['#ff5a5f', '#35e0ff', '#ffb020', '#7c5cff', '#2ecc71', '#ff7ac6', '#4fd1c5', '#ff8a3d']
 
 export async function meResponse(userId: string): Promise<MeResponse> {
   const u = (await ctx().db.select().from(users).where(eq(users.id, userId)).limit(1))[0]
-  return { user: userDto(u), workspaces: await listWorkspaces(userId), ...(isOperator(u) ? { operator: true } : {}) }
+  return { user: userDto(u), workspaces: await listWorkspaces(userId), ...(isOperator(u) ? { operator: true } : {}), ...(u.passwordHash.startsWith(UNSET_PASSWORD_PREFIX) ? { needsPassword: true } : {}) }
 }
 
 /** Create a user and their personal workspace (also used by the seed script). */
@@ -181,6 +182,21 @@ authRoutes.post('/login', async (c) => {
   const u = await checkCredentials(c, b.email, b.password)
   await createSession(c, u.id)
   await audit(c, { kind: 'signin.ok', actor: u })
+  return c.json(await meResponse(u.id))
+})
+
+/**
+ * A one-time sign-in link a membership website handed its member (services/membership.ts signInLink): this browser is
+ * signed in. An account the website made has no password until its person chooses one (needsPassword).
+ */
+authRoutes.post('/link', async (c) => {
+  const b = await body(c, z.object({ token: z.string().min(10).max(200) }))
+  const row = await consumeToken(b.token, ['signin'])
+  const u = (await ctx().db.select().from(users).where(eq(users.id, row.userId)).limit(1))[0]
+  if (!u) throw new HttpError(404, 'not_found', 'This account no longer exists')
+  if (u.disabledAt) throw new HttpError(403, 'forbidden', DISABLED_MESSAGE)
+  await createSession(c, u.id)
+  await audit(c, { kind: 'signin.link', actor: u })
   return c.json(await meResponse(u.id))
 })
 

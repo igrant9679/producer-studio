@@ -17,6 +17,8 @@ interface SessionState {
   workspaceId?: string
   /** P-10: the signed-in account is an operator (the Operator page is theirs). */
   operator?: boolean
+  /** An account the membership website made: it has no password until its person chooses one. */
+  needsPassword?: boolean
   /** Why the app is signed out, when it didn't start that way (for a note on the sign-in page). */
   signedOutReason?: 'expired' | 'elsewhere'
   load: () => Promise<void>
@@ -104,7 +106,7 @@ export const useSession = create<SessionState>((set, get) => {
   function adopt(me: MeResponse) {
     if (tabUser && tabUser !== me.user.id) resetUserState()
     tabUser = me.user.id
-    set({ status: 'ready', user: me.user, workspaces: me.workspaces, workspaceId: pickWorkspace(me.workspaces), signedOutReason: undefined, operator: me.operator === true })
+    set({ status: 'ready', user: me.user, workspaces: me.workspaces, workspaceId: pickWorkspace(me.workspaces), signedOutReason: undefined, operator: me.operator === true, needsPassword: me.needsPassword === true })
   }
   return {
     status: 'loading',

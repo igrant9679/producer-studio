@@ -487,6 +487,25 @@ export const workspaceUsageSettings = pgTable('workspace_usage_settings', {
   updatedAt: ms('updated_at').notNull(),
 })
 
+/** v21: a membership bought on a membership website for a space (services/membership.ts). Not synced. */
+export const workspacePlans = pgTable('workspace_plans', {
+  workspaceId: text('workspace_id').primaryKey(),
+  /** The website it came from ('meyousocial'). */
+  source: text('source').notNull(),
+  /** The website's own id for this membership (its subscription), unique per source. */
+  externalId: text('external_id').notNull(),
+  /** The website's plan slug (member, contributor, steward, founder…). */
+  plan: text('plan').notNull(),
+  /** active | past_due | paused | cancelled | expired (only active gives the plan's benefits). */
+  status: text('status').notNull(),
+  /** People the space may have (members and pending invites); null = no limit. */
+  seats: integer('seats'),
+  /** The buyer's email on the website. */
+  email: text('email'),
+  createdAt: ms('created_at').notNull(),
+  updatedAt: ms('updated_at').notNull(),
+})
+
 /** v16: the security audit log (services/audit.ts). Not synced. */
 export const auditLog = pgTable('audit_log', {
   id: text('id').primaryKey(),

@@ -180,6 +180,8 @@ function EmailSection({ info, reload }: { info: AccountInfo; reload: () => void 
 }
 
 function PasswordSection() {
+  // an account the membership website made has no password yet: its first one needs no current one
+  const first = useSession((s) => s.needsPassword === true)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [busy, setBusy] = useState(false)
@@ -190,10 +192,11 @@ function PasswordSection() {
     setBusy(true)
     setErr(undefined)
     try {
-      await accountApi.changePassword(current, next)
+      await accountApi.changePassword(first ? '' : current, next)
       setCurrent('')
       setNext('')
-      toast('Password changed. Other browsers were signed out.')
+      if (first) useSession.setState({ needsPassword: false })
+      toast(first ? 'Password set. You can sign in with it anywhere now.' : 'Password changed. Other browsers were signed out.')
     } catch (e2) {
       setErr(errText(e2))
     } finally {
@@ -201,11 +204,12 @@ function PasswordSection() {
     }
   }
   return (
-    <form onSubmit={submit} aria-label="Change password" noValidate>
+    <form onSubmit={submit} aria-label={first ? 'Choose a password' : 'Change password'} noValidate>
+      {first && <p className="muted" style={{ fontSize: '0.8125rem', marginTop: 0 }}>Your account was made when you joined on the membership website. Choose a password to sign in here directly, and to link the desktop app.</p>}
       <div className="row" style={{ flexWrap: 'wrap' }}>
-        <input className="input" style={{ flex: '1 1 180px' }} type="password" autoComplete="current-password" placeholder="Current password" aria-label="Current password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+        {!first && <input className="input" style={{ flex: '1 1 180px' }} type="password" autoComplete="current-password" placeholder="Current password" aria-label="Current password" value={current} onChange={(e) => setCurrent(e.target.value)} />}
         <input className="input" style={{ flex: '1 1 180px' }} type="password" autoComplete="new-password" placeholder="New password (8+ characters)" aria-label="New password" value={next} onChange={(e) => setNext(e.target.value)} />
-        <button className="btn" disabled={busy || !current || !next}>{busy && <Spinner />} Change password</button>
+        <button className="btn" disabled={busy || (!first && !current) || !next}>{busy && <Spinner />} {first ? 'Set password' : 'Change password'}</button>
       </div>
       {err && <div className="ps-field-err" role="alert">{err}</div>}
       <div className="muted" style={{ fontSize: '0.75rem', marginTop: 8 }}>

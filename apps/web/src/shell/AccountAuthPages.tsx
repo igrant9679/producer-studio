@@ -1,5 +1,6 @@
-// Signed-out account pages (P-22, A-17): /forgot asks for a reset link, /reset/:token sets a new password, and
-// /verify/:token confirms an address (a new account's, or a new one an account switches to).
+// Signed-out account pages (P-22, A-17): /forgot asks for a reset link, /reset/:token sets a new password,
+// /verify/:token confirms an address (a new account's, or a new one an account switches to), and /link/:token signs in
+// with a one-time link from the membership website.
 import { ArrowLeft, Eye, EyeOff, MailCheck } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -195,6 +196,85 @@ export function VerifyPage() {
         {state.ok!.purpose === 'email' ? `You now sign in with ${state.ok!.email}.` : `${state.ok!.email} is confirmed. Password resets and notices will reach you there.`}
       </p>
       <Link className="btn primary" to={status === 'ready' ? '/' : '/login'}>{status === 'ready' ? 'Back to Producer Studio' : 'Sign in'}</Link>
+    </Frame>
+  )
+}
+
+/** Sign-in links in use by this page (StrictMode runs an effect twice; a link works once). */
+const linking = new Map<string, Promise<import('@producer/core').MeResponse>>()
+
+/**
+ * /link/:token?ws=…: a one-time sign-in link from the membership website (after joining, or its "Open Producer Studio").
+ * This browser is signed in and the space opens; an account the website made first chooses a password (or skips it).
+ */
+export function LinkPage() {
+  const { token = '' } = useParams()
+  const navigate = useNavigate()
+  const ws = new URLSearchParams(window.location.search).get('ws') ?? undefined
+  const [state, setState] = useState<{ error?: string; needsPassword?: boolean; email?: string }>()
+  const [password, setPassword] = useState('')
+  const [show, setShow] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string>()
+  const open = () => navigate('/', { replace: true })
+  useEffect(() => {
+    let alive = true
+    if (!linking.has(token)) linking.set(token, accountApi.signInLink(token))
+    linking
+      .get(token)!
+      .then(async (me) => {
+        await useSession.getState().load()
+        if (ws && me.workspaces.some((w) => w.id === ws)) useSession.getState().setWorkspace(ws)
+        if (!alive) return
+        if (me.needsPassword) setState({ needsPassword: true, email: me.user.email })
+        else navigate('/', { replace: true })
+      })
+      .catch((e) => alive && setState({ error: errText(e) }))
+    return () => {
+      alive = false
+    }
+  }, [token, ws, navigate])
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (password.length < 8) return setErr('Use at least 8 characters')
+    setBusy(true)
+    setErr(undefined)
+    try {
+      await accountApi.changePassword('', password)
+      useSession.setState({ needsPassword: false })
+      toast('Welcome to Producer Studio. Your password is set.')
+      open()
+    } catch (e2) {
+      setErr(errText(e2))
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (!state) return <Frame eyebrow="Welcome" title="Signing you in"><Spinner size={20} /></Frame>
+  if (state.error)
+    return (
+      <Frame eyebrow="Sign-in link" title="This link doesn’t work">
+        <p className="sub" role="alert">{state.error} Sign-in links work once and for 15 minutes: open Producer Studio again from the membership website for a new one.</p>
+        <Link className="btn primary" to="/login">Sign in</Link>
+      </Frame>
+    )
+  return (
+    <Frame eyebrow="Welcome" title="Choose a password">
+      <form onSubmit={submit} noValidate aria-label="Choose a password">
+        <p className="sub">You’re signed in as {state.email}. Choose a password to sign in here directly next time, and to link the desktop app.</p>
+        {err && <div className="ps-alert" role="alert" style={{ marginBottom: 16 }}>{err}</div>}
+        <div className="ps-field">
+          <label className="label" htmlFor="link-password">Password</label>
+          <div className="ps-pw">
+            <input id="link-password" className="input" type={show ? 'text' : 'password'} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" autoFocus />
+            <button type="button" className="btn ghost sm icon" onClick={() => setShow((s) => !s)} aria-label={show ? 'Hide password' : 'Show password'}>
+              {show ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
+          </div>
+        </div>
+        <button className="btn primary" type="submit" disabled={busy}>{busy && <Spinner />} Set password and open</button>
+        <button className="btn ghost" type="button" onClick={open} style={{ marginLeft: 8 }}>Later</button>
+      </form>
     </Frame>
   )
 }

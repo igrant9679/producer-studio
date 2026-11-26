@@ -12,14 +12,20 @@ import { HttpError } from '../http'
 import { randomToken, sha256 } from '../ids'
 import { purgeWorkspace } from '../routes/workspaces'
 
-export type TokenPurpose = 'reset' | 'verify' | 'email'
+/** 'signin': a one-time sign-in link a membership website hands its member (services/membership.ts). */
+export type TokenPurpose = 'reset' | 'verify' | 'email' | 'signin'
+
+/** A sign-in link lives this long (the website sends the member straight to it). */
+export const SIGNIN_TTL_MS = 15 * 60_000
+/** Sign-in links one account can be given in an hour (each "Open Producer Studio" on the website mints one). */
+const SIGNIN_PER_HOUR = 30
 
 /** Mails of one kind one account can be sent in an hour; and account mails one client address can ask for. */
 export const TOKENS_PER_HOUR = 3
 export const TOKENS_PER_IP_PER_HOUR = 20
 
 const HOUR = 3600_000
-const ttl = (p: TokenPurpose) => (p === 'reset' ? RESET_TTL_MS : VERIFY_TTL_MS)
+const ttl = (p: TokenPurpose) => (p === 'signin' ? SIGNIN_TTL_MS : p === 'reset' ? RESET_TTL_MS : VERIFY_TTL_MS)
 
 async function count(where: ReturnType<typeof and>): Promise<number> {
   const [r] = await ctx().db.select({ n: sql<number>`count(*)::int` }).from(authTokens).where(where)
@@ -40,7 +46,7 @@ export async function checkTokenIpRate(ip: string) {
  */
 export async function issueToken(userId: string, purpose: TokenPurpose, email: string, ip: string | null): Promise<string | null> {
   const now = Date.now()
-  if ((await count(and(eq(authTokens.userId, userId), eq(authTokens.purpose, purpose), gt(authTokens.createdAt, now - HOUR)))) >= TOKENS_PER_HOUR) return null
+  if ((await count(and(eq(authTokens.userId, userId), eq(authTokens.purpose, purpose), gt(authTokens.createdAt, now - HOUR)))) >= (purpose === 'signin' ? SIGNIN_PER_HOUR : TOKENS_PER_HOUR)) return null
   const db = ctx().db
   await db.update(authTokens).set({ usedAt: now }).where(and(eq(authTokens.userId, userId), eq(authTokens.purpose, purpose), isNull(authTokens.usedAt)))
   const token = randomToken(32)

@@ -4,7 +4,7 @@ import { useSession } from './lib/session'
 import { Toasts } from './lib/Toasts'
 import { TooltipLayer } from './lib/tooltip'
 import { AuthPage } from './shell/AuthPage'
-import { ForgotPage, ResetPage, VerifyPage } from './shell/AccountAuthPages'
+import { ForgotPage, LinkPage, ResetPage, VerifyPage } from './shell/AccountAuthPages'
 import { AppErrorBoundary, EditorSkeleton, ShellSkeleton, SmallScreenNote } from './shell/boot'
 import { ShellRoutes } from './shell/ShellRoutes'
 import { SharePage } from './shell/SharePage'
@@ -39,6 +39,7 @@ export function App() {
         <Route path="/forgot" element={<ForgotPage />} />
         <Route path="/reset/:token" element={<ResetPage />} />
         <Route path="/verify/:token" element={<VerifyPage />} />
+        <Route path="/link/:token" element={<LinkPage />} />
         <Route path="/r/:token" element={<SharePage />} />
         {/* Offline demo project (bundled media in /public/demo) for editor development without the API. */}
         <Route path="/edit/demo" element={<Suspense fallback={<EditorSkeleton />}><EditorPage demo /><SmallScreenNote /></Suspense>} />

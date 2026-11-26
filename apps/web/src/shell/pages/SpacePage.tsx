@@ -10,6 +10,7 @@ import { useSystem } from '../system'
 import { absoluteUrl, copyText, relativeTime } from '../util'
 import { CreateSpaceModal, DeleteSpaceModal, InviteForm, RenameSpaceModal } from '../modals'
 import { Avatar, ConfirmDialog, EmptyState, spaceColor, useAsync, usePageTitle } from '../ui'
+import { SpaceMembership } from './SpaceMembership'
 
 const ROLE: Record<string, { label: string; icon: React.ReactNode; desc: string }> = {
   owner: { label: 'Owner', icon: <Crown size={13} />, desc: 'Manage members, brand kit and everything in the space' },
@@ -191,6 +192,8 @@ export default function SpacePage() {
           )}
         </section>
       )}
+
+      {workspaceId && <SpaceMembership workspaceId={workspaceId} />}
 
       <section className="card ps-brand-sec">
         <div className="ps-brand-sec-head"><Users size={15} /> <strong>Members</strong><span className="muted">{members.data ? `${members.data.length}` : ''}</span></div>

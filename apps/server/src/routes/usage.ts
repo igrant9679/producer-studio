@@ -9,7 +9,7 @@ import { falModelName } from '../ai/generate/fal'
 import { builtinProvider } from '../ai/resolve'
 import { ctx } from '../context'
 import { jobs, memberships, rateWindows, users, workspaces } from '../db/schema'
-import { body, invalid, requireRole } from '../http'
+import { HttpError, body, invalid, requireRole } from '../http'
 import { QUEUED_KINDS } from '../limits'
 import { DAY_MS, builtinAiEnabled, monthStart, setBuiltinAi, storageOf, sumUsage, usageRows, utcDay } from '../services/metering'
 
@@ -148,6 +148,12 @@ usageRoutes.put('/builtin-ai', async (c) => {
   const b = await body(c, z.object({ workspaceId: z.string().min(1), enabled: z.boolean() }))
   await requireRole(u.id, b.workspaceId, 'owner')
   if (ctx().config.mode !== 'cloud') throw invalid('The desktop app uses your own Claude sign-in; there is no server key to turn on.')
+  // a space whose membership ended gets it back by renewing, not by switching it on
+  if (b.enabled) {
+    const { builtinAiBlocked } = await import('../services/membership')
+    const why = await builtinAiBlocked(b.workspaceId)
+    if (why) throw new HttpError(409, 'conflict', why)
+  }
   await setBuiltinAi(b.workspaceId, b.enabled, u.id)
   await audit(c, { kind: 'ai.builtin', workspaceId: b.workspaceId, data: { enabled: b.enabled } })
   return c.json({ enabled: b.enabled })

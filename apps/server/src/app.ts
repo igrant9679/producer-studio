@@ -26,6 +26,7 @@ import { assetRoutes, mediaRoutes, uploadRoutes } from './routes/assets'
 import { sceneRoutes } from './routes/scenes'
 import { smartRoutes, smartToolsRoutes } from './routes/smart'
 import { smoothRoutes } from './routes/smooth'
+import { provisionRoutes } from './routes/provision'
 import { authRoutes } from './routes/auth'
 import { accountRoutes } from './routes/account'
 import { eventRoutes, jobRoutes } from './routes/jobs'
@@ -107,6 +108,8 @@ export function createApp() {
     if (max === null) return next()
     return bodyLimit({ maxSize: max, onError: (x) => x.json({ error: 'Request body too large', code: 'quota', requestId: requestIdOf(x) }, 413) })(c, next)
   })
+  // a membership website's signed server-to-server calls: before sign-in (a signature, not a session or device token)
+  app.route('/api/provision', provisionRoutes)
   app.use('/api/*', sessionMiddleware)
   // usage (AI tokens) inside the request is charged to the signed-in person
   app.use('/api/*', (c, next) => withActor(c.get('user')?.id, next))

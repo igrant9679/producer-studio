@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 21
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -729,6 +729,26 @@ export const DDL_V20 = `
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS abilities jsonb;
 `
 
+/**
+ * v21 — memberships bought on a membership website (meyousocial.com) for a space: one per space, found by the
+ * website's own id for it (source + external_id). Provisioning (/api/provision) writes them; the plan and status decide
+ * what the space gets (services/membership.ts). Not synced; deleted with the space.
+ */
+export const DDL_V21 = `
+CREATE TABLE IF NOT EXISTS workspace_plans (
+  workspace_id text PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  source text NOT NULL,
+  external_id text NOT NULL,
+  plan text NOT NULL,
+  status text NOT NULL,
+  seats integer,
+  email text,
+  created_at double precision NOT NULL,
+  updated_at double precision NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_plans_external_idx ON workspace_plans(source, external_id);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -753,4 +773,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [18, DDL_V18],
   [19, DDL_V19],
   [20, DDL_V20],
+  [21, DDL_V21],
 ]

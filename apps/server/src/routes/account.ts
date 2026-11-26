@@ -15,6 +15,7 @@ import { emailChangeMail, passwordChangedNotice } from '../mail/messages'
 import { checkTokenIpRate, deleteAccount, issueToken, pendingEmail, planAccountDelete } from '../services/account'
 import { AVATAR_COLORS, sendVerification } from './auth'
 import { audit } from '../services/audit'
+import { UNSET_PASSWORD_PREFIX } from '../services/membership'
 
 async function loadUser(id: string): Promise<UserRow> {
   const u = (await ctx().db.select().from(users).where(eq(users.id, id)).limit(1))[0]
@@ -59,8 +60,9 @@ accountRoutes.patch('/', async (c) => {
 accountRoutes.post('/password', async (c) => {
   cloudOnly()
   const u = await loadUser(requireUser(c).id)
-  const b = await body(c, z.object({ current: z.string().max(200), password: z.string().min(8, 'Use at least 8 characters').max(200) }))
-  await confirmPassword(u, b.current)
+  const b = await body(c, z.object({ current: z.string().max(200).default(''), password: z.string().min(8, 'Use at least 8 characters').max(200) }))
+  // an account a membership website made has no password to confirm: its first one is chosen after a sign-in link
+  if (!u.passwordHash.startsWith(UNSET_PASSWORD_PREFIX)) await confirmPassword(u, b.current)
   await ctx().db.update(users).set({ passwordHash: await hashPassword(b.password) }).where(eq(users.id, u.id))
   // everyone else signed in as them is out; this browser stays in. App links stay (Sign out everywhere ends those).
   await endSessions(u.id, { except: c.get('sessionId') })

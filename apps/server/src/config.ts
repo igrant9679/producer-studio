@@ -72,6 +72,13 @@ export interface Config {
   operatorEmails: string[]
   /** The bearer token GET /api/metrics asks for (P-7); unset = the endpoint is off. */
   metricsToken?: string
+  /**
+   * The secret a membership website signs its provisioning calls with (/api/provision, HMAC-SHA256; docs/integrations/
+   * meyousocial.md). At least 32 characters; unset or shorter = provisioning is off.
+   */
+  provisionSecret?: string
+  /** Where a space's owner gets or manages a membership (the website); shown on the Members page. */
+  membershipUrl: string
   /** The janitor (P-11): days finished jobs, tombstones and audit entries are kept (0 = forever). */
   retention: { jobDays: number; tombstoneDays: number; auditDays: number }
   /**
@@ -233,6 +240,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
             .filter(Boolean)
         : [],
     metricsToken: env.METRICS_TOKEN?.trim() || undefined,
+    provisionSecret: (env.PROVISION_SECRET?.trim().length ?? 0) >= 32 ? env.PROVISION_SECRET!.trim() : undefined,
+    membershipUrl: env.MEMBERSHIP_URL?.trim() || 'https://www.meyousocial.com/',
     retention: {
       jobDays: envInt(env, 'JOB_RETENTION_DAYS', 30),
       tombstoneDays: envInt(env, 'TOMBSTONE_RETENTION_DAYS', 90),

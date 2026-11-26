@@ -30,6 +30,8 @@ export const accountApi = {
   forgot: (email: string) => call<{ ok: true; mail: boolean }>('POST', '/auth/forgot', { email }),
   resetInfo: (token: string) => call<{ email: string }>('GET', `/auth/reset/${enc(token)}`),
   reset: (token: string, password: string) => call<MeResponse>('POST', '/auth/reset', { token, password }),
+  /** A one-time sign-in link from the membership website (this browser is signed in). */
+  signInLink: (token: string) => call<MeResponse>('POST', '/auth/link', { token }),
   verify: (token: string) => call<{ ok: true; email: string; purpose: 'verify' | 'email' }>('POST', '/auth/verify', { token }),
 
   // the account page
