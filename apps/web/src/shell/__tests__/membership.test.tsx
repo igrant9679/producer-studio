@@ -98,3 +98,76 @@ describe('Settings → Space: membership', () => {
     expect(container.textContent).toBe('')
   })
 })
+
+describe('the welcome step after signing up in the app', () => {
+  it('a new account made in the app goes to /welcome; one that came to accept an invite goes there instead', async () => {
+    const { AuthPage } = await import('../AuthPage')
+    const signupApi = vi.spyOn(api, 'signup').mockImplementation(async () => me(false))
+    const fill = () => {
+      fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Maya Lee' } })
+      fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'maya@example.com' } })
+      fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: 'a-good-password' } })
+      fireEvent.click(screen.getByRole('button', { name: /create account/i }))
+    }
+    const at = (path: string) =>
+      render(
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/signup" element={<AuthPage mode="signup" />} />
+            <Route path="/welcome" element={<div>Welcome step</div>} />
+            <Route path="/invite/:token" element={<div>Invite page</div>} />
+            <Route path="/" element={<div>Home page</div>} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    at('/signup')
+    fill()
+    expect(await screen.findByText('Welcome step')).toBeTruthy()
+    expect(signupApi).toHaveBeenCalledWith('maya@example.com', 'a-good-password', 'Maya Lee')
+    cleanup()
+    useSession.setState({ status: 'anon', workspaces: [], workspaceId: undefined })
+    at('/signup?next=%2Finvite%2Ftok9')
+    fill()
+    expect(await screen.findByText('Invite page')).toBeTruthy()
+  })
+
+  it('offers a membership where memberships are set up, your own key, or free; a membership goes to the website with a claim', async () => {
+    const { default: WelcomePage } = await import('../pages/WelcomePage')
+    useSession.setState({ status: 'ready', user: me(false).user, workspaces: [ws], workspaceId: 'ws_maya' })
+    vi.spyOn(api, 'membership').mockResolvedValue({ membershipUrl: 'https://www.meyousocial.com/membership/', canClaim: true })
+    const claim = vi.spyOn(api, 'claimMembership').mockResolvedValue({ url: 'https://www.meyousocial.com/membership/?ps_claim=v1.y', claim: 'v1.y', expiresAt: 1 })
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign })
+    const show = () =>
+      render(
+        <MemoryRouter initialEntries={['/welcome']}>
+          <Routes>
+            <Route path="/welcome" element={<WelcomePage />} />
+            <Route path="/settings" element={<div>Settings page</div>} />
+            <Route path="/" element={<div>Home page</div>} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    try {
+      show()
+      expect(await screen.findByText('Welcome, Maya')).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: /Choose a plan/ }))
+      await waitFor(() => expect(assign).toHaveBeenCalledWith('https://www.meyousocial.com/membership/?ps_claim=v1.y'))
+      expect(claim).toHaveBeenCalledWith('ws_maya')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    cleanup()
+    // where memberships aren't set up: a key, or free
+    vi.spyOn(api, 'membership').mockResolvedValue({ membershipUrl: 'https://www.meyousocial.com/', canClaim: false })
+    show()
+    await screen.findByText('Use my own AI key')
+    expect(screen.queryByText('Get a membership')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Add a key/ }))
+    expect(await screen.findByText('Settings page')).toBeTruthy()
+    cleanup()
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: /Go to my space/ }))
+    expect(await screen.findByText('Home page')).toBeTruthy()
+  })
+})

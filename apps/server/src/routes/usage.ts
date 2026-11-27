@@ -137,10 +137,20 @@ usageRoutes.get('/', async (c) => {
     spaces: mine.map((w) => ({ id: w.id, name: w.name, bytes: stored.get(w.id)?.bytes ?? 0 })).sort((a, b) => b.bytes - a.bytes),
     ...(members ? { members } : {}),
     limits,
-    builtinAi: { enabled: cloud ? await builtinAiEnabled(workspaceId) : true, available: b.id === 'anthropic-api' && (await b.status()).available, canChange: cloud && role === 'owner' },
+    builtinAi: await builtinAiView(workspaceId, u, cloud, role, b.id === 'anthropic-api' && (await b.status()).available),
   }
   return c.json(summary)
 })
+
+/** Whether the space uses the server's AI, whether this person may switch it, and why it can't be turned on (when it can't). */
+async function builtinAiView(workspaceId: string, u: Parameters<typeof import('../services/membership').builtinAiRefusal>[1], cloud: boolean, role: string, available: boolean): Promise<UsageSummary['builtinAi']> {
+  const enabled = cloud ? await builtinAiEnabled(workspaceId) : true
+  const canChange = cloud && role === 'owner'
+  if (enabled || !canChange || !available) return { enabled, available, canChange }
+  const { builtinAiRefusal } = await import('../services/membership')
+  const whyNot = await builtinAiRefusal(workspaceId, u)
+  return { enabled, available, canChange, ...(whyNot ? { whyNot } : {}) }
+}
 
 /** Owners: let this space use the server's own AI key, or stop it (its own keys keep working either way). */
 usageRoutes.put('/builtin-ai', async (c) => {
@@ -148,10 +158,10 @@ usageRoutes.put('/builtin-ai', async (c) => {
   const b = await body(c, z.object({ workspaceId: z.string().min(1), enabled: z.boolean() }))
   await requireRole(u.id, b.workspaceId, 'owner')
   if (ctx().config.mode !== 'cloud') throw invalid('The desktop app uses your own Claude sign-in; there is no server key to turn on.')
-  // a space whose membership ended gets it back by renewing, not by switching it on
+  // it comes with a membership (operators: anywhere); a space whose membership ended gets it back by renewing
   if (b.enabled) {
-    const { builtinAiBlocked } = await import('../services/membership')
-    const why = await builtinAiBlocked(b.workspaceId)
+    const { builtinAiRefusal } = await import('../services/membership')
+    const why = await builtinAiRefusal(b.workspaceId, u)
     if (why) throw new HttpError(409, 'conflict', why)
   }
   await setBuiltinAi(b.workspaceId, b.enabled, u.id)

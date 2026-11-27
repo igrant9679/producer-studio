@@ -178,7 +178,7 @@ describe('AI metering and quotas (P-1, A-18)', () => {
 })
 
 describe('the server’s own AI key is opt-in per space (P-1)', () => {
-  it('a new space can’t use it until an owner turns it on; editors can’t', async () => {
+  it('a new space can’t use it until it’s turned on; since 26 Nov only with a membership (or by an operator); editors can’t', async () => {
     const { A, wsId, others } = await team(['editor'])
     const { requireProvider } = await import('../ai/provider')
     const saved = process.env.ANTHROPIC_API_KEY
@@ -187,9 +187,30 @@ describe('the server’s own AI key is opt-in per space (P-1)', () => {
       await expect(requireProvider(wsId, 'writer')).rejects.toMatchObject({ status: 503, message: BUILTIN_OFF })
       const s = (await A.client.json('GET', `/api/ai/settings?workspaceId=${wsId}`)).body
       expect(s.builtin).toMatchObject({ id: 'anthropic-api', available: false, detail: BUILTIN_OFF })
-      expect((await A.client.json('GET', `/api/usage?workspaceId=${wsId}`)).body.builtinAi).toEqual({ enabled: false, available: true, canChange: true })
+      // an owner with no membership: told why, and refused
+      const members = 'The server’s AI is for members. Add your own AI key in Settings → AI.'
+      expect((await A.client.json('GET', `/api/usage?workspaceId=${wsId}`)).body.builtinAi).toEqual({ enabled: false, available: true, canChange: true, whyNot: members })
       expect((await others[0].client.json('PUT', '/api/usage/builtin-ai', { workspaceId: wsId, enabled: true })).status).toBe(403)
-      expect((await A.client.json('PUT', '/api/usage/builtin-ai', { workspaceId: wsId, enabled: true })).body).toEqual({ enabled: true })
+      const refused = await A.client.json('PUT', '/api/usage/builtin-ai', { workspaceId: wsId, enabled: true })
+      expect(refused.status).toBe(409)
+      expect(refused.body.error).toBe(members)
+      // with memberships set up, the reason says where to get one
+      ctx().config.provisionSecret = 'test-provision-secret-0123456789abcdef-xyz'
+      try {
+        expect((await A.client.json('GET', `/api/usage?workspaceId=${wsId}`)).body.builtinAi.whyNot).toMatch(/comes with a membership: get one for this space on its Members page/)
+      } finally {
+        ctx().config.provisionSecret = undefined
+      }
+      // an operator can turn it on anywhere
+      const { users } = await import('../db/schema')
+      const email =(await ctx().db.select({ email: users.email }).from(users).where(eq(users.id, (await A.client.json('GET', '/api/auth/me')).body.user.id)))[0].email
+      ctx().config.operatorEmails = [email]
+      try {
+        expect((await A.client.json('GET', `/api/usage?workspaceId=${wsId}`)).body.builtinAi).toEqual({ enabled: false, available: true, canChange: true })
+        expect((await A.client.json('PUT', '/api/usage/builtin-ai', { workspaceId: wsId, enabled: true })).body).toEqual({ enabled: true })
+      } finally {
+        ctx().config.operatorEmails = []
+      }
       expect((await requireProvider(wsId, 'writer')).id).toBe('anthropic-api')
       expect((await A.client.json('GET', `/api/ai/settings?workspaceId=${wsId}`)).body.builtin).toMatchObject({ available: true })
       await A.client.json('PUT', '/api/usage/builtin-ai', { workspaceId: wsId, enabled: false })

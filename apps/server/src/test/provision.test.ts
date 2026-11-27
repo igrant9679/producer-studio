@@ -165,6 +165,19 @@ describe('membership changes', () => {
     expect((await browser.json('GET', `/api/workspaces/${ws}/membership`)).body).toMatchObject({ membership: { plan: 'steward', status: 'active' }, membershipUrl: 'https://www.meyousocial.com/join/', canClaim: false })
   })
 
+  it('a member owner can turn the server AI off and on again; a non-member owner can’t turn it on', async () => {
+    const r = await call('POST', '/api/provision/signup', { externalId: ext(), email: mail(), name: 'Kim Member', plan: 'member' })
+    const ws = r.body.workspace.id
+    const { browser } = await follow(r.body.signIn.url)
+    expect((await browser.json('PUT', '/api/usage/builtin-ai', { workspaceId: ws, enabled: false })).status).toBe(200)
+    expect((await browser.json('PUT', '/api/usage/builtin-ai', { workspaceId: ws, enabled: true })).body).toEqual({ enabled: true })
+    const free = await signup(t.app, 'Free Signup')
+    const no = await free.client.json('PUT', '/api/usage/builtin-ai', { workspaceId: free.workspaceId, enabled: true })
+    expect(no.status).toBe(409)
+    expect(no.body.error).toMatch(/comes with a membership: get one for this space on its Members page \(from https:\/\/www\.meyousocial\.com\/join\/\)/)
+    expect(await builtinAiEnabled(free.workspaceId)).toBe(false)
+  })
+
   it('seats: members and pending invitations together, at most the membership’s seats', async () => {
     const externalId = ext()
     const r = await call('POST', '/api/provision/signup', { externalId, email: mail(), name: 'Ana Ruiz', plan: 'founder', seats: 2 })

@@ -72,7 +72,7 @@ function Section({ icon, title, children, note }: { icon: ReactNode; title: stri
 
 function BuiltinAi({ data, onChange }: { data: UsageSummary; onChange: (on: boolean) => void }) {
   const [busy, setBusy] = useState(false)
-  const { enabled, available, canChange } = data.builtinAi
+  const { enabled, available, canChange, whyNot } = data.builtinAi
   const toggle = async () => {
     setBusy(true)
     try {
@@ -86,12 +86,18 @@ function BuiltinAi({ data, onChange }: { data: UsageSummary; onChange: (on: bool
   }
   // the desktop (its own Claude sign-in), or a server without a key and nothing to switch: nothing to say here
   if (!available && enabled) return null
-  const words = !available ? 'This server has no AI key of its own: add your own key in Settings → AI.' : enabled ? 'AI in this space can use the server’s own key.' : 'This space doesn’t use the server’s AI: add your own key in Settings → AI, or turn it on.'
+  const words = !available ? 'This server has no AI key of its own: add your own key in Settings → AI.' : enabled ? 'AI in this space can use the server’s own key.' : (whyNot ?? 'This space doesn’t use the server’s AI: add your own key in Settings → AI, or turn it on.')
   return (
     <Section icon={<Bot size={16} />} title="The server’s AI key">
       <div className="ps-usage-switch-row">
         <p className="muted" style={{ margin: 0 }}>{words}</p>
-        {canChange && available && (
+        {/* it comes with a membership: the Members page gets one, rather than a switch that would be refused */}
+        {canChange && available && whyNot && /membership/i.test(whyNot) && (
+          <Link className="btn sm" to="/space">
+            <Sparkles size={14} /> Membership
+          </Link>
+        )}
+        {canChange && available && !whyNot && (
           <button type="button" role="switch" aria-checked={enabled} aria-label="Use the server’s AI key in this space" className={`ps-usage-switch${enabled ? ' on' : ''}`} onClick={() => void toggle()} disabled={busy}>
             <span className="ps-usage-knob" aria-hidden="true" />
             <span>{enabled ? 'On' : 'Off'}</span>

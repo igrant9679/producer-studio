@@ -11,7 +11,9 @@ How a membership sold on **meyousocial.com** (WordPress + MemberPress) creates a
    with a one-time `signIn.url` → the website redirects the member's browser to it → they land signed in to their new
    space. An account made this way has no password: the link page asks them to choose one (or "Later").
 2. **Sign up in the app, then join**. Anyone can still sign up at `https://producerstudio.app/signup` (a free account
-   and a personal space), and make more spaces from the space switcher. In **the **Members** page (left menu)**, a space's owner sees
+   and a personal space), and make more spaces from the space switcher. Right after signing up, a **welcome step**
+   (`/welcome`) offers **Choose a plan** (the claim below, for the new space), **Use my own AI key**, or **Continue free**,
+   so expect claim visitors who have no WordPress account yet. In **the **Members** page (left menu)**, a space's owner sees
    **Membership → Get a membership for this space**: it sends them to `MEMBERSHIP_URL?ps_claim=<claim>`. The website keeps
    `ps_claim` through checkout and passes it as `claim` in the signup call: the membership goes on **that** space, and
    nothing new is made. A claim lasts 7 days.
@@ -31,7 +33,10 @@ Then, for the membership's life, MemberPress events → `PUT /api/provision/memb
   invitations. An invite past it is refused with a message pointing to `MEMBERSHIP_URL`.
 - **plan** is stored and shown (the **Members** page (left menu) → Membership); it doesn't change behaviour by itself yet. Expected
   slugs: `member`, `contributor`, `steward`, `founder` (any lowercase slug is accepted).
-- Spaces with no membership behave as before.
+- **The server's AI is members-only** (since 26 Nov 2026): an owner can switch it on (Usage page) only with an active
+  membership; operators can switch it on anywhere. Spaces with no membership keep what they had: one that already used
+  the server's AI keeps it (and can switch it off); one that didn't is told it comes with a membership and pointed to its
+  Members page. Every space can always use its own AI keys (Settings → AI).
 
 ## Setting it up
 

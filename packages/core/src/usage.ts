@@ -137,5 +137,7 @@ export interface UsageSummary {
     available: boolean
     /** Owners can turn it on or off. */
     canChange: boolean
+    /** Why this owner can't turn it on (it comes with a membership since 26 Nov 2026); absent when they can, or it's on. */
+    whyNot?: string
   }
 }

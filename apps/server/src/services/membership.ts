@@ -117,6 +117,21 @@ export async function builtinAiBlocked(workspaceId: string): Promise<string | nu
 }
 
 /**
+ * Why `user` can't turn the server's AI key on for this space, or null when they can. Since 26 Nov 2026 it comes with an
+ * active membership; operators can turn it on anywhere. A space that had it on before keeps it (and can turn it off).
+ */
+export async function builtinAiRefusal(workspaceId: string, user: Parameters<typeof import('./operator').isOperator>[0]): Promise<string | null> {
+  const p = await planOf(workspaceId)
+  if (p?.status === 'active') return null
+  const { isOperator } = await import('./operator')
+  if (isOperator(user)) return null
+  if (p) return builtinAiBlocked(workspaceId)
+  return provisioningOn()
+    ? `The server’s AI comes with a membership: get one for this space on its Members page (from ${ctx().config.membershipUrl}), or add your own AI key in Settings → AI.`
+    : 'The server’s AI is for members. Add your own AI key in Settings → AI.'
+}
+
+/**
  * 409 when adding one more person (a member or an invite) would go past the membership's seats. `accepting`: an invite
  * being accepted already holds its seat, so only the members are counted.
  */

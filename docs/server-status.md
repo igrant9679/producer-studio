@@ -501,7 +501,9 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   "<timestamp>.<body>"; off and 404 without it), `POST /api/auth/link` (one-time sign-in links, `/link/:token` in the app),
   `GET|POST /api/workspaces/:id/membership[/claim]`, `workspace_plans` (migration v21). An active membership turns the
   server's AI on for the space; any other status turns it off and the owner can't turn it back on; `seats` caps members
-  plus pending invites. The full contract: docs/integrations/meyousocial.md.
+  plus pending invites. Since 26 Nov the server's AI is members-only: `PUT /api/usage/builtin-ai {enabled:true}` needs an
+  active membership or an operator (`builtinAiRefusal`; `GET /api/usage` says why in `builtinAi.whyNot`); spaces that
+  already had it on keep it. The full contract: docs/integrations/meyousocial.md.
   **Flow-style clips** (asked for on 24 Nov 2026: "add the Flow-style features"; Google's Flow app has no API, and it is
   built on Gemini Omni, which Producer already uses). Two brief options under Full motion, both off by default:
   *Flowing scenes* (`brief.flow`): an AI clip whose scene follows another AI clip starts on that clip's last frame

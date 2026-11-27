@@ -1,5 +1,5 @@
 import { ArrowRight, AudioLines, Check, Eye, EyeOff, FileText, Film, Sparkles, Upload } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { HttpError } from '../lib/api'
 import { useSession } from '../lib/session'
@@ -75,6 +75,10 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
   const [touched, setTouched] = useState(false)
   const [serverError, setServerError] = useState<string>()
   const [busy, setBusy] = useState(false)
+  // a new account made here goes to the welcome step (a membership, its own AI key, or free), unless ?next= says
+  // where it was going (an invite it came to accept)
+  const signedUp = useRef(false)
+  const dest = signedUp.current && next === '/' ? '/welcome' : next
 
   useEffect(() => {
     document.title = mode === 'login' ? 'Sign in · Producer Studio' : 'Create your account · Producer Studio'
@@ -97,7 +101,7 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
     return () => clearTimeout(t)
   }, [])
 
-  if (status === 'ready') return <Navigate to={next} replace />
+  if (status === 'ready') return <Navigate to={dest} replace />
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -109,9 +113,13 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
     setServerError(undefined)
     try {
       if (mode === 'login') await login(email.trim(), password)
-      else await signup(email.trim(), password, name.trim())
-      navigate(next, { replace: true })
+      else {
+        signedUp.current = true
+        await signup(email.trim(), password, name.trim())
+      }
+      navigate(signedUp.current && next === '/' ? '/welcome' : next, { replace: true })
     } catch (err) {
+      signedUp.current = false
       setServerError(authErrorMessage(err, mode))
     } finally {
       setBusy(false)

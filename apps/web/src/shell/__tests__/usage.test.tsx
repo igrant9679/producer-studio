@@ -144,6 +144,16 @@ describe('the Usage page (A-18)', () => {
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Use the server’s AI key in this space' }).getAttribute('aria-checked')).toBe('true'))
   })
 
+  it('an owner without a membership is told the server’s AI comes with one, and goes to Members for it (no switch)', async () => {
+    signIn('owner')
+    const whyNot = 'The server’s AI comes with a membership: get one for this space on its Members page (from https://www.meyousocial.com/), or add your own AI key in Settings → AI.'
+    handler = () => ({ body: summary({ builtinAi: { enabled: false, available: true, canChange: true, whyNot } }) })
+    openUsage()
+    expect(await screen.findByText(whyNot)).toBeTruthy()
+    expect(screen.queryByRole('switch', { name: 'Use the server’s AI key in this space' })).toBeNull()
+    expect(screen.getByRole('link', { name: /Membership/ }).getAttribute('href')).toBe('/space')
+  })
+
   it('viewers see the usage but no switch, and no per-person rows', async () => {
     signIn('viewer')
     handler = () => ({ body: summary({ builtinAi: { enabled: true, available: true, canChange: false } }) })
