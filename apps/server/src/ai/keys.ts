@@ -9,6 +9,7 @@ import { keyClient, mapAiError } from './claude'
 import { FALLBACK_MODEL, PROVIDER_LABEL, filterAnthropicModels, pickDefaultModel, redact } from './common'
 import { type GeminiClientLike, GeminiProvider, geminiClient, listGeminiModels } from './gemini'
 import { type OpenAiClientLike, OpenAiProvider, listOpenAiModels, openAiClient } from './openai'
+import { OpenRouterProvider, testOpenRouterKey } from './openrouter'
 import { genDeps } from './generate/capabilities'
 import { testFalKey } from './generate/fal'
 import type { AiProvider } from './provider'
@@ -54,6 +55,7 @@ async function listAnthropicModels(client: AnthropicClientLike): Promise<string[
 }
 
 export async function listModels(provider: AiKeyProvider, key: string): Promise<string[]> {
+  if (provider === 'openrouter') return (await testOpenRouterKey(key)).models
   if (provider === 'openai') return listOpenAiModels(clients.openai(key))
   if (provider === 'gemini') return listGeminiModels(clients.gemini(key))
   return listAnthropicModels(clients.anthropic(key))
@@ -66,6 +68,8 @@ export async function testKey(provider: StoredKeyProvider, key: string): Promise
     const { testRunpodKey } = await import('../media/runpod')
     return { models: [], ...(await testRunpodKey(key)) }
   }
+  // OpenRouter: its key endpoint (what's left on the key's limit), then the models that answer in shape
+  if (provider === 'openrouter') return testOpenRouterKey(key)
   try {
     const models = await listModels(provider, key)
     const defaultModel = pickDefaultModel(provider, models)
@@ -80,6 +84,7 @@ export async function testKey(provider: StoredKeyProvider, key: string): Promise
 /** Provider instance for a stored key + model. */
 export function buildKeyProvider(provider: AiKeyProvider, key: string, model: string): AiProvider {
   const m = model.trim() || FALLBACK_MODEL[provider]
+  if (provider === 'openrouter') return new OpenRouterProvider({ apiKey: key, model: m })
   if (provider === 'openai') return new OpenAiProvider({ client: clients.openai(key), model: m })
   if (provider === 'gemini') return new GeminiProvider({ client: clients.gemini(key), model: m })
   const c = clients.anthropic(key)

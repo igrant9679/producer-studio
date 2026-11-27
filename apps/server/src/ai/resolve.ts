@@ -14,9 +14,42 @@ import type { AiProvider, AiScope } from './provider'
 import { type AiSettingsDoc, FEATURES, KEY_PROVIDERS, MEDIA_KEY_PROVIDERS, keyMeta, loadDoc, readKey } from './store'
 
 let builtin: AiProvider | undefined
+let shared: { key: string; model: string; provider: AiProvider } | undefined
 
-/** The edition's own provider (Claude CLI on desktop, server Anthropic credentials on cloud). */
+/**
+ * The server's shared OpenRouter key (cloud, OPENROUTER_API_KEY) running `model`, else the model the operator chose for
+ * it, else the newest Claude Sonnet on OpenRouter's list. Undefined when the server has no such key. It is the server's
+ * AI: callers put it behind the members-only gate (gated()).
+ */
+export async function sharedOpenRouter(model?: string): Promise<AiProvider | undefined> {
+  const key = ctx().config.openrouterKey
+  if (ctx().config.mode !== 'cloud' || !key) return undefined
+  let m = model?.trim()
+  if (!m) {
+    const { platformAi } = await import('../services/platform-ai')
+    m = (await platformAi()).openrouterModel
+  }
+  if (!m) {
+    const { defaultOpenRouterModel, openRouterModels } = await import('./openrouter')
+    m = defaultOpenRouterModel(await openRouterModels().catch(() => []))
+  }
+  if (!shared || shared.key !== key || shared.model !== m) {
+    const { OpenRouterProvider } = await import('./openrouter')
+    shared = { key, model: m, provider: new OpenRouterProvider({ apiKey: key, model: m, shared: true }) }
+  }
+  return shared.provider
+}
+
+/** The edition's own provider (Claude CLI on desktop; on cloud the server's Claude, or its OpenRouter key when the
+ * operator made that the default: services/platform-ai.ts). */
 export async function builtinProvider(): Promise<AiProvider> {
+  if (ctx().config.mode === 'cloud' && ctx().config.openrouterKey) {
+    const { platformAi } = await import('../services/platform-ai')
+    if ((await platformAi()).defaultProvider === 'openrouter') {
+      const p = await sharedOpenRouter()
+      if (p) return p
+    }
+  }
   if (builtin) return builtin
   const id = ctx().config.aiProvider
   if (id === 'claude-cli') {
@@ -130,12 +163,18 @@ class BuiltinOffProvider implements AiProvider {
   runAgent: AiProvider['runAgent'] = async () => this.refuse()
 }
 
-/** On cloud, a space uses the server's own Anthropic key only once an owner has turned it on. */
-async function builtinFor(scope: AiScope): Promise<AiProvider> {
-  const b = await builtinProvider()
-  if (ctx().config.mode !== 'cloud' || b.id !== 'anthropic-api') return b
+/**
+ * On cloud, a space uses the server's own keys (its Claude, or its shared OpenRouter key) only once an owner has turned
+ * the server's AI on, which since 26 Nov needs a membership (services/membership.ts builtinAiRefusal).
+ */
+async function gated(scope: AiScope, b: AiProvider): Promise<AiProvider> {
+  if (ctx().config.mode !== 'cloud' || (b.id !== 'anthropic-api' && b.id !== 'openrouter-api')) return b
   const { builtinAiEnabled } = await import('../services/metering')
   return (await builtinAiEnabled(scope)) ? b : new BuiltinOffProvider(b)
+}
+
+async function builtinFor(scope: AiScope): Promise<AiProvider> {
+  return gated(scope, await builtinProvider())
 }
 
 export interface Resolved {
@@ -156,6 +195,12 @@ export async function resolveProvider(scope: AiScope, feature?: AiFeature, prelo
   for (const [source, choice] of candidates) {
     if (!choice) continue
     if (choice === 'builtin') return { provider: await builtinFor(scoped), source, choice }
+    // OpenRouter without a key of the space's own: the server's shared key, as the server's AI (members only)
+    if (choice === 'openrouter' && !keys.has(choice)) {
+      const s = await sharedOpenRouter(featureModel('openrouter', doc, feature))
+      if (s) return { provider: await gated(scoped, s), source, choice }
+      continue
+    }
     if (!keys.has(choice)) continue
     const p = await keyProvider(scoped, choice, doc, feature)
     // a saved key that can't be opened stops here (503 with the reason), never falls through to the built-in key
@@ -218,6 +263,9 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
     const s = r.provider === b ? bs : await r.provider.status()
     effective[f] = { provider: r.provider.id, model: s.model }
   }
+  // the server's shared OpenRouter key: a space can pick OpenRouter without a key of its own (members only)
+  const sharedOr = cloud ? await sharedOpenRouter(doc.providers.openrouter?.model) : undefined
+  const sharedStatus = sharedOr ? await (await gated(scoped, sharedOr)).status() : undefined
   return {
     defaultProvider: doc.defaultProvider,
     perFeature: doc.perFeature,
@@ -226,6 +274,7 @@ export async function describeSettings(scope: AiScope, canEdit: boolean): Promis
     videoProvider: doc.videoProvider ?? null,
     animationModel: doc.animationModel ?? null,
     builtin: { id: b.id, available: bs.available, detail: bs.detail, model: bs.model, ...(bs.cli ? { cli: bs.cli } : {}) },
+    ...(sharedStatus ? { openrouterShared: { available: sharedStatus.available, detail: sharedStatus.detail, model: sharedStatus.model ?? '' } } : {}),
     effective,
     canEdit,
   }

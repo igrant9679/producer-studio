@@ -32,7 +32,7 @@ usageRoutes.get('/', async (c) => {
   const rows = await usageRows(workspaceId, utcDay(from), utcDay(now))
 
   // AI by provider and model
-  const ai = new Map<string, { provider: string; model: string; requests: number; inputTokens: number; outputTokens: number }>()
+  const ai = new Map<string, { provider: string; model: string; requests: number; inputTokens: number; outputTokens: number; costMicroUsd: number }>()
   const jobKinds = new Map<string, { kind: string; ms: number; runs: number }>()
   // AI video clips by provider and model: seconds and clips, never tokens or dollars
   const clipKinds = new Map<string, { provider: string; model: string; clips: number; seconds: number }>()
@@ -49,10 +49,11 @@ usageRoutes.get('/', async (c) => {
       else e.clips += n
     } else if (r.metric.startsWith('ai.')) {
       const [provider, ...rest] = r.subject.split('|')
-      const e = ai.get(r.subject) ?? { provider, model: rest.join('|'), requests: 0, inputTokens: 0, outputTokens: 0 }
+      const e = ai.get(r.subject) ?? { provider, model: rest.join('|'), requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 }
       ai.set(r.subject, e)
       if (r.metric === 'ai.requests') (e.requests += n), (who.aiRequests += n)
       else if (r.metric === 'ai.input_tokens') (e.inputTokens += n), (who.tokens += n)
+      else if (r.metric === 'ai.cost_microusd') e.costMicroUsd += n
       else (e.outputTokens += n), (who.tokens += n)
     } else {
       const e = jobKinds.get(r.subject) ?? { kind: r.subject, ms: 0, runs: 0 }
@@ -61,7 +62,10 @@ usageRoutes.get('/', async (c) => {
       else e.runs += n
     }
   }
-  const providers = [...ai.values()].map((p) => ({ ...p, estCostUsd: estimateCost(p.provider, p.model, p.inputTokens, p.outputTokens) })).sort((a, b) => b.estCostUsd - a.estCostUsd || b.requests - a.requests)
+  // the dollars the provider reported (OpenRouter), else an estimate from list prices
+  const providers = [...ai.values()]
+    .map(({ costMicroUsd, ...p }) => ({ ...p, estCostUsd: costMicroUsd > 0 ? costMicroUsd / 1_000_000 : estimateCost(p.provider, p.model, p.inputTokens, p.outputTokens) }))
+    .sort((a, b) => b.estCostUsd - a.estCostUsd || b.requests - a.requests)
   const sum = (k: 'requests' | 'inputTokens' | 'outputTokens' | 'estCostUsd') => providers.reduce((t, p) => t + p[k], 0)
   const tenth = (n: number) => Math.round(n * 10) / 10
   const clips: ClipUsage[] = [...clipKinds.values()]
@@ -137,7 +141,7 @@ usageRoutes.get('/', async (c) => {
     spaces: mine.map((w) => ({ id: w.id, name: w.name, bytes: stored.get(w.id)?.bytes ?? 0 })).sort((a, b) => b.bytes - a.bytes),
     ...(members ? { members } : {}),
     limits,
-    builtinAi: await builtinAiView(workspaceId, u, cloud, role, b.id === 'anthropic-api' && (await b.status()).available),
+    builtinAi: await builtinAiView(workspaceId, u, cloud, role, ((b.id === 'anthropic-api' || b.id === 'openrouter-api') && (await b.status()).available) || Boolean(ctx().config.openrouterKey)),
   }
   return c.json(summary)
 })

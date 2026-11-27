@@ -532,6 +532,21 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   or, when its own start continues the scene before's, plays up to `FLOW_SPEEDUP` (1.12×) faster. Captions from whisper
   now say the script's words at whisper's times (`scriptWords`: the two word lists lined up; "a wide, calm pond" had
   been captioned "a wide compound").
+  **OpenRouter** (asked for on 27 Nov 2026 in all four apps; the shared spec is
+  `C:\Users\Admin\meyousocial-knowledge\openrouter-spec.md`). A space's own OpenRouter key is used first; without one,
+  a space that picks OpenRouter runs on the server's shared key (`OPENROUTER_API_KEY`, set by the owner on Railway),
+  which is the server's AI: members only, the same gate as the server's Claude (`resolve.ts` `gated`). All text AI can
+  run on it; pictures, clips, music and voices keep their providers. Models come from OpenRouter's own
+  `GET /models` (no key, cached three hours: `GET /api/ai/openrouter/models`); Settings → AI offers only the ones whose
+  endpoints list tools or a JSON schema (`answersInShape`), with the price per million tokens, and the default is the
+  newest Claude Sonnet that takes tools (`defaultOpenRouterModel`, read from the live list; `anthropic/claude-sonnet-5.5`
+  on 27 Nov). `structured()` sends `response_format` json_schema with `provider.require_parameters` where the list says
+  the model takes it, and asks with the schema in words when the model turns it down; `runAgent()` streams tool calls.
+  A key is checked with `GET /key` ("$12.50 left on its limit"). Every response's usage carries its cost, recorded as
+  `ai.cost_microusd`; the Usage page shows those dollars instead of a list-price estimate. Errors keep OpenRouter's own
+  message (401 wrong or revoked key, 402 out of credit, 429 and 5xx retried before the answer starts, twice). The
+  server's AI for spaces that chose none is a platform setting (migration v22 `platform_settings`, Operator → AI,
+  `services/platform-ai.ts`): Claude until the operator switches it, which needs `OPENROUTER_API_KEY` first.
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

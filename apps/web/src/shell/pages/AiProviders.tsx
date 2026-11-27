@@ -3,7 +3,7 @@
 // fal.ai key (Wan video clips) and who makes clips when Gemini could too. Keys are write-only: the server returns
 // hasKey + last4, never the key. On the web an owner can share a key with other spaces they own: those spaces use it
 // without seeing it ("Shared with" on the key's card there, "Shared by" on the card of the space that uses it).
-import { strongestModel, type AiChoice, type AiFeature, type AiKeyProvider, type AiKeyProviderSettings, type AiSettings, type StoredKeyProvider, type SystemInfo, type VideoClipProvider } from '@producer/core'
+import { strongestModel, type AiChoice, type AiFeature, type AiKeyProvider, type AiKeyProviderSettings, type AiSettings, type OpenRouterModel, type StoredKeyProvider, type SystemInfo, type VideoClipProvider } from '@producer/core'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, ExternalLink, Info, KeyRound, Lock, Save, Share2, Sparkles, Trash2, X } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -24,6 +24,12 @@ const META: Record<StoredKeyProvider, ProviderMeta> = {
   anthropic: { name: 'Anthropic API key', sub: 'Claude models, billed to your Anthropic account.', keyUrl: 'https://console.anthropic.com/settings/keys', placeholder: 'sk-ant-…' },
   gemini: { name: 'Google Gemini (AI Studio)', sub: 'Gemini models with a Google AI Studio API key.', keyUrl: 'https://aistudio.google.com/apikey', placeholder: 'AIza…' },
   openai: { name: 'OpenAI', sub: 'GPT models with an OpenAI platform API key.', keyUrl: 'https://platform.openai.com/api-keys', placeholder: 'sk-…' },
+  openrouter: {
+    name: 'OpenRouter',
+    sub: 'One key for hundreds of models (Claude, GPT, Gemini, Llama and more), billed to your OpenRouter credit. Writing only: pictures, clips, music and voices keep their own providers.',
+    keyUrl: 'https://openrouter.ai/settings/keys',
+    placeholder: 'sk-or-v1-…',
+  },
   fal: {
     name: 'fal.ai (Wan video clips)',
     sub: 'AI video clips made with Wan, billed per second of video to your fal.ai account. Used for clips only, never for writing.',
@@ -37,8 +43,8 @@ const META: Record<StoredKeyProvider, ProviderMeta> = {
     placeholder: 'rpa_…',
   },
 }
-const ORDER: AiKeyProvider[] = ['anthropic', 'gemini', 'openai']
-const SHORT: Record<AiKeyProvider, string> = { anthropic: 'Claude (your key)', gemini: 'Gemini', openai: 'OpenAI' }
+const ORDER: AiKeyProvider[] = ['anthropic', 'gemini', 'openai', 'openrouter']
+const SHORT: Record<AiKeyProvider, string> = { anthropic: 'Claude (your key)', gemini: 'Gemini', openai: 'OpenAI', openrouter: 'OpenRouter' }
 const FEATURES: Array<{ id: AiFeature; label: string; hint: string }> = [
   { id: 'writer', label: 'AI writer', hint: 'Voiceover, captions and headline suggestions' },
   { id: 'script', label: 'Producer script', hint: 'Turns recordings into a scripted video' },
@@ -144,6 +150,88 @@ function ModelPicker({ provider, info, disabled, onSave }: { provider: AiKeyProv
   )
 }
 
+const price = (n: number) => (n === 0 ? 'free' : n < 0.1 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`)
+
+/**
+ * OpenRouter's models, from its own live list (newest first) with the price per million tokens in and out. Only the
+ * ones that answer in shape (tools or a JSON schema) are offered: a Producer script, a drawing and the assistant's
+ * edits all need it. A search narrows the list; another id can still be typed.
+ */
+function OpenRouterModelPicker({ info, disabled, onSave }: { info?: AiKeyProviderSettings; disabled: boolean; onSave: (m: string) => Promise<void> }) {
+  const [list, setList] = useState<OpenRouterModel[]>()
+  const [fallback, setFallback] = useState<string>()
+  const [err, setErr] = useState<string>()
+  const [q, setQ] = useState('')
+  const [custom, setCustom] = useState(false)
+  const [text, setText] = useState(info?.model ?? '')
+  const current = info?.model ?? ''
+  useEffect(() => setText(current), [current])
+  useEffect(() => {
+    let alive = true
+    systemApi
+      .openRouterModels()
+      .then((r) => {
+        if (!alive) return
+        setList(r.models.filter((m) => m.tools || m.structured))
+        setFallback(r.defaultModel)
+      })
+      .catch((e) => alive && setErr(errText(e)))
+    return () => {
+      alive = false
+    }
+  }, [])
+  const needle = q.trim().toLowerCase()
+  const shown = (list ?? []).filter((m) => !needle || m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle))
+  const picked = list?.find((m) => m.id === current)
+  if (custom || err)
+    return (
+      <div className="ps-field" style={{ marginBottom: 0 }}>
+        <label className="label" htmlFor="ai-model-openrouter">Model</label>
+        <div className="row" style={{ gap: 6 }}>
+          <input id="ai-model-openrouter" className="input mono" value={text} placeholder="vendor/model, e.g. anthropic/claude-sonnet-5.5" spellCheck={false} disabled={disabled} onChange={(e) => setText(e.target.value)} />
+          <button className="btn sm" disabled={disabled || text.trim() === current} onClick={() => void onSave(text.trim())}>
+            <Save size={13} /> Save
+          </button>
+          {list && (
+            <button className="btn ghost sm" onClick={() => setCustom(false)}>
+              List
+            </button>
+          )}
+        </div>
+        <div className="ps-hint">{err ? `Couldn’t load OpenRouter’s list of models (${err}). Type a model id.` : 'Any OpenRouter model id.'}</div>
+      </div>
+    )
+  return (
+    <div className="ps-field" style={{ marginBottom: 0 }}>
+      <label className="label" htmlFor="ai-model-openrouter">Model</label>
+      <input className="input" style={{ marginBottom: 6 }} placeholder="Search models (claude, gpt, gemini, llama…)" aria-label="Search OpenRouter models" value={q} disabled={disabled || !list} onChange={(e) => setQ(e.target.value)} />
+      <select
+        id="ai-model-openrouter"
+        className="input"
+        value={current}
+        disabled={disabled || !list}
+        onChange={(e) => {
+          if (e.target.value === '__custom') setCustom(true)
+          else void onSave(e.target.value)
+        }}
+      >
+        <option value="">{fallback ? `Default: ${fallback}` : 'Loading models…'}</option>
+        {current && !shown.some((m) => m.id === current) && <option value={current}>{picked ? picked.name : current}</option>}
+        {shown.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name} · {price(m.promptPerM)} in / {price(m.completionPerM)} out per M tokens
+          </option>
+        ))}
+        <option value="__custom">Other model id…</option>
+      </select>
+      <div className="ps-hint">
+        {list ? `${list.length} models that can write scripts, drawings and edits. Prices are OpenRouter’s, per million tokens.` : 'Loading OpenRouter’s list…'}
+        {picked && !picked.vision ? ' This model can’t look at pictures, so the steps that check pictures (stock footage, the frames of drawn scenes) won’t work with it.' : ''}
+      </div>
+    </div>
+  )
+}
+
 function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: StoredKeyProvider; s: AiSettings; desktop: boolean; workspaceId?: string; onSettings: (s: AiSettings) => void }) {
   const meta = META[provider]
   const media = provider === 'fal' || provider === 'runpod'
@@ -164,7 +252,7 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
   const shortName = meta.name.split(' (')[0].replace(/ API key$/, '')
   const status = result ?? (info?.hasKey ? (info.valid === false ? { ok: false, detail: info.error || 'The key didn’t work' } : info.valid ? { ok: true, detail: okDetail } : undefined) : undefined)
   const isDefault = !media && s.defaultProvider === provider
-  const inUse = media ? provider === 'fal' && clipMaker(s) === 'fal' : Object.values(s.effective).some((e) => e.provider === (provider === 'anthropic' ? 'anthropic-key' : provider))
+  const inUse = media ? provider === 'fal' && clipMaker(s) === 'fal' : Object.values(s.effective).some((e) => keyOf(e.provider) === provider)
 
   async function run<T>(what: typeof busy, fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(what)
@@ -234,7 +322,17 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
                 : 'Stored encrypted on the server; it’s never shown again.'}
           </div>
         </div>
-        {!media && (
+        {!media && provider === 'openrouter' && (
+          <OpenRouterModelPicker
+            info={textInfo}
+            disabled={!canEdit || !!busy}
+            onSave={async (m) => {
+              const next = await run('model', () => systemApi.saveAiSettings({ workspaceId, models: { openrouter: m } }))
+              if (next) onSettings(next)
+            }}
+          />
+        )}
+        {!media && provider !== 'openrouter' && (
           <ModelPicker
             provider={provider as AiKeyProvider}
             info={textInfo}
@@ -244,6 +342,13 @@ function KeyCard({ provider, s, desktop, workspaceId, onSettings }: { provider: 
               if (next) onSettings(next)
             }}
           />
+        )}
+        {provider === 'openrouter' && s.openrouterShared && !info?.hasKey && (
+          <div className="ps-hint" style={{ alignSelf: 'center' }}>
+            {s.openrouterShared.available
+              ? 'Without a key of your own, OpenRouter runs on Producer Studio’s key, as the server’s AI: choose it below as the default or for one feature.'
+              : `Producer Studio has an OpenRouter key too: ${s.openrouterShared.detail}`}
+          </div>
         )}
         {provider === 'fal' && (
           <div className="ps-hint" style={{ alignSelf: 'center' }}>
@@ -378,7 +483,8 @@ function clipMaker(s: AiSettings): VideoClipProvider | undefined {
 
 /** Shown when both a Gemini and a fal.ai key are stored: who makes the clips. */
 /** The key provider behind an effective provider id ('anthropic-key' → anthropic), or undefined for the built-in one. */
-const keyOf = (id: string): AiKeyProvider | undefined => (id === 'anthropic-key' ? 'anthropic' : id === 'openai' || id === 'gemini' ? id : undefined)
+const keyOf = (id: string): AiKeyProvider | undefined =>
+  id === 'anthropic-key' ? 'anthropic' : id === 'openai' || id === 'gemini' || id === 'openrouter' ? id : id === 'openrouter-api' ? 'openrouter' : undefined
 
 /**
  * Which model draws AI-drawn scenes: automatic (the most capable on the key's list) or one the owner picks. Shown when
@@ -460,16 +566,18 @@ function VideoClipChoice({ s, workspaceId, onSettings }: { s: AiSettings; worksp
 }
 
 function choiceLabel(c: AiChoice, s: AiSettings, desktop: boolean): string {
-  if (c === 'builtin') return desktop ? 'Claude · your subscription' : 'Producer Studio (server Claude)'
+  if (c === 'builtin') return desktop ? 'Claude · your subscription' : s.builtin.id === 'openrouter-api' ? 'Producer Studio (server OpenRouter)' : 'Producer Studio (server Claude)'
+  // OpenRouter with no key of the space's own runs on the server's shared key
+  if (c === 'openrouter' && !s.providers.openrouter?.hasKey && s.openrouterShared) return `OpenRouter (Producer Studio’s key) · ${s.providers.openrouter?.model || s.openrouterShared.model}`
   const m = s.providers[c]?.model
   return m ? `${SHORT[c].replace(' (your key)', '')} · ${m}` : SHORT[c]
 }
 
 function ProviderSelectors({ s, desktop, workspaceId, onSettings }: { s: AiSettings; desktop: boolean; workspaceId?: string; onSettings: (s: AiSettings) => void }) {
   const [busy, setBusy] = useState(false)
-  const configured = ORDER.filter((p) => s.providers[p]?.hasKey && s.providers[p]?.valid !== false)
+  const configured = ORDER.filter((p) => (s.providers[p]?.hasKey && s.providers[p]?.valid !== false) || (p === 'openrouter' && !s.providers.openrouter?.hasKey && s.openrouterShared?.available))
   const choices: AiChoice[] = [...(s.builtin.available ? (['builtin'] as const) : []), ...configured]
-  const builtinName = desktop ? 'Claude · your subscription' : 'the server’s Claude'
+  const builtinName = desktop ? 'Claude · your subscription' : s.builtin.id === 'openrouter-api' ? 'the server’s OpenRouter' : 'the server’s Claude'
   async function save(patch: Parameters<typeof systemApi.saveAiSettings>[0]) {
     setBusy(true)
     try {
@@ -582,7 +690,7 @@ export function AiProviders({
       <div className="ps-alert info" style={{ fontSize: '0.7812rem' }}>
         <Info size={15} style={{ flex: 'none' }} />
         <span>
-          API keys are billed per token by the provider you choose (OpenAI, Google, Anthropic); AI video clips per second of video.{' '}
+          API keys are billed per token by the provider you choose (OpenAI, Google, Anthropic, OpenRouter); AI video clips per second of video.{' '}
           {desktop ? 'Claude through the Claude Code CLI uses your Claude subscription instead — no per-token charges.' : 'The built-in Claude runs on Producer Studio’s servers.'}
         </span>
       </div>

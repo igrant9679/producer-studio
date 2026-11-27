@@ -112,7 +112,7 @@ export async function requireProvider(scope?: AiScope, feature?: AiFeature): Pro
     const { notConfigured } = await import('./claude')
     // a chosen provider that isn't usable explains itself (e.g. "Claude isn't signed in"); nothing configured → the generic message
     if (s.reason === 'builtin-off') throw new HttpError(503, 'server', s.detail)
-    throw p.id === 'none' || p.id === 'anthropic-api' ? notConfigured() : new HttpError(503, 'server', s.detail || notConfigured().message)
+    throw p.id === 'none' || p.id === 'anthropic-api' || p.id === 'openrouter-api' ? notConfigured() : new HttpError(503, 'server', s.detail || notConfigured().message)
   }
   return p
 }

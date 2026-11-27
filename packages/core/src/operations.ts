@@ -21,7 +21,10 @@
 // GET  /api/operator/library                        -> LibraryItemStatus[] (the media library: made, being made, failed)
 // POST /api/operator/library/make {workspaceId, kinds?} -> {queued: ids, going?}  (makes what isn't made yet with that
 //                                                       space's keys, one item at a time; the operator must own the space)
-// Every POST above is written to the audit log.
+// GET  /api/operator/ai-default                     -> PlatformAiSettings (which shared key serves spaces with no AI choice)
+// PUT  /api/operator/ai-default {defaultProvider?, openrouterModel?} -> PlatformAiSettings  (OpenRouter only once
+//                                                       OPENROUTER_API_KEY is set on the server)
+// Every POST and PUT above is written to the audit log.
 
 export type AuditKind =
   | 'signin.ok'
@@ -59,6 +62,7 @@ export type AuditKind =
   | 'operator.job.cancelled'
   | 'operator.storage.orphans'
   | 'operator.library.make'
+  | 'operator.ai.default'
   // a membership website's provisioning (routes/provision.ts) and what it leads to
   | 'signin.link'
   | 'membership.provisioned'
@@ -179,6 +183,8 @@ export function auditSentence(e: AuditEntry): string {
       return `Operator ${who} cancelled job ${t}`
     case 'operator.storage.orphans':
       return `Operator ${who} removed ${str(d.removed)} orphaned storage objects`
+    case 'operator.ai.default':
+      return `Operator ${who} made ${d.defaultProvider === 'openrouter' ? 'OpenRouter' : 'the server’s Claude'} the server’s AI for spaces that chose none${d.openrouterModel ? ` (OpenRouter model ${str(d.openrouterModel)})` : ''}`
     case 'signin.link':
       return `${who} signed in with a link from the membership website`
     case 'membership.provisioned':

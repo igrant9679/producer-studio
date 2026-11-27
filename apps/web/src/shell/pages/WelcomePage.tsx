@@ -61,7 +61,7 @@ export default function WelcomePage() {
               <KeyRound size={16} /> <strong>Use my own AI key</strong>
             </div>
             <p className="muted" style={{ fontSize: '0.875rem', margin: '0 0 12px' }}>
-              Bring an Anthropic, Gemini or OpenAI key. It is used for this space only, and billed to your own account.
+              Bring an Anthropic, Gemini, OpenAI or OpenRouter key. It is used for this space only, and billed to your own account.
             </p>
             <button className="btn" onClick={() => navigate('/settings#ai')}>
               <KeyRound size={14} /> Add a key

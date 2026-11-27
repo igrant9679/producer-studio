@@ -57,10 +57,27 @@ const RATES: Array<[provider: string, modelPrefix: string, rate: TokenRate]> = [
 /** Which rate family a provider id belongs to (the server's key and a space's own Anthropic key cost the same). */
 export function rateFamily(provider: AiProviderId | string): string {
   if (provider === 'anthropic-api' || provider === 'anthropic-key' || provider === 'claude-cli') return 'anthropic'
+  if (provider === 'openrouter-api') return 'openrouter'
   return provider
 }
 
+/**
+ * An OpenRouter model id as its maker's ("anthropic/claude-sonnet-5.5" → anthropic, "claude-sonnet-5-5"): OpenRouter
+ * charges the maker's list price, so the maker's rate is the estimate. (The Usage page shows the dollars OpenRouter
+ * reports for each request instead, when it has them.)
+ */
+function openRouterAsMaker(model: string): [string, string] | undefined {
+  const m = /^([a-z0-9-]+)\/(.+?)(?::[a-z]+)?$/.exec(model)
+  if (!m) return undefined
+  const maker = m[1] === 'google' ? 'gemini' : m[1]
+  return [maker, maker === 'anthropic' ? m[2].replace(/\./g, '-') : m[2]]
+}
+
 export function tokenRate(provider: AiProviderId | string, model = ''): TokenRate | undefined {
+  if (rateFamily(provider) === 'openrouter') {
+    const as = openRouterAsMaker(model)
+    return as && as[0] !== 'openrouter' ? tokenRate(as[0], as[1]) : undefined
+  }
   const fam = rateFamily(provider)
   let best: [string, TokenRate] | undefined
   for (const [p, prefix, rate] of RATES) if (p === fam && model.startsWith(prefix) && (!best || prefix.length > best[0].length)) best = [prefix, rate]

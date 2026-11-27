@@ -493,6 +493,15 @@ export const workspaceUsageSettings = pgTable('workspace_usage_settings', {
 })
 
 /** v21: a membership bought on a membership website for a space (services/membership.ts). Not synced. */
+/** Settings of the whole server an operator changes in the app, one JSON value per key (v22; services/platform-ai.ts). */
+export const platformSettings = pgTable('platform_settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  /** The operator who last changed it. */
+  updatedBy: text('updated_by'),
+  updatedAt: ms('updated_at').notNull(),
+})
+
 export const workspacePlans = pgTable('workspace_plans', {
   workspaceId: text('workspace_id').primaryKey(),
   /** The website it came from ('meyousocial'). */

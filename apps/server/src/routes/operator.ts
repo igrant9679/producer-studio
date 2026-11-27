@@ -17,6 +17,7 @@ import { afterCursor, pageOrder, pageQuery, toPage } from '../paging'
 import { issueToken } from '../services/account'
 import { audit, listAudit } from '../services/audit'
 import { requireOperator } from '../services/operator'
+import { platformAiView, setPlatformAi } from '../services/platform-ai'
 import { dryRunOrphans, removeOrphans } from '../services/orphans'
 import { libraryStatus, makeLibrary } from '../services/media-library'
 
@@ -251,6 +252,25 @@ operatorRoutes.post('/storage/orphans', async (c) => {
   const res = await removeOrphans(b.scanId, op.id)
   await audit(c, { kind: 'operator.storage.orphans', target: `${res.removed} objects`, data: { removed: res.removed, bytes: res.bytes, scanId: b.scanId } })
   return c.json(res)
+})
+
+// ---- the server's AI for spaces that chose none (services/platform-ai.ts) ----
+
+operatorRoutes.get('/ai-default', async (c) => c.json(await platformAiView()))
+
+operatorRoutes.put('/ai-default', async (c) => {
+  const op = requireOperator(c)
+  const b = await body(
+    c,
+    z.object({
+      defaultProvider: z.enum(['anthropic', 'openrouter']).optional(),
+      openrouterModel: z.string().trim().max(200).regex(/^[\w.:/@-]*$/).nullable().optional(),
+    }),
+  )
+  await setPlatformAi(b, op.id)
+  const now = await platformAiView()
+  await audit(c, { kind: 'operator.ai.default', target: now.defaultProvider, data: { defaultProvider: now.defaultProvider, ...(b.openrouterModel ? { openrouterModel: b.openrouterModel } : {}) } })
+  return c.json(now)
 })
 
 // ---- the audit log ----

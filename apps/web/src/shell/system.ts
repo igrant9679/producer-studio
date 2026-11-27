@@ -1,6 +1,6 @@
 // Server mode (cloud | desktop), AI provider and desktop sync state.
 // lib/api.ts doesn't cover these endpoints yet, so the shell calls them with a small fetch helper.
-import type { StoredKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, ApiError, Device, DesktopSettings, LinkChoice, LinkPreview, OfflineInfo, SyncConflictPreview, SyncFailure, SyncItems, SyncStatus, SystemInfo } from '@producer/core'
+import type { StoredKeyProvider, AiKeyTestResult, AiProviderId, AiSettings, AiSettingsUpdate, OpenRouterModelsResponse, ApiError, Device, DesktopSettings, LinkChoice, LinkPreview, OfflineInfo, SyncConflictPreview, SyncFailure, SyncItems, SyncStatus, SystemInfo } from '@producer/core'
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { HttpError, noteStatus, subscribeEvents } from '../lib/api'
@@ -57,6 +57,8 @@ export const systemApi = {
   // bring-your-own-key AI providers (desktop ignores workspaceId)
   aiSettings: (workspaceId?: string) => sysFetch<AiSettings>('GET', `/ai/settings${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   saveAiSettings: (u: AiSettingsUpdate) => sysFetch<AiSettings>('PUT', '/ai/settings', u),
+  /** OpenRouter's text models with prices per million tokens, newest first (public; the server keeps them three hours). */
+  openRouterModels: () => sysFetch<OpenRouterModelsResponse>('GET', '/ai/openrouter/models'),
   saveAiKey: (provider: StoredKeyProvider, key: string, workspaceId?: string) => sysFetch<AiKeyTestResult>('PUT', `/ai/keys/${provider}`, { workspaceId, key }),
   deleteAiKey: (provider: StoredKeyProvider, workspaceId?: string) => sysFetch<AiSettings>('DELETE', `/ai/keys/${provider}${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`),
   testAiKey: (provider: StoredKeyProvider, workspaceId?: string, key?: string) => sysFetch<AiKeyTestResult>('POST', `/ai/keys/${provider}/test`, { workspaceId, key }),
@@ -173,6 +175,8 @@ const PROVIDER_NAME: Record<AiProviderId, string> = {
   'anthropic-key': 'Claude',
   openai: 'OpenAI',
   gemini: 'Gemini',
+  openrouter: 'OpenRouter',
+  'openrouter-api': 'OpenRouter',
   none: 'AI',
 }
 
@@ -188,7 +192,10 @@ export function aiProviderLabel(id?: AiProviderId, model?: string): string {
     case 'anthropic-key':
     case 'openai':
     case 'gemini':
+    case 'openrouter':
       return model ? `${PROVIDER_NAME[id]} · ${model}` : `${PROVIDER_NAME[id]} API`
+    case 'openrouter-api':
+      return model ? `OpenRouter (server) · ${model}` : 'OpenRouter (server)'
     default:
       return 'AI unavailable'
   }

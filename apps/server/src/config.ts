@@ -23,6 +23,12 @@ export interface Config {
   /** cloud = hosted multi-user; desktop = bundled in the Electron app for one local user. */
   mode: Mode
   aiProvider: 'anthropic-api' | 'claude-cli' | 'none'
+  /**
+   * The server's shared OpenRouter key (OPENROUTER_API_KEY, cloud): used by a space that picks OpenRouter without a
+   * key of its own, and by every space when the operator makes OpenRouter the server's AI. Members only, like the
+   * server's Claude. Never logged or sent anywhere but OpenRouter.
+   */
+  openrouterKey?: string
   version: string
   port: number
   role: Role
@@ -193,6 +199,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     mode,
     aiProvider,
+    openrouterKey: (mode === 'cloud' && env.OPENROUTER_API_KEY?.trim()) || undefined,
     version,
     port: Number(env.PORT ?? 8787),
     role: (['all', 'api', 'worker'].includes(env.ROLE ?? '') ? env.ROLE : 'all') as Role,

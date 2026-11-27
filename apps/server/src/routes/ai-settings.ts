@@ -4,7 +4,7 @@
 // between spaces they own.
 import { Hono, type Context } from 'hono'
 import * as z from 'zod/v4'
-import type { AiKeyProvider, AiKeyTestResult, Role, StoredKeyProvider } from '@producer/core'
+import type { AiKeyProvider, AiKeyTestResult, OpenRouterModelsResponse, Role, StoredKeyProvider } from '@producer/core'
 import { type AppEnv, requireUser } from '../auth'
 import { audit } from '../services/audit'
 import { ctx } from '../context'
@@ -17,8 +17,8 @@ import { type AiSettingsDoc, isMediaKey, keyMeta, loadDoc, readKey, removeKey, s
 
 export const aiSettingsRoutes = new Hono<AppEnv>()
 
-const Provider = z.enum(['openai', 'gemini', 'anthropic', 'fal', 'runpod'])
-const Choice = z.enum(['builtin', 'openai', 'gemini', 'anthropic'])
+const Provider = z.enum(['openai', 'gemini', 'anthropic', 'openrouter', 'fal', 'runpod'])
+const Choice = z.enum(['builtin', 'openai', 'gemini', 'anthropic', 'openrouter'])
 const ModelId = z
   .string()
   .trim()
@@ -51,7 +51,7 @@ async function auditShare(c: Context<AppEnv>, kind: 'ai.key.shared' | 'ai.key.un
 
 function providerParam(c: Context<AppEnv>): StoredKeyProvider {
   const r = Provider.safeParse(c.req.param('provider'))
-  if (!r.success) throw invalid('provider must be openai, gemini, anthropic, fal or runpod')
+  if (!r.success) throw invalid('provider must be openai, gemini, anthropic, openrouter, fal or runpod')
   return r.data
 }
 
@@ -77,6 +77,14 @@ async function recordTest(scope: string, provider: StoredKeyProvider, result: Ai
   return d
 }
 
+/** OpenRouter's text models with their prices (public data, read through a three-hour cache), and the default. */
+aiSettingsRoutes.get('/openrouter/models', async (c) => {
+  requireUser(c)
+  const { defaultOpenRouterModel, openRouterModels } = await import('../ai/openrouter')
+  const models = await openRouterModels({ refresh: c.req.query('refresh') === '1' })
+  return c.json({ models, defaultModel: defaultOpenRouterModel(models) } satisfies OpenRouterModelsResponse)
+})
+
 aiSettingsRoutes.get('/settings', async (c) => {
   const { scope, canEdit } = await access(c, c.req.query('workspaceId') || undefined, 'viewer')
   return c.json(await describeSettings(scope, canEdit))
@@ -89,7 +97,7 @@ aiSettingsRoutes.put('/settings', async (c) => {
       workspaceId: z.string().max(100).optional(),
       defaultProvider: Choice.nullable().optional(),
       perFeature: z.object({ writer: Choice.nullable().optional(), script: Choice.nullable().optional(), assistant: Choice.nullable().optional(), animation: Choice.nullable().optional() }).optional(),
-      models: z.object({ openai: ModelId.optional(), gemini: ModelId.optional(), anthropic: ModelId.optional() }).optional(),
+      models: z.object({ openai: ModelId.optional(), gemini: ModelId.optional(), anthropic: ModelId.optional(), openrouter: ModelId.optional() }).optional(),
       videoProvider: z.enum(['gemini', 'fal']).nullable().optional(),
       animationModel: ModelId.nullable().optional(),
     }),
@@ -97,8 +105,11 @@ aiSettingsRoutes.put('/settings', async (c) => {
   const { scope, canEdit } = await ownerOnly(c, b.workspaceId)
   const doc = await loadDoc(scope)
   const stored = new Set(Object.keys(await keyMeta(scope)))
+  // OpenRouter can also run on the server's shared key (cloud), as the server's AI: members only, checked when it runs
+  const sharedOr = cloud() && Boolean(ctx().config.openrouterKey)
   const usable = (choice: string) => {
-    if (choice !== 'builtin' && !stored.has(choice)) throw invalid(`Add a ${PROVIDER_LABEL[choice as AiKeyProvider]} key before choosing it`)
+    if (choice === 'openrouter' && sharedOr) return
+    if (choice !== 'builtin' && !stored.has(choice)) throw invalid(`Add a${choice === 'openai' ? 'n' : ''} ${PROVIDER_LABEL[choice as AiKeyProvider]} key before choosing it`)
   }
   if (b.defaultProvider !== undefined) {
     if (b.defaultProvider) usable(b.defaultProvider)

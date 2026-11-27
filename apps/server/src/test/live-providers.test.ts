@@ -1,5 +1,5 @@
 // Optional live smoke tests against the real APIs. Skipped unless OPENAI_API_KEY / GEMINI_API_KEY (or GOOGLE_API_KEY)
-// / ANTHROPIC_LIVE_KEY are set. Each run lists models and streams one tiny completion (a few tokens, billed).
+// / ANTHROPIC_LIVE_KEY / OPENROUTER_LIVE_KEY are set. Each run lists models and streams one tiny completion (a few tokens, billed).
 import { describe, expect, it } from 'vitest'
 import type { AiKeyProvider } from '@producer/core'
 import { buildKeyProvider, testKey } from '../ai/keys'
@@ -8,6 +8,7 @@ const KEYS: Record<AiKeyProvider, string | undefined> = {
   openai: process.env.OPENAI_API_KEY,
   gemini: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
   anthropic: process.env.ANTHROPIC_LIVE_KEY,
+  openrouter: process.env.OPENROUTER_LIVE_KEY,
 }
 
 for (const provider of Object.keys(KEYS) as AiKeyProvider[]) {

@@ -9,6 +9,8 @@ const SKIP: Record<AiKeyProvider, RegExp> = {
   anthropic: /(instant|-v\d+:|embed)/i,
   gemini: /(image|tts|audio|live|embed|vision|robotics|computer|learnlm|gemma|aqa|imagen|veo|native)/i,
   openai: /(mini|nano|audio|realtime|search|transcribe|tts|image|dall-e|whisper|embed|moderation|codex|oss|instruct|babbage|davinci|chat-latest|-pro\b|deep-research|sora)/i,
+  // OpenRouter ids are "vendor/model" (anthropic/claude-opus-5.5): free and batch variants, guards and embeddings aren't it
+  openrouter: /(:free|:batch|:extended|embed|guard|moderation|-instant)/i,
 }
 
 function tier(p: AiKeyProvider, id: string): number {
@@ -16,6 +18,8 @@ function tier(p: AiKeyProvider, id: string): number {
   // Fable sits above Opus (Anthropic's most capable widely released line), so Fable 5.2 beats Opus 5.5 despite the lower number
   if (p === 'anthropic') return /(fable|mythos)/.test(s) ? 4 : /opus/.test(s) ? 3 : /sonnet/.test(s) ? 2 : /haiku/.test(s) ? 1 : 0
   if (p === 'gemini') return /lite/.test(s) ? 1 : /pro/.test(s) ? 3 : /flash/.test(s) ? 2 : 0
+  // on OpenRouter the Claude lines rank as Anthropic's do; other vendors' models are chosen only by hand
+  if (p === 'openrouter') return /^anthropic\/claude/.test(s) ? tier('anthropic', s.slice('anthropic/'.length)) : 0
   return /^(gpt-\d|o\d)/.test(s) ? 3 : 0
 }
 

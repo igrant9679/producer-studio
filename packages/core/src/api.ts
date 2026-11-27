@@ -951,10 +951,14 @@ export interface SyncChanges {
 // DELETE /api/ai/keys/:provider/shares/:toWorkspaceId?workspaceId=  -> AiSettings      (owner of the sharing space)
 //        In the receiving space, DELETE /api/ai/keys/:provider stops using the shared key, and saving a key of its
 //        own replaces it. Removing the key in the sharing space ends every share of it.
-/** Provider implementations: server Anthropic key, workspace/user Anthropic key, OpenAI, Gemini, local Claude CLI. */
-export type AiProviderId = 'anthropic-api' | 'anthropic-key' | 'openai' | 'gemini' | 'claude-cli' | 'none'
+/**
+ * Provider implementations: server Anthropic key, workspace/user Anthropic key, OpenAI, Gemini, local Claude CLI,
+ * OpenRouter with a space's own key (openrouter) or the server's shared key (openrouter-api, the server's AI like
+ * anthropic-api: members only).
+ */
+export type AiProviderId = 'anthropic-api' | 'anthropic-key' | 'openai' | 'gemini' | 'claude-cli' | 'openrouter' | 'openrouter-api' | 'none'
 /** Providers configured with a user-supplied API key. */
-export type AiKeyProvider = 'openai' | 'gemini' | 'anthropic'
+export type AiKeyProvider = 'openai' | 'gemini' | 'anthropic' | 'openrouter'
 /** Keys used only to make media (never a writing provider): fal.ai, which hosts Wan for AI video clips. */
 export type MediaKeyProvider = 'fal' | 'runpod'
 /** Every provider whose key can be stored (PUT /api/ai/keys/:provider). */
@@ -1035,6 +1039,44 @@ export interface MediaKeySettings {
   updatedAt?: number
 }
 
+/** One of OpenRouter's text models (GET /api/ai/openrouter/models), prices in US dollars per million tokens. */
+export interface OpenRouterModel {
+  id: string
+  name: string
+  /** When OpenRouter listed it (Unix seconds): the list is newest first. */
+  created: number
+  contextLength: number
+  promptPerM: number
+  completionPerM: number
+  /** Its endpoints take tools (the editor assistant needs them). */
+  tools: boolean
+  /** Its endpoints take a JSON schema (response_format / structured_outputs). */
+  structured: boolean
+  /** It can look at pictures. */
+  vision: boolean
+  reasoning: boolean
+  maxOutput?: number
+}
+
+export interface OpenRouterModelsResponse {
+  /** Every text model, newest first; Settings → AI offers the ones that answer in shape (tools or structured). */
+  models: OpenRouterModel[]
+  /** The newest Claude Sonnet that takes tools. */
+  defaultModel: string
+}
+
+/** The platform's choice of the server's AI for spaces that chose none (GET/PUT /api/operator/ai-default). */
+export type PlatformAiProvider = 'anthropic' | 'openrouter'
+export interface PlatformAiSettings {
+  defaultProvider: PlatformAiProvider
+  /** OPENROUTER_API_KEY / ANTHROPIC_API_KEY are set on the server (never the keys themselves). */
+  openrouterKey: boolean
+  anthropicKey: boolean
+  /** The model the shared OpenRouter key runs when a space hasn't picked one. */
+  openrouterModel: string
+  updatedAt?: number
+}
+
 export interface AiSettings {
   /** null = automatic (the built-in provider). */
   defaultProvider: AiChoice | null
@@ -1049,6 +1091,11 @@ export interface AiSettings {
   animationModel?: string | null
   /** The built-in provider for this edition and whether it's usable. */
   builtin: { id: AiProviderId; available: boolean; detail: string; model?: string; cli?: ClaudeCliInfo }
+  /**
+   * The server's shared OpenRouter key (cloud, when the operator has set one): a space that picks OpenRouter without a
+   * key of its own uses it, as the server's AI (members only). Optional: older servers and the desktop omit it.
+   */
+  openrouterShared?: { available: boolean; detail: string; model: string }
   /** Effective provider per feature after resolution. */
   effective: Record<AiFeature, { provider: AiProviderId; model?: string }>
   /** True when the caller may change keys and settings (workspace owner; always on desktop). */

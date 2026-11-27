@@ -9,6 +9,7 @@ import { extractJson } from './cli/schema'
 
 const KEY_PATTERNS = [
   /sk-ant-[A-Za-z0-9_-]{6,}/g,
+  /sk-or-(?:v\d+-)?[A-Za-z0-9_-]{8,}/g,
   /sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_*-]{8,}/g,
   /AIza[0-9A-Za-z_-]{10,}/g,
   // RunPod API keys
@@ -138,10 +139,10 @@ export const formatMismatch = () => new HttpError(502, 'server', 'The AI respons
 
 // ---------------- models ----------------
 
-export const PROVIDER_LABEL: Record<StoredKeyProvider, string> = { openai: 'OpenAI', gemini: 'Gemini', anthropic: 'Claude', fal: 'fal.ai', runpod: 'RunPod' }
+export const PROVIDER_LABEL: Record<StoredKeyProvider, string> = { openai: 'OpenAI', gemini: 'Gemini', anthropic: 'Claude', openrouter: 'OpenRouter', fal: 'fal.ai', runpod: 'RunPod' }
 
 /** Hardcoded only as a last resort (no live list yet); users can always type another id. */
-export const FALLBACK_MODEL: Record<AiKeyProvider, string> = { openai: 'gpt-5.5', gemini: 'gemini-pro-latest', anthropic: 'claude-opus-5' }
+export const FALLBACK_MODEL: Record<AiKeyProvider, string> = { openai: 'gpt-5.5', gemini: 'gemini-pro-latest', anthropic: 'claude-opus-5', openrouter: 'anthropic/claude-sonnet-5.5' }
 
 /** Main version numbers of a model id (snapshot dates and preview suffixes ignored), e.g. claude-sonnet-4-5 → [4, 5]. */
 const NUM = (id: string) =>
@@ -186,6 +187,8 @@ function sortNewest(ids: string[]): string[] {
 
 /** Pick the newest general flagship from a live list (falls back to the provider default). */
 export function pickDefaultModel(provider: AiKeyProvider, models: string[]): string {
+  // OpenRouter: the newest Claude Sonnet on the live list (keys.ts passes the one openrouter.ts reads from it)
+  if (provider === 'openrouter') return models.find((m) => /^anthropic\/claude-sonnet-[\d.]+$/.test(m)) ?? models[0] ?? FALLBACK_MODEL.openrouter
   if (provider === 'anthropic') return models.find((m) => m === 'claude-opus-5') ?? models.find((m) => /^claude-opus-/.test(m)) ?? models[0] ?? FALLBACK_MODEL.anthropic
   if (provider === 'openai') {
     const flagship = models.filter((m) => /^gpt-\d+(\.\d+)?$/.test(m))

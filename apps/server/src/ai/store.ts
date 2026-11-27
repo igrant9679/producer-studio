@@ -14,14 +14,14 @@ import { invalid } from '../http'
 import type { AiScope } from './provider'
 import { openKey, sealKey } from './secrets'
 
-export const KEY_PROVIDERS: AiKeyProvider[] = ['anthropic', 'gemini', 'openai']
+export const KEY_PROVIDERS: AiKeyProvider[] = ['anthropic', 'gemini', 'openai', 'openrouter']
 /** Keys that only make media (never a writing provider): fal.ai for Wan clips, RunPod for Blender scenes. */
 export const MEDIA_KEY_PROVIDERS: MediaKeyProvider[] = ['fal', 'runpod']
 const STORED: StoredKeyProvider[] = [...KEY_PROVIDERS, ...MEDIA_KEY_PROVIDERS]
 export const isMediaKey = (p: StoredKeyProvider): p is MediaKeyProvider => (MEDIA_KEY_PROVIDERS as string[]).includes(p)
 export const FEATURES: AiFeature[] = ['writer', 'script', 'assistant', 'animation']
 
-const Choice = z.enum(['builtin', 'openai', 'gemini', 'anthropic'])
+const Choice = z.enum(['builtin', 'openai', 'gemini', 'anthropic', 'openrouter'])
 const ProviderDocSchema = z.object({
   model: z.string().max(200).catch(''),
   models: z.array(z.string().max(200)).max(500).optional().catch(undefined),
@@ -38,7 +38,7 @@ const MediaDocSchema = z.object({
 const DocSchema = z.object({
   defaultProvider: Choice.nullable().catch(null),
   perFeature: z.object({ writer: Choice.optional(), script: Choice.optional(), assistant: Choice.optional(), animation: Choice.optional() }).catch({}),
-  providers: z.object({ openai: ProviderDocSchema.optional(), gemini: ProviderDocSchema.optional(), anthropic: ProviderDocSchema.optional() }).catch({}),
+  providers: z.object({ openai: ProviderDocSchema.optional(), gemini: ProviderDocSchema.optional(), anthropic: ProviderDocSchema.optional(), openrouter: ProviderDocSchema.optional() }).catch({}),
   media: z.object({ fal: MediaDocSchema.optional(), runpod: MediaDocSchema.optional() }).catch({}).optional(),
   videoProvider: z.enum(['gemini', 'fal']).nullable().optional().catch(undefined),
   animationModel: z.string().max(200).nullable().optional().catch(undefined),

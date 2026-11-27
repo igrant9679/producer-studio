@@ -260,6 +260,10 @@ at a `media.smooth` copy (time 0 = source `from`) while it covers what the clip 
   `ToolSpec`s + `runTool` (parallel calls, tool errors returned to the model, `maxIterations`, abort).
 - Shared keys (v19, cloud): an owner of two spaces lends a stored key of one to the other through a pointer row
   (`ai_key_shares`), never a copy; see `docs/server-status.md` → "Shared AI keys".
+- **OpenRouter** (`ai/openrouter.ts`, 27 Nov 2026, the spec the four apps share): ids `openrouter` (a space's key) and
+  `openrouter-api` (the server's shared `OPENROUTER_API_KEY`, the server's AI: members only, like `anthropic-api`).
+  Chat Completions over `fetch` with its own SSE reader (comment lines, a mid-stream `error` chunk, usage in the last
+  chunk). Text only. See `docs/server-status.md` → "OpenRouter".
 - Settings (`GET/PUT /api/ai/settings`, `PUT/DELETE /api/ai/keys/:provider`, `POST /api/ai/keys/:provider/test`):
   `{defaultProvider, perFeature: {writer, script, assistant}, providers: {openai|gemini|anthropic: {model, hasKey,
   keyLast4, models}}}`. The test call lists models (chat/text-capable ones only); the UI offers them in a dropdown with

@@ -1,5 +1,5 @@
 // Idempotent schema creation + a schema_version table for later migrations. Runs identically on PGlite and Postgres.
-export const SCHEMA_VERSION = 21
+export const SCHEMA_VERSION = 22
 
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (id integer PRIMARY KEY, version integer NOT NULL, updated_at double precision NOT NULL);
@@ -749,6 +749,19 @@ CREATE TABLE IF NOT EXISTS workspace_plans (
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_plans_external_idx ON workspace_plans(source, external_id);
 `
 
+/**
+ * v22 — settings of the whole server that an operator changes in the app (not per space): first, which shared key
+ * serves spaces that chose no AI provider (services/platform-ai.ts: the server's Claude or OpenRouter). Not synced.
+ */
+export const DDL_V22 = `
+CREATE TABLE IF NOT EXISTS platform_settings (
+  key text PRIMARY KEY,
+  value jsonb NOT NULL,
+  updated_by text,
+  updated_at double precision NOT NULL
+);
+`
+
 /** Namespace (high 16 bits) of the advisory lock keys in DDL_V8: 'PS'. */
 export const CHANGE_LOCK_NS = 20563
 
@@ -774,4 +787,5 @@ export const MIGRATIONS: Array<[number, string]> = [
   [19, DDL_V19],
   [20, DDL_V20],
   [21, DDL_V21],
+  [22, DDL_V22],
 ]

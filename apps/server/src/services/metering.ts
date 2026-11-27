@@ -34,7 +34,7 @@ export const currentUserId = () => actors.getStore()?.userId
 
 // ---- tokens reported by the providers ----
 
-const bags = new AsyncLocalStorage<{ input: number; output: number }>()
+const bags = new AsyncLocalStorage<{ input: number; output: number; costUsd: number }>()
 
 /** Called by a provider after each model response with the tokens it used (no-op outside a metered call). */
 export function noteTokens(input: number | null | undefined, output: number | null | undefined) {
@@ -44,13 +44,23 @@ export function noteTokens(input: number | null | undefined, output: number | nu
   b.output += Math.max(0, Number(output) || 0)
 }
 
+/** Called by a provider that reports what a response cost, in US dollars (OpenRouter does, on every response). */
+export function noteCost(usd: number | null | undefined) {
+  const b = bags.getStore()
+  if (!b) return
+  b.costUsd += Math.max(0, Number(usd) || 0)
+}
+
 // ---- recording ----
 
 export interface UsageRow {
   workspaceId: string
   userId?: string
-  /** `clip.*`: AI video clips, the seconds of video a provider generated and how many clips, under "provider|model". */
-  metric: 'ai.requests' | 'ai.input_tokens' | 'ai.output_tokens' | 'job.ms' | 'job.runs' | 'clip.seconds' | 'clip.count'
+  /**
+   * `clip.*`: AI video clips, the seconds of video a provider generated and how many clips, under "provider|model".
+   * `ai.cost_microusd`: what the provider said the requests cost, in millionths of a dollar (OpenRouter reports it).
+   */
+  metric: 'ai.requests' | 'ai.input_tokens' | 'ai.output_tokens' | 'ai.cost_microusd' | 'job.ms' | 'job.runs' | 'clip.seconds' | 'clip.count'
   subject?: string
   amount: number
 }
@@ -173,7 +183,7 @@ export function meterAi(p: AiProvider, scope: AiScope, feature?: AiFeature): AiP
     const userId = currentUserId()
     const { assertAiTokens } = await import('../limits')
     await assertAiTokens(workspaceId, userId)
-    const bag = { input: 0, output: 0 }
+    const bag = { input: 0, output: 0, costUsd: 0 }
     try {
       return await bags.run(bag, call)
     } finally {
@@ -184,8 +194,9 @@ export function meterAi(p: AiProvider, scope: AiScope, feature?: AiFeature): AiP
         { workspaceId, userId, metric: 'ai.requests', subject, amount: 1 },
         { workspaceId, userId, metric: 'ai.input_tokens', subject, amount: bag.input },
         { workspaceId, userId, metric: 'ai.output_tokens', subject, amount: bag.output },
+        { workspaceId, userId, metric: 'ai.cost_microusd', subject, amount: Math.round(bag.costUsd * 1_000_000) },
       ])
-      log.info('ai usage', { workspaceId, feature, provider: p.id, input: bag.input, output: bag.output })
+      log.info('ai usage', { workspaceId, feature, provider: p.id, input: bag.input, output: bag.output, ...(bag.costUsd ? { costUsd: bag.costUsd } : {}) })
     }
   }
   return {

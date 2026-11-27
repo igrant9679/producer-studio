@@ -27,6 +27,8 @@ export function providerLabel(id: string): string {
   if (id === 'anthropic-key') return 'Anthropic (your key)'
   if (id === 'openai') return 'OpenAI (your key)'
   if (id === 'gemini') return 'Gemini (your key)'
+  if (id === 'openrouter') return 'OpenRouter (your key)'
+  if (id === 'openrouter-api') return 'OpenRouter (the server’s key)'
   if (id === 'fal') return 'fal.ai (your key)'
   if (id === 'claude-cli') return 'Claude Code (desktop)'
   return id

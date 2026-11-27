@@ -2,8 +2,8 @@
 // disable or enable, send a reset), Jobs (inspect, requeue, cancel), Storage (per space, orphaned files) and the full
 // audit log, and the Media library (the editor's music and clips, made with a space's keys). Everyone else sees a
 // page that isn't there.
-import type { AuditEntry, LibraryItemStatus, LibraryKind, OperatorJob, OperatorUser, OperatorUserDetail, OrphanScan, StorageUsageRow } from '@producer/core'
-import { Ban, Clapperboard, Copy, HardDrive, ListChecks, RotateCcw, Search, ShieldCheck, Sparkles, Trash2, UserCheck, UserX, Users } from 'lucide-react'
+import type { AuditEntry, LibraryItemStatus, LibraryKind, OperatorJob, OperatorUser, OperatorUserDetail, OrphanScan, PlatformAiProvider, PlatformAiSettings, StorageUsageRow } from '@producer/core'
+import { Ban, Bot, Clapperboard, Copy, HardDrive, ListChecks, RotateCcw, Search, ShieldCheck, Sparkles, Trash2, UserCheck, UserX, Users } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { opsApi } from '../../lib/opsApi'
 import { toast, toastError } from '../../lib/toast'
@@ -13,12 +13,13 @@ import { formatBytes, relativeTime } from '../util'
 import { AuditList } from './AuditPage'
 import './activity.css'
 
-type Tab = 'people' | 'jobs' | 'storage' | 'library' | 'audit'
+type Tab = 'people' | 'jobs' | 'storage' | 'library' | 'ai' | 'audit'
 const TABS: Array<{ id: Tab; label: string; icon: JSX.Element }> = [
   { id: 'people', label: 'People', icon: <Users size={15} /> },
   { id: 'jobs', label: 'Jobs', icon: <ListChecks size={15} /> },
   { id: 'storage', label: 'Storage', icon: <HardDrive size={15} /> },
   { id: 'library', label: 'Media library', icon: <Clapperboard size={15} /> },
+  { id: 'ai', label: 'AI', icon: <Bot size={15} /> },
   { id: 'audit', label: 'Audit log', icon: <ShieldCheck size={15} /> },
 ]
 
@@ -517,6 +518,71 @@ function MediaLibrary() {
   )
 }
 
+/**
+ * The server's AI for spaces that chose none (owner, 27 Nov 2026): the server's Claude or its shared OpenRouter key.
+ * Members only either way. OpenRouter can be chosen once OPENROUTER_API_KEY is set on the server.
+ */
+function ServerAi() {
+  const [s, setS] = useState<PlatformAiSettings>()
+  const [error, setError] = useState<string>()
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    opsApi.aiDefault().then(setS, (e) => setError(msg(e)))
+  }, [])
+  const save = async (u: { defaultProvider?: PlatformAiProvider; openrouterModel?: string | null }) => {
+    setBusy(true)
+    try {
+      setS(await opsApi.setAiDefault(u))
+      toast('Saved')
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (error) return <div className="ps-alert">Couldn’t load the AI setting: {error}</div>
+  if (!s) return <Spinner size={18} />
+  return (
+    <section className="card" aria-label="The server’s AI" style={{ padding: 16 }}>
+      <h2 className="ps-h2" style={{ marginTop: 0 }}>The server’s AI</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        What runs for spaces that chose no AI provider and have no key of their own. Either way it is the server’s AI: members only, billed to the server’s
+        account. A space that picks OpenRouter in Settings → AI without a key of its own also uses the OpenRouter key.
+      </p>
+      <div role="radiogroup" aria-label="The server’s AI" style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+        <label className="row" style={{ gap: 8 }}>
+          <input type="radio" name="server-ai" checked={s.defaultProvider === 'anthropic'} disabled={busy} onChange={() => void save({ defaultProvider: 'anthropic' })} />
+          <span>
+            <strong>Claude</strong> <span className="muted">· ANTHROPIC_API_KEY {s.anthropicKey ? 'is set' : 'isn’t set'}</span>
+          </span>
+        </label>
+        <label className="row" style={{ gap: 8 }}>
+          <input type="radio" name="server-ai" checked={s.defaultProvider === 'openrouter'} disabled={busy || !s.openrouterKey} onChange={() => void save({ defaultProvider: 'openrouter' })} />
+          <span>
+            <strong>OpenRouter</strong> <span className="muted">· {s.openrouterKey ? `OPENROUTER_API_KEY is set · ${s.openrouterModel}` : 'set OPENROUTER_API_KEY on the server (Railway → Variables) first'}</span>
+          </span>
+        </label>
+      </div>
+      {s.openrouterKey && (
+        <form
+          className="row"
+          style={{ gap: 6 }}
+          onSubmit={(e) => {
+            e.preventDefault()
+            const v = String(new FormData(e.currentTarget).get('model') ?? '').trim()
+            void save({ openrouterModel: v || null })
+          }}
+        >
+          <input name="model" className="input mono" aria-label="OpenRouter model for the server’s key" placeholder="vendor/model (empty: the newest Claude Sonnet)" defaultValue={s.openrouterModel} spellCheck={false} disabled={busy} />
+          <button className="btn sm" type="submit" disabled={busy}>
+            Save model
+          </button>
+        </form>
+      )}
+    </section>
+  )
+}
+
 function Audit() {
   const [q, setQ] = useState('')
   const [items, setItems] = useState<AuditEntry[]>()
@@ -568,12 +634,12 @@ export default function OperatorPage() {
         <div>
           <span className="eyebrow">Server</span>
           <h1>Operator</h1>
-          <p>Find and help people, look after jobs and storage, make the media library, and read the audit log. Everything done here is written to the audit log.</p>
+          <p>Find and help people, look after jobs and storage, make the media library, choose the server’s AI, and read the audit log. Everything done here is written to the audit log.</p>
         </div>
       </div>
       <Tabs id="ps-operator" tabs={TABS} value={tab} onChange={setTab} label="Operator tools" />
       <TabPanel tabs="ps-operator" value={tab}>
-        {tab === 'people' ? <People /> : tab === 'jobs' ? <Jobs /> : tab === 'storage' ? <Storage /> : tab === 'library' ? <MediaLibrary /> : <Audit />}
+        {tab === 'people' ? <People /> : tab === 'jobs' ? <Jobs /> : tab === 'storage' ? <Storage /> : tab === 'library' ? <MediaLibrary /> : tab === 'ai' ? <ServerAi /> : <Audit />}
       </TabPanel>
     </div>
   )
