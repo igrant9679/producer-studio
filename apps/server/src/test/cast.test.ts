@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
-import { AI_LOOKS, type ProjectDocResponse, type ScriptCharacter, type ScriptScene } from '@producer/core'
+import { AI_LOOKS, type Project, type ProjectDocResponse, type ScriptCharacter, type ScriptScene, type VideoItem } from '@producer/core'
 import sharp from 'sharp'
 import { MAX_CAST, MAX_REFERENCED, castIn, characterPicturePrompt, normalizeCast, sizesLine, tallAs, withCast } from '../ai/cast'
 import { chartLayout, sizeChart } from '../media/size-chart'
@@ -424,21 +424,34 @@ describe('flowing scenes and long shots', () => {
     const rows = await clipRows(id)
     const fromOf = (scene: string) => rows.find((r) => r.id === ids.get(scene))!.meta!.generated!.from
     expect([fromOf('s01'), fromOf('s02'), fromOf('s03'), fromOf('s04')]).toEqual([undefined, ids.get('s01'), ids.get('s02'), ids.get('s03')])
+    // …and the time in it of the frame it was sent: where the scene before cuts
+    const atOf = (scene: string) => rows.find((r) => r.id === ids.get(scene))!.meta!.generated!.fromAt
+    for (const s of ['s02', 's03', 's04']) expect(atOf(s)).toBeGreaterThan(0)
+    // the flowing scenes cut straight from one clip to the next (a crossfade over a flowing join blurred it), each
+    // ending on the frame the next clip starts from
+    const lastOf = (q: Project, scene: string) => q.tracks.find((t) => t.main)!.items.filter((i) => (i.name ?? '').startsWith(`${scene} ·`)).at(-1) as VideoItem
+    for (const [s, next] of [['s01', 's02'], ['s02', 's03'], ['s03', 's04']]) {
+      const it = lastOf(p, s)
+      expect(it.transitionOut).toBeUndefined()
+      expect(it.freezeAt ?? it.in + it.duration * it.speed).toBeCloseTo(atOf(next)! - (it.freezeAt !== undefined ? 1 / p.fps : 0), 2)
+    }
 
-    // assembled again as it is: every clip reused, nothing asked of Google
+    // assembled again as it is: every clip reused, nothing asked of Google, and the joins still cut
     gemini.create.mockClear()
     gemini.generateContent.mockClear()
     const again = await assembleWith(id, p.ai!.script!.scenes, flowing)
     expect(gemini.create).not.toHaveBeenCalled()
+    expect(['s01', 's02', 's03'].map((s) => lastOf(again.p, s).transitionOut)).toEqual([undefined, undefined, undefined])
 
     // turned off: a clip that only flowed is kept (s04, nobody in it); clips whose characters' pictures can be sent
-    // again are made again with them, each starting on its own
+    // again are made again with them, each starting on its own, and the scenes crossfade again
     gemini.create.mockClear()
-    await assembleWith(id, again.p.ai!.script!.scenes, brief)
+    const off = await assembleWith(id, again.p.ai!.script!.scenes, brief)
     expect(bodies().map((b) => [textOf(b).startsWith(FROM_FRAME), picturesOf(b).length])).toEqual([
       [false, 2],
       [false, 1],
     ])
+    expect(['s01', 's02', 's03'].map((s) => lastOf(off.p, s).transitionOut?.type)).toEqual(['crossfade', 'crossfade', 'crossfade'])
   }, 240_000)
 
   it('long shots: a scene longer than one clip is one shot, extended from the clip and joined on (a real join)', async () => {

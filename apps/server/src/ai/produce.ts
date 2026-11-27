@@ -406,13 +406,20 @@ const CLOSE_TAIL = 1.8
 const TITLE_CARD = 3
 const CLOSE_CARD = 3.5
 
+/** A scene's voice, or an estimate of it from its words when it has none. */
+const voiceLength = (scene: ScriptScene, voices: Map<string, { duration: number }>) => voices.get(scene.id)?.duration ?? Math.max(2, scene.narration.split(/\s+/).length / 2.8)
+
+/** A scene's length on an assembled timeline: its voice with the lead-in and the pause after it (longer for the last). */
+export function sceneLength(scene: ScriptScene, voices: Map<string, { duration: number }>, last: boolean): number {
+  return round(voiceLength(scene, voices) + LEAD + (last ? CLOSE_TAIL : TAIL), 1)
+}
+
 /** Where each scene sits on an assembled timeline (after the title card), where the close card starts, and the length. */
 export function sceneSpans(scenes: ScriptScene[], voices: Map<string, { duration: number }>, cards = true): { spans: SceneSpan[]; closeStart?: number; duration: number } {
   let t = cards ? TITLE_CARD : 0
   const spans = scenes.map((scene, si) => {
-    const voiceDur = voices.get(scene.id)?.duration ?? Math.max(2, scene.narration.split(/\s+/).length / 2.8)
     const start = t
-    t = start + round(voiceDur + LEAD + (si === scenes.length - 1 ? CLOSE_TAIL : TAIL), 1)
+    t = start + sceneLength(scene, voices, si === scenes.length - 1)
     return { id: scene.id, start, end: t }
   })
   return cards ? { spans, closeStart: t, duration: round(t + CLOSE_CARD, 3) } : { spans, duration: round(t, 3) }
@@ -434,6 +441,69 @@ export function syntheticTranscript(text: string, duration: number): Transcript 
   return { language: 'en', engine: 'estimate', segments: [{ start: 0, end: duration, text, words: out }] }
 }
 
+/**
+ * The narration's own words, on the times whisper heard them at. Whisper mishears a word now and then ("a wide, calm
+ * pond" came back "a wide compound", 26 Nov 2026) and the captions should say what the script says. The two word lists
+ * are lined up with the fewest changes; a script word takes the time of the heard word it lines up with (the same or
+ * misheard), and words whisper ran together or dropped share the time from the word before them to the next one.
+ */
+export function scriptWords(text: string, heard: Transcript): Transcript {
+  const words = text.split(/\s+/).filter(Boolean)
+  const got = heard.segments.flatMap((sg) => sg.words ?? [])
+  if (!words.length || !got.length) return heard
+  const norm = (w: string) => w.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]/gu, '')
+  const a = words.map(norm)
+  const b = got.map((w) => norm(w.w))
+  const n = a.length
+  const m = b.length
+  const cost = (i: number, j: number) => (a[i] === b[j] ? 0 : 1)
+  const d = Array.from({ length: n + 1 }, (_, i) => {
+    const row = new Uint32Array(m + 1)
+    row[0] = i
+    return row
+  })
+  for (let j = 0; j <= m; j++) d[0][j] = j
+  for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++) d[i][j] = Math.min(d[i - 1][j - 1] + cost(i - 1, j - 1), d[i - 1][j] + 1, d[i][j - 1] + 1)
+  // walk back: each script word gets the heard word it lines up with, or none (one whisper dropped or ran together).
+  // Between equally good line-ups, a heard word that stands for two said ones ("compound" for "calm pond") goes to the
+  // first of them, and the second shares its time
+  const at: Array<number | undefined> = new Array(n)
+  for (let i = n, j = m; i > 0 && j > 0; ) {
+    if (cost(i - 1, j - 1) === 0 && d[i][j] === d[i - 1][j - 1]) at[--i] = --j
+    else if (d[i][j] === d[i - 1][j] + 1) i--
+    else if (d[i][j] === d[i - 1][j - 1] + 1) at[--i] = --j
+    else j--
+  }
+  const out: Array<TranscriptWordLike | undefined> = words.map((w, k) => (at[k] === undefined ? undefined : { w, start: got[at[k]!].start, end: got[at[k]!].end }))
+  const first = Math.max(0, heard.segments[0]?.start ?? got[0].start)
+  const last = Math.max(heard.segments[heard.segments.length - 1]?.end ?? 0, got[m - 1].end)
+  for (let k = 0; k < n; ) {
+    if (out[k]) {
+      k++
+      continue
+    }
+    let e = k
+    while (e < n && !out[e]) e++
+    // the run k..e-1 has no time: it shares the word before's time up to the next timed word
+    const share = k > 0 ? [k - 1] : []
+    for (let x = k; x < e; x++) share.push(x)
+    const from = k > 0 ? out[k - 1]!.start : first
+    const to = Math.max(e < n ? out[e]!.start : last, from + 0.15 * share.length)
+    const weights = share.map((x) => Math.max(2, a[x].length))
+    const total = weights.reduce((s, w) => s + w, 0)
+    let t = from
+    share.forEach((x, q) => {
+      const span = ((to - from) * weights[q]) / total
+      out[x] = { w: words[x], start: round(t, 3), end: round(t + span * 0.92, 3) }
+      t += span
+    })
+    k = e
+  }
+  const timed = out as TranscriptWordLike[]
+  return { language: heard.language, engine: heard.engine, segments: [{ start: first, end: Math.max(last, timed[n - 1].end), text, words: timed }] }
+}
+type TranscriptWordLike = { w: string; start: number; end: number }
+
 export interface AssembleInput {
   project: Project
   brief: Brief
@@ -451,7 +521,15 @@ export interface AssembleInput {
   logo?: Asset
   /** Background music and sound effects (made beforehand; see makeSound). */
   sound?: VideoSound
+  /**
+   * Flowing scenes: by scene id, a scene whose AI clip starts on a frame of the scene before's clip, and that frame's
+   * time in it. The scene before ends on that frame and cuts straight to this one.
+   */
+  flows?: Map<string, number>
 }
+
+/** How much faster a clip may play to end on the frame the next scene's clip starts on, when its own start must stay. */
+const FLOW_SPEEDUP = 1.12
 
 /**
  * About how many lines a card's heading wraps to in its box (at most `max`): its words laid out at 0.6 em a
@@ -553,8 +631,8 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
   inp.scenes.forEach((scene, si) => {
     const isLast = si === inp.scenes.length - 1
     const v = inp.voices.get(scene.id)
-    const voiceDur = v?.duration ?? Math.max(2, scene.narration.split(/\s+/).length / 2.8)
-    const dur = round(voiceDur + LEAD + (isLast ? CLOSE_TAIL : TAIL), 1)
+    const voiceDur = voiceLength(scene, inp.voices)
+    const dur = sceneLength(scene, inp.voices, isLast)
     const sceneStart = t
     const visual = scene.visual ?? { kind: 'footage' as const }
     const gen = inp.generated?.get(scene.id)
@@ -562,7 +640,22 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     // footage windows: the recordings' own, or the whole stock / AI clip made for this scene (filling the frame)
     let windows = visual.kind === 'footage' ? scene.footage.filter((f) => inp.footage.has(f.assetId) && f.end > f.start) : []
     const madeClip = gen?.kind === 'video' && (visual.kind === 'stock' || visual.kind === 'aiVideo' || visual.kind === 'drawn' || visual.kind === 'library')
-    if (madeClip) windows = [{ assetId: gen.id, start: 0, end: gen.duration ?? dur }]
+    // flowing scenes: the next scene's clip starts on this clip's frame at handOff, so this one ends there and cuts
+    // straight to it (a crossfade laid two near-identical moving pictures over each other: a blur, seen 26 Nov)
+    const next = inp.scenes[si + 1]
+    const handOff = madeClip && next ? inp.flows?.get(next.id) : undefined
+    let faster = 1
+    if (madeClip) {
+      const end = handOff !== undefined ? Math.min(handOff, gen.duration ?? handOff) : (gen.duration ?? dur)
+      let start = 0
+      if (handOff !== undefined && end > dur + 0.02) {
+        // longer than the scene: a clip that continues the scene before keeps its first frame and plays a little faster
+        // (as far as FLOW_SPEEDUP); otherwise it starts later
+        if (inp.flows?.has(scene.id) && end / dur <= FLOW_SPEEDUP) faster = round(end / dur, 3)
+        else start = round(end - dur, 3)
+      }
+      windows = [{ assetId: gen.id, start, end }]
+    }
     // the person's own clip (from its start, or the part they chose) or image, filling the frame like a made one
     const own = visual.kind === 'media' ? inp.footage.get(visual.assetId) : undefined
     const ownClip = own?.kind === 'video' && visual.kind === 'media'
@@ -576,7 +669,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     if (windows.length) {
       // cut to fill the scene; slow slightly or hold the last frame when short
       const total = windows.reduce((n, f) => n + (f.end - f.start), 0)
-      const speed = total >= dur ? 1 : total >= dur * 0.6 ? round(Math.max(0.6, total / dur), 3) : 1
+      const speed = faster > 1 ? faster : total >= dur ? 1 : total >= dur * 0.6 ? round(Math.max(0.6, total / dur), 3) : 1
       let remaining = dur
       for (const f of windows) {
         if (remaining <= 0.05) break
@@ -607,7 +700,7 @@ export function buildProducerTimeline(inp: AssembleInput): Project {
     }
     const lastPiece = pieces[pieces.length - 1] as Item & { transitionOut?: { type: import('@producer/core').TransitionType; duration: number } }
     // the last scene slides into the closing card; with no card there is nothing after it to move to
-    if (!isLast) lastPiece.transitionOut = { type: 'crossfade', duration: 0.5 }
+    if (!isLast && handOff === undefined) lastPiece.transitionOut = { type: 'crossfade', duration: 0.5 }
     else if (parts.cards) lastPiece.transitionOut = { type: 'slideUp', duration: 0.5 }
 
     // voice
@@ -871,6 +964,8 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
         ? (await transcribeAsset(v.asset.id, 'en', { signal: jc.signal, check: jc.check, progress: () => undefined })).transcript
         : syntheticTranscript(s.narration, v.duration)
     }
+    // the captions say the script's words, at the times whisper heard them
+    if (transcript.engine !== 'estimate') transcript = scriptWords(s.narration, transcript)
     v.asset = { ...v.asset, transcript }
   }
   // 3. generated visuals (videos made from an idea): AI stills, stock clips, AI clips
@@ -879,7 +974,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   const allowed = await allowedVisualKinds(row.workspaceId, brief.visualKinds, { fullMotion: brief.motion === 'full' })
   const made = await makeSceneVisuals(jc, { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, aspect: brief.aspect, scenes: input.scenes, voices, drawing, look: brief.aiLook, fullMotion: brief.motion === 'full', allowed, cast: doc.ai?.script?.cast, flow: !!brief.flow, longShots: !!brief.longShots })
   // 3b. music composed on the cuts, and sound effects where things move (both free: made on this server)
-  const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, logo })
+  const probe = () => buildProducerTimeline({ project: doc, brief, scenes: made.scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, logo, flows: made.flows })
   const sounded = await makeSound(subContext(jc, 0.9, 0.92, 'Adding music and sound'), { workspaceId: row.workspaceId, userId: jc.job.userId, projectId: row.id, jobId: jc.job.id, brief, scenes: made.scenes, voices, probe, seed: brand?.name || row.id })
   made.notes.push(...sounded.notes)
   // 4. timeline, built on the project as it is now (a rename or script edit saved meanwhile stays); a timeline
@@ -890,7 +985,7 @@ export async function produceAssemble(jc: JobContext): Promise<{ version: number
   // the timeline shows text where nothing else could be made; the script keeps what it asked for there
   const script = scenes.map((s) => (made.asked.has(s.id) ? { ...s, visual: made.asked.get(s.id) } : s))
   const build = (cur: Project) => {
-    const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, logo, sound: sounded.sound })
+    const built = buildProducerTimeline({ project: cur, brief, scenes, footage, voices, generated: made.generated, illustrations: made.illustrations, brand, logo, sound: sounded.sound, flows: made.flows })
     built.ai = { ...(cur.ai ?? {}), brief, script: { ...(cur.ai?.script ?? {}), scenes: script }, status: 'assembled', assembled: { fingerprint: timelineFingerprint(built), at: Date.now() } }
     return built
   }
@@ -1035,10 +1130,12 @@ async function makeSceneVisuals(
     /** Long shots (the brief's longShots): a scene longer than one clip gets its clip extended, where the model can. */
     longShots?: boolean
   },
-): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[]; asked: Map<string, NonNullable<ScriptScene['visual']>> }> {
+): Promise<{ scenes: ScriptScene[]; generated: Map<string, Asset>; illustrations: Map<string, Asset>; notes: string[]; asked: Map<string, NonNullable<ScriptScene['visual']>>; flows: Map<string, number> }> {
   const generated = new Map<string, Asset>()
   const illustrations = new Map<string, Asset>()
   const notes: string[] = []
+  // flowing scenes whose clip really starts on the clip before's frame, and that frame's time there (AssembleInput.flows)
+  const flows = new Map<string, number>()
   // what the script asked for, of the scenes only text could show this time: the script keeps it, so the next
   // assembly tries again (a failure is not the script's to remember)
   const asked = new Map<string, NonNullable<ScriptScene['visual']>>()
@@ -1062,7 +1159,7 @@ async function makeSceneVisuals(
     }
   }
   const todo = scenes.filter((s) => s.visual && (s.visual.kind === 'image' || s.visual.kind === 'stock' || s.visual.kind === 'photo' || s.visual.kind === 'aiVideo' || s.visual.kind === 'animation' || s.visual.kind === 'drawn'))
-  if (!todo.length) return { scenes, generated, illustrations, notes, asked }
+  if (!todo.length) return { scenes, generated, illustrations, notes, asked, flows }
   const work = tmpDir('scene-visuals')
   let clips = 0
   const maxClips = o.fullMotion ? MAX_AI_CLIPS_FULL_MOTION : MAX_AI_CLIPS
@@ -1237,6 +1334,8 @@ async function makeSceneVisuals(
         const g = prev?.meta?.generated
         if (prev && prev.status === 'ready' && g?.kind === v.kind && g.prompt === ask && (!from || g.from === from.id) && (!long || g.long)) {
           generated.set(s.id, assetDoc(prev))
+          // (a clip made before fromAt was kept started on the last frame of the clip before)
+          if (from && g.fromFrame !== false) flows.set(s.id, g.fromAt ?? from.duration ?? 0)
           return
         }
       }
@@ -1246,18 +1345,21 @@ async function makeSceneVisuals(
         try {
           const sc = slot(s, `${MAKING[v.kind]} for ${s.id}`)
           let startFrame: string | undefined
+          // the frame the scene before cuts on (its clip's last frame when the clip is no longer than that scene)
+          const fromAt = from ? handOffAt(from, sceneLength(before!, o.voices, false)) : undefined
           if (from) {
             try {
-              startFrame = await lastFrame(from, work, jc.signal)
+              startFrame = await frameAt(from, fromAt!, work, jc.signal)
             } catch (err) {
               if (jc.signal.aborted) throw err
               log.warn('the clip before could not give its last frame; the clip starts on its own', { scene: s.id, err })
               notes.push(`${s.id}: the clip starts on its own (the last frame of ${before!.id}’s clip couldn’t be read)`)
             }
           }
-          const made = await makeOne(sc, { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds, work, fromPicture, references: [...pictured.map((c) => pictures.get(c.name)!), ...(sized ? [sized.file] : [])], ...(startFrame ? { startFrame, from: from!.id } : {}), ...(long ? { long } : {}) })
+          const made = await makeOne(sc, { ...o, jobId: jc.job.id, scene: s, visual: v, ask, seconds, work, fromPicture, references: [...pictured.map((c) => pictures.get(c.name)!), ...(sized ? [sized.file] : [])], ...(startFrame ? { startFrame, from: from!.id, fromAt } : {}), ...(long ? { long } : {}) })
           if (v.kind === 'aiVideo') clips++
           generated.set(s.id, made.asset)
+          if (startFrame && made.clip?.fromFrame !== false) flows.set(s.id, fromAt!)
           s.visual = { ...v, assetId: made.asset.id, ...(made.credit ? { credit: made.credit } : {}), ...(made.passedOver?.length ? { passedOver: made.passedOver } : {}) }
           if (v.kind === 'image') stoodIn(s, 'image')
           if (startFrame && made.clip?.fromFrame === false) notes.push(`${s.id}: the clip starts on its own: the clip model wouldn’t start it from the last frame of ${before!.id}’s`)
@@ -1408,7 +1510,7 @@ async function makeSceneVisuals(
     }
     fs.rm(work, { recursive: true, force: true }, () => undefined)
   }
-  return { scenes, generated, illustrations, notes: sameReasonTogether(notes), asked }
+  return { scenes, generated, illustrations, notes: sameReasonTogether(notes), asked, flows }
 }
 
 /**
@@ -1648,15 +1750,28 @@ export async function makeAiClip(o: {
 }
 
 /**
- * The last frame of a clip (an asset), as a JPEG in `work`: where a flowing scene's clip starts. Read from the last
- * second of the stored original, every frame written over the one before, so the file left is the very last.
+ * Where a flowing scene's clip starts: the time, in the clip before, of the first frame its scene doesn't show. The
+ * timeline shows a clip from its start for its scene's length (slowed, or held on its last frame, when it's shorter),
+ * so that is the scene's length, or the clip's end when the clip is no longer than that.
  */
-async function lastFrame(clip: Asset, work: string, signal: AbortSignal): Promise<string> {
+export function handOffAt(clip: Pick<Asset, 'duration'>, sceneLength: number): number {
+  const len = clip.duration ?? sceneLength
+  return round(Math.min(len, sceneLength), 3)
+}
+
+/**
+ * The frame of a clip (an asset) at `at` seconds, as a JPEG in `work`: where a flowing scene's clip starts. The first
+ * frame from `at` on, so the next clip begins on the picture that would have come next; at the clip's end (or past
+ * it) its very last frame, read from its last second with every frame written over the one before.
+ */
+async function frameAt(clip: Asset, at: number, work: string, signal: AbortSignal): Promise<string> {
   const row = (await ctx().db.select().from(assets).where(eq(assets.id, clip.id)).limit(1))[0]
   if (!row) throw new Error('the clip before is gone')
   const src = await localSource(row, work)
   const out = path.join(work, `last-${crypto.randomBytes(4).toString('hex')}.jpg`)
-  await ffmpeg(['-v', 'error', '-sseof', '-1', '-i', src, '-an', '-update', '1', '-q:v', '2', out], { signal })
+  const len = row.meta?.duration ?? clip.duration
+  const atEnd = len === undefined || at >= len - 0.05
+  await ffmpeg(atEnd ? ['-v', 'error', '-sseof', '-1', '-i', src, '-an', '-update', '1', '-q:v', '2', out] : ['-v', 'error', '-ss', String(at), '-i', src, '-an', '-frames:v', '1', '-q:v', '2', out], { signal })
   if (!fs.existsSync(out)) throw new Error('no frame was written')
   return out
 }
@@ -1716,9 +1831,10 @@ async function makeOne(
     work: string
     fromPicture?: boolean
     references?: string[]
-    /** A clip: the frame it starts from, and the clip (asset id) that frame ends. */
+    /** A clip: the frame it starts from, the clip (asset id) that frame is from, and its time there (that scene's cut). */
     startFrame?: string
     from?: string
+    fromAt?: number
     /** A clip: extended to the scene's length where the model can. */
     long?: boolean
   },
@@ -1753,7 +1869,7 @@ async function makeOne(
     kind: kind === 'image' || kind === 'photo' ? 'image' : 'video',
     origin: kind === 'stock' || kind === 'photo' ? 'stock' : 'ai',
     meta: {
-      generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}), ...(passedOver.length ? { passedOver } : {}), ...(o.from ? { from: o.from } : {}), ...(o.long ? { long: true } : {}) },
+      generated: { kind, prompt: o.ask, provider: file.provider, model: file.model, ...(credit ? { credit } : {}), ...(passedOver.length ? { passedOver } : {}), ...(o.from ? { from: o.from, ...(o.fromAt !== undefined ? { fromAt: o.fromAt } : {}), ...(clip?.fromFrame === false ? { fromFrame: false } : {}) } : {}), ...(o.long ? { long: true } : {}) },
       jobId: o.jobId,
     },
   })

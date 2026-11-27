@@ -506,8 +506,9 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   already had it on keep it. The full contract: docs/integrations/meyousocial.md.
   **Flow-style clips** (asked for on 24 Nov 2026: "add the Flow-style features"; Google's Flow app has no API, and it is
   built on Gemini Omni, which Producer already uses). Two brief options under Full motion, both off by default:
-  *Flowing scenes* (`brief.flow`): an AI clip whose scene follows another AI clip starts on that clip's last frame
-  (`produce.ts` `lastFrame`: ffmpeg, the last second of the stored original, JPEG). Gemini gets the frame as the only
+  *Flowing scenes* (`brief.flow`): an AI clip whose scene follows another AI clip starts on that clip's frame at its
+  scene's cut, its last frame when the clip is no longer than the scene (`produce.ts` `frameAt`: ffmpeg on the stored
+  original, JPEG; see "Flowing joins cut" below). Gemini gets the frame as the only
   picture, task `image_to_video`, its words prefixed with `FROM_FRAME`, and no reference pictures (two pictures read as
   first and last frames; the cast is still described in words); Wan on fal takes it as its first frame instead of a
   painted one. The clip records `meta.generated.from` (the clip it follows): turning flow on remakes the clips that
@@ -521,6 +522,16 @@ export of a 20 s 1080p project at 720p draft ~50 s.
   the shot as far as it got (`notExtended`, a note on the assembly); `meta.generated.long` keeps a long clip when long
   shots are turned off and remakes a short one when they are turned on. The Usage page counts the whole shot's
   seconds. Neither request shape has been tried on a live key yet: only Google's docs vouch for them.
+  **Flowing joins cut, on the frame handed on** (26 Nov 2026, the owner: the paper boat film's joins showed "a slight
+  blur"; the frames inside each 0.5 s crossfade were measurably softer, the long shot's ffmpeg joins were clean). A
+  crossfade over a flowing join laid two near-identical moving pictures over each other, so a scene whose clip the next
+  one continues now has no transition: a straight cut. The next clip starts on the frame at the scene before's cut
+  (`handOffAt`: its length, or the clip's end when the clip is shorter; `frameAt` takes the first frame from there),
+  recorded as `meta.generated.fromAt` (and `fromFrame: false` when the model wouldn't use it). The timeline ends the
+  clip before on that frame (`AssembleInput.flows`): a clip made before `fromAt` (from its last frame) starts later,
+  or, when its own start continues the scene before's, plays up to `FLOW_SPEEDUP` (1.12×) faster. Captions from whisper
+  now say the script's words at whisper's times (`scriptWords`: the two word lists lined up; "a wide, calm pond" had
+  been captioned "a wide compound").
 - **AI**: provider = Anthropic API (`claude-opus-5`, adaptive thinking, `fallbacks: "default"`). Without `ANTHROPIC_API_KEY` every AI
   route returns 503 `{code:'server', error:'AI is not configured on this server'}` before starting a stream/job.
   `GET /api/system` reports `ai.available`.

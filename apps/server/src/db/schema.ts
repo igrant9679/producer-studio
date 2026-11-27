@@ -131,6 +131,11 @@ export interface AssetMeta {
     passedOver?: string[]
     /** An AI clip of flowing scenes: the clip (asset id) whose last frame it starts from. */
     from?: string
+    /** …and the time in that clip of the frame it was sent: where that clip's scene cuts (absent on clips made before
+     * 26 Nov 2026: its last frame). */
+    fromAt?: number
+    /** false: the clip model wouldn't start the clip from that frame, so it starts on its own. */
+    fromFrame?: boolean
     /** An AI clip made as a long shot (extended to its scene's length, or tried to be). */
     long?: boolean
     /** A drawn scene's clip: what it was asked for (the note and the style, hashed) and the code that draws it, so a
