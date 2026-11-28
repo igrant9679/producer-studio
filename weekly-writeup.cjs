@@ -7,8 +7,8 @@ const {
   Table, TableCell, TableRow, TextRun, WidthType,
 } = require('docx')
 
-const UPDATED = '27 November 2026'
-const PERIOD = '20 to 27 November 2026'
+const UPDATED = '28 November 2026'
+const PERIOD = '20 to 28 November 2026'
 
 // ---------------------------------------------------------------- content
 
@@ -27,6 +27,7 @@ const AT_A_GLANCE = [
   ['26 Nov', 'Server AI members-only; a welcome step after in-app sign-up', 'Live'],
   ['26 Nov', 'Flowing joins cut cleanly; captions use the script’s words', 'Live'],
   ['27 Nov', 'OpenRouter as an AI provider', 'Built and tested; waits for your go-ahead'],
+  ['28 Nov', 'Sign-up only through meyousocial.com (your decision)', 'Built and tested; waits for your go-ahead'],
 ]
 
 const SECTIONS = [
@@ -123,6 +124,17 @@ const SECTIONS = [
     ],
   },
   {
+    title: 'Sign-up only through meyousocial.com (built 28 November, not live yet)',
+    intro: 'Your decision, passed on by the website session: “Send them to meyousocial.com.” Everyone signs up through the website for now.',
+    bullets: [
+      ['The sign-up page: ', 'producerstudio.app/signup takes people to the membership page (meyousocial.com/membership) instead of making a free account. The sign-in page’s “Create an account” link goes there too.'],
+      ['Invitations keep working: ', 'someone invited to a space still makes their account in the app, with the address the invitation went to, so members can bring in their team up to their seats.'],
+      ['Welcome step: ', 'no “Continue free” option. Accounts made by the website arrive with their space and membership already in place.'],
+      ['Free trials: ', 'start on the website, which gives a trial member their Producer Studio space at once. The server’s AI runs for them during the trial, a cost you accepted.'],
+      ['A switch to reopen it: ', 'set APP_SIGNUP=open on Railway and in-app sign-up works as before.'],
+    ],
+  },
+  {
     title: 'Housekeeping',
     bullets: [
       ['Release workflow: ', 'the desktop release workflow uses current GitHub actions.'],
@@ -132,6 +144,7 @@ const SECTIONS = [
 ]
 
 const WAITING = [
+  ['Say “deploy sign-up” in our chat. ', 'That puts the website-only sign-up live. It waits for your go-ahead in our chat, like OpenRouter.'],
   ['Say “deploy OpenRouter” in our chat. ', 'Then paste your OpenRouter key into Railway as OPENROUTER_API_KEY on the Producer Studio service. Switching the server’s AI to OpenRouter (Operator → AI) is a separate choice for later.'],
   ['Re-assemble the paper boat film and check the joins. ', 'Re-assembling reuses every clip, so Google makes no new ones. Then export it and tell me how the joins look, and whether I can delete the film.'],
   ['Test desktop 0.7.4. ', 'Install it, then click Voice Studio → Engine → Update. If anything fails, send me the Engine tab’s log and the exact message on screen.'],
@@ -146,6 +159,7 @@ const WAITING_OTHER = [
 
 const HISTORY = [
   ['27 Nov 2026', 'First version.'],
+  ['28 Nov 2026', 'Added sign-up only through meyousocial.com (built, waiting for your go-ahead) and its deploy to the list of what I’m waiting on.'],
 ]
 
 // ---------------------------------------------------------------- layout
