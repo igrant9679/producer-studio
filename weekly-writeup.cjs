@@ -26,8 +26,8 @@ const AT_A_GLANCE = [
   ['26 Nov', 'Sign-up from meyousocial.com, memberships, sign-in links', 'Live; switched on 26 Nov'],
   ['26 Nov', 'Server AI members-only; a welcome step after in-app sign-up', 'Live'],
   ['26 Nov', 'Flowing joins cut cleanly; captions use the script’s words', 'Live'],
-  ['27 Nov', 'OpenRouter as an AI provider', 'Built and tested; waits for your go-ahead'],
-  ['28 Nov', 'Sign-up only through meyousocial.com (your decision)', 'Built and tested; waits for your go-ahead'],
+  ['27 Nov', 'OpenRouter as an AI provider', 'Live 28 Nov; needs your OpenRouter key'],
+  ['28 Nov', 'Sign-up only through meyousocial.com (your decision)', 'Live 28 Nov'],
 ]
 
 const SECTIONS = [
@@ -112,8 +112,8 @@ const SECTIONS = [
     ],
   },
   {
-    title: 'OpenRouter as an AI provider (built 27 November, not live yet)',
-    intro: 'Asked for in all four apps. Built and tested on its own branch; it goes live when you say so.',
+    title: 'OpenRouter as an AI provider (live 28 November)',
+    intro: 'Asked for in all four apps. Live since 28 November; the server’s shared key starts working once you add it on Railway.',
     bullets: [
       ['Keys: ', 'a space’s own OpenRouter key is used first. Without one, a space that picks OpenRouter runs on the server’s shared key, as the server’s AI: members only, and you pay for it.'],
       ['Scope: ', 'all writing AI can run through OpenRouter: the writer, Producer scripts, the editor assistant and AI-drawn animation. Pictures, clips, music and voices keep their current providers.'],
@@ -124,7 +124,7 @@ const SECTIONS = [
     ],
   },
   {
-    title: 'Sign-up only through meyousocial.com (built 28 November, not live yet)',
+    title: 'Sign-up only through meyousocial.com (live 28 November)',
     intro: 'Your decision, passed on by the website session: “Send them to meyousocial.com.” Everyone signs up through the website for now.',
     bullets: [
       ['The sign-up page: ', 'producerstudio.app/signup takes people to the membership page (meyousocial.com/membership) instead of making a free account. The sign-in page’s “Create an account” link goes there too.'],
@@ -144,8 +144,8 @@ const SECTIONS = [
 ]
 
 const WAITING = [
-  ['Say “deploy sign-up” in our chat. ', 'That puts the website-only sign-up live. It waits for your go-ahead in our chat, like OpenRouter.'],
-  ['Say “deploy OpenRouter” in our chat. ', 'Then paste your OpenRouter key into Railway as OPENROUTER_API_KEY on the Producer Studio service. Switching the server’s AI to OpenRouter (Operator → AI) is a separate choice for later.'],
+  ['Point MEMBERSHIP_URL at the membership page. ', 'On Railway (Producer Studio service) it is set to https://www.meyousocial.com, the home page, so the sign-up page and “Get a membership” send people there. Set it to https://www.meyousocial.com/membership/ (no #join on the end).'],
+  ['Add your OpenRouter key when you’re ready. ', 'Paste it into Railway as OPENROUTER_API_KEY on the Producer Studio service; until then OpenRouter works only with a space’s own key. Switching the server’s AI to OpenRouter (Operator → AI) is a separate choice for later.'],
   ['Re-assemble the paper boat film and check the joins. ', 'Re-assembling reuses every clip, so Google makes no new ones. Then export it and tell me how the joins look, and whether I can delete the film.'],
   ['Test desktop 0.7.4. ', 'Install it, then click Voice Studio → Engine → Update. If anything fails, send me the Engine tab’s log and the exact message on screen.'],
   ['Answer the website session. ', 'Give it the go-ahead for the WordPress plugin, and decide: whether to add a pick-your-tools step for Member and Contributor; whether the 14-day free trials get the tools (trials run on the server’s AI at your cost); and whether you can edit wp-config.php.'],
@@ -160,6 +160,7 @@ const WAITING_OTHER = [
 const HISTORY = [
   ['27 Nov 2026', 'First version.'],
   ['28 Nov 2026', 'Added sign-up only through meyousocial.com (built, waiting for your go-ahead) and its deploy to the list of what I’m waiting on.'],
+  ['28 Nov 2026', 'OpenRouter and website-only sign-up deployed (“deploy both”) and checked on the live site. Waiting list: MEMBERSHIP_URL to the membership page, and the OpenRouter key.'],
 ]
 
 // ---------------------------------------------------------------- layout
