@@ -1,7 +1,7 @@
 import { ArrowRight, AudioLines, Check, Eye, EyeOff, FileText, Film, Sparkles, Upload } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
-import { HttpError } from '../lib/api'
+import { HttpError, api } from '../lib/api'
 import { useSession } from '../lib/session'
 import './dev/installMock'
 import './shell.css'
@@ -79,6 +79,24 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
   // where it was going (an invite it came to accept)
   const signedUp = useRef(false)
   const dest = signedUp.current && next === '/' ? '/welcome' : next
+  // accounts come through the membership website (the owner, 28 Nov 2026): the sign-up page sends people there, except
+  // someone who came to accept an invitation, who still makes their account here
+  const [joinAt, setJoinAt] = useState<string>()
+  const invited = next.startsWith('/invite/')
+  useEffect(() => {
+    let alive = true
+    api
+      .authOptions()
+      .then((o) => alive && o.signup === 'website' && setJoinAt(o.membershipUrl))
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
+  const toWebsite = mode === 'signup' && !invited && !!joinAt
+  useEffect(() => {
+    if (toWebsite && status !== 'ready') window.location.replace(joinAt!)
+  }, [toWebsite, joinAt, status])
 
   useEffect(() => {
     document.title = mode === 'login' ? 'Sign in · Producer Studio' : 'Create your account · Producer Studio'
@@ -102,6 +120,25 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
   }, [])
 
   if (status === 'ready') return <Navigate to={dest} replace />
+  if (toWebsite)
+    return (
+      <div className="ps-auth">
+        <div className="ps-auth-form">
+          <Logo />
+          <div role="status" style={{ marginTop: 24 }}>
+            <span className="eyebrow">Get started</span>
+            <h1>Join through MeYouSocial</h1>
+            <p className="sub">Producer Studio comes with a MeYouSocial membership, free trial included. Taking you to the membership page…</p>
+            <a className="btn primary" href={joinAt}>
+              Choose a membership <ArrowRight size={16} />
+            </a>
+            <div className="ps-auth-switch">
+              Already have an account? <Link to="/login">Sign in</Link>. Invited to a space? Open the link in your invitation.
+            </div>
+          </div>
+        </div>
+      </div>
+    )
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -202,7 +239,7 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
           </button>
           <div className="ps-auth-switch">
             {mode === 'login' ? 'New to Producer Studio? ' : 'Already have an account? '}
-            <Link to={otherHref}>{mode === 'login' ? 'Create an account' : 'Sign in'}</Link>
+            {mode === 'login' && joinAt && !invited ? <a href={joinAt}>Join through MeYouSocial</a> : <Link to={otherHref}>{mode === 'login' ? 'Create an account' : 'Sign in'}</Link>}
           </div>
         </form>
         <div className="ps-auth-foot">© {new Date().getFullYear()} Producer Studio</div>

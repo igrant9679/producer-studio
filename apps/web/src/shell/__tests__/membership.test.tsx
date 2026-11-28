@@ -134,6 +134,7 @@ describe('the welcome step after signing up in the app', () => {
   it('offers a membership where memberships are set up, your own key, or free; a membership goes to the website with a claim', async () => {
     const { default: WelcomePage } = await import('../pages/WelcomePage')
     useSession.setState({ status: 'ready', user: me(false).user, workspaces: [ws], workspaceId: 'ws_maya' })
+    vi.spyOn(api, 'authOptions').mockResolvedValue({ signup: 'open', membershipUrl: 'https://www.meyousocial.com/membership/' })
     vi.spyOn(api, 'membership').mockResolvedValue({ membershipUrl: 'https://www.meyousocial.com/membership/', canClaim: true })
     const claim = vi.spyOn(api, 'claimMembership').mockResolvedValue({ url: 'https://www.meyousocial.com/membership/?ps_claim=v1.y', claim: 'v1.y', expiresAt: 1 })
     const assign = vi.fn()
@@ -169,5 +170,70 @@ describe('the welcome step after signing up in the app', () => {
     show()
     fireEvent.click(await screen.findByRole('button', { name: /Go to my space/ }))
     expect(await screen.findByText('Home page')).toBeTruthy()
+  })
+})
+
+describe('accounts through the membership website (28 Nov 2026)', () => {
+  const site = 'https://www.meyousocial.com/membership/'
+  const at = async (path: string) => {
+    const { AuthPage } = await import('../AuthPage')
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/signup" element={<AuthPage mode="signup" />} />
+          <Route path="/login" element={<AuthPage mode="login" />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('the sign-up page sends people to the membership page', async () => {
+    vi.spyOn(api, 'authOptions').mockResolvedValue({ signup: 'website', membershipUrl: site })
+    const replace = vi.fn()
+    vi.stubGlobal('location', { ...window.location, replace })
+    try {
+      await at('/signup')
+      expect(await screen.findByText('Join through MeYouSocial')).toBeTruthy()
+      expect(screen.getByRole('link', { name: /Choose a membership/ }).getAttribute('href')).toBe(site)
+      await waitFor(() => expect(replace).toHaveBeenCalledWith(site))
+      expect(screen.queryByRole('button', { name: /create account/i })).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('someone who came to accept an invitation still makes their account here; sign-in links to the website', async () => {
+    vi.spyOn(api, 'authOptions').mockResolvedValue({ signup: 'website', membershipUrl: site })
+    const replace = vi.fn()
+    vi.stubGlobal('location', { ...window.location, replace })
+    try {
+      await at('/signup?next=%2Finvite%2Ftok9')
+      expect(await screen.findByRole('button', { name: /create account/i })).toBeTruthy()
+      await waitFor(() => expect(api.authOptions).toHaveBeenCalled())
+      expect(replace).not.toHaveBeenCalled()
+      cleanup()
+      await at('/login')
+      expect((await screen.findByRole('link', { name: 'Join through MeYouSocial' })).getAttribute('href')).toBe(site)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('the welcome step offers no “continue free”', async () => {
+    const { default: WelcomePage } = await import('../pages/WelcomePage')
+    useSession.setState({ status: 'ready', user: me(false).user, workspaces: [ws], workspaceId: 'ws_maya' })
+    vi.spyOn(api, 'authOptions').mockResolvedValue({ signup: 'website', membershipUrl: site })
+    vi.spyOn(api, 'membership').mockResolvedValue({ membershipUrl: site, canClaim: true })
+    render(
+      <MemoryRouter initialEntries={['/welcome']}>
+        <Routes>
+          <Route path="/welcome" element={<WelcomePage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByRole('button', { name: /Choose a plan/ })).toBeTruthy()
+    await waitFor(() => expect(api.authOptions).toHaveBeenCalled())
+    expect(screen.queryByText('Continue free for now')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Go to my space/ })).toBeNull()
   })
 })
