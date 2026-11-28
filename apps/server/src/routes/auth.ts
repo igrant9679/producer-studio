@@ -1,7 +1,7 @@
 import { type Context, Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import * as z from 'zod/v4'
-import type { MeResponse } from '@producer/core'
+import type { AuthOptions, MeResponse } from '@producer/core'
 import {
   type AppEnv,
   DISABLED_MESSAGE,
@@ -18,7 +18,7 @@ import {
   verifyPassword,
 } from '../auth'
 import { ctx } from '../context'
-import { users } from '../db/schema'
+import { invites, users } from '../db/schema'
 import { userDto } from '../dto'
 import { HttpError, body } from '../http'
 import { newId } from '../ids'
@@ -60,9 +60,30 @@ export async function createUser(email: string, password: string, name: string) 
 
 export const authRoutes = new Hono<AppEnv>()
 
+/** How people get an account here (public: the sign-up page asks before it shows a form). */
+authRoutes.get('/options', (c) => {
+  const cfg = ctx().config
+  return c.json({ signup: cfg.mode === 'cloud' ? cfg.appSignup : 'open', membershipUrl: cfg.membershipUrl } satisfies AuthOptions)
+})
+
+/** An invitation to this address that can still be accepted (not used, withdrawn or out of date). */
+async function invitedAddress(email: string): Promise<boolean> {
+  const now = Date.now()
+  const rows = await ctx()
+    .db.select({ createdAt: invites.createdAt, expiresAt: invites.expiresAt })
+    .from(invites)
+    .where(and(eq(invites.email, email.trim().toLowerCase()), isNull(invites.acceptedAt), isNull(invites.revokedAt)))
+  return rows.some((r) => (r.expiresAt ?? r.createdAt + INVITE_DAYS_MS) > now)
+}
+const INVITE_DAYS_MS = 7 * 24 * 3600_000
+
 authRoutes.post('/signup', async (c) => {
   const b = await body(c, z.object({ email: z.string().trim().email().max(254), password: z.string().min(8).max(200), name: z.string().trim().min(1).max(80) }))
   await limitSignup(clientIp(c))
+  // sign-up through the website (the owner, 28 Nov 2026): here only an invited address makes an account
+  const cfg = ctx().config
+  if (cfg.mode === 'cloud' && cfg.appSignup === 'website' && !(await invitedAddress(b.email)))
+    throw new HttpError(403, 'forbidden', `Producer Studio accounts come with a MeYouSocial membership: join at ${cfg.membershipUrl}. Invited by a space? Use the email address the invitation was sent to.`, { membershipUrl: cfg.membershipUrl })
   const id = await createUser(b.email, b.password, b.name)
   await createSession(c, id)
   await audit(c, { kind: 'signup', actor: { id, email: b.email.toLowerCase() }, targetId: id })

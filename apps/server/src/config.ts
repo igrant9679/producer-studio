@@ -79,6 +79,13 @@ export interface Config {
   provisionSecret?: string
   /** Where a space's owner gets or manages a membership (the website); shown on the Members page. */
   membershipUrl: string
+  /**
+   * Who may make an account in the app (APP_SIGNUP). 'website' (the owner, 28 Nov 2026: "Send them to
+   * meyousocial.com"): the sign-up page sends people to MEMBERSHIP_URL and only an invited address can make an account
+   * here, so a space's owner can still bring in their team; the website makes members' accounts (/api/provision).
+   * 'open': anyone signs up in the app. Default: 'website' on the hosted production server, 'open' elsewhere.
+   */
+  appSignup: 'open' | 'website'
   /** The janitor (P-11): days finished jobs, tombstones and audit entries are kept (0 = forever). */
   retention: { jobDays: number; tombstoneDays: number; auditDays: number }
   /**
@@ -242,6 +249,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     metricsToken: env.METRICS_TOKEN?.trim() || undefined,
     provisionSecret: (env.PROVISION_SECRET?.trim().length ?? 0) >= 32 ? env.PROVISION_SECRET!.trim() : undefined,
     membershipUrl: env.MEMBERSHIP_URL?.trim() || 'https://www.meyousocial.com/',
+    appSignup: env.APP_SIGNUP === 'open' || env.APP_SIGNUP === 'website' ? env.APP_SIGNUP : mode === 'cloud' && production ? 'website' : 'open',
     retention: {
       jobDays: envInt(env, 'JOB_RETENTION_DAYS', 30),
       tombstoneDays: envInt(env, 'TOMBSTONE_RETENTION_DAYS', 90),

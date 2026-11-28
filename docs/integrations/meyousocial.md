@@ -10,7 +10,12 @@ How a membership sold on **meyousocial.com** (WordPress + MemberPress) creates a
    `POST /api/provision/signup` → Producer Studio makes the space (and the account, when the email has none) and answers
    with a one-time `signIn.url` → the website redirects the member's browser to it → they land signed in to their new
    space. An account made this way has no password: the link page asks them to choose one (or "Later").
-2. **Sign up in the app, then join**. Anyone can still sign up at `https://producerstudio.app/signup` (a free account
+2. **Sign up in the app, then join**. *Off since 28 Nov 2026* (the owner: "Send them to meyousocial.com"): with
+   `APP_SIGNUP=website`, the default on the hosted server, `https://producerstudio.app/signup` sends people to
+   `MEMBERSHIP_URL`, and `POST /api/auth/signup` makes an account only for an address with a pending invitation, so a
+   member can still bring in their team up to their seats (403 with `details.membershipUrl` otherwise).
+   `GET /api/auth/options` (public) says which mode is on. Free trials start on the website. `APP_SIGNUP=open` on Railway
+   reopens what follows. When open, anyone can sign up at `https://producerstudio.app/signup` (a free account
    and a personal space), and make more spaces from the space switcher. Right after signing up, a **welcome step**
    (`/welcome`) offers **Choose a plan** (the claim below, for the new space), **Use my own AI key**, or **Continue free**,
    so expect claim visitors who have no WordPress account yet. In **the **Members** page (left menu)**, a space's owner sees

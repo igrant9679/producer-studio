@@ -1,5 +1,6 @@
 // Typed client for the Producer Studio API (contract: packages/core/src/api.ts).
 import type {
+  AuthOptions,
   ApiError,
   AssetRecord,
   AssistantRequest,
@@ -243,6 +244,8 @@ function storageRefusal(xhr: XMLHttpRequest): string {
 export const api = {
   // auth
   me: () => req<MeResponse>('GET', '/auth/me'),
+  /** How people get an account here: in the app, or through the membership website (public). */
+  authOptions: () => req<AuthOptions>('GET', '/auth/options'),
   login: (email: string, password: string) => req<MeResponse>('POST', '/auth/login', { email, password }),
   signup: (email: string, password: string, name: string) => req<MeResponse>('POST', '/auth/signup', { email, password, name }),
   logout: () => req<{ ok: true }>('POST', '/auth/logout'),

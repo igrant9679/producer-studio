@@ -45,6 +45,14 @@ export interface Workspace {
 // POST /api/auth/login   {email, password}            -> MeResponse (sets cookie)
 // POST /api/auth/logout                               -> {ok: true}
 // GET  /api/auth/me                                   -> MeResponse | 401
+/** GET /api/auth/options (public): how people get an account here. */
+export interface AuthOptions {
+  /** 'website': accounts come with a membership bought on the website (and invitations); 'open': sign up here. */
+  signup: 'open' | 'website'
+  /** The website's membership page (where 'website' sends people). */
+  membershipUrl: string
+}
+
 export interface MeResponse {
   /** An account a membership website made: it has no password until its person chooses one (Settings → Account). */
   needsPassword?: boolean

@@ -15,6 +15,9 @@ export default function WelcomePage() {
   const user = useSession((s) => s.user)
   const workspaceId = useSession((s) => s.workspaceId)
   const m = useAsync(() => (workspaceId ? api.membership(workspaceId) : Promise.resolve(undefined)), [workspaceId])
+  // accounts come through the membership website (28 Nov 2026): no "continue free" from here
+  const opts = useAsync(() => api.authOptions(), [])
+  const free = opts.data ? opts.data.signup === 'open' : false
   const [busy, setBusy] = useState(false)
   const canJoin = !!m.data?.canClaim
   const join = async () => {
@@ -67,6 +70,7 @@ export default function WelcomePage() {
               <KeyRound size={14} /> Add a key
             </button>
           </section>
+          {free && (
           <section className="card ps-brand-sec" role="listitem" aria-label="Continue free">
             <div className="ps-brand-sec-head">
               <ArrowRight size={16} /> <strong>Continue free for now</strong>
@@ -78,6 +82,7 @@ export default function WelcomePage() {
               Go to my space <ArrowRight size={14} />
             </button>
           </section>
+          )}
         </div>
       )}
     </div>
